@@ -36,21 +36,24 @@ jobs:
       - name: 下载并验真不可变正式 Release
         env:
           GH_TOKEN: ${{ github.token }}
-          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_RELEASE_SHA: ${{ inputs.source_sha }}
           GMB_VERSION_TAG: ${{ inputs.version_tag }}
         run: |
           set -euo pipefail
-          [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GMB_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$GMB_VERSION_TAG" =~ ^citizenweb-v[0-9]+\.[0-9]{1,2}\.[0-9]{1,2}$ ]]
           test "$(gh release view "$GMB_VERSION_TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\tfalse'
           git fetch --quiet origin "refs/tags/${GMB_VERSION_TAG}:refs/tags/${GMB_VERSION_TAG}"
-          test "$(git rev-list -n 1 "$GMB_VERSION_TAG")" = "$GMB_SOURCE_SHA"
+          test "$(git rev-list -n 1 "$GMB_VERSION_TAG")" = "$GMB_RELEASE_SHA"
           mkdir -p "$RUNNER_TEMP/release"
           gh release download "$GMB_VERSION_TAG" --dir "$RUNNER_TEMP/release" \
             --pattern citizenweb-release.tgz --pattern release-manifest.json --pattern SHA256SUMS
+          GMB_SOURCE_SHA="$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/release/release-manifest.json')).git_commit_sha")"
+          [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           node .github/scripts/build-citizenweb-release.mjs \
             --extract "$RUNNER_TEMP/release/citizenweb-release.tgz" \
             --output "$RUNNER_TEMP/candidate" --expected-git-sha "$GMB_SOURCE_SHA"
+          echo "GMB_SOURCE_SHA=$GMB_SOURCE_SHA" >> "$GITHUB_ENV"
           test "$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/candidate/release-manifest.json')).software_version")" \
             = "${GMB_VERSION_TAG#citizenweb-v}"
 
@@ -58,7 +61,6 @@ jobs:
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.DEPLOY }}
-          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
           GMB_VERSION_TAG: ${{ inputs.version_tag }}
         run: |
           set -euo pipefail
