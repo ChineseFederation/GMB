@@ -78,8 +78,8 @@ export function createClient() {
     async getTagObject(repository, objectSHA) {
       return json(gh(['api', `repos/${repository}/git/tags/${objectSHA}`], { retryRead: true }), 'GitHub Tag 对象');
     },
-    async createTag(repository, tag, sourceSHA) {
-      const payload = JSON.stringify({ ref: `refs/tags/${tag}`, sha: sourceSHA });
+    async createTag(repository, tag, releaseSHA) {
+      const payload = JSON.stringify({ ref: `refs/tags/${tag}`, sha: releaseSHA });
       gh(['api', '--method', 'POST', `repos/${repository}/git/refs`, '--input', '-'], {
         input: payload,
       });
@@ -92,8 +92,8 @@ export function createClient() {
       if (input.notes) args.push('--notes', input.notes);
       else args.push('--notes-file', input.notesFile);
       args.push(...input.assets.map((asset) => asset.path));
-      // 中文注释：版本 Tag 已在同一 Release 事务中准确绑定成功 CI 提交，禁止 CLI
-      // 根据 target_commitish 隐式创建 Tag，避免旧提交包含工作流差异时被 GitHub 拒绝。
+      // 中文注释：版本 Tag 已在同一 Release 事务中准确绑定本次 Release
+      // workflow 提交；成功 CI 提交只是正式构建与产物来源，不冒充 Tag 目标。
       gh(args);
     },
     async getRelease(repository, releaseId) {
@@ -166,13 +166,13 @@ async function versionTagCommit(client, input) {
   required(reference?.ref === `refs/tags/${input.tag}`
     && SHA_PATTERN.test(String(reference?.object?.sha || '')), '正式版本 Tag 不存在或无效');
   if (reference.object.type === 'commit') {
-    required(reference.object.sha === input.sourceSHA, '正式版本 Tag 未指向准确成功 CI 源提交');
+    required(reference.object.sha === input.releaseSHA, '正式版本 Tag 未指向本次 Release 提交');
     return reference.object.sha;
   }
   required(reference.object.type === 'tag', '正式版本 Tag 类型无效');
   const object = await client.getTagObject(input.repository, reference.object.sha);
   required(object?.tag === input.tag && object?.object?.type === 'commit'
-    && object.object.sha === input.sourceSHA, '正式版本 Tag 未指向准确成功 CI 源提交');
+    && object.object.sha === input.releaseSHA, '正式版本 Tag 未指向本次 Release 提交');
   return object.object.sha;
 }
 
@@ -201,8 +201,8 @@ export async function release(input, client = createClient()) {
   } else {
     const staleTag = await client.getTag(input.repository, input.tag);
     if (staleTag) {
-      // 中文注释：CitizenConsole 使用已登录且具 workflow 权限的 GitHub 用户会话创建
-      // 精确事务 Tag；Actions 令牌只验证复用，避免保存第二份高权限长期 Secret。
+      // 中文注释：上次事务如在创建 Tag 后中断，本次只复用准确指向
+      // 当前 Release workflow 提交的 Tag，禁止复用任意旧源码 Tag。
       await versionTagCommit(client, input);
       reuseExistingTag = true;
     }
@@ -210,9 +210,10 @@ export async function release(input, client = createClient()) {
 
   try {
     transactionStarted = true;
-    // 中文注释：Release 独占版本推进；先创建精确轻量 Tag，再要求草稿复用该 Tag。
+    // 中文注释：Release 独占版本推进；先为本次 Release workflow 提交创建
+    // 精确轻量 Tag，再要求草稿复用该 Tag。正式资产仍严格来自 sourceSHA。
     // 任一后续步骤失败都会在本事务中回滚，失败任务不会占用版本号。
-    if (!reuseExistingTag) await client.createTag(input.repository, input.tag, input.sourceSHA);
+    if (!reuseExistingTag) await client.createTag(input.repository, input.tag, input.releaseSHA);
     await client.createDraft(input);
     let draft = await findDraft(client, input);
     required(draft, `无法取得新建草稿 Release：${input.tag}`);
@@ -270,6 +271,7 @@ export function parseArgs(argv, environment = process.env) {
   }
 
   const repository = environment.GITHUB_REPOSITORY;
+  const releaseSHA = environment.GITHUB_SHA;
   const tag = values.get('--tag');
   const sourceSHA = values.get('--source-sha');
   const title = values.get('--title');
@@ -277,6 +279,7 @@ export function parseArgs(argv, environment = process.env) {
   const notesFile = values.get('--notes-file');
   const latestValue = values.get('--latest');
   required(REPOSITORY_PATTERN.test(repository || ''), 'GITHUB_REPOSITORY 无效');
+  required(SHA_PATTERN.test(releaseSHA || ''), 'Release workflow 提交无效');
   required(TAG_PATTERN.test(tag || ''), '版本 Tag 无效');
   required(SHA_PATTERN.test(sourceSHA || ''), 'Release 源提交无效');
   required(typeof title === 'string' && title.trim() === title && title.length > 0, 'Release 标题无效');
@@ -291,6 +294,7 @@ export function parseArgs(argv, environment = process.env) {
   required(new Set(assets.map((asset) => asset.name)).size === assets.length, 'Release 资产文件名重复');
   return {
     repository,
+    releaseSHA,
     tag,
     sourceSHA,
     title,

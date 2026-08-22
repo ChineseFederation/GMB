@@ -6,6 +6,7 @@ import { gh, release } from './github-release.mjs';
 function input() {
   return {
     repository: 'ChineseFederation/GMB',
+    releaseSHA: '7a46f2f7c2e58a2672961a2b66d4e882b725f560',
     tag: `citizenapp-cloudflare-v${['1', '0', '1'].join('.')}`,
     sourceSHA: '6f2c0e5355156db2fd36216ab7f928f8090ab3e0',
     title: '公民后端 · Release · Cloudflare',
@@ -20,6 +21,7 @@ function input() {
 
 function client(options = {}) {
   const calls = [];
+  const tagTargets = [];
   const value = input();
   let created = false;
   let published = false;
@@ -40,6 +42,7 @@ function client(options = {}) {
   });
   return {
     calls,
+    tagTargets,
     async listReleases() {
       calls.push('list');
       if (options.publishedExisting) return [remote(7, false)];
@@ -49,15 +52,16 @@ function client(options = {}) {
     async getTag() {
       calls.push('tag');
       return tagExists
-        ? { ref: `refs/tags/${value.tag}`, object: { type: 'commit', sha: value.sourceSHA } }
+        ? { ref: `refs/tags/${value.tag}`, object: { type: 'commit', sha: value.releaseSHA } }
         : null;
     },
     async getTagObject() {
       calls.push('tag-object');
-      return { tag: value.tag, object: { type: 'commit', sha: value.sourceSHA } };
+      return { tag: value.tag, object: { type: 'commit', sha: value.releaseSHA } };
     },
-    async createTag() {
+    async createTag(_repository, _tag, targetSHA) {
       calls.push('create-tag');
+      tagTargets.push(targetSHA);
       if (options.tagFailure) throw new Error('Tag 创建失败');
       tagExists = true;
     },
@@ -102,6 +106,8 @@ test('Release 事务先创建唯一 Tag，正式资产完成后发布', async ()
   assert.equal(fake.calls.includes('create'), true);
   assert.equal(fake.calls.includes('publish'), true);
   assert.equal(fake.calls.includes('delete-tag'), false);
+  assert.deepEqual(fake.tagTargets, [input().releaseSHA]);
+  assert.notEqual(input().releaseSHA, input().sourceSHA);
 });
 
 test('草稿资产不一致时回滚草稿与事务 Tag', async () => {
@@ -128,7 +134,7 @@ test('下一条同版本 Release 可回滚尚未创建 Tag 的遗留草稿', asy
   assert.equal(fake.calls.includes('publish'), true);
 });
 
-test('复用已登录用户会话预建且准确指向成功 CI 的事务 Tag', async () => {
+test('复用上次事务预建且准确指向 Release workflow 的 Tag', async () => {
   const fake = client({ staleTag: true });
   await release(input(), fake);
   assert.equal(fake.calls.includes('create-tag'), false);
