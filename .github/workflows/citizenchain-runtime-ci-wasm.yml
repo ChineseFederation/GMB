@@ -5,29 +5,13 @@ run-name: 公民协议 · CI · WASM
 # 本软件不设 push 触发——main push 只运行独立仓库门禁，绝不产生任何 WASM 运行记录。
 # 因此也不再需要按提交名分流：那套做法会让每一次普通 push 都留下一条 skipped 记录
 # 污染 Actions 列表，失败重试还只能靠造空提交换 SHA；dispatch 可以直接对同一 SHA 重跑。
-# CI 以点击时 finalized 链 spec_version +1 形成候选，并只在 runner 临时工作区应用。
-# 不提交、不推送、不改写仓库 Runtime；Release 后续只允许提升本次 CI 的精确 WASM 字节。
+# CI 只验证 GitHub main 当前源码，不访问正式链、不分配正式版本、不创建 Tag。
+# finalized Runtime、spec_version +1、正式构建与 Tag 全部只属于独立 Release。
 on:
   workflow_dispatch:
     inputs:
       source_sha:
         description: GitHub main 准确提交
-        required: true
-        type: string
-      spec_version:
-        description: Runtime CI 候选的 Substrate spec_version
-        required: true
-        type: string
-      chain_spec_version:
-        description: 点击 CI 时 finalized 链的 Substrate spec_version
-        required: true
-        type: string
-      genesis_hash:
-        description: 正式链 genesis hash
-        required: true
-        type: string
-      finalized_head:
-        description: 读取 RuntimeVersion 的 finalized block hash
         required: true
         type: string
 
@@ -44,10 +28,6 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   GMB_SOURCE_SHA: ${{ inputs.source_sha }}
-  GMB_SPEC_VERSION: ${{ inputs.spec_version }}
-  GMB_CHAIN_SPEC_VERSION: ${{ inputs.chain_spec_version }}
-  GMB_CHAIN_GENESIS_HASH: ${{ inputs.genesis_hash }}
-  GMB_CHAIN_FINALIZED_HEAD: ${{ inputs.finalized_head }}
 
 jobs:
   build-wasm:
@@ -59,7 +39,7 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
 
-      - name: 校验代码来源并应用 Runtime 候选版本
+      - name: 校验代码来源与 Runtime 源码版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/dependencies.mjs check --scope citizenchain-runtime
@@ -82,43 +62,16 @@ jobs:
           test_version = int(test_matches[0].group(1))
           if source_version != test_version:
               raise SystemExit("Runtime 源码与测试断言的 spec_version 不一致")
-          target_text = os.environ["GMB_SPEC_VERSION"]
-          chain_text = os.environ["GMB_CHAIN_SPEC_VERSION"]
-          genesis_hash = os.environ["GMB_CHAIN_GENESIS_HASH"]
-          finalized_head = os.environ["GMB_CHAIN_FINALIZED_HEAD"]
-          if not re.fullmatch(r"(?:0|[1-9]\d*)", target_text) or int(target_text) > 2**32 - 1:
-              raise SystemExit("Runtime 候选 spec_version 输入无效")
-          if not re.fullmatch(r"(?:0|[1-9]\d*)", chain_text) or int(chain_text) >= 2**32 - 1:
-              raise SystemExit("finalized 链 spec_version 输入无效")
-          if not re.fullmatch(r"0x[0-9a-f]{64}", genesis_hash):
-              raise SystemExit("正式链 genesis hash 输入无效")
-          if not re.fullmatch(r"0x[0-9a-f]{64}", finalized_head):
-              raise SystemExit("正式链 finalized block hash 输入无效")
-          target_version = int(target_text)
-          chain_version = int(chain_text)
-          if target_version != chain_version + 1:
-              raise SystemExit("Runtime CI 候选必须严格等于 finalized 链 spec_version + 1")
-          if source_version not in (chain_version, target_version):
-              raise SystemExit("Runtime 源码与 finalized 链版本差值不是 0 或 1")
-          if source_version != target_version:
-              runtime_match = runtime_matches[0]
-              test_match = test_matches[0]
-              runtime_text = runtime_text[:runtime_match.start(2)] + target_text + runtime_text[runtime_match.end(2):]
-              test_text = test_text[:test_match.start(1)] + target_text + test_text[test_match.end(1):]
-              test_path.write_text(test_text, encoding="utf-8")
-              runtime_path.write_text(runtime_text, encoding="utf-8")
+          if source_version < 0 or source_version > 2**32 - 1:
+              raise SystemExit("Runtime 源码 spec_version 无效")
           summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
 
           with summary.open("a", encoding="utf-8") as out:
               out.write("## CitizenChain WASM 构建来源\n\n")
               out.write("- 构建用途：纯 CI 验证\n")
-              out.write(f"- finalized 链 spec_version：`{chain_version}`\n")
-              out.write(f"- finalized block hash：`{finalized_head}`\n")
-              out.write(f"- genesis hash：`{genesis_hash}`\n")
               out.write(f"- 源码 spec_version：`{source_version}`\n")
-              out.write(f"- 构建 spec_version：`{target_version}`\n")
               out.write(f"- 源码提交：`{os.environ['GMB_SOURCE_SHA']}`\n")
-              out.write("- 候选版本只存在于本次 runner，不提交或推送源码\n")
+              out.write("- CI 不读取正式链、不分配正式版本、不创建 Tag\n")
           PY
 
       - name: 安装 Rust 工具链
@@ -246,47 +199,6 @@ jobs:
                   out.write(f"| `{filename}` | {size} | `0x{digest}` |\n")
           PY
 
-      - name: 生成 Runtime CI 候选清单
-        working-directory: citizenchain
-        run: |
-          python3 - <<'PY'
-          import hashlib
-          import json
-          import os
-          from pathlib import Path
-
-          output_dir = Path("target/release/wbuild/citizenchain")
-          filenames = (
-              "citizenchain.wasm",
-              "citizenchain.compact.wasm",
-              "citizenchain.compact.compressed.wasm",
-          )
-          wasm = []
-          for filename in filenames:
-              data = (output_dir / filename).read_bytes()
-              wasm.append({
-                  "blake2_256": f"0x{hashlib.blake2b(data, digest_size=32).hexdigest()}",
-                  "filename": filename,
-                  "size": len(data),
-              })
-          manifest = {
-              "candidate": {
-                  "source_sha": os.environ["GMB_SOURCE_SHA"],
-                  "spec_version": int(os.environ["GMB_SPEC_VERSION"]),
-                  "wasm": wasm,
-              },
-              "finalized": {
-                  "block_hash": os.environ["GMB_CHAIN_FINALIZED_HEAD"],
-                  "genesis_hash": os.environ["GMB_CHAIN_GENESIS_HASH"],
-                  "spec_version": int(os.environ["GMB_CHAIN_SPEC_VERSION"]),
-              },
-          }
-          Path("target/release/wbuild/citizenchain/runtime-ci-candidate.json").write_text(
-              json.dumps(manifest, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          PY
-
       # tauri::generate_context! 在 node 测试编译期读取 frontendDist；必须使用锁文件构建
       # 真实前端产物，不能提交 dist 或创建空占位文件绕过 Tauri 校验。
       - name: 构建公民链节点前端
@@ -303,8 +215,8 @@ jobs:
           cargo test --locked -p node \
             current_wasm_passes_candidate_runtime_policy_behavior_probes -- --nocapture
 
-      # CI artifact 只用于定位构建问题，名称与正式 Release 资产严格隔离；开发升级入口
-      # 禁止读取本 artifact，避免把未抬版的验证产物提交上链。
+      # CI artifact 只用于定位源码构建问题，名称与正式 Release 资产严格隔离；开发升级入口
+      # 禁止读取本 artifact，避免把未分配正式版本的验证产物提交上链。
       - name: 上传 CI 诊断 WASM
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -313,18 +225,15 @@ jobs:
             citizenchain/target/release/wbuild/citizenchain/citizenchain.wasm
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.wasm
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.compressed.wasm
-            citizenchain/target/release/wbuild/citizenchain/runtime-ci-candidate.json
           retention-days: 30
 
-      - name: 签署 WASM 候选构建来源
+      - name: 签署 WASM CI 构建来源
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
             citizenchain/target/release/wbuild/citizenchain/citizenchain.wasm
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.wasm
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.compressed.wasm
-            citizenchain/target/release/wbuild/citizenchain/runtime-ci-candidate.json
 
-  # Release 的 runner 只构建、验证、签署来源并上传无私钥候选。GitHub 内置
-  # GITHUB_TOKEN 无法在目标旧 SHA 与 main 的 workflow 文件不同时创建 Release；正式
-  # 固化改由已通过 Touch ID 的 CitizenConsole 下载同一 run 产物、逐项核验后完成。
+  # Release 独立读取正式链、分配 spec_version、重新执行版本相关门禁并构建正式资产；
+  # CI 诊断产物不进入正式 Release，也不作为链上升级来源。

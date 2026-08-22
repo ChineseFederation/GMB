@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from 'node:child_process';
-import {
-  mkdtempSync, readFileSync, readdirSync, rmSync, statSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d?)\.(0|[1-9]\d?)$/;
@@ -151,38 +147,13 @@ function verifySuccessfulCIRun(values) {
   if (head !== values['source-sha']) throw new Error(`checkout 与 source_sha 不一致：${head}`);
 }
 
-function findFiles(directory, filename, found = []) {
-  for (const name of readdirSync(directory)) {
-    const path = join(directory, name);
-    const metadata = statSync(path);
-    if (metadata.isDirectory()) findFiles(path, filename, found);
-    else if (metadata.isFile() && name === filename) found.push(path);
-  }
-  return found;
-}
-
-// 中文注释：Runtime 的同一源码可以用不同 spec_version 构建；Release 除了复核成功 run，
-// 还必须下载该 run 的公开候选清单，锁定本次真正通过 CI 的 spec_version。
-function verifyRuntimeCandidate(values) {
+// Runtime 正式版本只由 Release 确定；CI 仅证明同一源码已通过验证，因此这里校验
+// Release 的 spec_version 与正式 Tag 一致，不再从 CI 诊断产物读取版本候选。
+function verifyRuntimeVersion(values) {
   const specVersion = Number(values['spec-version']);
   if (!/^[1-9]\d*$/.test(values['spec-version'])
     || !Number.isSafeInteger(specVersion) || specVersion > 2 ** 32 - 1) {
     throw new Error('spec_version 无效');
-  }
-  const directory = mkdtempSync(join(tmpdir(), 'gmb-runtime-ci-'));
-  try {
-    execFileSync('gh', [
-      'run', 'download', values['ci-run-id'], '--name', 'citizenchain-wasm-ci', '--dir', directory,
-    ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-    const manifests = findFiles(directory, 'runtime-ci-candidate.json');
-    if (manifests.length !== 1) throw new Error('Runtime CI 候选清单不唯一');
-    const manifest = JSON.parse(readFileSync(manifests[0], 'utf8'));
-    if (manifest?.candidate?.source_sha !== values['source-sha']
-      || manifest?.candidate?.spec_version !== specVersion) {
-      throw new Error('Runtime CI 候选清单与 Release 来源不一致');
-    }
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
   }
 }
 
@@ -209,7 +180,7 @@ function verifyReleaseSource(values) {
   if (Object.hasOwn(values, 'spec-version')) {
     if (values['product-id'] !== 'citizenchain-runtime'
       || suffix !== values['spec-version']) throw new Error('Runtime Release 版本参数无效');
-    verifyRuntimeCandidate(values);
+    verifyRuntimeVersion(values);
   } else {
     const seedSources = {
       citizenapp: ['pubspec', 'citizenapp/pubspec.yaml'],

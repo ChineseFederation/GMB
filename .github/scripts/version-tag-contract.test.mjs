@@ -81,6 +81,12 @@ test('全部 CI 只验证构建，不创建 Tag、不推进正式版本', () => 
     assert.doesNotMatch(source, /contents:\s*write/);
     assert.doesNotMatch(source, /GMB_VERSION_TAG/);
   }
+  const runtimeCI = readFileSync(new URL('../workflows/citizenchain-runtime-ci-wasm.yml', import.meta.url), 'utf8');
+  assert.doesNotMatch(runtimeCI, /chain_spec_version:|genesis_hash:|finalized_head:|inputs\.spec_version/u);
+  assert.doesNotMatch(runtimeCI, /chain_getFinalizedHead|state_getRuntimeVersion|runtime-ci-candidate/u);
+  const runtimeRelease = readFileSync(new URL('../workflows/citizenchain-runtime-release-wasm.yml', import.meta.url), 'utf8');
+  assert.match(runtimeRelease, /chain_spec_version:[\s\S]*genesis_hash:[\s\S]*finalized_head:/u);
+  assert.match(runtimeRelease, /target_version != chain_version \+ 1/u);
 });
 
 test('每个 Release 用成功 ci_run_id 复核来源并创建唯一正式 Tag', () => {

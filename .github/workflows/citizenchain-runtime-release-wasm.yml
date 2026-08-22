@@ -5,8 +5,8 @@ run-name: 公民协议 · Release · WASM
 # 本软件不设 push 触发——main push 只运行独立仓库门禁，绝不产生任何 WASM 运行记录。
 # 因此也不再需要按提交名分流：那套做法会让每一次普通 push 都留下一条 skipped 记录
 # 污染 Actions 列表，失败重试还只能靠造空提交换 SHA；dispatch 可以直接对同一 SHA 重跑。
-# Runtime CI 已验证 finalized 链 spec_version +1 构建候选；Release 成功后才创建唯一正式版本 Tag；本 Release
-# workflow 只复用该成功 run 的源码、版本和 artifact 生成正式资产。两条流程始终独立，不提交或推送源码改动。
+# Runtime CI 只验证源码；Release 才读取 finalized 链、确定 spec_version +1、执行正式构建并
+# 创建唯一正式版本 Tag。两条流程始终独立，不提交或推送源码改动。
 on:
   workflow_dispatch:
     inputs:
@@ -24,6 +24,18 @@ on:
         type: string
       spec_version:
         description: 本次构建使用的 Substrate spec_version
+        required: true
+        type: string
+      chain_spec_version:
+        description: 点击 Release 时 finalized 链的 Substrate spec_version
+        required: true
+        type: string
+      genesis_hash:
+        description: 正式链 genesis hash
+        required: true
+        type: string
+      finalized_head:
+        description: 读取 RuntimeVersion 的 finalized block hash
         required: true
         type: string
 
@@ -44,6 +56,9 @@ env:
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SPEC_VERSION: ${{ inputs.spec_version }}
+  GMB_CHAIN_SPEC_VERSION: ${{ inputs.chain_spec_version }}
+  GMB_CHAIN_GENESIS_HASH: ${{ inputs.genesis_hash }}
+  GMB_CHAIN_FINALIZED_HEAD: ${{ inputs.finalized_head }}
 
 jobs:
   build-wasm:
@@ -101,11 +116,23 @@ jobs:
           if source_version != test_version:
               raise SystemExit("Runtime 源码与测试断言的 spec_version 不一致")
           target_text = os.environ["GMB_SPEC_VERSION"]
+          chain_text = os.environ["GMB_CHAIN_SPEC_VERSION"]
+          genesis_hash = os.environ["GMB_CHAIN_GENESIS_HASH"]
+          finalized_head = os.environ["GMB_CHAIN_FINALIZED_HEAD"]
           if not re.fullmatch(r"(?:0|[1-9]\d*)", target_text) or int(target_text) > 2**32 - 1:
               raise SystemExit("Runtime 候选 spec_version 输入无效")
+          if not re.fullmatch(r"(?:0|[1-9]\d*)", chain_text) or int(chain_text) >= 2**32 - 1:
+              raise SystemExit("finalized 链 spec_version 输入无效")
+          if not re.fullmatch(r"0x[0-9a-f]{64}", genesis_hash):
+              raise SystemExit("正式链 genesis hash 输入无效")
+          if not re.fullmatch(r"0x[0-9a-f]{64}", finalized_head):
+              raise SystemExit("正式链 finalized block hash 输入无效")
           target_version = int(target_text)
-          if source_version not in (target_version - 1, target_version):
-              raise SystemExit("Runtime Release 候选与 GitHub main 版本差值不是 0 或 1")
+          chain_version = int(chain_text)
+          if target_version != chain_version + 1:
+              raise SystemExit("Runtime Release 版本必须严格等于 finalized 链 spec_version + 1")
+          if source_version not in (chain_version, target_version):
+              raise SystemExit("Runtime Release 源码与 finalized 链版本差值不是 0 或 1")
           if source_version != target_version:
               runtime_match = runtime_matches[0]
               test_match = test_matches[0]
@@ -118,6 +145,9 @@ jobs:
           with summary.open("a", encoding="utf-8") as out:
               out.write("## CitizenChain WASM 构建来源\n\n")
               out.write("- 构建用途：正式 Release\n")
+              out.write(f"- finalized 链 spec_version：`{chain_version}`\n")
+              out.write(f"- finalized block hash：`{finalized_head}`\n")
+              out.write(f"- genesis hash：`{genesis_hash}`\n")
               out.write(f"- 源码 spec_version：`{source_version}`\n")
               out.write(f"- 构建 spec_version：`{target_version}`\n")
               out.write(f"- 源码提交：`{os.environ['GMB_SOURCE_SHA']}`\n")
