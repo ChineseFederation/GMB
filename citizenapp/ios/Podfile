@@ -1,0 +1,71 @@
+platform :ios, '16.0'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure flutter pub get is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Generated.xcconfig, then run flutter pub get"
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_ios_podfile_setup
+
+target 'Runner' do
+  # Swift 插件统一以 framework 集成，避免静态模块映射与 Objective-C 桥接头冲突。
+  use_frameworks!
+
+  # 原生静态库(smoldot 轻节点 + sr25519 签名 + OpenMLS 聊天),由
+  # scripts/build-smoldot-native.sh ios 生成,符号清单从产物实抽,详见 podspec。
+  pod 'smoldot_ffi', :path => 'smoldot'
+
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_ios_build_settings(target)
+    target.build_configurations.each do |config|
+      # Apple Silicon simulator requires arm64. Do not exclude it.
+      config.build_settings['EXCLUDED_ARCHS[sdk=iphonesimulator*]'] = ''
+      # 两个 iOS 产品统一以 16.0 为唯一最低版本，禁止 Pods 保留 9/11/12/13 的旧目标。
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'
+    end
+  end
+
+  # CocoaPods 1.17 会把 Isar 静态 XCFramework 的脚本输出误写成不存在的
+  # `isar.framework`，实际切片是 `libisar.a`。Xcode 27 据此建立错误依赖图，
+  # 可能在复制静态库前启动链接器。这里只修正每次 pod install 的生成清单，
+  # 不修改 pub cache、Isar 源码或引入手工预构建流程。
+  isar_support_dir = File.join(
+    installer.sandbox.root.to_s,
+    'Target Support Files',
+    'isar_community_flutter_libs',
+  )
+  isar_output_list = File.join(
+    isar_support_dir,
+    'isar_community_flutter_libs-xcframeworks-output-files.xcfilelist',
+  )
+  File.write(
+    isar_output_list,
+    "${PODS_XCFRAMEWORKS_BUILD_DIR}/isar_community_flutter_libs/libisar.a\n",
+  )
+end

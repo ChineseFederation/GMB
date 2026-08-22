@@ -1,0 +1,221 @@
+name: 公民 · CI · iOS
+run-name: 公民 · CI · iOS
+
+# 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
+# 本文件只处理 CitizenApp iOS CI，其它产品、动作和端使用独立 workflow 并可并行。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+      build_number:
+        description: 本次候选构建号
+        required: true
+        type: string
+
+concurrency:
+  group: citizenapp-ci-ios
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
+
+jobs:
+  # ── 代码检查 ──
+  check:
+    name: Flutter 代码检查
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      # 全产品 Logo 只允许由 docs/logo.png 唯一母版生成。
+      - name: 校验 Logo 唯一真源派生物
+        run: node scripts/generate-logo-assets.mjs --check
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenapp
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          version = os.environ["GMB_SOFTWARE_VERSION"]
+          build = os.environ["GMB_BUILD_NUMBER"]
+          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
+              raise SystemExit("CitizenApp 候选版本输入无效")
+          path = Path("citizenapp/pubspec.yaml")
+          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
+          if count != 1:
+              raise SystemExit("CitizenApp pubspec 版本真源无效")
+          path.write_text(text)
+          PY
+
+      - name: 校验 chainspec.json 冻结
+        run: |
+          bash citizenapp/scripts/check-chainspec-frozen.sh
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          print(f"version={version}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      - name: 安装依赖
+        working-directory: citizenapp
+        run: flutter pub get --enforce-lockfile
+
+      # 扫码设备层由 CitizenApp / CitizenWallet 共同消费；包本身不解析业务码型。
+      - name: 检查 Flutter 共享扫码适配器
+        working-directory: shared/scanner-flutter
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      # 本机与 CI 共用唯一入口：锁定 Flutter → 构建并验收宿主 libsmoldot
+      # 全部 FFI 符号 → analyze → 顺序执行 Flutter 测试。
+      - name: 分析并运行完整测试
+        working-directory: citizenapp
+        run: ./scripts/citizenapp-test.sh
+
+  # ── Android APK 打包 ──
+  ios:
+    name: 打包公民 iOS CI
+    runs-on: macos-15
+    needs: check
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          submodules: recursive
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenapp
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
+              raise SystemExit("CitizenApp 候选版本输入无效")
+          path = Path("citizenapp/pubspec.yaml")
+          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
+          if count != 1: raise SystemExit("CitizenApp pubspec 版本真源无效")
+          path.write_text(text)
+          PY
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: aarch64-apple-ios
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          print(f"version={version}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      # 与 android job 同一道门禁：chainspec 是轻节点创世真源，两端都不得绕过。
+      - name: 再次校验 chainspec.json 冻结
+        run: |
+          bash citizenapp/scripts/check-chainspec-frozen.sh
+
+      # ↓↓ 以下三步顺序是硬约束，颠倒会崩在很难读的 CocoaPods 报错里 ↓↓
+      # 1) flutter pub get 生成 ios/Flutter/Generated.xcconfig —— Podfile 必须读它定位 FLUTTER_ROOT
+      # 2) build-smoldot-native.sh ios 产出 libsmoldot.a 并从中实抽 exported_symbols.txt
+      #    —— smoldot_ffi.podspec 读该清单生成 -Wl,-u，缺它则 release 的 -dead_strip 会
+      #    静默剔掉全部导出符号，装机后才在运行时炸
+      # 3) flutter build ios 内部自带 pod install（且自带正确的 LANG；手动跑才需要
+      #    LANG=en_US.UTF-8，否则 CocoaPods 编码崩溃）
+      - name: 安装 Flutter 依赖
+        working-directory: citizenapp
+        run: flutter pub get --enforce-lockfile
+
+      - name: 编译 smoldot native library (iOS arm64)
+        working-directory: citizenapp
+        run: ./scripts/build-smoldot-native.sh ios
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "citizenapp-rust-ios"
+          workspaces: citizenapp/rust -> target
+
+      - name: 构建 iOS Release 候选
+        working-directory: citizenapp
+        run: flutter build ios --release --no-codesign
+
+      - name: 使用 ad-hoc CI 身份签名并核验 iOS 产物
+        run: |
+          codesign --force --deep --sign - citizenapp/build/ios/iphoneos/Runner.app
+          codesign --verify --deep --strict citizenapp/build/ios/iphoneos/Runner.app
+
+      - name: 核验 iOS 候选中英文系统弹窗本地化
+        working-directory: citizenapp
+        run: bash scripts/citizenapp-run.sh verify-ios-localization build/ios/iphoneos/Runner.app
+
+      - name: 整理 iOS 候选
+        run: |
+          set -euo pipefail
+          mkdir -p citizenapp/build/release-candidate/ios
+          asset='公民-iOS-CI.app.zip'
+          ditto -c -k --keepParent citizenapp/build/ios/iphoneos/Runner.app \
+            "citizenapp/build/release-candidate/ios/${asset}"
+
+      - name: 上传 iOS 候选
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: 公民-iOS-CI
+          path: citizenapp/build/release-candidate/ios/*.app.zip
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      - name: 签署 iOS 候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: citizenapp/build/release-candidate/ios/*.app.zip
+
+  # 中文注释：版本 Tag 是成功事务的最后提交点。只有代码检查和 iOS 候选全部成功才运行；
+  # 本 job 只有 refs 写权限，不读取或持有任何正式签名材料。

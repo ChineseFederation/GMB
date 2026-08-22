@@ -1,0 +1,149 @@
+name: 公民网 · Release · Web
+run-name: 公民网 · Release · Web
+
+# 中文注释：官网是独立产品，使用自己的 workflow、版本和候选产物；CI 只构建静态网站，
+# 不读取 Cloudflare 生产令牌，不创建 Pages Deployment，也不复用 CitizenApp 移动端流水线。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      ci_run_id:
+        description: 本次 Release 复核的准确成功 CI run_id
+        required: true
+        type: string
+      version_tag:
+        description: 公民网正式版本 Tag
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+
+concurrency:
+  group: citizenweb-release-web
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CI: 1
+  WRANGLER_SEND_METRICS: false
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
+  GMB_VERSION_TAG: ${{ inputs.version_tag }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+
+jobs:
+  check:
+    name: 官网代码与正式构建检查
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
+      - name: 拉取 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/github-release.mjs
+            .github/scripts/version-tag-contract.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: 验证公民网 Release 的正式版本 Tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          --ci-run-id "$GMB_CI_RUN_ID"
+          --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
+          --prefix citizenweb-v --product-id citizenweb
+          --target web --workflow citizenweb-ci-web.yml
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenweb
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const version = process.env.GMB_SOFTWARE_VERSION;
+          if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(version)) throw new Error('官网候选版本输入无效');
+          for (const path of ['citizenweb/package.json', 'citizenweb/package-lock.json']) {
+            const value = JSON.parse(fs.readFileSync(path, 'utf8'));
+            value.version = version;
+            if (path.endsWith('package-lock.json')) {
+              if (!value.packages?.['']) throw new Error('官网 package-lock 缺少根 package');
+              value.packages[''].version = version;
+            }
+            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+          }
+          NODE
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: citizenweb/package-lock.json
+
+      - name: 安装官网锁定依赖
+        working-directory: citizenweb
+        run: npm ci
+
+      - name: 执行依赖安全审计
+        run: node .github/scripts/dependencies.mjs audit --scope citizenweb
+
+      - name: 检查官网代码
+        working-directory: citizenweb
+        run: npm run lint
+
+      - name: 执行官网候选契约测试
+        working-directory: citizenweb
+        run: npm test
+
+      - name: 生成官网正式构建产物
+        working-directory: citizenweb
+        run: npm run build
+
+      - name: 生成不可变官网候选与规范归档
+        run: |
+          node .github/scripts/build-citizenweb-release.mjs \
+            --project citizenweb \
+            --dist citizenweb/dist \
+            --output "$RUNNER_TEMP/citizenweb-candidate" \
+            --git-sha "$GMB_SOURCE_SHA" \
+            --archive "$RUNNER_TEMP/citizenweb-release.tgz"
+
+      - name: 签署官网正式构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: ${{ runner.temp }}/citizenweb-release.tgz
+
+      # 中文注释：GitHub runner 只固化已验证归档；公民控制台不再下载 Actions 候选、
+      # 本机复核后二次创建 Release。草稿只作为三项正式资产上传的原子事务边界，
+      # Cloudflare Pages 生产发布仍由控制台的独立“发布”动作负责。
+      - name: 固化公民网正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          candidate_dir="$RUNNER_TEMP/citizenweb-candidate"
+          archive="$RUNNER_TEMP/citizenweb-release.tgz"
+          test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tool/.github/scripts/github-release.mjs \
+            --tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA" \
+            --title '公民网 · Release · Web' \
+            --notes "公民网 ${GMB_SOFTWARE_VERSION}。" --latest false \
+            --assets "$archive" "$candidate_dir/release-manifest.json" "$candidate_dir/SHA256SUMS"

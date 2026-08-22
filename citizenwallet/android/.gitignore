@@ -1,0 +1,12 @@
+gradle-wrapper.jar
+/.gradle
+/captures/
+/gradlew
+/gradlew.bat
+/local.properties
+GeneratedPluginRegistrant.java
+.cxx/
+
+# Android 正式签名材料禁止写入项目；以下格式只作为误放私钥的最后一道提交保护。
+**/*.keystore
+**/*.jks

@@ -1,0 +1,1076 @@
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:citizenapp/log/app_log.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:local_auth/local_auth.dart';
+import 'package:citizenapp/8964/square_tab_page.dart';
+import 'package:citizenapp/citizen/citizen_tab_page.dart';
+import 'package:citizenapp/chat/chat_push_service.dart';
+import 'package:citizenapp/chat/chat_runtime.dart';
+import 'package:citizenapp/chat/chat_tab.dart';
+import 'package:citizenapp/rpc/smoldot_client.dart';
+import 'package:citizenapp/security/app_lock_service.dart';
+import 'package:citizenapp/security/pin_input_page.dart';
+import 'package:citizenapp/security/secure_storage.dart';
+import 'package:citizenapp/transaction/transaction_tab_page.dart';
+import 'package:citizenapp/my/util/screenshot_guard.dart';
+import 'package:citizenapp/my/user/user.dart';
+import 'package:citizenapp/isar/user_isar.dart';
+import 'package:citizenapp/security/app_permission_gate.dart';
+import 'package:citizenapp/update/app_update.dart';
+import 'package:citizenapp/update/update_badge.dart';
+import 'package:citizenapp/8964/services/device_subkey_registrar.dart';
+import 'package:citizenapp/8964/pages/square_turnstile_page.dart';
+import 'package:citizenapp/qr/pages/qr_sign_session_page.dart';
+import 'package:citizenapp/qr/qr_protocols.dart';
+import 'package:citizenapp/security/local_data_key.dart';
+import 'package:citizenapp/security/account_data_key_provision.dart';
+import 'package:citizenapp/qr/bodies/account_data_key_response_body.dart';
+import 'package:citizenapp/qr/envelope.dart';
+import 'package:citizenapp/signer/qr_signer.dart';
+import 'package:citizenapp/wallet/core/default_account_service.dart';
+import 'package:citizenapp/wallet/core/wallet_manager.dart';
+import 'package:citizenapp/wallet/wallet_gate.dart';
+
+import 'ui/app_theme.dart';
+import 'ui/app_layout.dart';
+import 'ui/biometric_auth_text.dart';
+
+final appNavigatorKey = GlobalKey<NavigatorState>();
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // 任何 ChatRuntime、钱包页或 PIN 门禁构造前先处理跨重启擦除门闩。
+  // pending 不依赖已被平台阶段删除的 PIN，直接继续全量擦除；
+  // 当前进程无论成败都只允许重试或退出，禁止恢复业务运行态。
+  final wipeStartupResult =
+      await AppLockService.recoverPersistentWipeAtStartup();
+  if (wipeStartupResult != AppDataWipeStartupResult.ready) {
+    runApp(_DataWipeRecoveryApp(initialResult: wipeStartupResult));
+    return;
+  }
+
+  // 只有持久擦除门闩与上一进程 CID lease 都完成安全预检后，才允许注册
+  // 会构造 ChatRuntime 的后台入口；preflightBlocked 进程绝不启动任何业务生产者。
+  FirebaseMessaging.onBackgroundMessage(chatRuntimeBackgroundHandler);
+
+  // 注入 P-256 设备子钥登记钩子（8964 层实现，避免 wallet/core 反向依赖）。已有子钥
+  // 直接静默使用；只有实际业务确认缺钥时才鉴权一次生成，不在钱包创建或页面门禁触发。
+  DeviceSubkeyRegistrar.turnstileTokenProvider = () async {
+    final navigator = appNavigatorKey.currentState;
+    if (navigator == null) return null;
+    return navigator.push<String>(
+      MaterialPageRoute(builder: (_) => const SquareTurnstilePage()),
+    );
+  };
+  WalletManager.subkeyRegistrar = DeviceSubkeyRegistrar().register;
+  WalletManager.coldDeviceBindingSigner = _signColdDeviceBinding;
+  WalletManager.coldAccountDataKeyProvider = _provideColdAccountDataKeys;
+
+  // 诊断 — 把所有 framework / widget 静默吞掉的异常都打到 logcat。
+  // 默认 ErrorWidget 在某些场景下表现为空白方块（白屏），这里换成显眼的红框 + 文字。
+  FlutterError.onError = (details) {
+    FlutterError.dumpErrorToConsole(details);
+    AppLog.d(
+      '[FlutterError-Diag] library=${details.library} ctx=${details.context} '
+      'exception=${details.exception}',
+    );
+  };
+  ErrorWidget.builder = (FlutterErrorDetails details) {
+    AppLog.d(
+      '[ErrorWidget-Diag] exception=${details.exception}\nstack=${details.stack}',
+    );
+    return Material(
+      color: const Color(0xFFFFEEEE),
+      child: Padding(
+        padding: EdgeInsets.all(AppLayout.scaledValue(12)),
+        child: SingleChildScrollView(
+          child: Text(
+            'WIDGET ERROR:\n${details.exception}\n\n${details.stack}',
+            style: TextStyle(
+              color: const Color(0xFFB00020),
+              fontSize: AppLayout.scaledValue(12),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  // 状态栏样式
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.dark,
+      systemNavigationBarColor: AppTheme.surfaceCard,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    ),
+  );
+
+  // 先销毁可能残留的旧实例（hot restart 场景）。
+  // 防止 Rust tokio 线程持有已删除的 Dart FFI 回调导致 SIGABRT。
+  await SmoldotClientManager.instance.dispose();
+
+  runApp(const CitizenApp());
+}
+
+/// 持久 pending marker 的唯一启动终态：不构造任何业务页面。
+class _DataWipeRecoveryApp extends StatelessWidget {
+  const _DataWipeRecoveryApp({required this.initialResult});
+
+  final AppDataWipeStartupResult initialResult;
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: '公民',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme,
+      home: _DataWipeRecoveryPage(initialResult: initialResult),
+    );
+  }
+}
+
+class _DataWipeRecoveryPage extends StatefulWidget {
+  const _DataWipeRecoveryPage({required this.initialResult});
+
+  final AppDataWipeStartupResult initialResult;
+
+  @override
+  State<_DataWipeRecoveryPage> createState() => _DataWipeRecoveryPageState();
+}
+
+class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
+  late AppDataWipeStartupResult _result;
+  bool _retrying = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _result = widget.initialResult;
+  }
+
+  Future<void> _retry() async {
+    if (_retrying || _result != AppDataWipeStartupResult.retryRequired) return;
+    setState(() => _retrying = true);
+    try {
+      await AppLockService.wipeAllData();
+      if (!mounted) return;
+      setState(() => _result = AppDataWipeStartupResult.dataWiped);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _result = AppDataWipeStartupResult.retryRequired);
+    } finally {
+      if (mounted) setState(() => _retrying = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final completed = _result == AppDataWipeStartupResult.dataWiped;
+    final preflightBlocked =
+        _result == AppDataWipeStartupResult.preflightBlocked;
+    final canRetryWipe = _result == AppDataWipeStartupResult.retryRequired;
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  completed ? Icons.delete_forever : Icons.warning_amber,
+                  size: 56,
+                  color: completed ? AppTheme.primary : AppTheme.danger,
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  completed
+                      ? '数据已清空'
+                      : preflightBlocked
+                          ? '安全状态无法确认'
+                          : '数据清理未完成',
+                  style: const TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  completed
+                      ? '请退出并重新启动应用。'
+                      : preflightBlocked
+                          ? '应用不会擅自清理任何数据。请退出后重新启动。'
+                          : '为保护本机数据，应用不会继续进入任何功能页。',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(color: AppTheme.textSecondary),
+                ),
+                const SizedBox(height: 24),
+                if (canRetryWipe)
+                  FilledButton(
+                    onPressed: _retrying ? null : _retry,
+                    child: Text(_retrying ? '正在重试擦除…' : '重试擦除'),
+                  ),
+                if (canRetryWipe) const SizedBox(height: 8),
+                TextButton(
+                  onPressed: _retrying ? null : () => SystemNavigator.pop(),
+                  child: const Text('退出'),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// 当前默认账户是冷账户时，用 CitizenWallet 扫码签署既有 0x1C 设备绑定摘要。
+Future<String> _signColdDeviceBinding({
+  required AccountDataBinding binding,
+  required Uint8List payload,
+  required Uint8List signingMessage,
+  required String devicePublicKey,
+  required int issuedAtMillis,
+}) async {
+  final account = await DefaultAccountService().getDefaultAccount();
+  if (account == null ||
+      !account.isColdAccount ||
+      account.accountId != binding.accountId ||
+      !RegExp(r'^04[0-9a-f]{128}$').hasMatch(devicePublicKey)) {
+    throw const WalletAuthException('当前默认账户不是该 CID 的冷钱包账户');
+  }
+  final navigator = appNavigatorKey.currentState;
+  if (navigator == null) {
+    throw const WalletAuthException('当前页面无法发起冷钱包设备绑定签名');
+  }
+  final signer = QrSigner();
+  final request = signer.buildRequest(
+    requestId: QrSigner.generateRequestId(prefix: 'device-bind-'),
+    signerPublicKey: binding.accountId,
+    payloadHex: '0x${_lowerHex(payload)}',
+    action: QrActions.squareDeviceBind,
+    nowEpochSeconds: issuedAtMillis ~/ 1000,
+    ttlSeconds: 120,
+  );
+  final response = await navigator.push<SignResponseEnvelope>(
+    MaterialPageRoute(
+      builder: (_) => QrSignSessionPage(
+        request: request,
+        requestJson: signer.encodeRequest(request),
+        expectedSignerPublicKey: binding.accountId,
+      ),
+    ),
+  );
+  if (response == null) {
+    throw const WalletAuthException('冷钱包设备绑定签名已取消');
+  }
+  final current = await DefaultAccountService().getDefaultAccount();
+  if (current == null ||
+      !current.isColdAccount ||
+      current.accountId != binding.accountId ||
+      response.id != request.id ||
+      response.body.signerPublicKeyHex != binding.accountId ||
+      !QrSigner.verifySr25519Signature(
+        signerPublicKeyHex: binding.accountId,
+        signatureHex: response.body.signatureHex,
+        message: signingMessage,
+      )) {
+    throw const WalletAuthException('冷钱包设备绑定签名无效');
+  }
+  return response.body.signatureHex;
+}
+
+/// 冷账户真实缺少用途钥时，使用一次性 X25519 会话从 CitizenWallet 加密领取。
+Future<List<Uint8List>> _provideColdAccountDataKeys({
+  required AccountDataBinding binding,
+  required List<({LocalKeyPurpose purpose, String? context})> requests,
+}) async {
+  final account = await DefaultAccountService().getDefaultAccount();
+  if (account == null ||
+      !account.isColdAccount ||
+      account.accountId != binding.accountId) {
+    throw const WalletAuthException('当前默认账户不是该 CID 的冷钱包账户');
+  }
+  final navigator = appNavigatorKey.currentState;
+  if (navigator == null) {
+    throw const WalletAuthException('当前页面无法发起冷钱包用途钥请求');
+  }
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  final session = AccountDataKeyProvisionSession.create(
+    binding: binding,
+    requests: requests,
+    expiresAt: now + 120,
+  );
+  try {
+    final signer = QrSigner();
+    final request = signer.buildRequest(
+      requestId: QrSigner.generateRequestId(prefix: 'data-key-'),
+      signerPublicKey: binding.accountId,
+      payloadHex: '0x${_lowerHex(session.payload)}',
+      action: QrActions.accountDataKeyProvision,
+      nowEpochSeconds: now,
+      ttlSeconds: 120,
+    );
+    final response =
+        await navigator.push<QrEnvelope<AccountDataKeyResponseBody>>(
+      MaterialPageRoute(
+        builder: (_) => QrSignSessionPage(
+          request: request,
+          requestJson: signer.encodeRequest(request),
+          expectedSignerPublicKey: binding.accountId,
+          responseKind: QrKind.accountDataKeyResponse,
+        ),
+      ),
+    );
+    if (response == null) {
+      throw const WalletAuthException('冷钱包用途钥提供已取消');
+    }
+    final current = await DefaultAccountService().getDefaultAccount();
+    if (current == null ||
+        !current.isColdAccount ||
+        current.accountId != binding.accountId ||
+        response.id != request.id ||
+        response.expiresAt != request.expiresAt) {
+      throw const WalletAuthException('冷钱包用途钥响应会话已失效');
+    }
+    return session.open(response.body);
+  } on AccountDataKeyException catch (error) {
+    throw WalletAuthException(error.message);
+  } finally {
+    session.dispose();
+  }
+}
+
+String _lowerHex(List<int> bytes) =>
+    bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+
+class CitizenApp extends StatelessWidget {
+  const CitizenApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      navigatorKey: appNavigatorKey,
+      title: '公民',
+      debugShowCheckedModeBanner: false,
+      theme: AppTheme.lightTheme,
+      // 只根据完整逻辑视口注入动态 UI 主题；不覆盖 MediaQuery，
+      // 因此系统文字倍率、SafeArea、键盘和手势区仍保持原生语义。
+      builder: (context, child) =>
+          Theme(data: AppTheme.lightThemeFor(context), child: child!),
+      home: const _AppLockGate(),
+    );
+  }
+}
+
+/// 应用锁入口：先检查 PIN 锁 → 再检查设备锁 → 进入主界面。
+class _AppLockGate extends StatefulWidget {
+  const _AppLockGate();
+
+  @override
+  State<_AppLockGate> createState() => _AppLockGateState();
+}
+
+class _AppLockGateState extends State<_AppLockGate>
+    with WidgetsBindingObserver {
+  final LocalAuthentication _localAuth = LocalAuthentication();
+  bool _authenticated = false;
+  bool _checking = true;
+  bool _showDeviceLock = false;
+
+  /// 后台超过此时长后回到前台需重新验证。
+  static const Duration _sessionTimeout = Duration(minutes: 5);
+  DateTime? _pausedAt;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    // 短命 Chat 明文附件 purge 点之一：启动即清上次会话残留。
+    // 崩溃/强杀会跳过退后台那次清理，没有这道兜底明文就会跨会话留在盘上。
+    unawaited(_purgePlainAttachments());
+    _checkLock();
+  }
+
+  /// 清空解密出来的短命 Chat 附件。失败静默，不阻断 App 启动/切换。
+  Future<void> _purgePlainAttachments() async {
+    try {
+      await ChatRuntime.purgePlainAttachmentsWithoutAccount();
+    } catch (_) {
+      // 忽略：下次启动/切后台会再清一次。
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      _pausedAt = DateTime.now();
+      // purge 点之二:退到后台即清明文，把明文窗口压到一次前台会话内。
+      unawaited(_purgePlainAttachments());
+    } else if (state == AppLifecycleState.resumed && _authenticated) {
+      final paused = _pausedAt;
+      if (paused != null &&
+          DateTime.now().difference(paused) > _sessionTimeout) {
+        AppLog.d('[AppLock] 后台超过 ${_sessionTimeout.inMinutes} 分钟,重锁入口');
+        // 超时只重新锁定 App 入口（PIN/设备锁），不清会话签名密钥：
+        // App 锁已拦住入口，会话密钥留到进程结束，避免每次重进都为发广场
+        // 动态等低敏感操作重复生物识别。转账/投票/切换身份仍每次强制认证。
+        setState(() {
+          _authenticated = false;
+          _checking = true;
+          _showDeviceLock = false;
+        });
+        _checkLock();
+      }
+      _pausedAt = null;
+    }
+  }
+
+  Future<void> _checkLock() async {
+    // 1. 检查 PIN 锁
+    final pinSet = await AppLockService.isPinSet();
+    if (pinSet) {
+      if (!mounted) return;
+      setState(() => _checking = false);
+      _showPinVerify();
+      return;
+    }
+
+    // 2. 检查设备锁（存储在 SecureStorage，防 root 篡改）
+    final deviceLockStr = await appSecureStorage.read(
+      key: 'device_lock_enabled',
+    );
+    final deviceLockEnabled = deviceLockStr == 'true';
+    if (deviceLockEnabled) {
+      if (!mounted) return;
+      setState(() {
+        _checking = false;
+        _showDeviceLock = true;
+      });
+      _authenticateDevice();
+      return;
+    }
+
+    // 3. 无锁，直接进入
+    if (!mounted) return;
+    setState(() {
+      _authenticated = true;
+      _checking = false;
+    });
+  }
+
+  Future<void> _showPinVerify() async {
+    if (!mounted) return;
+    // 诊断:定位"签名后多弹一次输入框"到底是谁 —— 若是本页,日志会给出时点。
+    AppLog.d('[AppLock] 弹出 PIN 验证输入框');
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => const PinInputPage(mode: PinInputMode.verify),
+      ),
+    );
+    if (!mounted) return;
+    if (result == true) {
+      setState(() => _authenticated = true);
+    }
+  }
+
+  Future<void> _authenticateDevice() async {
+    AppLog.d('[AppLock] 弹出设备锁验证');
+    try {
+      final success = await _localAuth.authenticate(
+        localizedReason: BiometricAuthText.pick(
+          zh: '请验证身份以进入应用',
+          en: 'Verify your identity to open CitizenApp',
+        ),
+        authMessages: BiometricAuthText.messages(),
+        biometricOnly: false,
+        persistAcrossBackgrounding: true,
+        sensitiveTransaction: true,
+      );
+      if (!mounted) return;
+      if (success) {
+        setState(() => _authenticated = true);
+      }
+    } catch (_) {
+      // 认证失败，保持锁定状态
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_checking) {
+      return Scaffold(
+        body: Center(
+          child: SizedBox(
+            width: AppLayout.scaled(context, 24),
+            height: AppLayout.scaled(context, 24),
+            child: const CircularProgressIndicator(
+              strokeWidth: 2.5,
+              color: AppTheme.primary,
+            ),
+          ),
+        ),
+      );
+    }
+
+    if (_authenticated) {
+      // 账户门禁排在最后一环：无热钱包先进强制创建页，再放行主界面。
+      return const AppPermissionGate(
+        child: WalletGate(child: HomeTabGate()),
+      );
+    }
+
+    if (_showDeviceLock) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                width: AppLayout.scaled(context, 80),
+                height: AppLayout.scaled(context, 80),
+                decoration: BoxDecoration(
+                  gradient: AppTheme.primaryGradient,
+                  borderRadius: BorderRadius.circular(
+                    AppLayout.scaledValue(20),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppTheme.primary.withAlpha(50),
+                      blurRadius: AppLayout.scaled(context, 24),
+                      offset: Offset(0, AppLayout.scaled(context, 8)),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  Icons.lock_outline,
+                  color: Colors.white,
+                  size: AppLayout.scaled(context, 36),
+                ),
+              ),
+              SizedBox(height: AppLayout.scaled(context, 32)),
+              Text(
+                '应用已锁定',
+                style: TextStyle(
+                  fontSize: AppLayout.scaled(context, 22),
+                  fontWeight: FontWeight.w700,
+                  color: AppTheme.textPrimary,
+                  letterSpacing: 1,
+                ),
+              ),
+              SizedBox(height: AppLayout.scaled(context, 8)),
+              Text(
+                '请验证身份以继续',
+                style: TextStyle(
+                  fontSize: AppLayout.scaled(context, 14),
+                  color: AppTheme.textSecondary,
+                ),
+              ),
+              SizedBox(height: AppLayout.scaled(context, 40)),
+              SizedBox(
+                width: AppLayout.scaled(context, 200),
+                child: FilledButton.icon(
+                  onPressed: _authenticateDevice,
+                  icon: Icon(
+                    Icons.fingerprint,
+                    size: AppLayout.scaled(context, 22),
+                  ),
+                  label: const Text('验证身份'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // PIN 锁模式下，PinInputPage 已通过 Navigator 展示
+    return Scaffold(
+      body: Center(
+        child: Container(
+          width: AppLayout.scaled(context, 64),
+          height: AppLayout.scaled(context, 64),
+          decoration: BoxDecoration(
+            gradient: AppTheme.primaryGradient,
+            borderRadius: BorderRadius.circular(AppLayout.scaledValue(16)),
+          ),
+          child: Icon(
+            Icons.how_to_vote_outlined,
+            color: Colors.white,
+            size: AppLayout.scaled(context, 30),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// AppShell 构造前读取用户首页偏好，避免先创建广场再异步跳到聊天。
+class HomeTabGate extends StatefulWidget {
+  const HomeTabGate({
+    super.key,
+    this.preferenceReader,
+    this.shellBuilder,
+  });
+
+  /// 测试只替换 UserIsar 读取。
+  @visibleForTesting
+  final Future<bool> Function()? preferenceReader;
+
+  /// 测试只观察解析后的唯一初始索引，不构造真实五个业务 Tab。
+  @visibleForTesting
+  final Widget Function(int initialTabIndex)? shellBuilder;
+
+  @override
+  State<HomeTabGate> createState() => _HomeTabGateState();
+}
+
+class _HomeTabGateState extends State<HomeTabGate> {
+  static const Duration _readTimeout = Duration(seconds: 5);
+  int? _initialTabIndex;
+  String? _error;
+  int _generation = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final generation = ++_generation;
+    setState(() {
+      _initialTabIndex = null;
+      _error = null;
+    });
+    try {
+      final openChat = await (widget.preferenceReader ??
+              UserIsar.instance.readOpenChatOnLaunch)()
+          .timeout(_readTimeout);
+      if (!mounted || generation != _generation) return;
+      setState(() => _initialTabIndex = openChat ? 2 : 0);
+    } catch (_) {
+      if (!mounted || generation != _generation) return;
+      setState(() => _error = '首页设置读取失败，请重试');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final error = _error;
+    if (error != null) {
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(error, key: const ValueKey('home-tab-gate-error')),
+              const SizedBox(height: 16),
+              FilledButton(
+                key: const ValueKey('home-tab-gate-retry'),
+                onPressed: _load,
+                child: const Text('重试'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    final initialTabIndex = _initialTabIndex;
+    if (initialTabIndex == null) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(
+            strokeWidth: 2.5,
+            color: AppTheme.primary,
+          ),
+        ),
+      );
+    }
+    return widget.shellBuilder?.call(initialTabIndex) ??
+        AppShell(initialTabIndex: initialTabIndex);
+  }
+}
+
+class AppShell extends StatefulWidget {
+  const AppShell({
+    super.key,
+    this.initialTabIndex = 0,
+    this.chatRuntimeFactory,
+    this.tabBuilder,
+    this.openedPushData,
+    this.initialPushDataLoader,
+  }) : assert(initialTabIndex == 0 || initialTabIndex == 2);
+
+  /// 只允许广场(0)或聊天(2)作为普通启动首页。
+  final int initialTabIndex;
+
+  /// 测试只注入构造计数；生产固定首次进入 Chat Tab 时才创建 [ChatRuntime]。
+  @visibleForTesting
+  final ChatRuntime Function()? chatRuntimeFactory;
+
+  /// 测试只替换五个主页面，避免为了验证壳层懒加载而启动真实链、网络或数据库。
+  @visibleForTesting
+  final Widget Function(int tabIndex, ChatRuntime? chatRuntime)? tabBuilder;
+
+  /// 测试只注入 App 级“点击推送打开”数据；生产直接监听 Firebase。
+  @visibleForTesting
+  final Stream<Map<String, dynamic>>? openedPushData;
+
+  /// 测试只注入冷启动推送；生产读取 Firebase 唯一 initial message。
+  @visibleForTesting
+  final Future<Map<String, dynamic>?> Function()? initialPushDataLoader;
+
+  /// 主 Tab 的系统栏样式由壳层单源控制，避免保活页面留下上一页的明暗状态。
+  ///
+  /// 「我的」顶部是照片，使用浅色图标；其余四个主 Tab 都是浅色背景，必须使用深色
+  /// 图标。子路由的 AppBar 仍可用更靠前的 AnnotatedRegion 覆盖本样式。
+  static SystemUiOverlayStyle systemUiOverlayStyleForTab(int tabIndex) {
+    final statusStyle =
+        tabIndex == 4 ? SystemUiOverlayStyle.light : SystemUiOverlayStyle.dark;
+    return statusStyle.copyWith(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: AppTheme.surfaceCard,
+      systemNavigationBarIconBrightness: Brightness.dark,
+    );
+  }
+
+  @override
+  State<AppShell> createState() => _AppShellState();
+}
+
+class _AppShellState extends State<AppShell> {
+  final AppUpdateController _updateController = AppUpdateController.instance;
+  late final ValueNotifier<int> _selectedTab;
+  ChatRuntime? _chatRuntime;
+  late int _currentIndex;
+  int _pendingVoteCount = 0;
+  int _squareNotifyCount = 0;
+  bool _isRooted = false;
+  StreamSubscription<Map<String, dynamic>>? _pushOpenSub;
+
+  /// Chat 运行态只在用户首次打开聊天 Tab 时创建。广场、用户、钱包或公民页启动
+  /// 不得因为构造 ChatRuntime 而进入 Chat 的文件、密钥或网络生命周期。
+  ChatRuntime get _chatRuntimeForTab =>
+      _chatRuntime ??= (widget.chatRuntimeFactory ?? () => ChatRuntime())();
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.initialTabIndex;
+    _selectedTab = ValueNotifier<int>(_currentIndex);
+    _updateController.addListener(_handleUpdateStateChanged);
+    _checkRootStatus();
+    // 启动后异步检查 Release 更新，只更新设置页状态，不阻塞主界面进入。
+    _updateController.check();
+    // 点击推送属于 App 导航，不得为此提前构造 ChatRuntime。聊天唤醒只保存无内容
+    // sender 提示，进入/恢复 Chat 时再由 Chat 域消费；广场推送直接切广场 Tab。
+    unawaited(_startPushOpenRouting());
+  }
+
+  Future<void> _startPushOpenRouting() async {
+    try {
+      final injected = widget.openedPushData;
+      if (injected != null) {
+        _pushOpenSub = injected.listen(
+          (data) => unawaited(_handleOpenedPushData(data)),
+        );
+        final initial = await widget.initialPushDataLoader?.call();
+        if (initial != null) await _handleOpenedPushData(initial);
+        return;
+      }
+
+      await ensureChatFirebaseReady();
+      if (!mounted) return;
+      _pushOpenSub = FirebaseMessaging.onMessageOpenedApp
+          .map((message) => message.data)
+          .listen((data) => unawaited(_handleOpenedPushData(data)));
+      final initial = await FirebaseMessaging.instance.getInitialMessage();
+      if (initial != null) await _handleOpenedPushData(initial.data);
+    } catch (error, stackTrace) {
+      AppLog.d('[AppPush] 打开路由初始化失败: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _handleOpenedPushData(Map<String, dynamic> data) async {
+    if (!mounted) return;
+    if (data['kind'] == 'square_post') {
+      _openSquareTab();
+      return;
+    }
+    final sender = ChatPushService.wakeSenderFromData(data);
+    if (sender != null) {
+      await ChatPushService.storeWakeSender(sender);
+    }
+  }
+
+  void _openSquareTab() {
+    if (!mounted || _currentIndex == 0) return;
+    _selectedTab.value = 0;
+    setState(() => _currentIndex = 0);
+  }
+
+  @override
+  void dispose() {
+    _updateController.removeListener(_handleUpdateStateChanged);
+    unawaited(_pushOpenSub?.cancel());
+    _selectedTab.dispose();
+    super.dispose();
+  }
+
+  void _handleUpdateStateChanged() {
+    if (!mounted) return;
+    // 我的页懒建缓存失效以刷新「设置有更新」红点。
+    _tabCache[4] = null;
+    setState(() {});
+  }
+
+  Future<void> _checkRootStatus() async {
+    final rooted = await ScreenshotGuard.isDeviceRooted();
+    if (!mounted) return;
+    setState(() => _isRooted = rooted);
+  }
+
+  late final Widget _citizenPage = CitizenTabPage(
+    onPendingVoteCountChanged: (count) {
+      if (mounted && count != _pendingVoteCount) {
+        setState(() => _pendingVoteCount = count);
+      }
+    },
+  );
+
+  /// 广场落地页（index 0）：发帖通知红点数经回调上抛到底部 tab；selectedTab
+  /// 广播让广场在被切回时清广场红点（进广场清广场、关注红点另在关注子 tab 清）。
+  late final Widget _squarePage = SquareTab(
+    selectedTab: _selectedTab,
+    tabIndex: 0,
+    onSquareUnreadChanged: (count) {
+      if (mounted && count != _squareNotifyCount) {
+        setState(() => _squareNotifyCount = count);
+      }
+    },
+  );
+
+  /// 顶层 tab 懒建缓存：仅访问过的 index 建真页并由 IndexedStack 保活，未访问
+  /// 的用占位，避免「打开即全建」把 42k 行政区同步 / Chat runtime / 广场拉流等
+  /// 全拖到启动。UserIsar 选定的广场(0)或聊天(2)首页只建其一，其余点到才建。
+  static const int _tabCount = 5;
+  final List<Widget?> _tabCache = List<Widget?>.filled(_tabCount, null);
+
+  Widget _buildTab(int index) {
+    final injected = widget.tabBuilder;
+    if (injected != null) {
+      return injected(index, index == 2 ? _chatRuntimeForTab : null);
+    }
+    switch (index) {
+      case 0:
+        return _squarePage;
+      case 1:
+        return _citizenPage;
+      case 2:
+        return ChatTab(
+          runtime: _chatRuntimeForTab,
+          selectedTab: _selectedTab,
+          tabIndex: 2,
+        );
+      case 3:
+        return const TransactionTabPage();
+      case 4:
+        return MyTab(showSettingsUpdateDot: _updateController.state.hasUpdate);
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
+  /// 当前页按需建入缓存并保活，未访问的页用占位，避免启动即全建。
+  List<Widget> _lazyPages() {
+    _tabCache[_currentIndex] ??= _buildTab(_currentIndex);
+    return List<Widget>.generate(
+      _tabCount,
+      (i) => _tabCache[i] ?? const SizedBox.shrink(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scaffold = Scaffold(
+      body: Column(
+        children: [
+          if (_isRooted)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+              padding: EdgeInsets.symmetric(
+                horizontal: AppLayout.scaled(context, 12),
+                vertical: AppLayout.scaled(context, 10),
+              ),
+              decoration: AppTheme.bannerDecoration(AppTheme.danger),
+              child: SafeArea(
+                bottom: false,
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.warning_rounded,
+                      color: AppTheme.danger,
+                      size: AppLayout.scaled(context, 18),
+                    ),
+                    SizedBox(width: AppLayout.scaled(context, 8)),
+                    Expanded(
+                      child: Text(
+                        '检测到设备已 root/越狱，密钥安全无法保障',
+                        style: TextStyle(
+                          color: AppTheme.danger,
+                          fontSize: AppLayout.scaled(context, 13),
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(
+            child: IndexedStack(index: _currentIndex, children: _lazyPages()),
+          ),
+        ],
+      ),
+      bottomNavigationBar: Container(
+        decoration: const BoxDecoration(
+          color: AppTheme.surfaceCard,
+          border: Border(top: BorderSide(color: AppTheme.border, width: 0.5)),
+        ),
+        child: NavigationBar(
+          // 只补充放大后导航文字需要的高度，图标、边距和指示器保持结构令牌尺寸。
+          height: AppLayout.navigationBarHeight(context),
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (index) {
+            // IndexedStack 会保活旧页面，因此必须额外广播唯一活动 Tab；
+            // ChatTab 不能把“仍在 widget tree”误判为“当前可同步”。
+            _selectedTab.value = index;
+            setState(() {
+              _currentIndex = index;
+            });
+          },
+          destinations: [
+            NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _squareNotifyCount > 0,
+                label: Text(
+                  _squareNotifyCount > 99 ? '99+' : '$_squareNotifyCount',
+                  style: TextStyle(fontSize: AppLayout.scaled(context, 10)),
+                ),
+                child: SvgPicture.asset(
+                  'assets/icons/tank.svg',
+                  width: AppLayout.scaled(context, 26),
+                  height: AppLayout.scaled(context, 26),
+                  colorFilter: const ColorFilter.mode(
+                    AppTheme.textTertiary,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _squareNotifyCount > 0,
+                label: Text(
+                  _squareNotifyCount > 99 ? '99+' : '$_squareNotifyCount',
+                  style: TextStyle(fontSize: AppLayout.scaled(context, 10)),
+                ),
+                child: SvgPicture.asset(
+                  'assets/icons/tank.svg',
+                  width: AppLayout.scaled(context, 26),
+                  height: AppLayout.scaled(context, 26),
+                  colorFilter: const ColorFilter.mode(
+                    AppTheme.primary,
+                    BlendMode.srcIn,
+                  ),
+                ),
+              ),
+              label: '广场',
+            ),
+            NavigationDestination(
+              icon: Badge(
+                isLabelVisible: _pendingVoteCount > 0,
+                label: Text(
+                  '$_pendingVoteCount',
+                  style: TextStyle(fontSize: AppLayout.scaled(context, 10)),
+                ),
+                child: const Icon(Icons.how_to_vote_outlined),
+              ),
+              selectedIcon: Badge(
+                isLabelVisible: _pendingVoteCount > 0,
+                label: Text(
+                  '$_pendingVoteCount',
+                  style: TextStyle(fontSize: AppLayout.scaled(context, 10)),
+                ),
+                child: const Icon(Icons.how_to_vote),
+              ),
+              label: '公民',
+            ),
+            NavigationDestination(
+              icon: Icon(
+                Icons.textsms_outlined,
+                size: AppLayout.scaled(context, 22),
+              ),
+              selectedIcon: Icon(
+                Icons.textsms_rounded,
+                size: AppLayout.scaled(context, 22),
+              ),
+              label: '聊天',
+            ),
+            NavigationDestination(
+              icon: SvgPicture.asset(
+                'assets/icons/scale.svg',
+                width: AppLayout.scaled(context, 22),
+                height: AppLayout.scaled(context, 22),
+                colorFilter: const ColorFilter.mode(
+                  AppTheme.textTertiary,
+                  BlendMode.srcIn,
+                ),
+              ),
+              selectedIcon: SvgPicture.asset(
+                'assets/icons/scale.svg',
+                width: AppLayout.scaled(context, 22),
+                height: AppLayout.scaled(context, 22),
+                colorFilter: const ColorFilter.mode(
+                  AppTheme.primary,
+                  BlendMode.srcIn,
+                ),
+              ),
+              label: '交易',
+            ),
+            NavigationDestination(
+              icon: UpdateDotBadge(
+                show: _updateController.state.hasUpdate,
+                dotKey: const Key('my-tab-update-dot'),
+                child: const Icon(Icons.person_outline),
+              ),
+              selectedIcon: UpdateDotBadge(
+                show: _updateController.state.hasUpdate,
+                dotKey: const Key('my-tab-selected-update-dot'),
+                child: const Icon(Icons.person),
+              ),
+              label: '我的',
+            ),
+          ],
+        ),
+      ),
+    );
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      key: const ValueKey('app-shell-system-ui-style'),
+      value: AppShell.systemUiOverlayStyleForTab(_currentIndex),
+      child: scaffold,
+    );
+  }
+}

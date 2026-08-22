@@ -1,0 +1,162 @@
+name: GMB · 全仓统一
+run-name: GMB · 全仓统一
+
+# 中文注释：本 workflow 只验证跨产品共享真源和仓库规则，不构建、不发布任何软件。
+# 它拥有独立 Run 与独立结论；失败不得阻塞、取消或改变任一产品 CI/Release、Artifact 或 Tag。
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  # 中文注释：门禁只保留最新提交；新门禁先取消旧运行，再由首个任务删除旧记录。
+  group: gmb-repository
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
+
+jobs:
+  retain-current-run:
+    name: 只保留当前门禁记录
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 删除当前门禁之前的全部运行记录
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repository='${{ github.repository }}'
+          current='${{ github.run_id }}'
+          workflow_id="$(gh api "repos/${repository}/actions/runs/${current}" --jq '.workflow_id')"
+          while IFS= read -r previous; do
+            [[ -n "$previous" && "$previous" != "$current" ]] || continue
+            gh api --method DELETE "repos/${repository}/actions/runs/${previous}"
+            echo "已删除上一条门禁记录：${previous}"
+          done < <(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.id < ${current}) | .id")
+
+  dependency-contracts:
+    name: 全仓依赖契约与供应链完整性
+    needs: retain-current-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+
+      - name: 校验代码来源
+        run: test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+
+      # 中文注释：这里只做全仓确定性契约检查；依赖升级必须产生明确 manifest/lockfile diff，
+      # 禁止在 push 门禁或产品 CI/Release 中自动选择新的上游版本。
+      - name: 检查全仓依赖契约
+        run: node .github/scripts/dependencies.mjs check --scope repository
+
+  cross-platform-contracts:
+    name: 全仓跨端契约一致
+    needs: retain-current-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+
+      - name: 校验代码来源
+        run: test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+
+      - name: 校验金标向量跨端一致
+        run: node .github/scripts/check-golden-vectors-sync.mjs
+
+      - name: 校验 pallet 注册表与链上一致
+        run: node .github/scripts/check-pallet-registry-sync.mjs
+
+      - name: 校验全仓统一数据字典
+        run: |
+          node --test .github/scripts/data-dictionary.test.mjs
+          node .github/scripts/data-dictionary.mjs
+
+  repository-guardrails:
+    name: 文档、残留与统一仓库规则
+    needs: retain-current-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: 拉取完整变更历史
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          fetch-depth: 0
+
+      - name: 校验代码来源
+        run: test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+
+      - name: 检查公开仓库残留、命名与安全边界
+        env:
+          PUSH_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "push" && -n "$PUSH_BASE_SHA" && ! "$PUSH_BASE_SHA" =~ ^0+$ ]]; then
+            base_ref="$PUSH_BASE_SHA"
+          else
+            base_ref="${GMB_SOURCE_SHA}^"
+          fi
+          BASE_REF="$base_ref" ./.github/scripts/repository-guardrails.sh
+          node .github/scripts/data-dictionary.mjs --base-ref "$base_ref"
+
+  shared-contracts:
+    name: 统一签名、账户密码学与 QR 协议
+    needs: retain-current-run
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+
+      - name: 校验代码来源
+        run: test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存共享 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: gmb-repository-shared-rust
+          workspaces: . -> target
+
+      # 根 workspace 只包含 shared/qr-protocol、shared/citizen-signer 和
+      # shared/account-crypto；产品 workspace 不在本仓库级门禁中重复执行。
+      - name: 检查共享 Rust 格式
+        run: cargo fmt --all -- --check
+
+      - name: 执行共享 Rust Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: 运行共享 Rust 测试
+        run: cargo test --workspace --all-targets --locked
+
+      - name: 清理本次 Rust 增量缓存
+        if: ${{ success() }}
+        run: find target -type d -name incremental -prune -exec rm -rf {} +

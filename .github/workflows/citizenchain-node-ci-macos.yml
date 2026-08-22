@@ -1,0 +1,360 @@
+name: 公民链 · CI · macOS
+run-name: 公民链 · CI · macOS
+
+# 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
+# CI 只能由公民控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# 这样每个软件的 CI 彼此彻底分开，也不会出现「推送触发一条、dispatch 再触发一条、
+# 后者用 concurrency 把前者掐掉」的空跑 runner 浪费。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  # 中文注释：目标是并发键的一部分，四个目标互不取消；同目标新任务也只排队，绝不
+  # 把已经运行数小时的任务掐掉。CitizenConsole 会在 dispatch 前负责精确去重。
+  group: citizenchain-node-ci-macos
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_NODE_PLATFORM: macos
+
+jobs:
+  changes:
+    name: 锁定公民链节点构建范围
+    runs-on: ubuntu-24.04
+    outputs:
+      citizenchain: ${{ steps.scope.outputs.citizenchain }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      desktop_matrix: ${{ steps.scope.outputs.desktop_matrix }}
+    steps:
+      - name: 拉取完整变更历史
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      # 桌面端与两款移动产品共用 docs/logo.png 唯一母版。
+      - name: 校验 Logo 唯一真源派生物
+        run: node scripts/generate-logo-assets.mjs --check
+
+      - name: 校验代码来源并启用节点全量构建
+        id: scope
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenchain-node
+          echo "citizenchain=true" >> "$GITHUB_OUTPUT"
+          echo "desktop=true" >> "$GITHUB_OUTPUT"
+          test "$GMB_NODE_PLATFORM" = macos
+          echo 'desktop_matrix=[{"platform":"macos","name":"macOS Apple","os":"macos-15","artifact":"公民链macOS","installer_name":"citizenchain-node-macos-arm64.dmg","ci_bundle_targets":"dmg","updater_asset_name":"citizenchain-node-macos-arm64.app.tar.gz","updater_manifest_name":"citizenchain-node-latest-macos-arm64.json","expected_runner_arch":"ARM64","cache_key":"citizenchain-macos-apple"}]' >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: 公民链全工程验证
+    needs: changes
+    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
+    if: ${{ needs.changes.outputs.citizenchain == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: 安装系统依赖
+        # 中文注释：全工程验证运行在 Ubuntu；最终 macOS 打包仍使用独立 macOS Runner。
+        run: bash .github/scripts/citizenchain-linux-deps.sh
+
+      - name: 配置 libclang 与 protoc
+        run: |
+          {
+            echo "LLVM_CONFIG_PATH=$(command -v llvm-config)"
+            echo "LIBCLANG_PATH=$(llvm-config --libdir)"
+            echo "PROTOC=$(command -v protoc)"
+          } >> "$GITHUB_ENV"
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: |
+            shared/scanner-react/package-lock.json
+            citizenchain/node/frontend/package-lock.json
+            citizenchain/onchina/frontend/package-lock.json
+
+      # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
+      - name: 验证仓库级 React 扫码适配器
+        run: |
+          npm --prefix shared/scanner-react ci
+          npm --prefix shared/scanner-react run check
+          npm --prefix shared/scanner-react test
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: citizenchain-workspace
+          workspaces: citizenchain -> target
+
+      - name: 校验宪法创世 SCALE 解码器
+        run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
+
+      # Tauri generate_context! 在 Rust 编译期读取 frontendDist，必须先生成真实前端产物。
+      - name: 构建公民链节点前端
+        run: |
+          npm --prefix citizenchain/node/frontend ci
+          npm --prefix citizenchain/node/frontend run build
+
+      - name: 检查 Rust 格式
+        working-directory: citizenchain
+        run: cargo fmt --all -- --check
+
+      - name: 执行全 Rust workspace Clippy
+        working-directory: citizenchain
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: 运行全 Rust workspace 测试
+        working-directory: citizenchain
+        run: cargo test --workspace --all-targets --locked
+
+      - name: 构建 OnChina 前端
+        run: |
+          npm --prefix citizenchain/onchina/frontend ci
+          npm --prefix citizenchain/onchina/frontend run build
+
+      # 三档鉴权的前端头部组装 + 与 Rust 后端 header 名的跨端锁。
+      # 复用上一步已装好的依赖,不重复 npm ci。
+      - name: 测试 OnChina 前端
+        run: npm --prefix citizenchain/onchina/frontend test
+
+      - name: 清理本次 Rust 增量缓存
+        if: ${{ success() }}
+        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+
+  build-desktop:
+    name: 打包公民链桌面端 (${{ matrix.name }})
+    needs: [changes, verify]
+    # verify 在 Release 中按设计跳过；always() 只用于允许 Release 越过这个“已跳过”的
+    # 依赖，不会放过 changes 失败，也不会放过 CI 模式下的 verify 失败。
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.desktop == 'true' && needs.verify.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.desktop_matrix) }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: 校验代码来源并应用节点候选版本
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenchain-node
+          node .github/scripts/citizenchain-node-version.mjs apply "$GMB_SOFTWARE_VERSION"
+
+      - name: 校验 runner 架构
+        shell: bash
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.expected_runner_arch }}
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ARCH}" != "${EXPECTED_RUNNER_ARCH}" ]; then
+            echo "::error::runner 架构不符合 ${EXPECTED_RUNNER_ARCH}: 当前为 ${RUNNER_ARCH}"
+            exit 1
+          fi
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+
+      - name: 安装 Node.js
+        # 固定使用 Node.js 24,与项目 package.json engines 和 GitHub Actions node24 运行时一致。
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: citizenchain/node/frontend/package-lock.json
+
+      - name: 同步桌面端版本
+        shell: bash
+        env:
+          CITIZENCHAIN_CI_BUNDLE_TARGETS: ${{ matrix.ci_bundle_targets }}
+          CITIZENCHAIN_MANUAL_BUNDLE_TARGETS: ${{ matrix.manual_bundle_targets }}
+          CITIZENCHAIN_UPDATER_MANIFEST_NAME: ${{ matrix.updater_manifest_name }}
+          CITIZENCHAIN_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const targetSource = process.env.CITIZENCHAIN_CI_BUNDLE_TARGETS;
+          const bundleTargets = (targetSource || '')
+            .split(',')
+            .map((target) => target.trim())
+            .filter(Boolean);
+
+          if (bundleTargets.length === 0) {
+            throw new Error('缺少本 matrix 的 Tauri bundle targets。');
+          }
+
+          // 候选版本已在当前 runner 工作区应用；这里只设置本 matrix 的 bundle 目标。
+          const tauriPath = 'citizenchain/node/tauri.conf.json';
+          const tauri = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+          const version = tauri.version;
+          tauri.bundle = tauri.bundle || {};
+          // 中文注释：CI 只生成用户安装包；正式 updater 候选只属于独立 Release workflow。
+          tauri.bundle.targets = bundleTargets;
+          // 中文注释：GitHub 只构建无私钥候选产物；updater 签名统一由本机原生安全进程在 Touch ID 后完成。
+          delete tauri.bundle.createUpdaterArtifacts;
+          // 中文注释：CI 不创建正式版本 Tag，诊断安装包保留源码中的正式 updater 配置。
+          fs.writeFileSync(tauriPath, `${JSON.stringify(tauri, null, 2)}\n`);
+
+          console.log(`桌面端版本(源码): ${version}`);
+          console.log(`Tauri bundle targets: ${bundleTargets.join(',')}`);
+          NODE
+
+      - name: 安装 macOS 构建依赖
+        if: matrix.platform == 'macos'
+        run: brew install protobuf llvm
+
+      - name: 配置 macOS LLVM 环境变量
+        if: matrix.platform == 'macos'
+        run: |
+          echo "LLVM_CONFIG_PATH=$(brew --prefix llvm)/bin/llvm-config" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=$(brew --prefix llvm)/lib" >> "$GITHUB_ENV"
+
+      - name: 配置 macOS 候选的 ad-hoc 签名
+        if: matrix.platform == 'macos'
+        run: |
+          # 中文注释：GitHub runner 不接触 Developer ID 私钥，但 Apple Silicon App 仍必须
+          # 有完整且可验证的签名。显式使用 Tauri 官方的 ad-hoc 身份，避免 bundler 自动
+          # 生成只有资源封套声明、却缺少 CodeResources 的残缺签名。
+          echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: ${{ matrix.cache_key }}
+          workspaces: citizenchain -> target
+
+      - name: 同步并锁定节点候选版本
+        run: node .github/scripts/citizenchain-node-version.mjs lock "$GMB_SOFTWARE_VERSION"
+
+      - name: 安装前端依赖并构建
+        run: |
+          npm --prefix citizenchain/node/frontend ci
+          npm --prefix citizenchain/node/frontend run build
+
+      - name: 准备空创世状态资源目录
+        shell: bash
+        run: |
+          # 中文注释：安装包只携带节点软件；首次启动按冻结 chainspec 本地初始化并联网同步。
+          rm -rf citizenchain/node/resources/genesis-state
+
+      - name: Tauri 打包（不接触 updater 私钥）
+        working-directory: citizenchain/node
+        run: node frontend/node_modules/@tauri-apps/cli/tauri.js build --ci -- --locked
+
+      # Tauri 的 DMG bundler 会在生成 DMG 后清理 bundle/macos 中间 App。必须从最终 DMG
+      # 重新挂载并提取真实 App，再校验签名和生成 updater 候选；继续读取已清理目录会把
+      # 已成功的 macOS 构建误判成失败。
+      - name: 从最终 DMG 提取并验证 macOS App
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg_file="$(find citizenchain/target/release/bundle/dmg -name '*.dmg' | head -1)"
+          if [ -z "$dmg_file" ]; then
+            echo "::error::未找到 macOS dmg 安装包。"
+            exit 1
+          fi
+          mount_dir="$(mktemp -d)"
+          extracted_dir="citizenchain-macos-app"
+          cleanup() {
+            hdiutil detach "$mount_dir" -quiet 2>/dev/null || true
+            rm -rf "$mount_dir"
+          }
+          trap cleanup EXIT
+          hdiutil attach "$dmg_file" -nobrowse -readonly -mountpoint "$mount_dir" -quiet
+          app_bundle="$(find "$mount_dir" -maxdepth 1 -type d -name '*.app' | head -1)"
+          if [ -z "$app_bundle" ]; then
+            echo "::error::最终 DMG 中没有 macOS App bundle。"
+            exit 1
+          fi
+          rm -rf "$extracted_dir"
+          mkdir -p "$extracted_dir"
+          ditto "$app_bundle" "$extracted_dir/$(basename "$app_bundle")"
+          app_bundle="$extracted_dir/$(basename "$app_bundle")"
+          codesign --verify --deep --strict "$app_bundle"
+          entitlements="$(codesign -d --entitlements :- "$app_bundle" 2>/dev/null)"
+          for entitlement in \
+            com.apple.security.device.camera \
+            com.apple.security.cs.allow-jit \
+            com.apple.security.cs.allow-unsigned-executable-memory; do
+            # plutil 的 key path 以点号分层，签名 entitlement 的点号必须转义。
+            entitlement_key_path="${entitlement//./\\.}"
+            if [ "$(printf '%s' "$entitlements" | plutil -extract "$entitlement_key_path" raw -)" != "true" ]; then
+              echo "::error::macOS App 缺少 $entitlement。"
+              exit 1
+            fi
+          done
+          /usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' \
+            "$app_bundle/Contents/Info.plist" >/dev/null
+
+      - name: 整理 macOS 产物
+        if: matrix.platform == 'macos'
+        shell: bash
+        env:
+          INSTALLER_NAME: ${{ matrix.installer_name }}
+          UPDATER_ASSET_NAME: ${{ matrix.updater_asset_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p citizenchain-release
+
+          dmg_file="$(find citizenchain/target/release/bundle/dmg -name '*.dmg' | head -1)"
+          if [ -z "$dmg_file" ]; then
+            echo "::error::未找到 macOS dmg 安装包。"
+            exit 1
+          fi
+          cp "$dmg_file" "citizenchain-release/${INSTALLER_NAME}"
+
+
+          ls -lh citizenchain-release
+
+      - name: 上传桌面端产物
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: citizenchain-release/*
+          retention-days: 30
+          overwrite: true
+
+      - name: 签署节点平台候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: citizenchain-release/*

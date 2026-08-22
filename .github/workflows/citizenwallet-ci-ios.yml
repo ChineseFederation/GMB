@@ -1,0 +1,224 @@
+name: 公民钱包 · CI · iOS
+run-name: 公民钱包 · CI · iOS
+
+# 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
+# CI 只能由公民控制台「公民 → 公民钱包 → 运行 CI / Release」按钮经 workflow_dispatch 发起。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+      build_number:
+        description: 本次候选构建号
+        required: true
+        type: string
+
+env:
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
+
+concurrency:
+  group: citizenwallet-ci-ios
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  check:
+    name: 校验 CitizenWallet iOS 源码
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      # 全产品 Logo 只允许由 docs/logo.png 唯一母版生成。
+      - name: 校验 Logo 唯一真源派生物
+        run: node scripts/generate-logo-assets.mjs --check
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenwallet
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
+              raise SystemExit("CitizenWallet 候选版本输入无效")
+          path = Path("citizenwallet/pubspec.yaml")
+          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
+          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
+          path.write_text(text)
+          PY
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          print(f"version={version}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      # 索引同步的唯一实现在 citizenwallet/scripts/sync-pallet-registry.sh。
+      # 此前 CI 与 citizenwallet-run.sh 各持一份、且覆盖范围不同（CI 只同步 3 个 pallet，
+      # 本地同步 20 个），加 iOS job 会变成三份，故收敛到脚本，三处共用同一个全集。
+      - name: 同步 runtime pallet/call 索引
+        run: ./citizenwallet/scripts/sync-pallet-registry.sh
+
+      - name: 安装依赖
+        working-directory: citizenwallet
+        run: flutter pub get --enforce-lockfile
+
+      # 公民与公民钱包共用同一扫码设备适配器，两条移动端流水线都必须验证它。
+      - name: 检查 Flutter 共享扫码适配器
+        working-directory: shared/scanner-flutter
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+
+      - name: 安装固定依赖审计器
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: 执行依赖安全审计
+        run: node .github/scripts/dependencies.mjs audit --scope citizenwallet
+
+      - name: 分析代码
+        working-directory: citizenwallet
+        run: flutter analyze --no-fatal-infos
+
+      # flutter test 在 runner 宿主上跑，Dart FFI 要 dlopen 宿主平台动态库；
+      # 上面编译的是 Android ARM 产物，宿主库必须单独编一次，否则金标签名测试全数失败。
+      - name: 编译原生签名库（宿主，flutter test 用）
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh host
+
+      - name: 运行测试
+        working-directory: citizenwallet
+        run: flutter test
+
+  ios:
+    needs: check
+    name: 构建 公民钱包 iOS CI
+    runs-on: macos-15
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenwallet
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
+              raise SystemExit("CitizenWallet 候选版本输入无效")
+          path = Path("citizenwallet/pubspec.yaml")
+          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
+          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
+          path.write_text(text)
+          PY
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: aarch64-apple-ios
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          print(f"version={version}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      # 与 build-apk 调同一个脚本：冷钱包离线签名，索引与链端脱节没有任何编译期信号。
+      - name: 同步 runtime pallet/call 索引
+        run: ./citizenwallet/scripts/sync-pallet-registry.sh
+
+      # ↓↓ 以下三步顺序是硬约束，颠倒会崩在很难读的 CocoaPods 报错里 ↓↓
+      # 1) flutter pub get 生成 ios/Flutter/Generated.xcconfig —— Podfile 必须读它定位 FLUTTER_ROOT
+      # 2) build-signer-native.sh ios 产出 libcitizenwallet_signer.a
+      #    —— citizenwallet_signer.podspec 依赖它，冷端只有 4 个导出符号，
+      #    正是 release 的 -dead_strip 最容易整组剔干净的规模
+      # 3) flutter build ios 内部自带 pod install（且自带正确的 LANG；手动跑才需要
+      #    LANG=en_US.UTF-8，否则 CocoaPods 编码崩溃）
+      - name: 安装依赖
+        working-directory: citizenwallet
+        run: flutter pub get --enforce-lockfile
+
+      - name: 编译原生签名库 (iOS arm64)
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh ios
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "citizenwallet-rust-ios"
+          workspaces: citizenwallet/rust -> target
+
+      - name: 构建 iOS Release 候选
+        working-directory: citizenwallet
+        run: flutter build ios --release --no-codesign
+
+      - name: 使用 ad-hoc CI 身份签名并核验 iOS 产物
+        run: |
+          codesign --force --deep --sign - citizenwallet/build/ios/iphoneos/Runner.app
+          codesign --verify --deep --strict citizenwallet/build/ios/iphoneos/Runner.app
+
+      - name: 整理 iOS 候选
+        run: |
+          set -euo pipefail
+          mkdir -p citizenwallet/build/release-candidate/ios
+          asset='公民钱包-iOS-CI.app.zip'
+          ditto -c -k --keepParent citizenwallet/build/ios/iphoneos/Runner.app \
+            "citizenwallet/build/release-candidate/ios/${asset}"
+
+      - name: 上传 iOS 候选
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: 公民钱包-iOS-CI
+          path: citizenwallet/build/release-candidate/ios/*.app.zip
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      - name: 签署 iOS 候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: citizenwallet/build/release-candidate/ios/*.app.zip

@@ -1,0 +1,506 @@
+// This is a generated file - do not edit.
+//
+// Generated from chat_envelope.proto.
+
+// @dart = 3.3
+
+// ignore_for_file: annotate_overrides, camel_case_types, comment_references
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
+
+import 'dart:core' as $core;
+
+import 'package:fixnum/fixnum.dart' as $fixnum;
+import 'package:protobuf/protobuf.dart' as $pb;
+
+import 'chat_envelope.pbenum.dart';
+
+export 'package:protobuf/protobuf.dart' show GeneratedMessageGenericExtensions;
+
+export 'chat_envelope.pbenum.dart';
+
+class ChatRoute extends $pb.GeneratedMessage {
+  factory ChatRoute({
+    $core.String? peerCidNumber,
+    $core.String? routeDisplayName,
+    $core.String? deviceId,
+    $core.String? devicePublicKey,
+    $core.String? safetyNumber,
+    $core.String? nearbyPeerHint,
+    $fixnum.Int64? createdAtMillis,
+    $fixnum.Int64? expiresAtMillis,
+  }) {
+    final result = create();
+    if (peerCidNumber != null) result.peerCidNumber = peerCidNumber;
+    if (routeDisplayName != null) result.routeDisplayName = routeDisplayName;
+    if (deviceId != null) result.deviceId = deviceId;
+    if (devicePublicKey != null) result.devicePublicKey = devicePublicKey;
+    if (safetyNumber != null) result.safetyNumber = safetyNumber;
+    if (nearbyPeerHint != null) result.nearbyPeerHint = nearbyPeerHint;
+    if (createdAtMillis != null) result.createdAtMillis = createdAtMillis;
+    if (expiresAtMillis != null) result.expiresAtMillis = expiresAtMillis;
+    return result;
+  }
+
+  ChatRoute._();
+
+  factory ChatRoute.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ChatRoute.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ChatRoute',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      createEmptyInstance: create)
+    ..aOS(2, _omitFieldNames ? '' : 'peerCidNumber')
+    ..aOS(3, _omitFieldNames ? '' : 'routeDisplayName')
+    ..aOS(4, _omitFieldNames ? '' : 'deviceId')
+    ..aOS(5, _omitFieldNames ? '' : 'devicePublicKey')
+    ..aOS(6, _omitFieldNames ? '' : 'safetyNumber')
+    ..aOS(7, _omitFieldNames ? '' : 'nearbyPeerHint')
+    ..a<$fixnum.Int64>(
+        8, _omitFieldNames ? '' : 'createdAtMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..a<$fixnum.Int64>(
+        9, _omitFieldNames ? '' : 'expiresAtMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatRoute clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatRoute copyWith(void Function(ChatRoute) updates) =>
+      super.copyWith((message) => updates(message as ChatRoute)) as ChatRoute;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ChatRoute create() => ChatRoute._();
+  @$core.override
+  ChatRoute createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static ChatRoute getDefault() =>
+      _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ChatRoute>(create);
+  static ChatRoute? _defaultInstance;
+
+  @$pb.TagNumber(2)
+  $core.String get peerCidNumber => $_getSZ(0);
+  @$pb.TagNumber(2)
+  set peerCidNumber($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(2)
+  $core.bool hasPeerCidNumber() => $_has(0);
+  @$pb.TagNumber(2)
+  void clearPeerCidNumber() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get routeDisplayName => $_getSZ(1);
+  @$pb.TagNumber(3)
+  set routeDisplayName($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(3)
+  $core.bool hasRouteDisplayName() => $_has(1);
+  @$pb.TagNumber(3)
+  void clearRouteDisplayName() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get deviceId => $_getSZ(2);
+  @$pb.TagNumber(4)
+  set deviceId($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDeviceId() => $_has(2);
+  @$pb.TagNumber(4)
+  void clearDeviceId() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get devicePublicKey => $_getSZ(3);
+  @$pb.TagNumber(5)
+  set devicePublicKey($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(5)
+  $core.bool hasDevicePublicKey() => $_has(3);
+  @$pb.TagNumber(5)
+  void clearDevicePublicKey() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get safetyNumber => $_getSZ(4);
+  @$pb.TagNumber(6)
+  set safetyNumber($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(6)
+  $core.bool hasSafetyNumber() => $_has(4);
+  @$pb.TagNumber(6)
+  void clearSafetyNumber() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get nearbyPeerHint => $_getSZ(5);
+  @$pb.TagNumber(7)
+  set nearbyPeerHint($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(7)
+  $core.bool hasNearbyPeerHint() => $_has(5);
+  @$pb.TagNumber(7)
+  void clearNearbyPeerHint() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $fixnum.Int64 get createdAtMillis => $_getI64(6);
+  @$pb.TagNumber(8)
+  set createdAtMillis($fixnum.Int64 value) => $_setInt64(6, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCreatedAtMillis() => $_has(6);
+  @$pb.TagNumber(8)
+  void clearCreatedAtMillis() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $fixnum.Int64 get expiresAtMillis => $_getI64(7);
+  @$pb.TagNumber(9)
+  set expiresAtMillis($fixnum.Int64 value) => $_setInt64(7, value);
+  @$pb.TagNumber(9)
+  $core.bool hasExpiresAtMillis() => $_has(7);
+  @$pb.TagNumber(9)
+  void clearExpiresAtMillis() => $_clearField(9);
+}
+
+class ChatEnvelope extends $pb.GeneratedMessage {
+  factory ChatEnvelope({
+    $core.String? envelopeId,
+    $core.String? conversationId,
+    $core.String? senderCidNumber,
+    $core.String? recipientCidNumber,
+    $core.String? senderDeviceId,
+    $core.List<$core.int>? mlsWireMessage,
+    $core.List<$core.int>? encryptedMetadata,
+    $fixnum.Int64? createdAtMillis,
+    $fixnum.Int64? ttlMillis,
+    MlsWireMessageKind? mlsMessageKind,
+    $core.List<$core.int>? ratchetTree,
+  }) {
+    final result = create();
+    if (envelopeId != null) result.envelopeId = envelopeId;
+    if (conversationId != null) result.conversationId = conversationId;
+    if (senderCidNumber != null) result.senderCidNumber = senderCidNumber;
+    if (recipientCidNumber != null)
+      result.recipientCidNumber = recipientCidNumber;
+    if (senderDeviceId != null) result.senderDeviceId = senderDeviceId;
+    if (mlsWireMessage != null) result.mlsWireMessage = mlsWireMessage;
+    if (encryptedMetadata != null) result.encryptedMetadata = encryptedMetadata;
+    if (createdAtMillis != null) result.createdAtMillis = createdAtMillis;
+    if (ttlMillis != null) result.ttlMillis = ttlMillis;
+    if (mlsMessageKind != null) result.mlsMessageKind = mlsMessageKind;
+    if (ratchetTree != null) result.ratchetTree = ratchetTree;
+    return result;
+  }
+
+  ChatEnvelope._();
+
+  factory ChatEnvelope.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ChatEnvelope.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ChatEnvelope',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      createEmptyInstance: create)
+    ..aOS(2, _omitFieldNames ? '' : 'envelopeId')
+    ..aOS(3, _omitFieldNames ? '' : 'conversationId')
+    ..aOS(4, _omitFieldNames ? '' : 'senderCidNumber')
+    ..aOS(5, _omitFieldNames ? '' : 'recipientCidNumber')
+    ..aOS(6, _omitFieldNames ? '' : 'senderDeviceId')
+    ..a<$core.List<$core.int>>(
+        7, _omitFieldNames ? '' : 'mlsWireMessage', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        8, _omitFieldNames ? '' : 'encryptedMetadata', $pb.PbFieldType.OY)
+    ..a<$fixnum.Int64>(
+        9, _omitFieldNames ? '' : 'createdAtMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..a<$fixnum.Int64>(
+        10, _omitFieldNames ? '' : 'ttlMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aE<MlsWireMessageKind>(11, _omitFieldNames ? '' : 'mlsMessageKind',
+        enumValues: MlsWireMessageKind.values)
+    ..a<$core.List<$core.int>>(
+        12, _omitFieldNames ? '' : 'ratchetTree', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatEnvelope clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatEnvelope copyWith(void Function(ChatEnvelope) updates) =>
+      super.copyWith((message) => updates(message as ChatEnvelope))
+          as ChatEnvelope;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ChatEnvelope create() => ChatEnvelope._();
+  @$core.override
+  ChatEnvelope createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static ChatEnvelope getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ChatEnvelope>(create);
+  static ChatEnvelope? _defaultInstance;
+
+  @$pb.TagNumber(2)
+  $core.String get envelopeId => $_getSZ(0);
+  @$pb.TagNumber(2)
+  set envelopeId($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(2)
+  $core.bool hasEnvelopeId() => $_has(0);
+  @$pb.TagNumber(2)
+  void clearEnvelopeId() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get conversationId => $_getSZ(1);
+  @$pb.TagNumber(3)
+  set conversationId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(3)
+  $core.bool hasConversationId() => $_has(1);
+  @$pb.TagNumber(3)
+  void clearConversationId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get senderCidNumber => $_getSZ(2);
+  @$pb.TagNumber(4)
+  set senderCidNumber($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(4)
+  $core.bool hasSenderCidNumber() => $_has(2);
+  @$pb.TagNumber(4)
+  void clearSenderCidNumber() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get recipientCidNumber => $_getSZ(3);
+  @$pb.TagNumber(5)
+  set recipientCidNumber($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(5)
+  $core.bool hasRecipientCidNumber() => $_has(3);
+  @$pb.TagNumber(5)
+  void clearRecipientCidNumber() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get senderDeviceId => $_getSZ(4);
+  @$pb.TagNumber(6)
+  set senderDeviceId($core.String value) => $_setString(4, value);
+  @$pb.TagNumber(6)
+  $core.bool hasSenderDeviceId() => $_has(4);
+  @$pb.TagNumber(6)
+  void clearSenderDeviceId() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.List<$core.int> get mlsWireMessage => $_getN(5);
+  @$pb.TagNumber(7)
+  set mlsWireMessage($core.List<$core.int> value) => $_setBytes(5, value);
+  @$pb.TagNumber(7)
+  $core.bool hasMlsWireMessage() => $_has(5);
+  @$pb.TagNumber(7)
+  void clearMlsWireMessage() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.List<$core.int> get encryptedMetadata => $_getN(6);
+  @$pb.TagNumber(8)
+  set encryptedMetadata($core.List<$core.int> value) => $_setBytes(6, value);
+  @$pb.TagNumber(8)
+  $core.bool hasEncryptedMetadata() => $_has(6);
+  @$pb.TagNumber(8)
+  void clearEncryptedMetadata() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $fixnum.Int64 get createdAtMillis => $_getI64(7);
+  @$pb.TagNumber(9)
+  set createdAtMillis($fixnum.Int64 value) => $_setInt64(7, value);
+  @$pb.TagNumber(9)
+  $core.bool hasCreatedAtMillis() => $_has(7);
+  @$pb.TagNumber(9)
+  void clearCreatedAtMillis() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $fixnum.Int64 get ttlMillis => $_getI64(8);
+  @$pb.TagNumber(10)
+  set ttlMillis($fixnum.Int64 value) => $_setInt64(8, value);
+  @$pb.TagNumber(10)
+  $core.bool hasTtlMillis() => $_has(8);
+  @$pb.TagNumber(10)
+  void clearTtlMillis() => $_clearField(10);
+
+  @$pb.TagNumber(11)
+  MlsWireMessageKind get mlsMessageKind => $_getN(9);
+  @$pb.TagNumber(11)
+  set mlsMessageKind(MlsWireMessageKind value) => $_setField(11, value);
+  @$pb.TagNumber(11)
+  $core.bool hasMlsMessageKind() => $_has(9);
+  @$pb.TagNumber(11)
+  void clearMlsMessageKind() => $_clearField(11);
+
+  @$pb.TagNumber(12)
+  $core.List<$core.int> get ratchetTree => $_getN(10);
+  @$pb.TagNumber(12)
+  set ratchetTree($core.List<$core.int> value) => $_setBytes(10, value);
+  @$pb.TagNumber(12)
+  $core.bool hasRatchetTree() => $_has(10);
+  @$pb.TagNumber(12)
+  void clearRatchetTree() => $_clearField(12);
+}
+
+class ChatKeyPackage extends $pb.GeneratedMessage {
+  factory ChatKeyPackage({
+    $core.String? cidNumber,
+    $core.String? deviceId,
+    $core.String? devicePublicKey,
+    $core.String? keyPackageId,
+    $core.List<$core.int>? keyPackage,
+    $core.String? cipherSuite,
+    $fixnum.Int64? notBeforeMillis,
+    $fixnum.Int64? notAfterMillis,
+    $core.bool? lastResort,
+  }) {
+    final result = create();
+    if (cidNumber != null) result.cidNumber = cidNumber;
+    if (deviceId != null) result.deviceId = deviceId;
+    if (devicePublicKey != null) result.devicePublicKey = devicePublicKey;
+    if (keyPackageId != null) result.keyPackageId = keyPackageId;
+    if (keyPackage != null) result.keyPackage = keyPackage;
+    if (cipherSuite != null) result.cipherSuite = cipherSuite;
+    if (notBeforeMillis != null) result.notBeforeMillis = notBeforeMillis;
+    if (notAfterMillis != null) result.notAfterMillis = notAfterMillis;
+    if (lastResort != null) result.lastResort = lastResort;
+    return result;
+  }
+
+  ChatKeyPackage._();
+
+  factory ChatKeyPackage.fromBuffer($core.List<$core.int> data,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromBuffer(data, registry);
+  factory ChatKeyPackage.fromJson($core.String json,
+          [$pb.ExtensionRegistry registry = $pb.ExtensionRegistry.EMPTY]) =>
+      create()..mergeFromJson(json, registry);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(
+      _omitMessageNames ? '' : 'ChatKeyPackage',
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      createEmptyInstance: create)
+    ..aOS(2, _omitFieldNames ? '' : 'cidNumber')
+    ..aOS(3, _omitFieldNames ? '' : 'deviceId')
+    ..aOS(4, _omitFieldNames ? '' : 'devicePublicKey')
+    ..aOS(5, _omitFieldNames ? '' : 'keyPackageId')
+    ..a<$core.List<$core.int>>(
+        6, _omitFieldNames ? '' : 'keyPackage', $pb.PbFieldType.OY)
+    ..aOS(7, _omitFieldNames ? '' : 'cipherSuite')
+    ..a<$fixnum.Int64>(
+        8, _omitFieldNames ? '' : 'notBeforeMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..a<$fixnum.Int64>(
+        9, _omitFieldNames ? '' : 'notAfterMillis', $pb.PbFieldType.OU6,
+        defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aOB(10, _omitFieldNames ? '' : 'lastResort')
+    ..hasRequiredFields = false;
+
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatKeyPackage clone() => deepCopy();
+  @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
+  ChatKeyPackage copyWith(void Function(ChatKeyPackage) updates) =>
+      super.copyWith((message) => updates(message as ChatKeyPackage))
+          as ChatKeyPackage;
+
+  @$core.override
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static ChatKeyPackage create() => ChatKeyPackage._();
+  @$core.override
+  ChatKeyPackage createEmptyInstance() => create();
+  @$core.pragma('dart2js:noInline')
+  static ChatKeyPackage getDefault() => _defaultInstance ??=
+      $pb.GeneratedMessage.$_defaultFor<ChatKeyPackage>(create);
+  static ChatKeyPackage? _defaultInstance;
+
+  @$pb.TagNumber(2)
+  $core.String get cidNumber => $_getSZ(0);
+  @$pb.TagNumber(2)
+  set cidNumber($core.String value) => $_setString(0, value);
+  @$pb.TagNumber(2)
+  $core.bool hasCidNumber() => $_has(0);
+  @$pb.TagNumber(2)
+  void clearCidNumber() => $_clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get deviceId => $_getSZ(1);
+  @$pb.TagNumber(3)
+  set deviceId($core.String value) => $_setString(1, value);
+  @$pb.TagNumber(3)
+  $core.bool hasDeviceId() => $_has(1);
+  @$pb.TagNumber(3)
+  void clearDeviceId() => $_clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get devicePublicKey => $_getSZ(2);
+  @$pb.TagNumber(4)
+  set devicePublicKey($core.String value) => $_setString(2, value);
+  @$pb.TagNumber(4)
+  $core.bool hasDevicePublicKey() => $_has(2);
+  @$pb.TagNumber(4)
+  void clearDevicePublicKey() => $_clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get keyPackageId => $_getSZ(3);
+  @$pb.TagNumber(5)
+  set keyPackageId($core.String value) => $_setString(3, value);
+  @$pb.TagNumber(5)
+  $core.bool hasKeyPackageId() => $_has(3);
+  @$pb.TagNumber(5)
+  void clearKeyPackageId() => $_clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get keyPackage => $_getN(4);
+  @$pb.TagNumber(6)
+  set keyPackage($core.List<$core.int> value) => $_setBytes(4, value);
+  @$pb.TagNumber(6)
+  $core.bool hasKeyPackage() => $_has(4);
+  @$pb.TagNumber(6)
+  void clearKeyPackage() => $_clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.String get cipherSuite => $_getSZ(5);
+  @$pb.TagNumber(7)
+  set cipherSuite($core.String value) => $_setString(5, value);
+  @$pb.TagNumber(7)
+  $core.bool hasCipherSuite() => $_has(5);
+  @$pb.TagNumber(7)
+  void clearCipherSuite() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $fixnum.Int64 get notBeforeMillis => $_getI64(6);
+  @$pb.TagNumber(8)
+  set notBeforeMillis($fixnum.Int64 value) => $_setInt64(6, value);
+  @$pb.TagNumber(8)
+  $core.bool hasNotBeforeMillis() => $_has(6);
+  @$pb.TagNumber(8)
+  void clearNotBeforeMillis() => $_clearField(8);
+
+  @$pb.TagNumber(9)
+  $fixnum.Int64 get notAfterMillis => $_getI64(7);
+  @$pb.TagNumber(9)
+  set notAfterMillis($fixnum.Int64 value) => $_setInt64(7, value);
+  @$pb.TagNumber(9)
+  $core.bool hasNotAfterMillis() => $_has(7);
+  @$pb.TagNumber(9)
+  void clearNotAfterMillis() => $_clearField(9);
+
+  @$pb.TagNumber(10)
+  $core.bool get lastResort => $_getBF(8);
+  @$pb.TagNumber(10)
+  set lastResort($core.bool value) => $_setBool(8, value);
+  @$pb.TagNumber(10)
+  $core.bool hasLastResort() => $_has(8);
+  @$pb.TagNumber(10)
+  void clearLastResort() => $_clearField(10);
+}
+
+const $core.bool _omitFieldNames =
+    $core.bool.fromEnvironment('protobuf.omit_field_names');
+const $core.bool _omitMessageNames =
+    $core.bool.fromEnvironment('protobuf.omit_message_names');

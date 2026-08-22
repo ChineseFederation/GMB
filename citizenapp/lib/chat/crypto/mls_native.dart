@@ -1,0 +1,746 @@
+import 'dart:convert';
+import 'dart:ffi';
+import 'dart:io';
+
+import 'package:ffi/ffi.dart';
+import 'package:path/path.dart' as path;
+
+import 'package:citizenapp/8964/services/square_api_client.dart';
+
+import 'mls_boundary.dart';
+import 'mls_group_boundary.dart';
+import 'mls_state_store.dart';
+
+/// OpenMLS native smoke 结果。
+class MlsNativeSmokeResult {
+  const MlsNativeSmokeResult({
+    required this.plaintext,
+    required this.decryptedPlaintext,
+    required this.cipherSuite,
+    required this.aliceWireMessageHex,
+    required this.bobKeyPackageHex,
+    required this.welcomeHex,
+  });
+
+  final String plaintext;
+  final String decryptedPlaintext;
+  final String cipherSuite;
+  final String aliceWireMessageHex;
+  final String bobKeyPackageHex;
+  final String welcomeHex;
+
+  bool get roundTripOk => plaintext == decryptedPlaintext;
+
+  factory MlsNativeSmokeResult.fromJson(Map<String, dynamic> json) {
+    return MlsNativeSmokeResult(
+      plaintext: (json['plaintext'] ?? '').toString(),
+      decryptedPlaintext: (json['decrypted_plaintext'] ?? '').toString(),
+      cipherSuite: (json['cipher_suite'] ?? '').toString(),
+      aliceWireMessageHex: (json['alice_wire_message_hex'] ?? '').toString(),
+      bobKeyPackageHex: (json['bob_key_package_hex'] ?? '').toString(),
+      welcomeHex: (json['welcome_hex'] ?? '').toString(),
+    );
+  }
+}
+
+/// 通过现有 native 库调用 Rust OpenMLS。
+///
+/// 该类只负责跨 FFI 边界，密码学实现全部在 Rust OpenMLS 中完成。
+class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
+  NativeMlsCrypto({
+    MlsNativeBindings? bindings,
+    ChatDevice? identity,
+    MlsStateStore? stateStore,
+  })  : _bindings = bindings ?? MlsNativeBindings.load(),
+        _identity = identity,
+        _stateStore = stateStore;
+
+  final MlsNativeBindings _bindings;
+  final ChatDevice? _identity;
+  final MlsStateStore? _stateStore;
+
+  /// 当前账户运行上下文退出后立即清零 Dart 侧 MLS 状态信封钥。
+  void dispose() {
+    _stateStore?.dispose();
+  }
+
+  @override
+  Future<String> readDevicePublicKey(ChatDevice identity) async {
+    final error = identity.validate();
+    if (error != null) {
+      throw ArgumentError(error);
+    }
+    if (_stateStore == null) {
+      throw const MlsNativeException(
+        MlsNativeErrorCode.invalidRequest,
+        '读取 Chat 设备公钥必须提供 MLS stateStore',
+      );
+    }
+    final response = _bindings.callJson(_bindings.createKeyPackage, {
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'state_store_dir': _stateStore.path,
+      'state_key_hex': _stateStore.stateKeyHex,
+      // 复用现有 FFI 入口只读取/首次创建设备签名者，不生成多余 KeyPackage。
+      'identity_only': true,
+    });
+    return _requireField(response, 'device_public_key_hex');
+  }
+
+  @override
+  Future<MlsKeyPackage> createKeyPackage(
+    ChatDevice identity, {
+    bool lastResort = false,
+  }) async {
+    final error = identity.validate();
+    if (error != null) {
+      throw ArgumentError(error);
+    }
+
+    final response = _bindings.callJson(_bindings.createKeyPackage, {
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      if (_stateStore != null) 'state_store_dir': _stateStore.path,
+      if (_stateStore != null) 'state_key_hex': _stateStore.stateKeyHex,
+      'last_resort': lastResort,
+    });
+    return MlsKeyPackage(
+      cidNumber: identity.cidNumber,
+      deviceId: identity.deviceId,
+      devicePublicKey: _requireField(response, 'device_public_key_hex'),
+      keyPackageId: (response['key_package_id'] ?? '').toString(),
+      keyPackageBytes: _hexToBytes(_requireField(response, 'key_package_hex')),
+      cipherSuite: (response['cipher_suite'] ?? '').toString(),
+      notBeforeMillis: (response['not_before_millis'] as num?)?.toInt() ?? 0,
+      notAfterMillis: (response['not_after_millis'] as num?)?.toInt() ?? 0,
+      lastResort: response['last_resort'] == true,
+    );
+  }
+
+  /// 运行 Rust OpenMLS 两方 round-trip smoke。
+  Future<MlsNativeSmokeResult> runTwoPartySmoke({
+    required String plaintext,
+  }) async {
+    final response = _bindings.callJson(_bindings.twoPartySmoke, {
+      'plaintext': plaintext,
+    });
+    return MlsNativeSmokeResult.fromJson(response);
+  }
+
+  @override
+  Future<MlsOutboundMessage> encrypt({
+    required String conversationId,
+    required String recipientCidNumber,
+    MlsKeyPackage? recipientKeyPackage,
+    required List<int> plaintext,
+  }) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.encrypt, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'conversation_id': conversationId,
+      'recipient_cid_number': recipientCidNumber,
+      'plaintext_hex': _bytesToHex(plaintext),
+      if (recipientKeyPackage != null)
+        'recipient_key_package_hex': recipientKeyPackage.keyPackageHex,
+    });
+    final cipherSuite = (response['cipher_suite'] ?? '').toString();
+    final welcomeHex = response['welcome_wire_message_hex']?.toString();
+    final ratchetTreeHex = response['ratchet_tree_hex']?.toString();
+    final welcomeMessage = welcomeHex == null || welcomeHex.isEmpty
+        ? null
+        : MlsWireMessage(
+            wireBytes: _hexToBytes(welcomeHex),
+            cipherSuite: cipherSuite,
+            conversationId: conversationId,
+            messageKind: MlsMessageKind.welcome,
+            ratchetTreeBytes: ratchetTreeHex == null || ratchetTreeHex.isEmpty
+                ? null
+                : _hexToBytes(ratchetTreeHex),
+          );
+    return MlsOutboundMessage(
+      conversationId: conversationId,
+      welcomeMessage: welcomeMessage,
+      applicationMessage: MlsWireMessage(
+        wireBytes: _hexToBytes(
+          (response['application_wire_message_hex'] ?? '').toString(),
+        ),
+        cipherSuite: cipherSuite,
+        conversationId: conversationId,
+        messageKind: MlsMessageKind.application,
+      ),
+    );
+  }
+
+  @override
+  Future<List<int>> decrypt(MlsWireMessage message) async {
+    final inbound = await processIncoming(message);
+    return inbound.plaintext ?? const [];
+  }
+
+  /// 处理 Welcome 或 application wire message。
+  @override
+  Future<MlsInboundMessage> processIncoming(MlsWireMessage message) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.decrypt, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'conversation_id': message.conversationId,
+      'wire_message_hex': message.wireHex,
+      if (message.ratchetTreeHex != null)
+        'ratchet_tree_hex': message.ratchetTreeHex,
+    });
+    final plaintextHex = response['plaintext_hex']?.toString();
+    return MlsInboundMessage(
+      conversationId:
+          (response['conversation_id'] ?? message.conversationId).toString(),
+      messageKind: MlsMessageKind.fromWireName(
+        (response['message_kind'] ?? '').toString(),
+      ),
+      plaintext: plaintextHex == null || plaintextHex.isEmpty
+          ? null
+          : _hexToBytes(plaintextHex),
+    );
+  }
+
+  // ==== 私密小群(MlsGroupCrypto)==== 单次加密 + Dart 扇出,密码学全在 Rust。
+
+  @override
+  Future<GroupCreated> createGroup(String groupId) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupCreate, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': groupId,
+    });
+    return GroupCreated(
+      groupId: (response['group_id'] ?? groupId).toString(),
+      epoch: (response['epoch'] as num?)?.toInt() ?? 0,
+    );
+  }
+
+  @override
+  Future<GroupCommitBundle> addMembers(
+    String groupId,
+    List<MlsKeyPackage> keyPackages,
+  ) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupAddMembers, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': groupId,
+      'key_packages_hex':
+          keyPackages.map((keyPackage) => keyPackage.keyPackageHex).toList(),
+    });
+    final treeHex = (response['ratchet_tree_hex'] ?? '').toString();
+    final welcomeHex = (response['welcome_wire_hex'] ?? '').toString();
+    return GroupCommitBundle(
+      groupId: (response['group_id'] ?? groupId).toString(),
+      epoch: (response['epoch'] as num?)?.toInt() ?? 0,
+      commit: _groupWire(
+        groupId,
+        (response['commit_wire_hex'] ?? '').toString(),
+        MlsMessageKind.application,
+      ),
+      welcome: welcomeHex.isEmpty
+          ? null
+          : _groupWire(
+              groupId,
+              welcomeHex,
+              MlsMessageKind.welcome,
+              ratchetTreeHex: treeHex.isEmpty ? null : treeHex,
+            ),
+    );
+  }
+
+  @override
+  Future<GroupCommitBundle> removeMembers(
+    String groupId,
+    List<String> memberCidNumbers,
+  ) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupRemoveMembers, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': groupId,
+      'member_cid_numbers': memberCidNumbers,
+    });
+    final removed = (response['removed_cid_numbers'] as List?)
+            ?.map((item) => item.toString())
+            .toList() ??
+        const <String>[];
+    return GroupCommitBundle(
+      groupId: (response['group_id'] ?? groupId).toString(),
+      epoch: (response['epoch'] as num?)?.toInt() ?? 0,
+      commit: _groupWire(
+        groupId,
+        (response['commit_wire_hex'] ?? '').toString(),
+        MlsMessageKind.application,
+      ),
+      removedCidNumbers: removed,
+    );
+  }
+
+  @override
+  Future<MlsWireMessage> groupCreateMessage(
+    String groupId,
+    List<int> plaintext,
+  ) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupCreateMessage, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': groupId,
+      'plaintext_hex': _bytesToHex(plaintext),
+    });
+    return _groupWire(
+      groupId,
+      (response['application_wire_hex'] ?? '').toString(),
+      MlsMessageKind.application,
+    );
+  }
+
+  @override
+  Future<GroupInbound> groupProcess(MlsWireMessage wire) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupProcess, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': wire.conversationId,
+      'wire_message_hex': wire.wireHex,
+      if (wire.ratchetTreeHex != null) 'ratchet_tree_hex': wire.ratchetTreeHex,
+    });
+    final plaintextHex = response['plaintext_hex']?.toString();
+    final members = (response['member_identities'] as List?)
+        ?.map((item) => item.toString())
+        .toList();
+    return GroupInbound(
+      groupId: (response['group_id'] ?? wire.conversationId).toString(),
+      kind: GroupInboundKind.fromWireName(
+        (response['message_kind'] ?? '').toString(),
+      ),
+      status: GroupProcessStatus.fromWireName(
+        (response['status'] ?? '').toString(),
+      ),
+      messageEpoch: (response['message_epoch'] as num?)?.toInt() ?? 0,
+      groupEpoch: (response['group_epoch'] as num?)?.toInt() ?? 0,
+      selfRemoved: response['self_removed'] == true,
+      plaintext: plaintextHex == null || plaintextHex.isEmpty
+          ? null
+          : _hexToBytes(plaintextHex),
+      memberIdentities: members,
+    );
+  }
+
+  @override
+  Future<GroupState> groupState(String groupId) async {
+    final identity = _requireIdentity();
+    final stateStore = _requireStateStore();
+    await stateStore.ensureReady();
+    final response = _bindings.callJson(_bindings.groupState, {
+      'state_store_dir': stateStore.path,
+      'state_key_hex': stateStore.stateKeyHex,
+      'cid_number': identity.cidNumber,
+      'device_id': identity.deviceId,
+      'group_id': groupId,
+    });
+    final members = (response['member_identities'] as List?)
+            ?.map((item) => item.toString())
+            .toList() ??
+        const <String>[];
+    return GroupState(
+      groupId: (response['group_id'] ?? groupId).toString(),
+      epoch: (response['epoch'] as num?)?.toInt() ?? 0,
+      memberIdentities: members,
+    );
+  }
+
+  MlsWireMessage _groupWire(
+    String groupId,
+    String wireHex,
+    MlsMessageKind kind, {
+    String? ratchetTreeHex,
+  }) {
+    return MlsWireMessage(
+      wireBytes: _hexToBytes(wireHex),
+      cipherSuite: '',
+      conversationId: groupId,
+      messageKind: kind,
+      ratchetTreeBytes: ratchetTreeHex == null || ratchetTreeHex.isEmpty
+          ? null
+          : _hexToBytes(ratchetTreeHex),
+    );
+  }
+
+  ChatDevice _requireIdentity() {
+    final identity = _identity;
+    if (identity == null) {
+      throw StateError('NativeMlsCrypto 需要 Chat 设备身份才能执行会话加解密');
+    }
+    final error = identity.validate();
+    if (error != null) {
+      throw ArgumentError(error);
+    }
+    return identity;
+  }
+
+  MlsStateStore _requireStateStore() {
+    final store = _stateStore;
+    if (store == null) {
+      throw StateError('NativeMlsCrypto 需要 MLS stateStore 才能持久化会话');
+    }
+    return store;
+  }
+}
+
+typedef MlsJsonNative = Pointer<Utf8> Function(
+  Pointer<Utf8> requestJson,
+  Pointer<Pointer<Utf8>> errorOut,
+);
+typedef MlsJsonDart = Pointer<Utf8> Function(
+  Pointer<Utf8> requestJson,
+  Pointer<Pointer<Utf8>> errorOut,
+);
+typedef MlsFreeStringNative = Void Function(Pointer<Utf8> ptr);
+typedef MlsFreeStringDart = void Function(Pointer<Utf8> ptr);
+
+/// Chat MLS native bindings。
+class MlsNativeBindings {
+  MlsNativeBindings._({
+    required this.createKeyPackage,
+    required this.twoPartySmoke,
+    required this.encrypt,
+    required this.decrypt,
+    required this.rekeyState,
+    required this.groupCreate,
+    required this.groupAddMembers,
+    required this.groupRemoveMembers,
+    required this.groupCreateMessage,
+    required this.groupProcess,
+    required this.groupState,
+    required MlsFreeStringDart freeString,
+  }) : _freeString = freeString;
+
+  final MlsJsonDart createKeyPackage;
+  final MlsJsonDart twoPartySmoke;
+  final MlsJsonDart encrypt;
+  final MlsJsonDart decrypt;
+  final MlsJsonDart rekeyState;
+  final MlsJsonDart groupCreate;
+  final MlsJsonDart groupAddMembers;
+  final MlsJsonDart groupRemoveMembers;
+  final MlsJsonDart groupCreateMessage;
+  final MlsJsonDart groupProcess;
+  final MlsJsonDart groupState;
+  final MlsFreeStringDart _freeString;
+
+  static MlsNativeBindings load() {
+    final library = _loadSmoldotLibrary();
+    return MlsNativeBindings._(
+      createKeyPackage: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_create_key_package_json',
+      ),
+      twoPartySmoke: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_two_party_smoke_json',
+      ),
+      encrypt: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_encrypt_json',
+      ),
+      decrypt: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_decrypt_json',
+      ),
+      rekeyState: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_rekey_state_json',
+      ),
+      groupCreate: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_create_json',
+      ),
+      groupAddMembers: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_add_members_json',
+      ),
+      groupRemoveMembers: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_remove_members_json',
+      ),
+      groupCreateMessage: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_create_message_json',
+      ),
+      groupProcess: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_process_json',
+      ),
+      groupState: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_mls_group_state_json',
+      ),
+      freeString:
+          library.lookupFunction<MlsFreeStringNative, MlsFreeStringDart>(
+        'smoldot_free_string',
+      ),
+    );
+  }
+
+  Map<String, dynamic> callJson(
+    MlsJsonDart function,
+    Map<String, Object?> request,
+  ) {
+    final requestPtr = jsonEncode(request).toNativeUtf8();
+    final errorOut = calloc<Pointer<Utf8>>();
+    Pointer<Utf8> resultPtr = nullptr;
+    try {
+      resultPtr = function(requestPtr, errorOut);
+      if (resultPtr == nullptr) {
+        final errorPtr = errorOut.value;
+        final message = errorPtr == nullptr
+            ? 'OpenMLS native 调用失败'
+            : errorPtr.toDartString();
+        if (errorPtr != nullptr) {
+          _freeString(errorPtr);
+        }
+        throw MlsNativeException.fromTechnicalMessage(message);
+      }
+      final json = jsonDecode(resultPtr.toDartString());
+      return (json as Map).cast<String, dynamic>();
+    } finally {
+      calloc.free(requestPtr);
+      calloc.free(errorOut);
+      if (resultPtr != nullptr) {
+        _freeString(resultPtr);
+      }
+    }
+  }
+
+  /// 运行 Rust MLS 状态换绑边界；明文只在 Rust 内存中短暂存在。
+  void runStateRekey({
+    required String stateStoreDir,
+    required String action,
+    String? currentStateKeyHex,
+    String? newStateKeyHex,
+  }) {
+    callJson(rekeyState, <String, Object?>{
+      'state_store_dir': stateStoreDir,
+      'action': action,
+      if (currentStateKeyHex != null)
+        'current_state_key_hex': currentStateKeyHex,
+      if (newStateKeyHex != null) 'new_state_key_hex': newStateKeyHex,
+    });
+  }
+}
+
+DynamicLibrary _loadSmoldotLibrary() {
+  // iOS 把 libsmoldot.a 静态链接进 Runner 主二进制；不存在可 dlopen 的 dylib。
+  // 必须直接查当前进程符号，和 smoldotdart 的平台加载真源保持一致。
+  if (Platform.isIOS) {
+    return DynamicLibrary.process();
+  }
+  final candidates = <String>[];
+  final cwd = Directory.current.path;
+  if (Platform.isMacOS) {
+    candidates.addAll([
+      path.join(cwd, 'native', 'libsmoldot.dylib'),
+      path.join(cwd, 'rust', 'target', 'release', 'libsmoldot.dylib'),
+      'libsmoldot.dylib',
+    ]);
+  } else if (Platform.isWindows) {
+    candidates.addAll([
+      path.join(cwd, 'native', 'smoldot.dll'),
+      path.join(cwd, 'rust', 'target', 'release', 'smoldot.dll'),
+      'smoldot.dll',
+    ]);
+  } else {
+    candidates.addAll([
+      path.join(cwd, 'native', 'libsmoldot.so'),
+      path.join(cwd, 'rust', 'target', 'release', 'libsmoldot.so'),
+      'libsmoldot.so',
+    ]);
+  }
+
+  Object? lastError;
+  for (final candidate in candidates) {
+    if (candidate.startsWith('lib') || File(candidate).existsSync()) {
+      try {
+        return DynamicLibrary.open(candidate);
+      } catch (e) {
+        lastError = e;
+      }
+    }
+  }
+  throw MlsNativeException(
+    MlsNativeErrorCode.libraryUnavailable,
+    '无法加载 libsmoldot native 库: $lastError',
+  );
+}
+
+/// OpenMLS FFI 的结构化错误类别。
+///
+/// 技术信息仅供日志和测试定位；页面必须通过 [userMessage] 展示固定中文文案，禁止把
+/// native 路径、Dart `Bad state` 前缀或不可控底层文本直接交给用户。
+enum MlsNativeErrorCode {
+  stateOwnerMismatch,
+  stateUnreadable,
+  libraryUnavailable,
+  invalidRequest,
+  invalidResponse,
+  operationFailed,
+}
+
+class MlsNativeException implements Exception {
+  const MlsNativeException(this.code, this.technicalMessage);
+
+  factory MlsNativeException.fromTechnicalMessage(String message) {
+    if (message.contains('CHAT_MLS_STATE_OWNER_MISMATCH')) {
+      return MlsNativeException(MlsNativeErrorCode.stateOwnerMismatch, message);
+    }
+    if (message.contains('OpenMLS storage') ||
+        message.contains('MLS 状态') ||
+        message.contains('MLS 设备记录')) {
+      return MlsNativeException(MlsNativeErrorCode.stateUnreadable, message);
+    }
+    return MlsNativeException(MlsNativeErrorCode.operationFailed, message);
+  }
+
+  final MlsNativeErrorCode code;
+  final String technicalMessage;
+
+  String get userMessage => switch (code) {
+        MlsNativeErrorCode.stateOwnerMismatch =>
+          '当前 CID 的聊天设备状态属于其他用户，请重新切换账户后再试',
+        MlsNativeErrorCode.stateUnreadable =>
+          '当前 CID 的聊天加密状态无法读取，请勿清除应用数据并稍后重试',
+        MlsNativeErrorCode.libraryUnavailable => '聊天安全组件加载失败，请重新安装当前版本',
+        MlsNativeErrorCode.invalidRequest ||
+        MlsNativeErrorCode.invalidResponse ||
+        MlsNativeErrorCode.operationFailed =>
+          '聊天安全组件暂时无法使用，请稍后重试',
+      };
+
+  @override
+  String toString() => technicalMessage;
+}
+
+/// 将 Chat/OpenMLS 异常收敛为可公开展示的固定中文文案。
+///
+/// 未列入白名单的底层异常统一返回 [fallback]；禁止把 `Bad state`、动态库路径、native
+/// 调试文本或损坏字节直接渲染到 Android/iOS 页面。
+String chatUserErrorMessage(
+  Object error, {
+  String fallback = '聊天暂时无法使用，请稍后重试',
+}) {
+  if (error is MlsNativeException) return error.userMessage;
+  if (error is SquareApiException) {
+    return switch (error.errorCode) {
+      'cid_not_bound' => '当前默认账户尚未注册 CID，无法使用聊天',
+      'device_not_registered' ||
+      'chat_device_not_registered' ||
+      'invalid_signature' =>
+        '聊天设备身份尚未就绪，请重试',
+      'cid_binding_changed' => '当前登录用户已切换，请重新进入聊天',
+      'missing_session' ||
+      'invalid_session' ||
+      'session_expired' =>
+        '聊天会话已失效，请重试',
+      _ => error.statusCode == null || error.statusCode! >= 500
+          ? '聊天服务暂时无法连接，请稍后重试'
+          : fallback,
+    };
+  }
+  final technical = error.toString();
+  if (technical.contains('当前默认账户尚未注册 CID')) {
+    return '当前默认账户尚未注册 CID，无法使用聊天';
+  }
+  if (technical.contains('身份账户已切换') ||
+      technical.contains('CID 当前绑定已切换') ||
+      technical.contains('当前用户投影不一致')) {
+    return '当前登录用户已切换，请重新进入聊天';
+  }
+  if (technical.contains('key_package_not_available') ||
+      technical.contains('对方没有可用 Chat KeyPackage') ||
+      technical.contains('没有可用 Chat KeyPackage')) {
+    return '对方暂时无法接收加密消息，请稍后重试';
+  }
+  if (technical.contains('invalid_key_package_lifetime') ||
+      technical.contains('key_package_write_rejected')) {
+    return '聊天安全材料更新失败，请稍后重试';
+  }
+  if (technical.contains('对方尚未绑定身份（CID）')) {
+    return '对方尚未绑定身份（CID）';
+  }
+  if (technical.contains('对方 CID 当前没有有效钱包绑定')) {
+    return '对方 CID 当前没有有效钱包绑定';
+  }
+  if (technical.contains('允许麦克风权限')) {
+    return '请在系统设置中允许麦克风权限';
+  }
+  if (technical.contains('已退出该群')) {
+    return '已退出该群，无法继续操作';
+  }
+  if (technical.contains('群不存在')) {
+    return '该群聊已不存在';
+  }
+  return fallback;
+}
+
+/// 读 Rust 侧**必填**响应字段;缺字段或空值一律抛错,绝不静默退化成空串。
+///
+/// FFI 两侧字段名靠人工对齐,没有编译期约束:漏 `_hex` 后缀这类拼写漂移会让
+/// `?? ''` 一路把空串传到业务层,故障点离根因隔好几层(2026-08-04 的
+/// `device_public_key_hex` 断链即如此——设备公钥恒空,Chat 首启抛「请先重编
+/// native 库」,把 Dart 读错键名误导成 native 库过期)。在边界即炸。
+///
+/// 只用于**恒非空**的字段;可为空的响应字段(如无新会话时的
+/// `welcome_wire_message_hex`、Welcome 消息的 `plaintext_hex`)照旧走 `?? ''`。
+String _requireField(Map<String, dynamic> response, String key) {
+  final value = (response[key] ?? '').toString();
+  if (value.isEmpty) {
+    throw MlsNativeException(
+      MlsNativeErrorCode.invalidResponse,
+      'OpenMLS native 响应缺少必填字段 $key;请核对 Rust 侧 FFI 键名',
+    );
+  }
+  return value;
+}
+
+List<int> _hexToBytes(String value) {
+  final normalized = value.startsWith('0x') ? value.substring(2) : value;
+  if (normalized.length.isOdd) {
+    throw const FormatException('OpenMLS hex 长度必须为偶数');
+  }
+  if (normalized.isNotEmpty &&
+      !RegExp(r'^[0-9a-fA-F]+$').hasMatch(normalized)) {
+    throw const FormatException('OpenMLS hex 必须合法');
+  }
+  final bytes = <int>[];
+  for (var i = 0; i < normalized.length; i += 2) {
+    bytes.add(int.parse(normalized.substring(i, i + 2), radix: 16));
+  }
+  return bytes;
+}
+
+String _bytesToHex(List<int> bytes) {
+  return bytes.map((byte) => byte.toRadixString(16).padLeft(2, '0')).join();
+}

@@ -1,0 +1,489 @@
+import type { Env } from "../types";
+import { nowMs } from "../shared/time";
+import { fetchBlockHeader, fetchFinalizedHead, isChainRpcConfigured } from "../chain/rpc";
+import {
+  readChainTimestampAtBlock,
+  readSubscriptionAtBlock,
+  readSubscriptionsAtBlock,
+  updateChainClock,
+  updateChainClockStatement,
+  type ChainSubscriptionState,
+} from "../chain/subscription";
+
+/**
+ * 订阅投影对账只处理已经到期、可能发生自动续费或终止的候选项。每轮只读取一次 finalized
+ * 头和 Timestamp.Now，不滚动扫描未到期全表，不承担扣款或续费职责。
+ */
+
+const DEFAULT_BATCH = 50;
+const MAX_BATCH = 50;
+
+export const MEMBERSHIP_RECONCILE_FLAG_KEY = "flag:membership_reconcile";
+export const CREATOR_RECONCILE_FLAG_KEY = "flag:creator_reconcile";
+
+export interface FinalizedPoint {
+  blockHash: string;
+  blockNumber: number;
+  chainTimestamp: number;
+  observedAt: number;
+}
+
+export interface ReconcileDeps {
+  finalizedPoint: (env: Env) => Promise<FinalizedPoint>;
+  readSubscriptionAtBlock: typeof readSubscriptionAtBlock;
+  readSubscriptionsAtBlock?: typeof readSubscriptionsAtBlock;
+}
+
+const defaultDeps: ReconcileDeps = {
+  finalizedPoint: readFinalizedPoint,
+  readSubscriptionAtBlock,
+  readSubscriptionsAtBlock,
+};
+
+export interface ReconcileResult {
+  scanned: number;
+  updated: number;
+  failed: number;
+}
+
+export interface SubscriptionReconcileResult {
+  platform: ReconcileResult;
+  creator: ReconcileResult;
+  /// 本轮对账读取的 finalized 区块时间戳；未读取链时为 null。
+  finalized_chain_timestamp: number | null;
+}
+
+export interface MembershipReconcileInput {
+  cidNumber: string;
+  accountId: string;
+}
+
+const EMPTY_RESULT: ReconcileResult = { scanned: 0, updated: 0, failed: 0 };
+
+/** Cron 唯一入口：共享一次 finalized 链锚点后分别处理平台与创作者到期候选。 */
+export async function reconcileSubscriptions(
+  env: Env,
+  deps: ReconcileDeps = defaultDeps,
+): Promise<SubscriptionReconcileResult> {
+  const [platformEnabled, creatorEnabled] = await Promise.all([
+    reconcileEnabled(env, MEMBERSHIP_RECONCILE_FLAG_KEY, env.MEMBERSHIP_RECONCILE_ENABLED),
+    reconcileEnabled(env, CREATOR_RECONCILE_FLAG_KEY, env.CREATOR_RECONCILE_ENABLED),
+  ]);
+  if ((!platformEnabled && !creatorEnabled) || !isChainRpcConfigured(env)) {
+    return {
+      platform: { ...EMPTY_RESULT },
+      creator: { ...EMPTY_RESULT },
+      finalized_chain_timestamp: null,
+    };
+  }
+
+  const point = await deps.finalizedPoint(env);
+  await updateChainClock(env, {
+    chainTimestamp: point.chainTimestamp,
+    blockNumber: point.blockNumber,
+    blockHash: point.blockHash,
+    observedAt: point.observedAt,
+  });
+
+  // 已取消订阅无需点读链：权益在链上 paid_until 到达时自然失效，清理边界固定为该时间。
+  await env.DB.prepare(
+    `UPDATE square_memberships
+      SET entitlement_lapsed_at = paid_until
+      WHERE subscription_status IN ('cancelled', 'terminated')
+        AND entitlement_lapsed_at IS NULL AND paid_until <= ?`,
+  ).bind(point.chainTimestamp).run();
+
+  const [platform, creator] = await Promise.all([
+    platformEnabled
+      ? reconcilePlatformCandidates(env, point, deps, reconcileBatchSize(env))
+      : Promise.resolve({ ...EMPTY_RESULT }),
+    creatorEnabled
+      ? reconcileCreatorCandidates(env, point, deps, reconcileBatchSize(env))
+      : Promise.resolve({ ...EMPTY_RESULT }),
+  ]);
+  return {
+    platform,
+    creator,
+    finalized_chain_timestamp: point.chainTimestamp,
+  };
+}
+
+/** 单模块测试与人工诊断入口；生产 Cron 使用 reconcileSubscriptions 避免重复读链。 */
+export async function reconcileMemberships(
+  env: Env,
+  deps: ReconcileDeps = defaultDeps,
+): Promise<ReconcileResult> {
+  if (!(await reconcileEnabled(env, MEMBERSHIP_RECONCILE_FLAG_KEY, env.MEMBERSHIP_RECONCILE_ENABLED))) {
+    return { ...EMPTY_RESULT };
+  }
+  if (!isChainRpcConfigured(env)) return { ...EMPTY_RESULT };
+  const point = await deps.finalizedPoint(env);
+  await updateChainClock(env, {
+    chainTimestamp: point.chainTimestamp,
+    blockNumber: point.blockNumber,
+    blockHash: point.blockHash,
+    observedAt: point.observedAt,
+  });
+  return reconcilePlatformCandidates(env, point, deps, reconcileBatchSize(env));
+}
+
+export async function reconcileCreatorSubscriptions(
+  env: Env,
+  deps: ReconcileDeps = defaultDeps,
+): Promise<ReconcileResult> {
+  if (!(await reconcileEnabled(env, CREATOR_RECONCILE_FLAG_KEY, env.CREATOR_RECONCILE_ENABLED))) {
+    return { ...EMPTY_RESULT };
+  }
+  if (!isChainRpcConfigured(env)) return { ...EMPTY_RESULT };
+  const point = await deps.finalizedPoint(env);
+  await updateChainClock(env, {
+    chainTimestamp: point.chainTimestamp,
+    blockNumber: point.blockNumber,
+    blockHash: point.blockHash,
+    observedAt: point.observedAt,
+  });
+  return reconcileCreatorCandidates(env, point, deps, reconcileBatchSize(env));
+}
+
+/**
+ * 发布授权拒绝前的单 CID finalized 对账。
+ *
+ * 不受 Cron 开关控制：调用方已经用当前钱包会话校验 CID 与 account_id，本函数只在 D1
+ * 快路径即将拒绝时执行。链时钟和平台会员行通过同一 D1 batch 原子提交；任何一步失败都
+ * 不留下半套权益投影。
+ */
+export async function reconcileMembershipForCid(
+  env: Env,
+  input: MembershipReconcileInput,
+  deps: ReconcileDeps = defaultDeps,
+): Promise<ChainSubscriptionState | null> {
+  if (!isChainRpcConfigured(env)) {
+    throw new Error("chain rpc not configured");
+  }
+  const point = await deps.finalizedPoint(env);
+  const state = await deps.readSubscriptionAtBlock(
+    env,
+    input.cidNumber,
+    { kind: "platform" },
+    point.blockHash,
+  );
+  await env.DB.batch([
+    updateChainClockStatement(env, {
+      chainTimestamp: point.chainTimestamp,
+      blockNumber: point.blockNumber,
+      blockHash: point.blockHash,
+      observedAt: point.observedAt,
+    }),
+    platformStateStatement(
+      env,
+      input.cidNumber,
+      input.accountId,
+      state,
+      point,
+    ),
+  ]);
+  return state;
+}
+
+async function readFinalizedPoint(env: Env): Promise<FinalizedPoint> {
+  const blockHash = await fetchFinalizedHead(env);
+  const [header, chainTimestamp] = await Promise.all([
+    fetchBlockHeader(env, blockHash),
+    readChainTimestampAtBlock(env, blockHash),
+  ]);
+  return {
+    blockHash,
+    blockNumber: parseBlockNumber(header.number),
+    chainTimestamp,
+    observedAt: nowMs(),
+  };
+}
+
+async function reconcilePlatformCandidates(
+  env: Env,
+  point: FinalizedPoint,
+  deps: ReconcileDeps,
+  batch: number,
+): Promise<ReconcileResult> {
+  const rows = await env.DB.prepare(
+    // active（可能转挂起）与 suspended/issuerPaused（可能链上恢复为 active）都要复核。
+    // 按身份主键 CID 直接读取链上订阅；账户换绑不会改变 storage key。
+    `SELECT cid_number, account_id FROM square_memberships
+      WHERE subscription_status IN ('active', 'suspended', 'issuerPaused')
+        AND paid_until <= ?
+      ORDER BY paid_until ASC LIMIT ?`,
+  ).bind(point.chainTimestamp, batch).all<{
+    cid_number: string;
+    account_id: string;
+  }>();
+  const candidates = rows.results ?? [];
+  if (!deps.readSubscriptionsAtBlock) {
+    return runBatch(candidates, async (row) => {
+      const state = await deps.readSubscriptionAtBlock(
+        env,
+        row.cid_number,
+        { kind: "platform" },
+        point.blockHash,
+      );
+      await applyPlatformState(env, row.cid_number, row.account_id, state, point);
+    });
+  }
+  const states = await deps.readSubscriptionsAtBlock(
+    env,
+    candidates.map((row) => ({
+      subscriberCidNumber: row.cid_number,
+      issuer: { kind: "platform" as const },
+    })),
+    point.blockHash,
+  );
+  return runBatch(candidates.map((row, index) => ({ row, state: states[index] ?? null })), async ({ row, state }) => {
+    await applyPlatformState(
+      env,
+      row.cid_number,
+      row.account_id,
+      state,
+      point,
+    );
+  });
+}
+
+async function reconcileCreatorCandidates(
+  env: Env,
+  point: FinalizedPoint,
+  deps: ReconcileDeps,
+  batch: number,
+): Promise<ReconcileResult> {
+  const rows = await env.DB.prepare(
+    // issuerPaused 在链上会随创作者恢复自动续为 active，必须纳入复核刷新投影。
+    // 订阅者和创作者都以 CID 定位链上状态，不读取审计用账户列。
+    `SELECT subscriber_cid_number, creator_cid_number
+      FROM square_creator_subscriptions
+      WHERE subscription_status IN ('active', 'suspended', 'issuerPaused')
+        AND paid_until <= ?
+      ORDER BY paid_until ASC LIMIT ?`,
+  ).bind(point.chainTimestamp, batch).all<{
+    subscriber_cid_number: string;
+    creator_cid_number: string;
+  }>();
+  const candidates = rows.results ?? [];
+  if (!deps.readSubscriptionsAtBlock) {
+    return runBatch(candidates, async (row) => {
+      const state = await deps.readSubscriptionAtBlock(
+        env,
+        row.subscriber_cid_number,
+        { kind: "creator", creatorCidNumber: row.creator_cid_number },
+        point.blockHash,
+      );
+      await applyCreatorState(
+        env,
+        row.subscriber_cid_number,
+        row.creator_cid_number,
+        state,
+        point,
+      );
+    });
+  }
+  const states = await deps.readSubscriptionsAtBlock(
+    env,
+    candidates.map((row) => ({
+      subscriberCidNumber: row.subscriber_cid_number,
+      issuer: { kind: "creator" as const, creatorCidNumber: row.creator_cid_number },
+    })),
+    point.blockHash,
+  );
+  return runBatch(candidates.map((row, index) => ({ row, state: states[index] ?? null })), async ({ row, state }) => {
+    await applyCreatorState(env, row.subscriber_cid_number, row.creator_cid_number, state, point);
+  });
+}
+
+export async function applyPlatformState(
+  env: Env,
+  cidNumber: string,
+  accountId: string,
+  state: ChainSubscriptionState | null,
+  point: FinalizedPoint,
+): Promise<void> {
+  await platformStateStatement(
+    env,
+    cidNumber,
+    accountId,
+    state,
+    point,
+  ).run();
+}
+
+/** 同一 finalized 高度只允许等高幂等或向前更新，旧链读不得覆盖新投影。 */
+function platformStateStatement(
+  env: Env,
+  cidNumber: string,
+  accountId: string,
+  state: ChainSubscriptionState | null,
+  point: FinalizedPoint,
+): D1PreparedStatement {
+  if (!state || state.plan.kind !== "platform") {
+    return env.DB.prepare(
+      `UPDATE square_memberships SET subscription_status = 'terminated',
+        entitlement_lapsed_at = paid_until,
+        finalized_block_number = ?, finalized_block_hash = ?, verified_at = ?
+        WHERE cid_number = ? AND finalized_block_number <= ?
+          AND ? >= COALESCE(
+            (SELECT finalized_block_number FROM chain_clock WHERE clock_id = 1),
+            ?
+          )`,
+    ).bind(
+      point.blockNumber,
+      point.blockHash,
+      point.observedAt,
+      cidNumber,
+      point.blockNumber,
+      point.blockNumber,
+      point.blockNumber,
+    );
+  }
+  return env.DB.prepare(
+    `INSERT INTO square_memberships
+      (cid_number, account_id, membership_level, started_at, last_charged_at,
+       last_charged_price_fen, paid_until, subscription_status, finalized_block_number,
+       finalized_block_hash, verified_at, entitlement_lapsed_at, last_tx_hash)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL
+      WHERE ? >= COALESCE(
+        (SELECT finalized_block_number FROM chain_clock WHERE clock_id = 1),
+        ?
+      )
+      ON CONFLICT(cid_number) DO UPDATE SET
+        account_id = excluded.account_id,
+        membership_level = excluded.membership_level,
+        started_at = excluded.started_at,
+        last_charged_at = excluded.last_charged_at,
+        last_charged_price_fen = excluded.last_charged_price_fen,
+        paid_until = excluded.paid_until,
+        subscription_status = excluded.subscription_status,
+        finalized_block_number = excluded.finalized_block_number,
+        finalized_block_hash = excluded.finalized_block_hash,
+        verified_at = excluded.verified_at,
+        entitlement_lapsed_at = excluded.entitlement_lapsed_at,
+        storage_cleanup_notified_at = CASE
+          WHEN excluded.subscription_status = 'active' THEN NULL
+          ELSE square_memberships.storage_cleanup_notified_at END
+      WHERE excluded.finalized_block_number >= square_memberships.finalized_block_number
+        AND excluded.finalized_block_number >= COALESCE(
+          (SELECT finalized_block_number FROM chain_clock WHERE clock_id = 1),
+          excluded.finalized_block_number
+        )`,
+  ).bind(
+    cidNumber,
+    accountId,
+    state.plan.membershipLevel,
+    state.startedAt,
+    state.lastChargedAt,
+    safePrice(state.lastChargedPriceFen),
+    state.paidUntil,
+    state.status,
+    point.blockNumber,
+    point.blockHash,
+    point.observedAt,
+    state.status === "active" ? null : state.paidUntil,
+    point.blockNumber,
+    point.blockNumber,
+  );
+}
+
+async function applyCreatorState(
+  env: Env,
+  subscriberCidNumber: string,
+  creatorCidNumber: string,
+  state: ChainSubscriptionState | null,
+  point: FinalizedPoint,
+): Promise<void> {
+  if (!state || state.plan.kind !== "creator") {
+    await env.DB.prepare(
+      `UPDATE square_creator_subscriptions SET subscription_status = 'terminated',
+        finalized_block_number = ?, finalized_block_hash = ?, verified_at = ?
+        WHERE subscriber_cid_number = ? AND creator_cid_number = ?`,
+    ).bind(
+      point.blockNumber,
+      point.blockHash,
+      point.observedAt,
+      subscriberCidNumber,
+      creatorCidNumber,
+    ).run();
+    return;
+  }
+  await env.DB.prepare(
+    `UPDATE square_creator_subscriptions SET tier_id = ?, billing_period = ?,
+      started_at = ?,
+      last_charged_at = ?, last_charged_price_fen = ?, paid_until = ?,
+      subscription_status = ?, finalized_block_number = ?, finalized_block_hash = ?, verified_at = ?
+      WHERE subscriber_cid_number = ? AND creator_cid_number = ?`,
+  ).bind(
+    state.plan.tierId,
+    state.plan.billingPeriod,
+    state.startedAt,
+    state.lastChargedAt,
+    safePrice(state.lastChargedPriceFen),
+    state.paidUntil,
+    state.status,
+    point.blockNumber,
+    point.blockHash,
+    point.observedAt,
+    subscriberCidNumber,
+    creatorCidNumber,
+  ).run();
+}
+
+async function runBatch<T>(
+  rows: T[],
+  handle: (row: T) => Promise<void>,
+): Promise<ReconcileResult> {
+  const result: ReconcileResult = { scanned: 0, updated: 0, failed: 0 };
+  for (const row of rows) {
+    result.scanned += 1;
+    try {
+      await handle(row);
+      result.updated += 1;
+    } catch (error) {
+      result.failed += 1;
+      console.error(JSON.stringify({
+        event: "subscription_reconcile_row_failed",
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  }
+  return result;
+}
+
+async function reconcileEnabled(
+  env: Env,
+  kvKey: string,
+  fallbackVar: string | undefined,
+): Promise<boolean> {
+  if (env.SQUARE_CACHE) {
+    try {
+      const value = await env.SQUARE_CACHE.get(kvKey);
+      if (value !== null) return value === "1";
+    } catch {
+      // KV 只承载动态开关；读取失败时回退部署变量，不改变订阅真态。
+    }
+  }
+  return fallbackVar === "1";
+}
+
+function reconcileBatchSize(env: Env): number {
+  const raw = Number.parseInt(env.MEMBERSHIP_RECONCILE_BATCH ?? "", 10);
+  if (!Number.isFinite(raw) || raw <= 0) return DEFAULT_BATCH;
+  return Math.min(raw, MAX_BATCH);
+}
+
+function parseBlockNumber(value: string): number {
+  if (!/^0x[0-9a-fA-F]+$/.test(value)) throw new Error("finalized block number invalid");
+  const number = Number(BigInt(value));
+  if (!Number.isSafeInteger(number) || number < 0) throw new Error("finalized block number out of range");
+  return number;
+}
+
+function safePrice(value: bigint): number {
+  if (value <= 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error("subscription price out of D1 range");
+  }
+  return Number(value);
+}

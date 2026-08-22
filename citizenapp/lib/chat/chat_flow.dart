@@ -1,0 +1,751 @@
+import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+import 'crypto/mls_boundary.dart';
+import 'media/attachment_vault.dart';
+import 'chat_media_limits.dart';
+import 'chat_models.dart';
+import 'chat_payload.dart';
+import 'proto/chat_envelope.pb.dart';
+import 'storage/chat_store.dart';
+import 'transport/chat_transport.dart';
+
+/// 投递一个密文 Envelope。[recipientCidNumber] 是收件人唯一身份主键和路由键。
+typedef ChatEnvelopeDeliverer = Future<ChatDeliveryResult> Function(
+  ChatEnvelope envelope,
+  List<int> envelopeBytes,
+  String recipientCidNumber,
+);
+
+/// 本地可靠队列落盘后，把网络投递交给按会话保序的后台执行器。调用方不得
+/// 在执行器内重新处理 MLS 或改写附件，只允许投递已持久化的密文信封并回写状态。
+typedef ChatEnvelopeDeliveryScheduler = void Function(
+  String conversationId,
+  Future<void> Function() delivery,
+);
+
+/// 把本机源文件字节经 WebRTC 流式发给对端设备。传路径而非整块字节:大文件
+/// (最大 5GB)绝不整块进内存,由发送端 openRead 分片 + 背压推送。
+///
+/// [recipientCidNumber] 为对端身份主键 CID 号（WebRTC 信令按 CID 路由）。
+typedef ChatAttachmentDeviceSender = Future<void> Function({
+  required String recipientCidNumber,
+  required String conversationId,
+  required String attachmentId,
+  required String fileName,
+  required String contentType,
+  required String sourcePath,
+  required int byteSize,
+});
+
+/// 发送方把自己发出的媒体自存一份到本机缓存,以便在会话里看到并支持上线补发。
+typedef ChatLocalAttachmentSaver = Future<void> Function({
+  required String conversationId,
+  required String attachmentId,
+  required String fileName,
+  required String contentType,
+  required String sourcePath,
+  required int byteSize,
+});
+
+/// 登记一条待设备投递的媒体(字节未送达对方设备,留待上线补发)。
+typedef ChatMediaPendingRecorder = Future<void> Function(String attachmentId);
+
+/// 字节已送达对方设备(收到 WebRTC ack)后清除待投递登记。
+typedef ChatMediaDeliveredMarker = Future<void> Function(String attachmentId);
+
+/// 媒体控制消息和发送方本地附件均已安全落盘，可以立即刷新本机聊天气泡。
+typedef ChatMediaLocalCommitNotifier = Future<void> Function();
+
+/// 待发送的本机明文媒体(图片 / 视频 / 文件 / 语音)。
+///
+/// 承载**源文件路径**而非整块字节:发送走流式读盘,支持最大 5GB 且不 OOM。
+class ChatMediaDraft {
+  const ChatMediaDraft({
+    required this.kind,
+    required this.fileName,
+    required this.contentType,
+    required this.sourcePath,
+    required this.byteSize,
+    this.width,
+    this.height,
+    this.durationMs,
+    this.blurhash,
+  });
+
+  /// 媒体类型:image / video / file / audio。
+  final ChatMessageKind kind;
+
+  /// 用户本机可见文件名。该字段只会进入 OpenMLS 明文，不写入 Worker 明文表。
+  final String fileName;
+
+  /// 文件 MIME 类型。
+  final String contentType;
+
+  /// 本机源文件路径。字节从此路径流式读取,不整块载入内存。
+  final String sourcePath;
+
+  /// 源文件字节数(= File(sourcePath).length())。
+  final int byteSize;
+
+  /// image/video 像素宽高(可空;步骤2 采集时补齐)。
+  final int? width;
+  final int? height;
+
+  /// video/audio 时长毫秒(可空)。
+  final int? durationMs;
+
+  /// image/video 低清占位串(blurhash，可空;步骤2 生成)。
+  final String? blurhash;
+}
+
+/// 已在本机缓存就绪的媒体句柄。
+///
+/// 只返回路径与大小,**不返回整块字节**:5GB 媒体不允许载入内存,读取由调用方
+/// 按需流式进行。
+class ChatDownloadedAttachment {
+  const ChatDownloadedAttachment({
+    required this.attachmentId,
+    required this.fileName,
+    required this.contentType,
+    required this.clearByteSize,
+    required this.filePath,
+  });
+
+  /// OpenMLS 附件控制消息中的附件 ID。
+  final String attachmentId;
+
+  /// 用户可见文件名。
+  final String fileName;
+
+  /// 文件 MIME 类型。
+  final String contentType;
+
+  /// 明文字节数。
+  final int clearByteSize;
+
+  /// App 私有缓存中的保存路径。
+  final String filePath;
+}
+
+/// Chat 入站处理结果。
+class ChatIncomingProcessResult {
+  const ChatIncomingProcessResult({
+    required this.envelopeId,
+    required this.accepted,
+    required this.queuedPending,
+    this.plaintext,
+    this.acceptedEnvelopes = const <ChatEnvelope>[],
+  });
+
+  final String envelopeId;
+  final bool accepted;
+  final bool queuedPending;
+  final String? plaintext;
+
+  /// 本次处理及 Welcome 回放中已经成功落库的应用 envelope；运行态据此发送
+  /// 内部设备确认，不代表用户已读。
+  final List<ChatEnvelope> acceptedEnvelopes;
+}
+
+/// 公民 Chat 消息收发状态机。
+///
+/// 本类是聊天收发编排层。它不实现密码学，只负责把 OpenMLS native、
+/// ChatEnvelope、本地 Isar 和正式 transport 串起来。
+class ChatFlow {
+  const ChatFlow({
+    required MlsCrypto crypto,
+    required ChatStore store,
+    required ChatEnvelopeDeliverer deliverer,
+    required ChatBindingFenceToken bindingToken,
+    required String ownerCidNumber,
+    required String currentAccountId,
+    this.deliveryScheduler,
+    this.defaultTtlMillis = 30 * 24 * 60 * 60 * 1000,
+  })  : _crypto = crypto,
+        _store = store,
+        _deliverer = deliverer,
+        _bindingToken = bindingToken,
+        _ownerCidNumber = ownerCidNumber,
+        _currentAccountId = currentAccountId;
+
+  final MlsCrypto _crypto;
+  final ChatStore _store;
+  final ChatEnvelopeDeliverer _deliverer;
+  final ChatBindingFenceToken _bindingToken;
+  final String _ownerCidNumber;
+  final String _currentAccountId;
+  final ChatEnvelopeDeliveryScheduler? deliveryScheduler;
+  final int defaultTtlMillis;
+
+  Future<List<ChatDeliveryResult>> sendText({
+    required String conversationId,
+    required String senderCidNumber,
+    required String recipientCidNumber,
+    required String senderDeviceId,
+    MlsKeyPackage? recipientKeyPackage,
+    required String text,
+    String? pendingLocalMessageId,
+    int? createdAtMillis,
+  }) async {
+    final now = createdAtMillis ?? DateTime.now().millisecondsSinceEpoch;
+    final payload = ChatPayloadCodec.encode(ChatContent.text(text));
+    final outbound = await _crypto.encrypt(
+      conversationId: conversationId,
+      recipientCidNumber: recipientCidNumber,
+      recipientKeyPackage: recipientKeyPackage,
+      plaintext: utf8.encode(payload),
+    );
+    return _deliverOutbound(
+      outbound: outbound,
+      conversationId: conversationId,
+      senderCidNumber: senderCidNumber,
+      recipientCidNumber: recipientCidNumber,
+      senderDeviceId: senderDeviceId,
+      nowMillis: now,
+      messageKind: ChatMessageKind.text,
+      payload: payload,
+      pendingLocalMessageId: pendingLocalMessageId,
+    );
+  }
+
+  /// 发送内置贴纸：只走控制信封(几十字节)，不经 WebRTC、不落缓存。
+  Future<List<ChatDeliveryResult>> sendSticker({
+    required String conversationId,
+    required String senderCidNumber,
+    required String recipientCidNumber,
+    required String senderDeviceId,
+    MlsKeyPackage? recipientKeyPackage,
+    required String packId,
+    required String stickerId,
+    String? pendingLocalMessageId,
+    int? createdAtMillis,
+  }) async {
+    final now = createdAtMillis ?? DateTime.now().millisecondsSinceEpoch;
+    final payload = ChatPayloadCodec.encode(
+      ChatContent.sticker(packId: packId, stickerId: stickerId),
+    );
+    final outbound = await _crypto.encrypt(
+      conversationId: conversationId,
+      recipientCidNumber: recipientCidNumber,
+      recipientKeyPackage: recipientKeyPackage,
+      plaintext: utf8.encode(payload),
+    );
+    return _deliverOutbound(
+      outbound: outbound,
+      conversationId: conversationId,
+      senderCidNumber: senderCidNumber,
+      recipientCidNumber: recipientCidNumber,
+      senderDeviceId: senderDeviceId,
+      nowMillis: now,
+      messageKind: ChatMessageKind.sticker,
+      payload: payload,
+      pendingLocalMessageId: pendingLocalMessageId,
+    );
+  }
+
+  /// 发送图片 / 视频 / 文件 / 语音：控制消息(含尺寸、时长、blurhash)走 MLS 信封,
+  /// 媒体字节走 WebRTC 端到端直传。
+  ///
+  /// 顺序:加密 → **控制消息先离线安全入队/投递**(和文字一样,不依赖 WebRTC 成功)
+  /// → 自存缓存 + 登记待设备投递 → 尝试 WebRTC 字节。字节发送失败(对方离线)**不
+  /// 抛错**,留 pending 由对方上线时补发。加密仍在发字节之前,保持零泄漏顺序。
+  Future<List<ChatDeliveryResult>> sendMedia({
+    required String conversationId,
+    required String senderCidNumber,
+    required String recipientCidNumber,
+    required String senderDeviceId,
+    MlsKeyPackage? recipientKeyPackage,
+    required ChatMediaDraft media,
+    required ChatAttachmentDeviceSender sendDeviceAttachment,
+    ChatLocalAttachmentSaver? saveLocalAttachment,
+    ChatMediaPendingRecorder? recordPendingMedia,
+    ChatMediaDeliveredMarker? onDeviceDelivered,
+    ChatMediaLocalCommitNotifier? onLocalCommitted,
+    String? attachmentId,
+    String? pendingLocalMessageId,
+    int? createdAtMillis,
+  }) async {
+    // 门①:发送端大小硬门控。即使 UI 被绕过也在此拦下,此刻字节尚未进入任何
+    // 通道。与接收端字节层门控(门②)配合,构成收发双端强制。
+    if (ChatMediaLimits.exceedsForKind(media.kind, media.byteSize)) {
+      throw ChatMediaTooLargeException(
+        byteSize: media.byteSize,
+        limitBytes: ChatMediaLimits.forKind(media.kind),
+        kind: media.kind,
+      );
+    }
+    final now = createdAtMillis ?? DateTime.now().millisecondsSinceEpoch;
+    final stableAttachmentId = attachmentId ?? _newAttachmentId(now);
+
+    final payload = ChatPayloadCodec.encode(
+      ChatContent.media(
+        kind: media.kind,
+        attachmentId: stableAttachmentId,
+        fileName: media.fileName,
+        mime: media.contentType,
+        byteSize: media.byteSize,
+        width: media.width,
+        height: media.height,
+        durationMs: media.durationMs,
+        blurhash: media.blurhash,
+      ),
+    );
+    final outbound = await _crypto.encrypt(
+      conversationId: conversationId,
+      recipientCidNumber: recipientCidNumber,
+      recipientKeyPackage: recipientKeyPackage,
+      plaintext: utf8.encode(payload),
+    );
+    // 控制消息先离线安全落库/投递:即便对方离线、WebRTC 发不出,消息仍成立。
+    final results = await _deliverOutbound(
+      outbound: outbound,
+      conversationId: conversationId,
+      senderCidNumber: senderCidNumber,
+      recipientCidNumber: recipientCidNumber,
+      senderDeviceId: senderDeviceId,
+      nowMillis: now,
+      messageKind: media.kind,
+      payload: payload,
+      pendingLocalMessageId: pendingLocalMessageId,
+      pendingMedia: ChatPendingMedia(
+        attachmentId: stableAttachmentId,
+        recipientCidNumber: recipientCidNumber,
+        conversationId: conversationId,
+        fileName: media.fileName,
+        contentType: media.contentType,
+        byteSize: media.byteSize,
+      ),
+      onApplicationStored: () async {
+        // 本机气泡只等待消息与本地附件安全落盘；云端投递和 WebRTC ack 不再
+        // 阻塞本机显示。
+        await saveLocalAttachment?.call(
+          conversationId: conversationId,
+          attachmentId: stableAttachmentId,
+          fileName: media.fileName,
+          contentType: media.contentType,
+          sourcePath: media.sourcePath,
+          byteSize: media.byteSize,
+        );
+        await onLocalCommitted?.call();
+      },
+    );
+    await recordPendingMedia?.call(stableAttachmentId);
+    // 尝试 WebRTC 字节;对方离线/直连失败**不抛错**,留 pending 待上线补发。
+    // 所有媒体字节均由 WebRTC DTLS 端到端传输；任何大小都不得进入 Worker/R2。
+    try {
+      await sendDeviceAttachment(
+        recipientCidNumber: recipientCidNumber,
+        conversationId: conversationId,
+        attachmentId: stableAttachmentId,
+        fileName: media.fileName,
+        contentType: media.contentType,
+        sourcePath: media.sourcePath,
+        byteSize: media.byteSize,
+      );
+      await onDeviceDelivered?.call(stableAttachmentId);
+    } on Exception {
+      // 留 pending 行,对方上线(peer_ready)时由 retryOutgoing 补发。
+    }
+    return results;
+  }
+
+  /// 把加密结果逐条落库并投递。应用消息进消息表 + 出站队列，握手消息只进出站
+  /// 队列；投递结果回写投递状态。sendText / sendMedia / sendSticker 共用。
+  Future<List<ChatDeliveryResult>> _deliverOutbound({
+    required MlsOutboundMessage outbound,
+    required String conversationId,
+    required String senderCidNumber,
+    required String recipientCidNumber,
+    required String senderDeviceId,
+    required int nowMillis,
+    required ChatMessageKind messageKind,
+    required String payload,
+    ChatMediaLocalCommitNotifier? onApplicationStored,
+    String? pendingLocalMessageId,
+    ChatPendingMedia? pendingMedia,
+  }) async {
+    final queued = <({ChatEnvelope envelope, List<int> envelopeBytes})>[];
+    var applicationStored = false;
+    var index = 0;
+    for (final wireMessage in outbound.wireMessages) {
+      // 本机 pending 的 MLS 序号必须按语义固定，而不能取当前返回列表的下标。
+      // 首次创建会话可能在只保存 Welcome 后中断；重试时 OpenMLS 已有会话，
+      // 只返回 Application。固定 Welcome=0 / Application=1 可保证两者永不撞
+      // Envelope ID，且队列始终先投递 Welcome、再投递 Application。
+      final envelopeIndex = pendingLocalMessageId == null
+          ? index
+          : switch (wireMessage.messageKind) {
+              MlsMessageKind.welcome => 0,
+              MlsMessageKind.application => 1,
+            };
+      final envelope = wireMessage.toEnvelope(
+        // 本地待发送行用稳定 ID 与语义序号做 seed；初始化或网络失败后重试
+        // 仍得到同一 Envelope ID，Store/收端幂等去重。
+        envelopeId: _newEnvelopeId(
+          pendingLocalMessageId ?? conversationId,
+          nowMillis,
+          envelopeIndex,
+        ),
+        senderCidNumber: senderCidNumber,
+        recipientCidNumber: recipientCidNumber,
+        senderDeviceId: senderDeviceId,
+        createdAtMillis: nowMillis + envelopeIndex,
+        ttlMillis: defaultTtlMillis,
+      );
+      final envelopeBytes = envelope.writeToBuffer();
+      final isApplication =
+          wireMessage.messageKind == MlsMessageKind.application;
+      if (isApplication) {
+        await _store.saveOutgoingEnvelope(
+          bindingToken: _bindingToken,
+          ownerCidNumber: _ownerCidNumber,
+          currentAccountId: _currentAccountId,
+          envelope: envelope,
+          envelopeBytes: envelopeBytes,
+          recipientCidNumber: recipientCidNumber,
+          messageKind: messageKind,
+          deliveryState: ChatMessageDeliveryState.queued,
+          plaintext: payload,
+          pendingLocalMessageId: pendingLocalMessageId,
+          pendingMedia: pendingMedia,
+        );
+        applicationStored = true;
+      } else {
+        await _store.queueOutgoingEnvelope(
+          bindingToken: _bindingToken,
+          ownerCidNumber: _ownerCidNumber,
+          envelope: envelope,
+          envelopeBytes: envelopeBytes,
+          recipientCidNumber: recipientCidNumber,
+          deliveryState: ChatMessageDeliveryState.queued,
+        );
+      }
+      queued.add((envelope: envelope, envelopeBytes: envelopeBytes));
+      index += 1;
+    }
+    if (applicationStored) {
+      await onApplicationStored?.call();
+    }
+
+    Future<List<ChatDeliveryResult>> deliverQueued() async {
+      final results = <ChatDeliveryResult>[];
+      for (final item in queued) {
+        final result = await _deliverer(
+          item.envelope,
+          item.envelopeBytes,
+          recipientCidNumber,
+        );
+        await _store.markOutgoingDelivery(
+          bindingToken: _bindingToken,
+          ownerCidNumber: _ownerCidNumber,
+          envelopeId: item.envelope.envelopeId,
+          state: result.state,
+          errorMessage: result.errorMessage,
+        );
+        results.add(result);
+      }
+      return results;
+    }
+
+    // Runtime 页面链路在本地可靠落盘后立即返回；网络投递在独立后台队列中
+    // 按会话保序。低层测试未注入执行器时仍等待并返回真实投递结果。
+    final scheduler = deliveryScheduler;
+    if (scheduler != null) {
+      scheduler(conversationId, () async {
+        await deliverQueued();
+      });
+      return const <ChatDeliveryResult>[];
+    }
+    return deliverQueued();
+  }
+
+  Future<ChatIncomingProcessResult> processIncomingEnvelopeBytes(
+    List<int> envelopeBytes,
+  ) async {
+    final envelope = ChatEnvelope.fromBuffer(envelopeBytes);
+    final wireMessage = imMlsWireMessageFromEnvelope(envelope);
+    try {
+      final inbound = await _crypto.processIncoming(wireMessage);
+      if (inbound.messageKind == MlsMessageKind.welcome) {
+        final acceptedEnvelopes = <ChatEnvelope>[];
+        final pending = await _store.takePendingInbound(
+          _ownerCidNumber,
+          envelope.conversationId,
+          bindingToken: _bindingToken,
+        );
+        for (final item in pending) {
+          final replayed =
+              await processIncomingEnvelopeBytes(item.writeToBuffer());
+          acceptedEnvelopes.addAll(replayed.acceptedEnvelopes);
+        }
+        return ChatIncomingProcessResult(
+          envelopeId: envelope.envelopeId,
+          accepted: true,
+          queuedPending: false,
+          acceptedEnvelopes: List<ChatEnvelope>.unmodifiable(acceptedEnvelopes),
+        );
+      }
+
+      final plaintext = utf8.decode(inbound.plaintext ?? const []);
+      await _store.saveIncomingEnvelope(
+        bindingToken: _bindingToken,
+        ownerCidNumber: _ownerCidNumber,
+        currentAccountId: _currentAccountId,
+        envelope: envelope,
+        envelopeBytes: envelopeBytes,
+        messageKind: ChatPayloadCodec.decode(plaintext).kind,
+        plaintext: plaintext,
+      );
+      return ChatIncomingProcessResult(
+        envelopeId: envelope.envelopeId,
+        accepted: true,
+        queuedPending: false,
+        plaintext: plaintext,
+        acceptedEnvelopes: <ChatEnvelope>[envelope],
+      );
+    } catch (error) {
+      if (wireMessage.messageKind == MlsMessageKind.application) {
+        await _store.savePendingInbound(
+          bindingToken: _bindingToken,
+          ownerCidNumber: _ownerCidNumber,
+          envelope: envelope,
+          envelopeBytes: envelopeBytes,
+          reason: error.toString(),
+        );
+        return ChatIncomingProcessResult(
+          envelopeId: envelope.envelopeId,
+          accepted: false,
+          queuedPending: true,
+        );
+      }
+      rethrow;
+    }
+  }
+
+  static Future<ChatDeliveryResult> deliverWithTransport({
+    required ChatTransport transport,
+    required ChatEnvelope envelope,
+    required String recipientCidNumber,
+  }) {
+    return transport.sendEncryptedEnvelope(
+      envelopeId: envelope.envelopeId,
+      envelopeBytes: envelope.writeToBuffer(),
+      recipientCidNumber: recipientCidNumber,
+    );
+  }
+
+  static Future<ChatDownloadedAttachment> downloadAttachment({
+    required String conversationId,
+    required String controlPlaintext,
+    required Directory cacheDirectory,
+    required List<int> attachmentKey,
+    required Directory plainDirectory,
+  }) async {
+    final content = ChatPayloadCodec.decode(controlPlaintext);
+    final attachmentId = content.attachmentId ?? '';
+    final fileName = content.fileName ?? '';
+    if (!content.isMedia || attachmentId.isEmpty || fileName.isEmpty) {
+      throw const FormatException('不是有效的 Chat 媒体控制消息');
+    }
+    final cached = await readCachedAttachment(
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+      contentType: content.mime ?? 'application/octet-stream',
+      clearByteSize: content.byteSize ?? 0,
+      cacheDirectory: cacheDirectory,
+      attachmentKey: attachmentKey,
+      plainDirectory: plainDirectory,
+    );
+    if (cached != null) return cached;
+    throw StateError('附件尚未完成设备间传输');
+  }
+
+  /// 把一份本机文件导入 App 私有缓存(流式,零整块内存)。
+  ///
+  /// [moveSource]=true 用于接收端把 WebRTC 落盘的临时文件**移动**进缓存(同卷
+  /// rename 零拷贝,跨卷回退流式复制后删源);=false 用于发送端把源文件**复制**
+  /// 进缓存(保留源)。两者落到同一按 conversationId/attachmentId/fileName 派生
+  /// 的缓存路径。
+  static Future<ChatDownloadedAttachment> importAttachmentFileToCache({
+    required String conversationId,
+    required String attachmentId,
+    required String fileName,
+    required String contentType,
+    required String sourcePath,
+    required int byteSize,
+    required bool moveSource,
+    required Directory cacheDirectory,
+    required List<int> attachmentKey,
+    required Directory plainDirectory,
+  }) async {
+    final cachePath = attachmentCachePath(
+      cacheDirectory: cacheDirectory,
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+    );
+    // 长期缓存只落密文。moveSource=true(接收端临时文件)封存后删源；
+    // =false(发送端用户原文件)保留源。
+    await AttachmentVault.seal(
+      plainSource: File(sourcePath),
+      cachePath: cachePath,
+      key: attachmentKey,
+      deleteSource: moveSource,
+    );
+    // 返回给 UI 的是解密出来的**短命明文**，由前台生命周期统一 purge。
+    final plain = await AttachmentVault.openPlain(
+      cachePath: cachePath,
+      key: attachmentKey,
+      plainDirectory: plainDirectory,
+    );
+    return ChatDownloadedAttachment(
+      attachmentId: attachmentId,
+      fileName: fileName,
+      contentType: contentType,
+      clearByteSize: byteSize,
+      filePath: plain.path,
+    );
+  }
+
+  /// 门③:接收端把落盘的临时文件收入缓存前的**落盘二次门控**。
+  ///
+  /// 大小超出该 mime 上限 → 删临时、返回 null(不入缓存,纵深防御,即便传输层门②
+  /// 被绕过);否则把临时文件移入缓存并返回句柄。cacheDirectory 注入以便单测。
+  static Future<ChatDownloadedAttachment?> acceptReceivedMediaToCache({
+    required String conversationId,
+    required String attachmentId,
+    required String fileName,
+    required String contentType,
+    required String tempFilePath,
+    required int byteSize,
+    required Directory cacheDirectory,
+    required List<int> attachmentKey,
+    required Directory plainDirectory,
+  }) async {
+    if (byteSize > ChatMediaLimits.forMime(contentType)) {
+      final temp = File(tempFilePath);
+      if (await temp.exists()) {
+        await temp.delete();
+      }
+      return null;
+    }
+    return importAttachmentFileToCache(
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+      contentType: contentType,
+      sourcePath: tempFilePath,
+      byteSize: byteSize,
+      moveSource: true,
+      attachmentKey: attachmentKey,
+      plainDirectory: plainDirectory,
+      cacheDirectory: cacheDirectory,
+    );
+  }
+
+  /// 媒体在本机缓存中的确定路径(离线补发时按当前 Documents 目录重算)。
+  static String attachmentCachePath({
+    required Directory cacheDirectory,
+    required String conversationId,
+    required String attachmentId,
+    required String fileName,
+  }) {
+    return _attachmentCacheFile(
+      cacheDirectory: cacheDirectory,
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+    ).path;
+  }
+
+  /// 判定密文缓存是否就绪，并解密出短命明文供展示。
+  ///
+  /// 密文长度含分块 GCM 框架开销、与明文长度不等，**不能再拿密文 stat 比对
+  /// [clearByteSize]**；改为解密后验明文长度，长度不符视为损坏并清掉明文。
+  static Future<ChatDownloadedAttachment?> readCachedAttachment({
+    required String conversationId,
+    required String attachmentId,
+    required String fileName,
+    required String contentType,
+    required int clearByteSize,
+    required Directory cacheDirectory,
+    required List<int> attachmentKey,
+    required Directory plainDirectory,
+  }) async {
+    final cachePath = attachmentCachePath(
+      cacheDirectory: cacheDirectory,
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      fileName: fileName,
+    );
+    if (!await AttachmentVault.hasCipher(cachePath)) {
+      return null;
+    }
+    // 先复用已解密好的明文：会话打开时每条媒体消息都会走一次路径解析，
+    // 若每次都整文件解密，一个有若干视频的会话首屏就要解出上 GB。
+    final reusable = await AttachmentVault.existingPlain(
+      cachePath: cachePath,
+      plainDirectory: plainDirectory,
+    );
+    final plain = reusable != null && await reusable.length() == clearByteSize
+        ? reusable
+        : await AttachmentVault.openPlain(
+            cachePath: cachePath,
+            key: attachmentKey,
+            plainDirectory: plainDirectory,
+          );
+    final length = await plain.length();
+    if (length != clearByteSize) {
+      await AttachmentVault.releasePlain(plain);
+      return null;
+    }
+    return ChatDownloadedAttachment(
+      attachmentId: attachmentId,
+      fileName: fileName,
+      contentType: contentType,
+      clearByteSize: length,
+      filePath: plain.path,
+    );
+  }
+}
+
+String _newEnvelopeId(String conversationId, int millis, int index) {
+  final normalized = conversationId.replaceAll(RegExp(r'[^a-zA-Z0-9_.-]'), '_');
+  return '$normalized-$millis-$index';
+}
+
+String _newAttachmentId(int millis) {
+  final random = Random.secure();
+  final suffix = List<int>.generate(8, (_) => random.nextInt(256))
+      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
+      .join();
+  return 'att-$millis-$suffix';
+}
+
+String _safePath(String value) {
+  return value.replaceAll(RegExp(r'[^a-zA-Z0-9_.-]'), '_');
+}
+
+String _safeFileName(String value) {
+  final cleaned = value
+      .split(RegExp(r'[/\\]'))
+      .last
+      .replaceAll(RegExp(r'[^a-zA-Z0-9_.() -]'), '_')
+      .trim();
+  return cleaned.isEmpty ? 'attachment.bin' : cleaned;
+}
+
+File _attachmentCacheFile({
+  required Directory cacheDirectory,
+  required String conversationId,
+  required String attachmentId,
+  required String fileName,
+}) {
+  final targetDirectory = Directory(
+    '${cacheDirectory.path}/${_safePath(conversationId)}/${_safePath(attachmentId)}',
+  );
+  return File('${targetDirectory.path}/${_safeFileName(fileName)}');
+}

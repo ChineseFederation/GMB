@@ -1,0 +1,186 @@
+name: 公民钱包 · CI · Android
+run-name: 公民钱包 · CI · Android
+
+# 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
+# CI 只能由公民控制台「公民 → 公民钱包 → 运行 CI / Release」按钮经 workflow_dispatch 发起。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+      build_number:
+        description: 本次候选构建号
+        required: true
+        type: string
+
+env:
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
+
+concurrency:
+  group: citizenwallet-ci-android
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+jobs:
+  build-apk:
+    name: 构建 公民钱包.apk
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      # 全产品 Logo 只允许由 docs/logo.png 唯一母版生成。
+      - name: 校验 Logo 唯一真源派生物
+        run: node scripts/generate-logo-assets.mjs --check
+
+      - name: 校验代码来源并应用候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenwallet
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
+              raise SystemExit("CitizenWallet 候选版本输入无效")
+          path = Path("citizenwallet/pubspec.yaml")
+          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
+          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
+          path.write_text(text)
+          PY
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          print(f"version={version}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      # flutter-action 只安装 Flutter，不保证 apksigner 位于 PATH。钱包 CI 与公民 CI
+      # 使用同一种临时证书签名口径，必须显式配置 Android SDK，避免签名步骤以 127 失败。
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: 安装 Android SDK Platform 与 Build Tools 36
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # 索引同步的唯一实现在 citizenwallet/scripts/sync-pallet-registry.sh。
+      # 此前 CI 与 citizenwallet-run.sh 各持一份、且覆盖范围不同（CI 只同步 3 个 pallet，
+      # 本地同步 20 个），加 iOS job 会变成三份，故收敛到脚本，三处共用同一个全集。
+      - name: 同步 runtime pallet/call 索引
+        run: ./citizenwallet/scripts/sync-pallet-registry.sh
+
+      - name: 安装依赖
+        working-directory: citizenwallet
+        run: flutter pub get --enforce-lockfile
+
+      # 公民与公民钱包共用同一扫码设备适配器，两条移动端流水线都必须验证它。
+      - name: 检查 Flutter 共享扫码适配器
+        working-directory: shared/scanner-flutter
+        run: |
+          flutter pub get
+          flutter analyze
+          flutter test
+
+      # 原生签名库(schnorrkel)从源码重建，不信任入库的 .so。
+      # 四端统一口径：产物一律由 CI 从源码构建——入库二进制与源码脱节时不会有任何报错，
+      # 只会在装机后签名失败，那时已经晚了。公民端一直如此，本端此前是唯一例外。
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: aarch64-linux-android
+
+      - name: 安装固定依赖审计器
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: 执行依赖安全审计
+        run: node .github/scripts/dependencies.mjs audit --scope citizenwallet
+
+      - name: 编译原生签名库 (Android ARM64)
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh android
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: "citizenwallet-rust-android"
+          workspaces: citizenwallet/rust -> target
+
+      - name: 分析代码
+        working-directory: citizenwallet
+        run: flutter analyze --no-fatal-infos
+
+      # flutter test 在 runner 宿主上跑，Dart FFI 要 dlopen 宿主平台动态库；
+      # 上面编译的是 Android ARM 产物，宿主库必须单独编一次，否则金标签名测试全数失败。
+      - name: 编译原生签名库（宿主，flutter test 用）
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh host
+
+      - name: 运行测试
+        working-directory: citizenwallet
+        run: flutter test
+
+      # CI 使用当次临时证书完成非生产签名，正式 APP_KEY 不进入 GitHub；构建类型仍是
+      # 与正式版完全一致的 Release，不生成 Debug/Profile 或第二版本。
+      - name: 构建 Android Release（CI）
+        working-directory: citizenwallet
+        run: flutter build apk --release --target-platform android-arm64
+
+      - name: 使用当次 CI 证书签名并核验 APK
+        run: |
+          set -euo pipefail
+          GMB_CI_STORE_PASSWORD="$(openssl rand -hex 32)"
+          GMB_CI_KEY_PASSWORD="$GMB_CI_STORE_PASSWORD"
+          GMB_CI_APKSIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          export GMB_CI_STORE_PASSWORD GMB_CI_KEY_PASSWORD
+          test -x "$GMB_CI_APKSIGNER"
+          trap 'rm -f "$RUNNER_TEMP/citizenwallet-ci.p12"' EXIT
+          keytool -genkeypair -storetype PKCS12 \
+            -keystore "$RUNNER_TEMP/citizenwallet-ci.p12" \
+            -storepass:env GMB_CI_STORE_PASSWORD -keypass:env GMB_CI_KEY_PASSWORD -alias ci \
+            -keyalg RSA -keysize 4096 -validity 2 \
+            -dname 'CN=CitizenWallet CI,O=GMB,C=US'
+          "$GMB_CI_APKSIGNER" sign --ks "$RUNNER_TEMP/citizenwallet-ci.p12" \
+            --ks-type PKCS12 --ks-key-alias ci \
+            --ks-pass env:GMB_CI_STORE_PASSWORD --key-pass env:GMB_CI_KEY_PASSWORD \
+            --out citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk \
+            citizenwallet/build/app/outputs/flutter-apk/app-release.apk
+          "$GMB_CI_APKSIGNER" verify --verbose --print-certs citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk
+          unset GMB_CI_STORE_PASSWORD GMB_CI_KEY_PASSWORD
+
+      - name: 上传签名后的公民钱包 CI APK
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: 公民钱包-CI.apk
+          path: citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      - name: 签署公民钱包 CI APK 构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk

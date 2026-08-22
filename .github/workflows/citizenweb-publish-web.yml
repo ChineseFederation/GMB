@@ -1,0 +1,288 @@
+name: 公民网 · 发布 · Web
+run-name: 公民网 · 发布 · Web
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 正式 Release 准确提交
+        required: true
+        type: string
+      version_tag:
+        description: 公民网正式版本 Tag
+        required: true
+        type: string
+
+concurrency:
+  group: citizenweb-publish-web
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  publish:
+    name: 发布公民网到 Cloudflare Pages
+    runs-on: ubuntu-24.04
+    environment: citizenweb-production
+    steps:
+      - name: 拉取发布工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: 校验发布依赖契约
+        run: node .github/scripts/dependencies.mjs check --scope citizenweb
+
+      - name: 下载并验真不可变正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GMB_VERSION_TAG" =~ ^citizenweb-v[0-9]+\.[0-9]{1,2}\.[0-9]{1,2}$ ]]
+          test "$(gh release view "$GMB_VERSION_TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\tfalse'
+          git fetch --quiet origin "refs/tags/${GMB_VERSION_TAG}:refs/tags/${GMB_VERSION_TAG}"
+          test "$(git rev-list -n 1 "$GMB_VERSION_TAG")" = "$GMB_SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release download "$GMB_VERSION_TAG" --dir "$RUNNER_TEMP/release" \
+            --pattern citizenweb-release.tgz --pattern release-manifest.json --pattern SHA256SUMS
+          node .github/scripts/build-citizenweb-release.mjs \
+            --extract "$RUNNER_TEMP/release/citizenweb-release.tgz" \
+            --output "$RUNNER_TEMP/candidate" --expected-git-sha "$GMB_SOURCE_SHA"
+          test "$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/candidate/release-manifest.json')).software_version")" \
+            = "${GMB_VERSION_TAG#citizenweb-v}"
+
+      - name: 从 GitHub Runner 执行预览、生产、逐文件验收和失败回滚
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DEPLOY }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/candidate"
+          npm ci --ignore-scripts
+
+          verify_deployment() {
+            node - "$1" "$RUNNER_TEMP/candidate" <<'NODE'
+          const { createHash } = require('node:crypto');
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const [baseUrl, candidate] = process.argv.slice(2);
+          if (!/^https:\/\/[A-Za-z0-9.-]+$/.test(baseUrl)) throw new Error('官网验收地址无效');
+          const manifest = JSON.parse(fs.readFileSync(path.join(candidate, 'release-manifest.json'), 'utf8'));
+          const marker = JSON.parse(fs.readFileSync(path.join(candidate, 'dist', 'citizenweb-release.json'), 'utf8'));
+          const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+          const sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+          const maxAttempts = 60;
+          async function responseBytes(relativePath, attempt) {
+            const url = new URL(relativePath, `${baseUrl}/`);
+            url.searchParams.set('gmb_release_probe', `${manifest.git_commit_sha}-${attempt}`);
+            const response = await fetch(url, {
+              headers: { 'Cache-Control': 'no-cache' }, redirect: 'follow',
+            });
+            if (!response.ok) throw new Error(`${relativePath} 返回 HTTP ${response.status}`);
+            return Buffer.from(await response.arrayBuffer());
+          }
+          (async () => {
+            let markerMatched = false;
+            let lastError = null;
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+              try {
+                const actual = JSON.parse((await responseBytes('citizenweb-release.json', attempt)).toString('utf8'));
+                if (JSON.stringify(actual) === JSON.stringify(marker)) {
+                  markerMatched = true;
+                  break;
+                }
+                lastError = new Error('线上版本标记与 Release 不一致');
+              } catch (error) {
+                lastError = error;
+              }
+              if (attempt < maxAttempts) await sleep(2000);
+            }
+            if (!markerMatched) throw lastError || new Error('线上版本标记不可用');
+            for (const entry of manifest.files.filter(({ path: file }) => file.startsWith('dist/'))) {
+              const relativePath = entry.path.slice('dist/'.length);
+              if (relativePath === '_redirects' || relativePath === '_headers') continue;
+              let matched = false;
+              let fileError = null;
+              for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                try {
+                  const bytes = await responseBytes(relativePath, attempt + maxAttempts);
+                  if (sha256(bytes) === entry.sha256) {
+                    matched = true;
+                    break;
+                  }
+                  fileError = new Error(`线上文件与 Release 不一致：${relativePath}`);
+                } catch (error) {
+                  fileError = error;
+                }
+                if (attempt < maxAttempts) await sleep(2000);
+              }
+              if (!matched) throw fileError || new Error(`线上文件与 Release 不一致：${relativePath}`);
+            }
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+          }
+
+          current_deployment() {
+            node <<'NODE'
+          (async () => {
+            const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)}`
+              + '/pages/projects/citizenweb/deployments?env=production&per_page=25';
+            const response = await fetch(url, {
+              headers: { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}` },
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || body?.success !== true || !Array.isArray(body.result)) {
+              throw new Error(`Cloudflare Pages 生产 deployment 查询失败：HTTP ${response.status}`);
+            }
+            const rows = body.result.filter((item) => item.environment === 'production'
+              && item.latest_stage?.name === 'deploy' && item.latest_stage?.status === 'success')
+              .sort((left, right) => Date.parse(right.created_on || 0) - Date.parse(left.created_on || 0));
+            const id = String(rows[0]?.id || '');
+            if (!/^[0-9a-f-]{32,64}$/i.test(id)) throw new Error('无法识别当前成功的生产 deployment');
+            process.stdout.write(id);
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+          }
+
+          rollback_deployment() {
+            DEPLOYMENT_ID="$1" node <<'NODE'
+          (async () => {
+            const id = process.env.DEPLOYMENT_ID || '';
+            if (!/^[0-9a-f-]{32,64}$/i.test(id)) throw new Error('Pages 回滚 deployment id 无效');
+            const url = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(process.env.CLOUDFLARE_ACCOUNT_ID)}`
+              + `/pages/projects/citizenweb/deployments/${encodeURIComponent(id)}/rollback`;
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+            });
+            const body = await response.json().catch(() => null);
+            if (!response.ok || body?.success !== true) {
+              throw new Error(`Cloudflare Pages 回滚失败：HTTP ${response.status}`);
+            }
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+          }
+
+          stable_deployment="$(current_deployment)"
+          old_marker="$RUNNER_TEMP/citizenweb-old-marker.json"
+          if curl --fail --silent --show-error --max-time 20 -H 'Cache-Control: no-cache' \
+              "https://www.crcfrcn.com/citizenweb-release.json?before_publish=${GITHUB_RUN_ID}" \
+              --output "$old_marker" \
+              && node - "$old_marker" <<'NODE'
+          const fs = require('node:fs');
+          const [oldPath] = process.argv.slice(2);
+          const oldMarker = JSON.parse(fs.readFileSync(oldPath, 'utf8'));
+          if (!/^\d+\.\d+\.\d+$/.test(String(oldMarker.software_version || ''))
+              || !/^[0-9a-f]{40}$/.test(String(oldMarker.git_commit_sha || ''))) {
+            throw new Error('当前官网不是标准版本标记');
+          }
+          NODE
+          then
+            old_marker_valid=1
+          else
+            old_marker_valid=0
+            rm -f -- "$old_marker"
+            echo '当前官网尚无标准版本标记，本次按首次标准化发布处理'
+          fi
+          if [[ "$old_marker_valid" == 1 ]]; then
+            node - "$old_marker" "$RUNNER_TEMP/candidate/release-manifest.json" <<'NODE'
+          const fs = require('node:fs');
+          const [oldPath, nextPath] = process.argv.slice(2);
+          const oldVersion = JSON.parse(fs.readFileSync(oldPath, 'utf8')).software_version;
+          const nextVersion = JSON.parse(fs.readFileSync(nextPath, 'utf8')).software_version;
+          const parse = (value) => String(value).split('.').map(Number);
+          const oldParts = parse(oldVersion);
+          const nextParts = parse(nextVersion);
+          const index = nextParts.findIndex((value, offset) => value !== oldParts[offset]);
+          if (index < 0 || nextParts[index] < oldParts[index]) {
+            throw new Error(`待发布官网版本 ${nextVersion} 必须高于当前生产版本 ${oldVersion}`);
+          }
+          NODE
+          fi
+
+          production_attempted=0
+          publish_cleanup() {
+            status="$?"
+            trap - EXIT
+            set +e
+            if [[ "$status" -ne 0 && "$production_attempted" == 1 ]]; then
+              echo '[回滚] 官网生产发布未完成，正在恢复旧 deployment' >&2
+              current="$(current_deployment 2>/dev/null || true)"
+              if [[ "$current" == "$stable_deployment" ]] || rollback_deployment "$stable_deployment"; then
+                if [[ "$old_marker_valid" == 1 ]]; then
+                  OLD_MARKER="$old_marker" node <<'NODE'
+          const fs = require('node:fs');
+          const expected = JSON.parse(fs.readFileSync(process.env.OLD_MARKER, 'utf8'));
+          (async () => {
+            for (let attempt = 1; attempt <= 15; attempt += 1) {
+              try {
+                const response = await fetch(
+                  `https://www.crcfrcn.com/citizenweb-release.json?rollback_probe=${Date.now()}-${attempt}`,
+                  { headers: { 'Cache-Control': 'no-cache' } },
+                );
+                if (response.ok && JSON.stringify(await response.json()) === JSON.stringify(expected)) return;
+              } catch {}
+              if (attempt < 15) await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+            throw new Error('回滚后的正式域名版本标记不是旧版本');
+          })().catch((error) => { console.error(error.message); process.exit(1); });
+          NODE
+                  rollback_verified="$?"
+                else
+                  curl --fail --silent --show-error --max-time 20 --output /dev/null https://www.crcfrcn.com/
+                  rollback_verified="$?"
+                fi
+                [[ "$rollback_verified" == 0 ]] \
+                  && echo "[回滚] 已恢复并验证旧官网 deployment ${stable_deployment}" >&2 \
+                  || echo '[回滚失败] 已请求恢复旧 deployment，但正式域名验收失败' >&2
+              else
+                echo '[回滚失败] 无法恢复旧官网 deployment，请立即检查 Cloudflare Pages' >&2
+              fi
+            fi
+            exit "$status"
+          }
+          trap publish_cleanup EXIT
+
+          preview_output="$(CI=1 WRANGLER_SEND_METRICS=false npm exec -- wrangler pages deploy dist \
+            --project-name citizenweb --branch citizenweb-candidate --commit-hash "$GMB_SOURCE_SHA" \
+            --commit-message "GitHub preview ${GMB_VERSION_TAG}" --commit-dirty=false 2>&1)"
+          printf '%s\n' "$preview_output"
+          preview_url="$(printf '%s' "$preview_output" \
+            | grep -oE 'https://[a-z0-9.-]+\.pages\.dev' | tail -1 || true)"
+          test -n "$preview_url"
+          verify_deployment "$preview_url"
+
+          production_attempted=1
+          CI=1 WRANGLER_SEND_METRICS=false npm exec -- wrangler pages deploy dist \
+            --project-name citizenweb --branch main --commit-hash "$GMB_SOURCE_SHA" \
+            --commit-message "GitHub production ${GMB_VERSION_TAG}" --commit-dirty=false
+          verify_deployment 'https://www.crcfrcn.com'
+          node - "$RUNNER_TEMP/publish-receipt.json" <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/candidate/release-manifest.json`, 'utf8'));
+          const receipt = {
+            product_id: 'citizenweb', software_flow: 'publish', publish_state: 'published',
+            software_version: manifest.software_version, version_tag: process.env.GMB_VERSION_TAG,
+            source_sha: manifest.git_commit_sha, publish_receipt_id: process.env.GITHUB_RUN_ID,
+          };
+          fs.writeFileSync(process.argv[2], `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
+          NODE
+          production_attempted=0
+          trap - EXIT
+
+      - name: 在 GitHub 记录发布结果
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node .github/scripts/publish-record.mjs
+          --receipt "$RUNNER_TEMP/publish-receipt.json"
+          --environment citizenweb-production --description '公民网 Cloudflare Pages 发布'
+          --url 'https://www.crcfrcn.com/'

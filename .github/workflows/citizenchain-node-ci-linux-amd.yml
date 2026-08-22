@@ -1,0 +1,316 @@
+name: 公民链 · CI · LinuxAMD
+run-name: 公民链 · CI · LinuxAMD
+
+# 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
+# CI 只能由公民控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# 这样每个软件的 CI 彼此彻底分开，也不会出现「推送触发一条、dispatch 再触发一条、
+# 后者用 concurrency 把前者掐掉」的空跑 runner 浪费。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      software_version:
+        description: 本次候选软件版本
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+concurrency:
+  # 中文注释：LinuxAMD 拥有独立并发键；ARM、macOS、Windows 的任务不会阻塞或取消它。
+  group: citizenchain-node-ci-linux-amd
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_NODE_PLATFORM: linux-amd
+
+jobs:
+  changes:
+    name: 锁定公民链 LinuxAMD 构建范围
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      citizenchain: ${{ steps.scope.outputs.citizenchain }}
+      desktop: ${{ steps.scope.outputs.desktop }}
+      desktop_matrix: ${{ steps.scope.outputs.desktop_matrix }}
+    steps:
+      - name: 拉取完整变更历史
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+
+      # 桌面端与两款移动产品共用 docs/logo.png 唯一母版。
+      - name: 校验 Logo 唯一真源派生物
+        run: node scripts/generate-logo-assets.mjs --check
+
+      - name: 校验代码来源并启用节点全量构建
+        id: scope
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenchain-node
+          echo "citizenchain=true" >> "$GITHUB_OUTPUT"
+          echo "desktop=true" >> "$GITHUB_OUTPUT"
+          test "$GMB_NODE_PLATFORM" = linux-amd
+          echo 'desktop_matrix=[{"platform":"linux-amd","name":"LinuxAMD","os":"ubuntu-24.04","artifact":"公民链AMD","installer_name":"citizenchain-node-linux-amd64.deb","ci_bundle_targets":"deb","updater_asset_name":"citizenchain-node-linux-amd64.AppImage","updater_manifest_name":"citizenchain-node-latest-linux-amd64.json","expected_runner_arch":"X64","deb_arch":"amd64","cache_key":"citizenchain-linux-amd"}]' >> "$GITHUB_OUTPUT"
+
+  verify:
+    name: 公民链 LinuxAMD 全工程验证
+    needs: changes
+    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
+    if: ${{ needs.changes.outputs.citizenchain == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          components: rustfmt, clippy
+
+      - name: 安装系统依赖
+        run: bash .github/scripts/citizenchain-linux-deps.sh
+
+      - name: 配置 libclang 与 protoc
+        run: |
+          {
+            echo "LLVM_CONFIG_PATH=$(command -v llvm-config)"
+            echo "LIBCLANG_PATH=$(llvm-config --libdir)"
+            echo "PROTOC=$(command -v protoc)"
+          } >> "$GITHUB_ENV"
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: |
+            shared/scanner-react/package-lock.json
+            citizenchain/node/frontend/package-lock.json
+            citizenchain/onchina/frontend/package-lock.json
+
+      # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
+      - name: 验证仓库级 React 扫码适配器
+        run: |
+          npm --prefix shared/scanner-react ci
+          npm --prefix shared/scanner-react run check
+          npm --prefix shared/scanner-react test
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: citizenchain-workspace
+          workspaces: citizenchain -> target
+
+      - name: 校验宪法创世 SCALE 解码器
+        run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
+
+      # Tauri generate_context! 在 Rust 编译期读取 frontendDist，必须先生成真实前端产物。
+      - name: 构建公民链节点前端
+        run: |
+          npm --prefix citizenchain/node/frontend ci
+          npm --prefix citizenchain/node/frontend run build
+
+      - name: 检查 Rust 格式
+        working-directory: citizenchain
+        run: cargo fmt --all -- --check
+
+      - name: 执行全 Rust workspace Clippy
+        working-directory: citizenchain
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: 运行全 Rust workspace 测试
+        working-directory: citizenchain
+        run: cargo test --workspace --all-targets --locked
+
+      - name: 构建 OnChina 前端
+        run: |
+          npm --prefix citizenchain/onchina/frontend ci
+          npm --prefix citizenchain/onchina/frontend run build
+
+      # 三档鉴权的前端头部组装 + 与 Rust 后端 header 名的跨端锁。
+      # 复用上一步已装好的依赖,不重复 npm ci。
+      - name: 测试 OnChina 前端
+        run: npm --prefix citizenchain/onchina/frontend test
+
+      - name: 清理本次 Rust 增量缓存
+        if: ${{ success() }}
+        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+
+  build-desktop:
+    name: 打包公民链桌面端 (${{ matrix.name }})
+    needs: [changes, verify]
+    # verify 在 Release 中按设计跳过；always() 只用于允许 Release 越过这个“已跳过”的
+    # 依赖，不会放过 changes 失败，也不会放过 CI 模式下的 verify 失败。
+    if: ${{ always() && needs.changes.result == 'success' && needs.changes.outputs.desktop == 'true' && needs.verify.result == 'success' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.changes.outputs.desktop_matrix) }}
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      - name: 校验代码来源并应用节点候选版本
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenchain-node
+          node .github/scripts/citizenchain-node-version.mjs apply "$GMB_SOFTWARE_VERSION"
+
+      - name: 校验 runner 架构
+        shell: bash
+        env:
+          EXPECTED_RUNNER_ARCH: ${{ matrix.expected_runner_arch }}
+        run: |
+          set -euo pipefail
+          if [ "${RUNNER_ARCH}" != "${EXPECTED_RUNNER_ARCH}" ]; then
+            echo "::error::runner 架构不符合 ${EXPECTED_RUNNER_ARCH}: 当前为 ${RUNNER_ARCH}"
+            exit 1
+          fi
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+
+      - name: 安装 Node.js
+        # 固定使用 Node.js 24,与项目 package.json engines 和 GitHub Actions node24 运行时一致。
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: citizenchain/node/frontend/package-lock.json
+
+      - name: 同步桌面端版本
+        shell: bash
+        env:
+          CITIZENCHAIN_CI_BUNDLE_TARGETS: ${{ matrix.ci_bundle_targets }}
+          CITIZENCHAIN_MANUAL_BUNDLE_TARGETS: ${{ matrix.manual_bundle_targets }}
+          CITIZENCHAIN_UPDATER_MANIFEST_NAME: ${{ matrix.updater_manifest_name }}
+          CITIZENCHAIN_PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const targetSource = process.env.CITIZENCHAIN_CI_BUNDLE_TARGETS;
+          const bundleTargets = (targetSource || '')
+            .split(',')
+            .map((target) => target.trim())
+            .filter(Boolean);
+
+          if (bundleTargets.length === 0) {
+            throw new Error('缺少本 matrix 的 Tauri bundle targets。');
+          }
+
+          // 候选版本已在当前 runner 工作区应用；这里只设置本 matrix 的 bundle 目标。
+          const tauriPath = 'citizenchain/node/tauri.conf.json';
+          const tauri = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
+          const version = tauri.version;
+          tauri.bundle = tauri.bundle || {};
+          // 中文注释：CI 只生成用户安装包；正式 updater 候选只属于独立 Release workflow。
+          tauri.bundle.targets = bundleTargets;
+          // 中文注释：GitHub 只构建无私钥候选产物；updater 签名统一由本机原生安全进程在 Touch ID 后完成。
+          delete tauri.bundle.createUpdaterArtifacts;
+          // 中文注释：CI 不创建正式版本 Tag，诊断安装包保留源码中的正式 updater 配置。
+          fs.writeFileSync(tauriPath, `${JSON.stringify(tauri, null, 2)}\n`);
+
+          console.log(`桌面端版本(源码): ${version}`);
+          console.log(`Tauri bundle targets: ${bundleTargets.join(',')}`);
+          NODE
+
+      - name: 安装 Linux 构建依赖
+        if: startsWith(matrix.platform, 'linux-')
+        run: bash .github/scripts/citizenchain-linux-deps.sh
+
+      - name: 配置 Linux libclang 环境变量
+        if: startsWith(matrix.platform, 'linux-')
+        run: |
+          {
+            echo "LLVM_CONFIG_PATH=$(command -v llvm-config)"
+            echo "LIBCLANG_PATH=$(llvm-config --libdir)"
+            echo "PROTOC=$(command -v protoc)"
+          } >> "$GITHUB_ENV"
+
+      - name: 缓存 Rust 依赖
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          shared-key: ${{ matrix.cache_key }}
+          workspaces: citizenchain -> target
+
+      - name: 同步并锁定节点候选版本
+        run: node .github/scripts/citizenchain-node-version.mjs lock "$GMB_SOFTWARE_VERSION"
+
+      - name: 安装前端依赖并构建
+        run: |
+          npm --prefix citizenchain/node/frontend ci
+          npm --prefix citizenchain/node/frontend run build
+
+      - name: 准备空创世状态资源目录
+        shell: bash
+        run: |
+          # 中文注释：安装包只携带节点软件；首次启动按冻结 chainspec 本地初始化并联网同步。
+          rm -rf citizenchain/node/resources/genesis-state
+
+      - name: Tauri 打包（不接触 updater 私钥）
+        working-directory: citizenchain/node
+        run: node frontend/node_modules/@tauri-apps/cli/tauri.js build --ci -- --locked
+
+      - name: 整理 Linux 产物
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        env:
+          INSTALLER_NAME: ${{ matrix.installer_name }}
+          UPDATER_ASSET_NAME: ${{ matrix.updater_asset_name }}
+          EXPECTED_DEB_ARCH: ${{ matrix.deb_arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p citizenchain-release
+
+          deb_file="$(find citizenchain/target/release/bundle/deb -name '*.deb' | head -1)"
+          if [ -z "$deb_file" ]; then
+            echo "::error::未找到 Linux deb 安装包。"
+            exit 1
+          fi
+          actual_deb_arch="$(dpkg-deb -f "$deb_file" Architecture)"
+          if [ "$actual_deb_arch" != "$EXPECTED_DEB_ARCH" ]; then
+            echo "::error::deb 架构不符合 ${EXPECTED_DEB_ARCH}: 当前为 ${actual_deb_arch}"
+            exit 1
+          fi
+          cp "$deb_file" "citizenchain-release/${INSTALLER_NAME}"
+
+
+          ls -lh citizenchain-release
+
+      - name: 上传桌面端产物
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.artifact }}
+          path: citizenchain-release/*
+          retention-days: 30
+          overwrite: true
+
+      - name: 签署节点平台候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: citizenchain-release/*

@@ -1,0 +1,284 @@
+// 统一机构详情页(ADR-028)widget 测试 —— 公权路径(信息卡/账户/提案占位/管理员/
+// 提案列表/订阅)+ 统一账户行派生。替代旧 public_institution_detail_test。
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+import 'package:citizenapp/citizen/institution/institution.dart';
+import 'package:citizenapp/citizen/institution/institution_accounts.dart';
+import 'package:citizenapp/citizen/institution/institution_accounts_page.dart';
+import 'package:citizenapp/citizen/institution/institution_chain_state.dart';
+import 'package:citizenapp/citizen/institution/institution_detail_page.dart';
+import 'package:citizenapp/citizen/institution/institution_repository.dart';
+import 'package:citizenapp/citizen/public/data/public_institution_dto.dart';
+import 'package:citizenapp/citizen/institution/institution_role_models.dart';
+import 'package:citizenapp/citizen/proposal/admins-change/models/admin_account.dart';
+import 'package:citizenapp/citizen/shared/account_derivation.dart';
+import 'package:citizenapp/citizen/shared/reserved_account_names.dart';
+import 'package:citizenapp/isar/app_isar.dart';
+
+import '../public/public_nav_harness.dart';
+
+const _cid = 'LN001-CREG0-944805165-2026';
+const _adminAccountId =
+    '0xabababababababababababababababababababababababababababababababab';
+const _fscCid = 'ZS001-FSC0W-434172688-2026';
+const _fcsfAccountId =
+    '0xc0e4ce3c11401ad661ae139081bbc797db51d0efe71df3ffb107f3dcb0064802';
+
+class _FakeChainState implements InstitutionChainState {
+  _FakeChainState({
+    this.adminList = const [],
+    this.proposalList = const [],
+    this.balanceByAccountId = const {},
+  });
+  final List<String> adminList;
+  final List<InstitutionProposalSummary> proposalList;
+  final Map<String, double> balanceByAccountId;
+
+  @override
+  Future<Map<String, double>> balances(List<String> publicKeyes) async => {
+        for (final h in publicKeyes) h: balanceByAccountId[h] ?? 12.5,
+      };
+
+  @override
+  Future<List<InstitutionAdminView>> adminViews(
+          Institution institution) async =>
+      adminList
+          .map((account) => InstitutionAdminView(
+                admin: AdminPerson(
+                  account_id: account,
+                  family_name: '管理',
+                  given_name: '员',
+                ),
+                assignments: [
+                  InstitutionAdminAssignment(
+                    cidNumber: institution.cidNumber,
+                    account_id: account,
+                    roleCode: 'MEMBER',
+                    roleName: '委员',
+                    termStart: 0,
+                    termEnd: 0,
+                    source: InstitutionAssignmentSource.genesis,
+                    sourceRef: '',
+                    active: true,
+                  ),
+                ],
+              ))
+          .toList();
+
+  @override
+  Future<List<InstitutionProposalSummary>> proposals(
+    Institution institution,
+  ) async =>
+      proposalList;
+}
+
+PublicInstitutionEntity _entity() => PublicInstitutionDto.fromJson(
+      <String, dynamic>{
+        'cid_number': _cid,
+        'cid_full_name': '辽宁省身份注册局',
+        'province_code': 'LN',
+        'city_code': '001',
+        'institution_code': 'CREG',
+        'account_count': 4,
+        'custom_account_names': ['业务专户'],
+      },
+    ).toEntity(catalogVersion: 'v', updatedAtMillis: 0);
+
+PublicInstitutionEntity _fscEntity() => PublicInstitutionDto.fromJson(
+      <String, dynamic>{
+        'cid_number': _fscCid,
+        'cid_full_name': '总统府联邦安全局',
+        'cid_short_name': '联邦安全局',
+        'province_code': 'ZS',
+        'city_code': '001',
+        'institution_code': 'FSC',
+        'account_count': 3,
+        'custom_account_names': [kReservedNameFcsf],
+      },
+    ).toEntity(catalogVersion: 'v', updatedAtMillis: 0);
+
+Widget _wrap(Widget child) => MaterialApp(home: child);
+
+void main() {
+  group('institutionAccountIdRows(公权派生)', () {
+    test('主/费/自定义三行,地址与卡0 派生吻合', () {
+      final rows =
+          institutionAccountIdRows(Institution.fromPublicEntity(_entity()));
+      expect(rows.map((r) => r.label), ['主账户', '费用账户', '业务专户']);
+      expect(rows.first.accountId,
+          accountIdText(deriveInstitutionMainAccountId(_cid)));
+      expect(
+        rows.last.accountId,
+        accountIdText(deriveInstitutionCustomAccountId(_cid, '业务专户')),
+      );
+    });
+
+    test('联邦安全局第三行走 OP_FCSF，不回落普通 OP_NAME', () {
+      final rows = institutionAccountIdRows(
+        Institution.fromPublicEntity(_fscEntity()),
+      );
+      expect(
+        rows.map((r) => r.label),
+        [kReservedNameMain, kReservedNameFee, kReservedNameFcsf],
+      );
+      expect(rows, hasLength(3));
+      expect(rows.last.accountId, _fcsfAccountId);
+      expect(
+        rows.last.accountId,
+        isNot(
+          '0x1f5f77852f56e6d97b7f300d0ee883909e7ebbcd5b68d2a59c38a5520fcd1204',
+        ),
+      );
+    });
+  });
+
+  testWidgets('联邦安全局全部账户页显示 FCSF 正确余额', (tester) async {
+    final institution = Institution.fromPublicEntity(_fscEntity());
+    await tester.pumpWidget(
+      _wrap(
+        InstitutionAccountsPage(
+          institution: institution,
+          chainState: _FakeChainState(
+            balanceByAccountId: const {_fcsfAccountId: 10000000000.0},
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('全部账户'), findsOneWidget);
+    expect(find.text(kReservedNameFcsf), findsOneWidget);
+    expect(find.text('10,000,000,000.00 元'), findsOneWidget);
+  });
+
+  testWidgets('详情页:全称/ID/主账户/余额/法代/所属地 + 账户/提案占位/管理员/提案列表', (tester) async {
+    tester.view.physicalSize = const Size(1200, 3200);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+    final repo = await buildSeededRepo(
+      provinceOrder: const ['GD'],
+      institutions: [
+        PublicInstitutionDto.fromJson(<String, dynamic>{
+          'cid_number': _cid,
+          'cid_full_name': '辽宁省身份注册局',
+          'province_code': 'GD',
+          'city_code': '001',
+          'institution_code': 'CREG',
+          'account_count': 4,
+          'legal_representative': {
+            'family_name': '王',
+            'given_name': '法人',
+            'cid_number': 'CID-1',
+            'account': '11',
+          },
+          'custom_account_names': ['业务专户'],
+        }),
+      ],
+      cityNames: const {'GD|001': '中央'},
+    );
+    final chain = _FakeChainState(
+      adminList: const [_adminAccountId],
+      proposalList: const [
+        InstitutionProposalSummary(proposalId: 7, idLabel: '提案 #7', status: 1),
+      ],
+    );
+    await tester.pumpWidget(_wrap(InstitutionDetailPage(
+      cidNumber: _cid,
+      repository: InstitutionRepository(directory: repo),
+      chainState: chain,
+      subscriberCidNumberProvider: () async => 'CID-USER',
+    )));
+    await tester.pumpAndSettle();
+
+    expect(find.text('辽宁省身份注册局'), findsWidgets); // AppBar 简称回退全称 + 全称行
+    expect(find.text(_cid), findsOneWidget);
+    expect(find.text('全称'), findsOneWidget);
+    expect(find.text('身份CID号'), findsOneWidget);
+    expect(find.text('身份ID'), findsNothing);
+    expect(find.text('主账户'), findsOneWidget);
+    expect(find.text('主账户余额'), findsOneWidget);
+    expect(find.text('12.50 元'), findsOneWidget);
+    expect(find.text('法定代表人'), findsOneWidget);
+    expect(find.text('王法人'), findsOneWidget);
+    expect(find.text('所属地'), findsOneWidget);
+    expect(find.text('广东省 · 中央'), findsOneWidget);
+    // 机构账户入口:主+费+1自定义=3。
+    expect(find.text('机构账户'), findsOneWidget);
+    expect(find.text('共 3 个账户'), findsOneWidget);
+    // 提案入口(公权占位)。
+    expect(find.text('发起提案'), findsOneWidget);
+    // 管理员入口。
+    expect(find.text('管理员'), findsOneWidget);
+    expect(find.text('共 1 位管理员'), findsOneWidget);
+    // 提案列表。
+    expect(find.text('提案列表'), findsOneWidget);
+    expect(find.text('提案 #7'), findsOneWidget);
+  });
+
+  testWidgets('管理员入口点击进入可激活管理员列表页', (tester) async {
+    final repo = await buildSeededRepo(
+      provinceOrder: const ['LN'],
+      institutions: [
+        PublicInstitutionDto.fromJson(<String, dynamic>{
+          'cid_number': _cid,
+          'cid_full_name': '辽宁省身份注册局',
+          'province_code': 'LN',
+          'city_code': '001',
+          'institution_code': 'CREG',
+          'account_count': 2,
+        }),
+      ],
+      cityNames: const {'LN|001': '中央'},
+    );
+    await tester.pumpWidget(_wrap(InstitutionDetailPage(
+      cidNumber: _cid,
+      repository: InstitutionRepository(directory: repo),
+      chainState: _FakeChainState(adminList: const [_adminAccountId]),
+      subscriberCidNumberProvider: () async => 'CID-USER',
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('管理员'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('管理员'));
+    await tester.pumpAndSettle();
+    expect(find.text('管理员列表'), findsOneWidget);
+    expect(find.textContaining('共 1 位管理员'), findsOneWidget);
+  });
+
+  testWidgets('订阅按钮切换写入 store', (tester) async {
+    final repo = await buildSeededRepo(
+      provinceOrder: const ['LN'],
+      institutions: [
+        PublicInstitutionDto.fromJson(<String, dynamic>{
+          'cid_number': _cid,
+          'cid_full_name': '辽宁省身份注册局',
+          'province_code': 'LN',
+          'city_code': '001',
+          'institution_code': 'CREG',
+          'account_count': 2,
+        }),
+      ],
+      cityNames: const {'LN|001': '中央'},
+    );
+    await tester.pumpWidget(_wrap(InstitutionDetailPage(
+      cidNumber: _cid,
+      repository: InstitutionRepository(directory: repo),
+      chainState: _FakeChainState(),
+      subscriberCidNumberProvider: () async => 'CID-USER',
+    )));
+    await tester.pumpAndSettle();
+
+    expect(await repo.isSubscribed('CID-USER', _cid), isFalse);
+    await tester.tap(find.byIcon(Icons.bookmark_border));
+    await tester.pumpAndSettle();
+    expect(await repo.isSubscribed('CID-USER', _cid), isTrue);
+
+    await tester.tap(find.byIcon(Icons.bookmark));
+    await tester.pumpAndSettle();
+    expect(await repo.isSubscribed('CID-USER', _cid), isFalse);
+  });
+}

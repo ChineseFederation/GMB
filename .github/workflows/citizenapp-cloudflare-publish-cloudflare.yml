@@ -1,0 +1,192 @@
+name: 公民后端 · 发布 · Cloudflare
+run-name: 公民后端 · 发布 · Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 正式 Release 准确提交
+        required: true
+        type: string
+      version_tag:
+        description: 公民后端正式版本 Tag
+        required: true
+        type: string
+
+concurrency:
+  group: citizenapp-cloudflare-publish-cloudflare
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  publish:
+    name: 发布公民后端到 Cloudflare
+    runs-on: ubuntu-24.04
+    environment: citizenapp-cloudflare-production
+    steps:
+      - name: 拉取发布工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: 校验发布依赖契约
+        run: node .github/scripts/dependencies.mjs check --scope citizenapp-cloudflare
+
+      - name: 下载并验真不可变正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GMB_VERSION_TAG" =~ ^citizenapp-cloudflare-v[0-9]+\.[0-9]{1,2}\.[0-9]{1,2}$ ]]
+          test "$(gh release view "$GMB_VERSION_TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\tfalse'
+          git fetch --quiet origin "refs/tags/${GMB_VERSION_TAG}:refs/tags/${GMB_VERSION_TAG}"
+          test "$(git rev-list -n 1 "$GMB_VERSION_TAG")" = "$GMB_SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release download "$GMB_VERSION_TAG" --dir "$RUNNER_TEMP/release" \
+            --pattern citizenapp-cloudflare-release.tgz --pattern release-manifest.json --pattern SHA256SUMS
+          node .github/scripts/build-citizenapp-cloudflare-release.mjs \
+            --extract "$RUNNER_TEMP/release/citizenapp-cloudflare-release.tgz" \
+            --output "$RUNNER_TEMP/candidate" --expected-git-sha "$GMB_SOURCE_SHA"
+          test "$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/candidate/release-manifest.json')).software_version")" \
+            = "${GMB_VERSION_TAG#citizenapp-cloudflare-v}"
+
+      - name: 安装候选锁定的 Cloudflare 工具
+        working-directory: ${{ runner.temp }}/candidate
+        run: npm ci --ignore-scripts
+
+      - name: 从 GitHub Runner 零流量验收并原子切换生产版本
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.DEPLOY }}
+          ZONE_ID: ${{ secrets.ZONE_ID }}
+          CHAIN_URL: ${{ secrets.CHAIN_URL }}
+          APNS_KID: ${{ secrets.APNS_KID }}
+          APNS_TEAM: ${{ secrets.APNS_TEAM }}
+          APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
+          FCM_EMAIL: ${{ secrets.FCM_EMAIL }}
+          FCM_PROJECT: ${{ secrets.FCM_PROJECT }}
+          R2_KEY: ${{ secrets.R2_KEY }}
+          R2_SECRET: ${{ secrets.R2_SECRET }}
+          PURGE: ${{ secrets.PURGE }}
+          CHAIN_ID: ${{ secrets.CHAIN_ID }}
+          CHAIN_SECRET: ${{ secrets.CHAIN_SECRET }}
+          APNS_KEY: ${{ secrets.APNS_KEY }}
+          FCM_KEY: ${{ secrets.FCM_KEY }}
+          HASH_KEY: ${{ secrets.HASH_KEY }}
+          TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+          SETTLE_TOKEN: ${{ secrets.SETTLE_TOKEN }}
+          TOPUP_INTENT_SECRET: ${{ secrets.TOPUP_INTENT_SECRET }}
+          GH_TOKEN: ${{ github.token }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          umask 077
+          candidate="$RUNNER_TEMP/candidate"
+          cd "$candidate"
+          wrangler=(npm exec -- wrangler)
+          stable="$("${wrangler[@]}" deployments list --name citizenapp --json | node -e '
+            const fs=require("fs"); const value=JSON.parse(fs.readFileSync(0,"utf8"));
+            const rows=Array.isArray(value)?value:(value.items||value.deployments||[]);
+            rows.sort((a,b)=>Date.parse(b.created_on||b.created_at||0)-Date.parse(a.created_on||a.created_at||0));
+            const serving=(rows[0]?.versions||[]).filter((item)=>Number(item.percentage)>0);
+            if(serving.length!==1||Number(serving[0].percentage)!==100) throw new Error("生产流量不是单一稳定版本 100%");
+            const id=String(serving[0].version_id||serving[0].id||"");
+            if(!/^[0-9a-f-]{36}$/i.test(id)) throw new Error("稳定版本 id 无效"); process.stdout.write(id);')"
+          current_tag="$("${wrangler[@]}" versions view "$stable" --name citizenapp --json | node -e '
+            const fs=require("fs"); const value=JSON.parse(fs.readFileSync(0,"utf8"));
+            const a=value.annotations||value.metadata?.annotations||value.result?.annotations||{};
+            process.stdout.write(String(a["workers/tag"]||a.tag||""));')"
+          health() {
+            local expected="$1" override="${2:-}" actual=''
+            for attempt in $(seq 1 15); do
+              if [[ -n "$override" ]]; then
+                actual="$(curl --fail --silent -H 'Cache-Control: no-cache' \
+                  -H "Cloudflare-Workers-Version-Overrides: citizenapp=\"${override}\"" \
+                  "https://www.crcfrcn.com/api/health?publish_probe=${GITHUB_RUN_ID}-${attempt}" \
+                  | node -e 'const fs=require("fs");try{const x=JSON.parse(fs.readFileSync(0,"utf8"));if(x.ok===true&&x.service==="citizenapp")process.stdout.write(x.worker_version_id||"")}catch{}' || true)"
+              else
+                actual="$(curl --fail --silent -H 'Cache-Control: no-cache' \
+                  "https://www.crcfrcn.com/api/health?publish_probe=${GITHUB_RUN_ID}-${attempt}" \
+                  | node -e 'const fs=require("fs");try{const x=JSON.parse(fs.readFileSync(0,"utf8"));if(x.ok===true&&x.service==="citizenapp")process.stdout.write(x.worker_version_id||"")}catch{}' || true)"
+              fi
+              [[ "$actual" == "$expected" ]] && return 0
+              sleep 2
+            done
+            return 1
+          }
+          if [[ "$current_tag" == "$GMB_VERSION_TAG" ]]; then
+            health "$stable"
+            candidate_version="$stable"
+          else
+            if [[ -n "$current_tag" ]]; then
+              mkdir -p "$RUNNER_TEMP/current-release"
+              gh release download "$current_tag" --dir "$RUNNER_TEMP/current-release" \
+                --pattern citizenapp-cloudflare-release.tgz
+              node "$GITHUB_WORKSPACE/.github/scripts/build-citizenapp-cloudflare-release.mjs" \
+                --extract "$RUNNER_TEMP/current-release/citizenapp-cloudflare-release.tgz" \
+                --output "$RUNNER_TEMP/current"
+            fi
+            printf '{"active_percentage":100,"stable_version_id":"%s","worker_name":"citizenapp"}\n' "$stable" \
+              > "$RUNNER_TEMP/live.json"
+            plan=(node "$GITHUB_WORKSPACE/.github/scripts/plan-citizenapp-cloudflare-publish.mjs" \
+              --candidate "$candidate" --live-state "$RUNNER_TEMP/live.json" --output "$RUNNER_TEMP/plan.json")
+            [[ -z "$current_tag" ]] || plan+=(--current "$RUNNER_TEMP/current")
+            "${plan[@]}"
+            node - "$RUNNER_TEMP/secrets.json" <<'NODE'
+          const fs=require('fs');
+          const names=['R2_KEY','R2_SECRET','PURGE','CHAIN_ID','CHAIN_SECRET','APNS_KEY','FCM_KEY','HASH_KEY','TURNSTILE_SECRET','SETTLE_TOKEN','TOPUP_INTENT_SECRET'];
+          const value=Object.fromEntries(names.map((name)=>[name,process.env[name]]));
+          if(Object.values(value).some((item)=>!item))throw new Error('GitHub Worker Secret 不完整');
+          fs.writeFileSync(process.argv[2],JSON.stringify(value),{mode:0o600});
+          NODE
+            vars=(CF_ACCOUNT_ID ZONE_ID CHAIN_URL APNS_KID APNS_TEAM APNS_TOPIC FCM_EMAIL FCM_PROJECT)
+            var_args=()
+            for name in "${vars[@]}"; do [[ -n "${!name:-}" ]] || exit 1; var_args+=(--var "${name}:${!name}"); done
+            output="$RUNNER_TEMP/wrangler.jsonl"
+            WRANGLER_OUTPUT_FILE_PATH="$output" "${wrangler[@]}" versions upload worker.mjs \
+              --no-bundle --config wrangler.toml --strict --secrets-file "$RUNNER_TEMP/secrets.json" \
+              "${var_args[@]}" --tag "$GMB_VERSION_TAG" --message "GitHub Release ${GMB_VERSION_TAG}"
+            candidate_version="$(node -e '
+              const fs=require("fs");let id="";for(const line of fs.readFileSync(process.argv[1],"utf8").split(/\n+/).filter(Boolean)){const x=JSON.parse(line);if(x.type==="version-upload")id=String(x.version_id||"")}if(!/^[0-9a-f-]{36}$/i.test(id))throw new Error("候选版本 id 无效");process.stdout.write(id)' "$output")"
+            migration_count="$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/plan.json')).migrations.length")"
+            [[ "$migration_count" == 0 ]] || "${wrangler[@]}" d1 migrations apply citizenapp-db --remote --config wrangler.toml
+            rollback() {
+              trap - ERR
+              echo '[回滚] 正在恢复发布前 Worker 版本' >&2
+              if "${wrangler[@]}" versions deploy "${stable}@100" --name citizenapp --yes \
+                  --message 'GitHub 自动回滚' >/dev/null && health "$stable"; then
+                echo "[回滚] 已恢复并验证旧 Worker 版本 ${stable}" >&2
+              else
+                echo '[回滚失败] 无法恢复或验证旧 Worker 版本，请立即检查 Cloudflare' >&2
+              fi
+            }
+            trap rollback ERR
+            "${wrangler[@]}" versions deploy "${stable}@100" "${candidate_version}@0" --name citizenapp --yes \
+              --message "GitHub candidate ${GMB_VERSION_TAG}" >/dev/null
+            health "$candidate_version" "$candidate_version"
+            "${wrangler[@]}" versions deploy "${candidate_version}@100" --name citizenapp --yes \
+              --message "GitHub production ${GMB_VERSION_TAG}" >/dev/null
+            health "$candidate_version"
+            trap - ERR
+          fi
+          node - "$RUNNER_TEMP/publish-receipt.json" "$candidate_version" <<'NODE'
+          const fs=require('fs'); const manifest=JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/candidate/release-manifest.json`,'utf8'));
+          const receipt={product_id:'citizenapp-cloudflare',software_flow:'publish',publish_state:'published',
+            software_version:manifest.software_version,version_tag:process.env.GMB_VERSION_TAG,
+            source_sha:manifest.git_commit_sha,publish_receipt_id:process.argv[3]};
+          fs.writeFileSync(process.argv[2],`${JSON.stringify(receipt)}\n`,{mode:0o600});
+          NODE
+
+      - name: 在 GitHub 记录发布结果
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node .github/scripts/publish-record.mjs
+          --receipt "$RUNNER_TEMP/publish-receipt.json"
+          --environment citizenapp-cloudflare-production --description '公民后端 Cloudflare 发布'
+          --url 'https://www.crcfrcn.com/api/health'

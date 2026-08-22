@@ -1,0 +1,369 @@
+import 'package:flutter/material.dart';
+import 'package:local_auth/local_auth.dart';
+
+import '../security/app_lock_service.dart';
+import 'biometric_auth_text.dart';
+import '../security/pin_input_page.dart';
+import '../security/secure_storage.dart';
+import 'app_theme.dart';
+import 'product_manual_page.dart';
+
+/// 冷钱包设置页。
+class SettingsPage extends StatefulWidget {
+  const SettingsPage({super.key});
+
+  @override
+  State<SettingsPage> createState() => _SettingsPageState();
+}
+
+class _SettingsPageState extends State<SettingsPage> {
+  static const String _deviceLockKey = 'device_lock_enabled';
+  // 单源加固实例(选项集中在 security/secure_storage.dart)。
+  static const _secure = appSecureStorage;
+  final LocalAuthentication _localAuth = LocalAuthentication();
+  bool _deviceLockEnabled = false;
+  bool _pinLockEnabled = false;
+  bool _duressModeEnabled = false;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSettings();
+  }
+
+  Future<void> _loadSettings() async {
+    final deviceLockStr = await _secure.read(key: _deviceLockKey);
+    final pinSet = await AppLockService.isPinSet();
+    final duressModeEnabled = await AppLockService.isDuressModeEnabled();
+    if (!mounted) return;
+    setState(() {
+      _deviceLockEnabled = deviceLockStr == 'true';
+      _pinLockEnabled = pinSet;
+      _duressModeEnabled = duressModeEnabled;
+      _loading = false;
+    });
+  }
+
+  Future<void> _toggleDeviceLock(bool value) async {
+    if (value) {
+      // 强制生物识别:未录入指纹/面容一律不给开设备锁(禁密码/图案回退)。
+      final available = await _localAuth.getAvailableBiometrics();
+      if (available.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('您的设备未录入生物识别（指纹/面容），无法开启设备锁')),
+        );
+        return;
+      }
+
+      try {
+        final authenticated = await _localAuth.authenticate(
+          localizedReason: BiometricAuthText.pick(
+            zh: '用生物识别验证身份以开启设备锁',
+            en: 'Verify with biometrics to enable the device lock',
+          ),
+          authMessages: BiometricAuthText.messages(),
+          biometricOnly: true,
+          persistAcrossBackgrounding: true,
+          sensitiveTransaction: true,
+        );
+        if (!authenticated) return;
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('身份验证失败：$e')),
+        );
+        return;
+      }
+    }
+
+    await _secure.write(key: _deviceLockKey, value: value.toString());
+    if (!mounted) return;
+    setState(() => _deviceLockEnabled = value);
+  }
+
+  Future<void> _togglePinLock(bool value) async {
+    if (value) {
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => const PinInputPage(mode: PinInputMode.setup),
+        ),
+      );
+      if (result == true && mounted) {
+        setState(() {
+          _pinLockEnabled = true;
+          _duressModeEnabled = false;
+        });
+      }
+    } else {
+      final result = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(
+          builder: (_) => const PinInputPage(mode: PinInputMode.remove),
+        ),
+      );
+      if (result == true && mounted) {
+        setState(() {
+          _pinLockEnabled = false;
+          _duressModeEnabled = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _handlePinLockAreaTap() async {
+    if (_deviceLockEnabled || _duressModeEnabled) return;
+    if (!_pinLockEnabled) {
+      await _togglePinLock(true);
+      return;
+    }
+    final saved = await showDuressModeSetupDialog(context);
+    if (saved && mounted) setState(() => _duressModeEnabled = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('设置'),
+        centerTitle: true,
+      ),
+      body: _loading
+          ? const Center(
+              child: CircularProgressIndicator(
+                color: AppTheme.primary,
+                strokeWidth: 2.5,
+              ),
+            )
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                // 安全区标题
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.security_rounded,
+                          size: 16, color: AppTheme.primaryLight),
+                      SizedBox(width: 8),
+                      Text(
+                        '安全',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.primaryLight,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  decoration:
+                      AppTheme.cardDecoration(radius: AppTheme.radiusLg),
+                  child: Column(
+                    children: [
+                      _buildSettingTile(
+                        icon: Icons.fingerprint_rounded,
+                        title: '设备锁',
+                        subtitle:
+                            _pinLockEnabled ? '请先关闭应用锁' : '启动应用时需要指纹或面容验证',
+                        value: _deviceLockEnabled,
+                        onChanged: _pinLockEnabled ? null : _toggleDeviceLock,
+                      ),
+                      const Divider(height: 1, indent: 56, endIndent: 16),
+                      _buildSettingTile(
+                        icon: Icons.pin_outlined,
+                        title: _pinLockEnabled && _duressModeEnabled
+                            ? '应用锁（防共匪模式）'
+                            : '应用锁（防共匪锁）',
+                        subtitle: _deviceLockEnabled
+                            ? '请先关闭设备锁'
+                            : !_pinLockEnabled
+                                ? '启动应用时需要输入 6 位数字密码'
+                                : _duressModeEnabled
+                                    ? '防共匪模式已开启'
+                                    : '点击设置防共匪密码',
+                        value: _pinLockEnabled,
+                        onChanged: _deviceLockEnabled ? null : _togglePinLock,
+                        onTap:
+                            _deviceLockEnabled ? null : _handlePinLockAreaTap,
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 12),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.menu_book_outlined,
+                        size: 16,
+                        color: AppTheme.primaryLight,
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        '产品手册',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.primaryLight,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  decoration:
+                      AppTheme.cardDecoration(radius: AppTheme.radiusLg),
+                  child: ListTile(
+                    minTileHeight: 64,
+                    leading: const Icon(Icons.auto_stories_outlined),
+                    title: const Text('产品手册'),
+                    subtitle: const Text('助记词、账户与扫码签名指南'),
+                    trailing: const Icon(Icons.chevron_right_rounded),
+                    onTap: () => Navigator.of(context).push<void>(
+                      MaterialPageRoute(
+                        builder: (_) => const ProductManualPage(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                // 关于区
+                const Padding(
+                  padding: EdgeInsets.only(left: 4, bottom: 12),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          size: 16, color: AppTheme.primaryLight),
+                      SizedBox(width: 8),
+                      Text(
+                        '关于',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: AppTheme.primaryLight,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration:
+                      AppTheme.cardDecoration(radius: AppTheme.radiusLg),
+                  child: const Column(
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.shield_outlined,
+                              size: 18, color: AppTheme.textSecondary),
+                          SizedBox(width: 12),
+                          Text('公民钱包',
+                              style: TextStyle(
+                                  color: AppTheme.textPrimary,
+                                  fontWeight: FontWeight.w500)),
+                          Spacer(),
+                          Text('v1.0.0',
+                              style: TextStyle(
+                                  color: AppTheme.textTertiary, fontSize: 13)),
+                        ],
+                      ),
+                      SizedBox(height: 8),
+                      Row(
+                        children: [
+                          SizedBox(width: 30),
+                          Text(
+                            '离线签名，安全可靠',
+                            style: TextStyle(
+                              color: AppTheme.textTertiary,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildSettingTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required bool value,
+    required ValueChanged<bool>? onChanged,
+    VoidCallback? onTap,
+  }) {
+    final disabled = onChanged == null && onTap == null;
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      child: Row(
+        children: [
+          Expanded(
+            child: InkWell(
+              onTap: onTap,
+              borderRadius: BorderRadius.circular(8),
+              child: Row(
+                children: [
+                  Container(
+                    width: 36,
+                    height: 36,
+                    decoration: BoxDecoration(
+                      color: disabled
+                          ? AppTheme.surfaceElevated
+                          : AppTheme.primary.withAlpha(20),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(icon,
+                        size: 20,
+                        color: disabled
+                            ? AppTheme.textTertiary
+                            : AppTheme.primaryLight),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w500,
+                            color: disabled
+                                ? AppTheme.textTertiary
+                                : AppTheme.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppTheme.textTertiary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Switch(
+            value: value,
+            onChanged: onChanged,
+          ),
+        ],
+      ),
+    );
+  }
+}

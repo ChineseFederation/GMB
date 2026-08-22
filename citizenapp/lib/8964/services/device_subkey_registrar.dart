@@ -1,0 +1,76 @@
+import 'dart:typed_data';
+
+import 'package:citizenapp/8964/services/square_api_client.dart';
+import 'package:citizenapp/wallet/core/device_subkey.dart';
+
+/// 对设备绑定证明消息（`signing_message` 的 32 字节摘要）做 sr25519 主钥签名，
+/// 返回 `0x` hex 签名。
+typedef DeviceBindingSigner = Future<String> Function({
+  required Uint8List payload,
+  required Uint8List signingMessage,
+  required String devicePublicKey,
+  required int issuedAtMillis,
+});
+typedef TurnstileTokenProvider = Future<String?> Function();
+
+/// 编排 P-256 设备子钥注册：取子钥公钥 → 构造 `signing_message(OP_SIGN_SQUARE_DEVICE_BIND)`
+/// 32B 摘要 → sr25519 主钥签摘要 → 上报后端。
+///
+/// 仅在 Worker 明确返回 `device_not_registered` 后调用：读取当前绑定账户 child 完成
+/// 一次鉴权签名。钱包创建、CID finalized、页面进入与后台预热均不得调用。
+class DeviceSubkeyRegistrar {
+  static TurnstileTokenProvider? turnstileTokenProvider;
+
+  DeviceSubkeyRegistrar({
+    DeviceSubkey? deviceSubkey,
+    SquareApiClient? apiClient,
+    TurnstileTokenProvider? turnstileToken,
+  })  : _subkey = deviceSubkey ?? DeviceSubkey(),
+        _api = apiClient ?? SquareApiClient(),
+        _turnstileToken = turnstileToken ?? turnstileTokenProvider;
+
+  final DeviceSubkey _subkey;
+  final SquareApiClient _api;
+  final TurnstileTokenProvider? _turnstileToken;
+
+  Future<void> register({
+    required String cidNumber,
+    required int bindingRevision,
+    required String accountId,
+    required DeviceBindingSigner signBinding,
+    int? issuedAtMillis,
+  }) async {
+    // publicKeyHex 返回裸未压缩点：签名消息 SCALE preimage 用裸（保持逐字节与后端一致），
+    // 跨端 wire 文本统一带 `0x`（ADR-041），后端入口一次 require 0x + strip。
+    final publicKey = await _subkey.publicKeyHex(cidNumber);
+    final issuedAt = issuedAtMillis ?? DateTime.now().millisecondsSinceEpoch;
+    final payload = encodeDeviceBindingPayload(
+      cidNumber: cidNumber,
+      bindingRevision: bindingRevision,
+      accountId: accountId,
+      p256PublicKeyHex: publicKey,
+      issuedAtMillis: issuedAt,
+    );
+    final message = buildDeviceBindingSigningMessage(
+      cidNumber,
+      bindingRevision,
+      accountId,
+      publicKey,
+      issuedAt,
+    );
+    final signatureHex = await signBinding(
+      payload: payload,
+      signingMessage: message,
+      devicePublicKey: publicKey,
+      issuedAtMillis: issuedAt,
+    );
+    final turnstileToken = await _turnstileToken?.call();
+    await _api.registerDeviceSubkey(
+      accountId: accountId,
+      p256PublicKeyHex: '0x$publicKey',
+      issuedAt: issuedAt,
+      bindingSignatureHex: signatureHex,
+      turnstileToken: turnstileToken,
+    );
+  }
+}

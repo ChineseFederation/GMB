@@ -1,0 +1,219 @@
+{
+  "schema": 1,
+  "toolchains": {
+    "node": "24.19.0",
+    "rust": "1.97.1",
+    "flutter": "3.44.4",
+    "java": "17",
+    "gradle": "8.14",
+    "cargoAudit": "0.22.2"
+  },
+  "tauri": {
+    "core": {
+      "rust": "2.11.5",
+      "api": "2.11.1",
+      "cli": "2.11.4"
+    },
+    "build": "2.6.3",
+    "plugins": {
+      "dialog": "2.6.0",
+      "process": "2.3.1",
+      "updater": "2.10.1"
+    }
+  },
+  "officialRunners": [
+    "ubuntu-24.04",
+    "ubuntu-24.04-arm",
+    "macos-15",
+    "windows-2025"
+  ],
+  "actions": {
+    "actions/checkout": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
+    "actions/setup-node": "a0853c24544627f65ddf259abe73b1d18a591444",
+    "actions/setup-java": "03ad4de0992f5dab5e18fcb136590ce7c4a0ac95",
+    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "actions/attest-build-provenance": "977bb373ede98d70efdf65b84cb5f73e068dcc2a",
+    "android-actions/setup-android": "40fd30fb8d7440372e1316f5d1809ec01dcd3699",
+    "dtolnay/rust-toolchain": "032958afbdc797a9164d3bc0b56325c1308924a5",
+    "Swatinem/rust-cache": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+    "subosito/flutter-action": "1a449444c387b1966244ae4d4f8c696479add0b2"
+  },
+  "scopes": {
+    "repository": {
+      "workflows": [
+        ".github/workflows/gmb-repository.yml"
+      ],
+      "requiredFiles": [
+        "Cargo.toml",
+        "Cargo.lock",
+        ".fvm/fvm_config.json"
+      ]
+    },
+    "citizenchain-node": {
+      "workflows": [
+        ".github/workflows/citizenchain-node-ci-linux-amd.yml",
+        ".github/workflows/citizenchain-node-ci-linux-arm.yaml",
+        ".github/workflows/citizenchain-node-ci-macos.yml",
+        ".github/workflows/citizenchain-node-ci-windows.yml",
+        ".github/workflows/citizenchain-node-release-linux-amd.yml",
+        ".github/workflows/citizenchain-node-release-linux-arm.yml",
+        ".github/workflows/citizenchain-node-release-macos.yml",
+        ".github/workflows/citizenchain-node-release-windows.yml"
+      ],
+      "requiredFiles": [
+        "citizenchain/Cargo.toml",
+        "citizenchain/Cargo.lock",
+        "citizenchain/rust-toolchain.toml",
+        "citizenchain/node/frontend/package.json",
+        "citizenchain/node/frontend/package-lock.json",
+        "citizenchain/node/frontend/.nvmrc",
+        "citizenchain/scripts/run.sh",
+        "citizenchain/scripts/clean-run.sh",
+        "citizenchain/onchina/frontend/package.json",
+        "citizenchain/onchina/frontend/package-lock.json",
+        "shared/scanner-react/package.json",
+        "shared/scanner-react/package-lock.json",
+        ".github/scripts/citizenchain-linux-deps.sh"
+      ]
+    },
+    "citizenchain-runtime": {
+      "workflows": [
+        ".github/workflows/citizenchain-runtime-ci-wasm.yml",
+        ".github/workflows/citizenchain-runtime-release-wasm.yml"
+      ],
+      "requiredFiles": [
+        "citizenchain/Cargo.toml",
+        "citizenchain/Cargo.lock",
+        "citizenchain/rust-toolchain.toml",
+        ".github/scripts/citizenchain-linux-deps.sh"
+      ]
+    },
+    "citizenapp": {
+      "workflows": [
+        ".github/workflows/citizenapp-ci-android.yml",
+        ".github/workflows/citizenapp-ci-ios.yml",
+        ".github/workflows/citizenapp-publish-android.yml",
+        ".github/workflows/citizenapp-publish-ios.yml",
+        ".github/workflows/citizenapp-release-android.yml",
+        ".github/workflows/citizenapp-release-ios.yml"
+      ],
+      "requiredFiles": [
+        "citizenapp/pubspec.yaml",
+        "citizenapp/pubspec.lock",
+        "citizenapp/rust/Cargo.toml",
+        "citizenapp/rust/Cargo.lock",
+        "citizenapp/rust/rust-toolchain.toml",
+        "citizenapp/smoldotdart/pubspec.yaml",
+        "citizenapp/smoldotdart/pubspec.lock",
+        "citizenapp/smoldotpow/Cargo.toml",
+        "citizenapp/smoldotpow/Cargo.lock",
+        "citizenapp/smoldotpow/wasm-node/javascript/package.json",
+        "citizenapp/smoldotpow/wasm-node/javascript/package-lock.json",
+        "citizenapp/android/gradle/wrapper/gradle-wrapper.properties",
+        "citizenapp/ios/Podfile",
+        "citizenapp/ios/Podfile.lock",
+        "shared/scanner-flutter/pubspec.yaml",
+        "shared/hardware-secretvault/pubspec.yaml",
+        "shared/hardware-secretvault/pubspec.lock",
+        "shared/wallet-password/pubspec.yaml",
+        "shared/wallet-password/pubspec.lock"
+      ]
+    },
+    "citizenapp-cloudflare": {
+      "workflows": [
+        ".github/workflows/citizenapp-cloudflare-ci-cloudflare.yml",
+        ".github/workflows/citizenapp-cloudflare-publish-cloudflare.yml",
+        ".github/workflows/citizenapp-cloudflare-release-cloudflare.yml"
+      ],
+      "requiredFiles": [
+        "citizenapp/cloudflare/package.json",
+        "citizenapp/cloudflare/package-lock.json"
+      ]
+    },
+    "citizenwallet": {
+      "workflows": [
+        ".github/workflows/citizenwallet-ci-android.yml",
+        ".github/workflows/citizenwallet-ci-ios.yml",
+        ".github/workflows/citizenwallet-publish-android.yml",
+        ".github/workflows/citizenwallet-publish-ios.yml",
+        ".github/workflows/citizenwallet-release-android.yml",
+        ".github/workflows/citizenwallet-release-ios.yml"
+      ],
+      "requiredFiles": [
+        "citizenwallet/pubspec.yaml",
+        "citizenwallet/pubspec.lock",
+        "citizenwallet/rust/Cargo.toml",
+        "citizenwallet/rust/Cargo.lock",
+        "citizenwallet/android/gradle/wrapper/gradle-wrapper.properties",
+        "citizenwallet/ios/Podfile",
+        "citizenwallet/ios/Podfile.lock",
+        "shared/scanner-flutter/pubspec.yaml",
+        "shared/hardware-secretvault/pubspec.yaml",
+        "shared/hardware-secretvault/pubspec.lock",
+        "shared/wallet-password/pubspec.yaml",
+        "shared/wallet-password/pubspec.lock"
+      ]
+    },
+    "citizenweb": {
+      "workflows": [
+        ".github/workflows/citizenweb-ci-web.yml",
+        ".github/workflows/citizenweb-publish-web.yml",
+        ".github/workflows/citizenweb-release-web.yml"
+      ],
+      "requiredFiles": [
+        "citizenweb/package.json",
+        "citizenweb/package-lock.json",
+        "citizenweb/.nvmrc"
+      ]
+    }
+  },
+  "npmProjects": [
+    "citizenchain/node/frontend",
+    "citizenchain/onchina/frontend",
+    "citizenapp/cloudflare",
+    "citizenapp/smoldotpow/wasm-node/javascript",
+    "citizenweb",
+    "shared/scanner-react"
+  ],
+  "dartApplications": [
+    "citizenapp",
+    "citizenapp/smoldotdart",
+    "citizenwallet",
+    "shared/hardware-secretvault",
+    "shared/wallet-password"
+  ],
+  "cargoProjects": [
+    ".",
+    "citizenchain",
+    "citizenapp/rust",
+    "citizenapp/smoldotpow",
+    "citizenwallet/rust"
+  ],
+  "auditedScopes": [
+    "citizenapp-cloudflare",
+    "citizenwallet",
+    "citizenweb"
+  ],
+  "sharedDartDependencies": [
+    "polkadart_keyring",
+    "bip39_mnemonic",
+    "ffi",
+    "path",
+    "crypto",
+    "pointycastle",
+    "isar_community",
+    "isar_community_flutter_libs",
+    "flutter_secure_storage",
+    "shared_preferences",
+    "path_provider",
+    "local_auth",
+    "local_auth_android",
+    "local_auth_darwin",
+    "qr_flutter",
+    "flutter_svg",
+    "image_picker",
+    "flutter_lints",
+    "build_runner",
+    "isar_community_generator"
+  ]
+}

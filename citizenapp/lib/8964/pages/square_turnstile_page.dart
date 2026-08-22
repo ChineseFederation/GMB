@@ -1,0 +1,48 @@
+import 'package:flutter/material.dart';
+import 'package:webview_flutter/webview_flutter.dart';
+
+import 'package:citizenapp/8964/services/square_api_client.dart';
+
+/// 首次设备绑定的 Cloudflare Turnstile 验证页；只返回单次 token，不保存浏览数据。
+class SquareTurnstilePage extends StatefulWidget {
+  const SquareTurnstilePage({super.key, this.baseUrl});
+
+  final String? baseUrl;
+
+  @override
+  State<SquareTurnstilePage> createState() => _SquareTurnstilePageState();
+}
+
+class _SquareTurnstilePageState extends State<SquareTurnstilePage> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    final base = widget.baseUrl ?? SquareApiClient.defaultBaseUrl;
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..setBackgroundColor(Colors.white)
+      ..addJavaScriptChannel(
+        'Turnstile',
+        onMessageReceived: (message) {
+          final token = message.message.trim();
+          if (token.isNotEmpty && mounted) Navigator.of(context).pop(token);
+        },
+      );
+    // 先让路由出首帧再拉重 WebView + Turnstile 反爬 JS：平台线程与 UI 线程合并的构建下，
+    // 在 initState 同步 loadRequest 会把主线程占满卡首帧输入派发（ANR 同源），推迟到首帧后。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _controller.loadRequest(Uri.parse('$base/security/turnstile'));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('设备安全验证')),
+      body: SafeArea(child: WebViewWidget(controller: _controller)),
+    );
+  }
+}

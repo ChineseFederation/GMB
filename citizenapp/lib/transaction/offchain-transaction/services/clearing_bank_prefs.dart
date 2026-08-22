@@ -1,0 +1,148 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+/// 当前钱包绑定清算行的本地快照。
+///
+///
+/// - 链上权威仍然是 `UserBank[user]` 与 `ClearingBankNodes[cid_number]`。
+/// - 本地只缓存 UI 和扫码付款所需的索引字段,每次关键操作前都要重新查链上
+///   或清算行节点确认,不能把本快照当作信任根。
+class ClearingBankBindingSnapshot {
+  const ClearingBankBindingSnapshot({
+    required this.cidNumber,
+    required this.cidFullName,
+    required this.cidShortName,
+    required this.mainAccountId,
+    required this.feeAccountId,
+    required this.peerId,
+    required this.rpcDomain,
+    required this.rpcPort,
+    required this.boundAtMs,
+    required this.lastVerifiedAtMs,
+  });
+
+  final String cidNumber;
+  final String cidFullName;
+  final String cidShortName;
+  final String mainAccountId;
+  final String feeAccountId;
+  final String peerId;
+  final String rpcDomain;
+  final int rpcPort;
+  final int boundAtMs;
+  final int lastVerifiedAtMs;
+
+  String get wssUrl {
+    final isLocal = rpcDomain == '127.0.0.1' || rpcDomain == 'localhost';
+    final scheme = isLocal ? 'ws' : 'wss';
+    return '$scheme://$rpcDomain:$rpcPort';
+  }
+
+  String get displayTitle {
+    final cidShort = cidShortName.trim();
+    if (cidShort.isNotEmpty) return cidShort;
+    final cidFull = cidFullName.trim();
+    return cidFull.isEmpty ? cidNumber : cidFull;
+  }
+
+  Map<String, dynamic> toJson() => {
+        'cid_number': cidNumber,
+        'cid_full_name': cidFullName,
+        'cid_short_name': cidShortName,
+        'main_account_id': mainAccountId,
+        'fee_account_id': feeAccountId,
+        'peer_id': peerId,
+        'rpc_domain': rpcDomain,
+        'rpc_port': rpcPort,
+        'bound_at_ms': boundAtMs,
+        'last_verified_at_ms': lastVerifiedAtMs,
+      };
+
+  factory ClearingBankBindingSnapshot.fromJson(Map<String, dynamic> json) {
+    return ClearingBankBindingSnapshot(
+      cidNumber: (json['cid_number'] as String?) ?? '',
+      cidFullName: (json['cid_full_name'] as String?) ?? '',
+      cidShortName: (json['cid_short_name'] as String?) ?? '',
+      mainAccountId: (json['main_account_id'] as String?) ?? '',
+      feeAccountId: (json['fee_account_id'] as String?) ?? '',
+      peerId: (json['peer_id'] as String?) ?? '',
+      rpcDomain: (json['rpc_domain'] as String?) ?? '',
+      rpcPort: (json['rpc_port'] as num?)?.toInt() ?? 0,
+      boundAtMs: (json['bound_at_ms'] as num?)?.toInt() ?? 0,
+      lastVerifiedAtMs: (json['last_verified_at_ms'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// 扫码支付 Step 3:**用户绑定清算行本地快照缓存**。
+///
+///
+/// - 链上 `OffchainTransaction::UserBank[user]` 存的是**主账户** `AccountId32`
+///   (32 字节),**不是** CID `cid_number` 字符串。CitizenApp 同时需要 cid_number、
+///   主账户和链上 `ClearingBankNodes` 端点,所以本地缓存升级为 JSON 快照。
+/// - 快照仅是用户体验缓存;绑定、支付、充值、提现前仍要查链上或清算行节点。
+/// - 缓存按 `account_id` 隔离(单钱包多账户下,每个账户独立绑定清算行,互不干扰)。
+class ClearingBankPrefs {
+  ClearingBankPrefs._();
+
+  static const String _keyPrefix = 'clearing_bank_binding_';
+
+  @visibleForTesting
+  static Future<bool> Function(SharedPreferences prefs, String key)?
+      debugRemoveForTest;
+
+  /// 写入完整绑定快照。[accountId] 为该绑定账户的链账户主键(0x+64hex)。
+  static Future<void> saveSnapshot(
+    String accountId,
+    ClearingBankBindingSnapshot snapshot,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      '$_keyPrefix$accountId',
+      jsonEncode(snapshot.toJson()),
+    );
+  }
+
+  /// 读取完整绑定快照。[accountId] 为该账户的链账户主键(0x+64hex)。
+  static Future<ClearingBankBindingSnapshot?> loadSnapshot(
+    String accountId,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_keyPrefix$accountId');
+    if (raw == null || raw.trim().isEmpty) return null;
+    try {
+      final json = jsonDecode(raw) as Map<String, dynamic>;
+      final snapshot = ClearingBankBindingSnapshot.fromJson(json);
+      if (snapshot.cidNumber.isEmpty ||
+          snapshot.mainAccountId.isEmpty ||
+          snapshot.feeAccountId.isEmpty ||
+          snapshot.rpcDomain.isEmpty ||
+          snapshot.rpcPort <= 0) {
+        return null;
+      }
+      return snapshot;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 清除(切换清算行后由 bind 页主动覆盖,或用户手动解绑时调)。
+  static Future<void> clear(String accountId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final key = '$_keyPrefix$accountId';
+    if (!prefs.containsKey(key)) return;
+    final remove = debugRemoveForTest;
+    final removed =
+        await (remove == null ? prefs.remove(key) : remove(prefs, key));
+    if (!removed) {
+      throw StateError('清算行缓存删除未提交');
+    }
+    // remove 返回 true 也不代表当前事实已不存在；并发写入或异常后端
+    // 可在回读前重建该键。只要值仍存在就必须抛错，上层 pending 不得 ack。
+    if (prefs.containsKey(key)) {
+      throw StateError('清算行缓存删除后回读仍存在');
+    }
+  }
+}

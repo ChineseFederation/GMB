@@ -1,0 +1,354 @@
+import 'package:flutter/material.dart';
+
+import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
+import 'package:citizenapp/8964/subscribe/creator_subscribe_service.dart';
+import 'package:citizenapp/my/creator/creator_api.dart';
+import 'package:citizenapp/my/creator/creator_money.dart';
+import 'package:citizenapp/my/creator/models/creator_plan.dart';
+import 'package:citizenapp/my/myid/register_identity_flow.dart';
+import 'package:citizenapp/rpc/subscription_rpc.dart';
+import 'package:citizenapp/ui/app_theme.dart';
+import 'package:citizenapp/ui/app_layout.dart';
+
+/// 广场他人主页的创作者订阅入口（订阅者侧）。
+///
+/// 有档才显示；订阅、取消、更换分别只提交一笔账户签名交易。价格只采用 finalized 链上档位，
+/// Cloudflare 只提供查询投影；档位名称和价格来自同一 finalized 链状态。
+class CreatorSubscribeButton extends StatefulWidget {
+  const CreatorSubscribeButton({
+    super.key,
+    required this.creatorCidNumber,
+    this.enabled = true,
+    CreatorApi? api,
+    CreatorSubscribeService? service,
+    SquareSessionProvider? sessionProvider,
+  })  : _api = api,
+        _service = service,
+        _sessionProvider = sessionProvider;
+
+  final String creatorCidNumber;
+
+  /// false=置灰不可点（以他人视角看自己时，订阅自己无意义）。
+  final bool enabled;
+  final CreatorApi? _api;
+  final CreatorSubscribeService? _service;
+  final SquareSessionProvider? _sessionProvider;
+
+  @override
+  State<CreatorSubscribeButton> createState() => _CreatorSubscribeButtonState();
+}
+
+class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
+  late final CreatorApi _api = widget._api ?? CreatorApiHttp();
+  late final CreatorSubscribeService _service =
+      widget._service ?? CreatorSubscribeService();
+  late final SquareSessionProvider _session =
+      widget._sessionProvider ?? SquareSessionProvider.instance;
+
+  bool _loading = true;
+  bool _busy = false;
+  CreatorPlan? _plan;
+  FinalizedSubscriptionSnapshot? _snapshot;
+
+  /// 被查看创作者本人的平台会员 finalized 快照；仅其有效时才显示订阅按钮。
+  FinalizedSubscriptionSnapshot? _creatorPlatform;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final session = await _session.ensureSession();
+      if (session == null) {
+        if (mounted) setState(() => _loading = false);
+        return;
+      }
+      final results = await Future.wait<Object?>([
+        // Cloudflare 只补投影时间；名称与价格直接读取同一 finalized 链状态。
+        _api
+            .fetchPlanOf(session, widget.creatorCidNumber)
+            .catchError((_) => null),
+        _service.fetchCreatorPlans(widget.creatorCidNumber),
+        _service.fetchFinalizedState(
+          subscriberCidNumber: session.cidNumber,
+          creatorCidNumber: widget.creatorCidNumber,
+        ),
+        // 被查看创作者本人平台会员真态：读失败 → 整个 _load 落 catch → 按钮隐藏（fail-closed）。
+        _service.fetchPlatformSnapshot(widget.creatorCidNumber),
+      ]);
+      final displayPlan = results[0] as CreatorPlan?;
+      final chainTiers = results[1] as List<ChainCreatorTier>;
+      if (!mounted) return;
+      setState(() {
+        _plan = mergeCreatorPlanWithChain(
+          creatorCidNumber: widget.creatorCidNumber,
+          displayPlan: displayPlan,
+          chainTiers: chainTiers,
+        );
+        _snapshot = results[2] as FinalizedSubscriptionSnapshot;
+        _creatorPlatform = results[3] as FinalizedSubscriptionSnapshot;
+        _loading = false;
+      });
+    } on Exception {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final creatorPlatformActive =
+        _creatorPlatform?.state?.isEffectiveAt(_creatorPlatform!.chainNowMs) ==
+            true;
+    // 双条件 fail-closed：有档 且 创作者本人平台会员有效，才显示订阅按钮。
+    // 未开档 / 加载中 / 创作者平台会员过期或缺失 / 快照读失败 一律隐藏，绝不诱导无效订阅。
+    if (_loading ||
+        _plan == null ||
+        _plan!.tiers.isEmpty ||
+        !creatorPlatformActive) {
+      return const SizedBox.shrink();
+    }
+    final actionable = widget.enabled && !_busy;
+    final subscribed = _snapshot?.state?.status == 'active';
+    // 顶部操作栏只保留一个紧凑入口，并固定在通知图标左侧。是否已订阅只决定
+    // 点击后的操作面板，不能在主页头部展开成两个按钮或增加纵向高度。
+    return SizedBox(
+      height: AppLayout.scaled(context, 34),
+      child: OutlinedButton(
+        onPressed: actionable
+            ? (subscribed ? _openSubscribedActions : _openPicker)
+            : null,
+        style: OutlinedButton.styleFrom(
+          minimumSize: Size(0, AppLayout.scaled(context, 34)),
+          padding:
+              EdgeInsets.symmetric(horizontal: AppLayout.scaled(context, 12)),
+          visualDensity: VisualDensity.compact,
+          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        ),
+        child: const Text('订阅', maxLines: 1),
+      ),
+    );
+  }
+
+  /// 已订阅时把“更换会员档 / 取消订阅”收进二级操作面板，主页只显示单一订阅入口。
+  Future<void> _openSubscribedActions() async {
+    final action = await showModalBottomSheet<_SubscribedAction>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.swap_horiz),
+              title: const Text('更换会员档'),
+              onTap: () =>
+                  Navigator.of(sheetContext).pop(_SubscribedAction.changePlan),
+            ),
+            ListTile(
+              leading: const Icon(
+                Icons.cancel_outlined,
+                color: AppTheme.danger,
+              ),
+              title: const Text(
+                '取消订阅',
+                style: TextStyle(color: AppTheme.danger),
+              ),
+              onTap: () =>
+                  Navigator.of(sheetContext).pop(_SubscribedAction.cancel),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case _SubscribedAction.changePlan:
+        await _openPicker();
+      case _SubscribedAction.cancel:
+        await _cancel();
+    }
+  }
+
+  Future<void> _openPicker() async {
+    // 未注册 CID:先于选档就地弹全 App 统一注册面板,不让用户选完档才被拦;
+    // 占号成功后订阅由用户重新发起。取消订阅无需此门(未注册者不可能有订阅)。
+    if (!await ensureCidRegisteredOrPrompt(context)) return;
+    if (!mounted) return;
+    final selection = await showModalBottomSheet<_TierPeriodSelection>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => _TierPeriodPicker(plan: _plan!),
+    );
+    if (selection == null || !mounted) return;
+    final current = _snapshot?.state;
+    final samePlan = current?.plan.kind == 'creator' &&
+        current?.plan.tierId == selection.tierId &&
+        current?.plan.billingPeriod == selection.period.key;
+    final shouldChange =
+        (current?.status == 'active' || current?.status == 'cancelled') &&
+            !samePlan;
+    await _run(
+      () => shouldChange
+          ? _service.changePlan(
+              context: context,
+              creatorCidNumber: widget.creatorCidNumber,
+              tierId: selection.tierId,
+              period: selection.period.key,
+              priceFen: selection.priceFen,
+            )
+          : _service.subscribe(
+              context: context,
+              creatorCidNumber: widget.creatorCidNumber,
+              tierId: selection.tierId,
+              period: selection.period.key,
+              priceFen: selection.priceFen,
+            ),
+    );
+  }
+
+  Future<void> _cancel() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('取消订阅'),
+        content: const Text('取消后区块链不再按月从你的钱包扣款，确定取消？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('再想想'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            style: TextButton.styleFrom(foregroundColor: AppTheme.danger),
+            child: const Text('取消订阅'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await _run(
+      () => _service.cancel(
+        context: context,
+        creatorCidNumber: widget.creatorCidNumber,
+      ),
+    );
+  }
+
+  Future<void> _run(Future<void> Function() action) async {
+    setState(() => _busy = true);
+    try {
+      await action();
+      if (!mounted) return;
+      await _load();
+    } on CreatorSubscribeException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(e.message)));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+}
+
+class _TierPeriodSelection {
+  const _TierPeriodSelection(this.tierId, this.period, this.priceFen);
+  final String tierId;
+  final BillingPeriod period;
+  final int priceFen;
+}
+
+enum _SubscribedAction { changePlan, cancel }
+
+/// 选档 + 周期底部弹窗：列出每档可用的月/季/年选项，点选即返回。
+class _TierPeriodPicker extends StatelessWidget {
+  const _TierPeriodPicker({required this.plan});
+
+  final CreatorPlan plan;
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      top: false,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: AppLayout.scaled(context, 38),
+                height: AppLayout.scaled(context, 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.border,
+                  borderRadius: BorderRadius.circular(AppLayout.scaledValue(4)),
+                ),
+              ),
+            ),
+            SizedBox(height: AppLayout.scaled(context, 14)),
+            Text(
+              '选择会员档与周期',
+              style: TextStyle(
+                fontSize: AppLayout.scaled(context, 16),
+                fontWeight: FontWeight.w700,
+                color: AppTheme.textPrimary,
+              ),
+            ),
+            SizedBox(height: AppLayout.scaled(context, 4)),
+            Text(
+              '订阅后区块链按所选周期自动扣公民币；款项全额进创作者钱包。',
+              style: TextStyle(
+                  fontSize: AppLayout.scaled(context, 12),
+                  color: AppTheme.textSecondary),
+            ),
+            SizedBox(height: AppLayout.scaled(context, 14)),
+            for (final tier in plan.tiers) _tierBlock(context, tier),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tierBlock(BuildContext context, CreatorTier tier) {
+    final periods =
+        BillingPeriod.values.where((period) => tier.hasPeriod(period)).toList();
+    return Padding(
+      padding: EdgeInsets.only(bottom: AppLayout.scaled(context, 14)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            tier.tierName.isEmpty ? '未命名档位' : tier.tierName,
+            style: TextStyle(
+              fontSize: AppLayout.scaled(context, 15),
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
+          SizedBox(height: AppLayout.scaled(context, 8)),
+          Wrap(
+            spacing: AppLayout.scaled(context, 8),
+            runSpacing: AppLayout.scaled(context, 8),
+            children: periods.map((period) {
+              final fen = tier.priceFenOf(period)!;
+              return OutlinedButton(
+                onPressed: () => Navigator.of(context).pop(
+                  _TierPeriodSelection(tier.tierId, period, fen),
+                ),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: Size(0, AppLayout.scaled(context, 40)),
+                  padding: EdgeInsets.symmetric(
+                      horizontal: AppLayout.scaled(context, 14)),
+                ),
+                child: Text('${period.label} ${fenToYuanLabel(fen)} 元'),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}

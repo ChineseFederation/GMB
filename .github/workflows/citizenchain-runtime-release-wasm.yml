@@ -1,0 +1,305 @@
+name: 公民协议 · Release · WASM
+run-name: 公民协议 · Release · WASM
+
+# 中文注释：只能由公民控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# 本软件不设 push 触发——main push 只运行独立仓库门禁，绝不产生任何 WASM 运行记录。
+# 因此也不再需要按提交名分流：那套做法会让每一次普通 push 都留下一条 skipped 记录
+# 污染 Actions 列表，失败重试还只能靠造空提交换 SHA；dispatch 可以直接对同一 SHA 重跑。
+# Runtime CI 已验证 finalized 链 spec_version +1 构建候选；Release 成功后才创建唯一正式版本 Tag；本 Release
+# workflow 只复用该成功 run 的源码、版本和 artifact 生成正式资产。两条流程始终独立，不提交或推送源码改动。
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: GitHub main 准确提交
+        required: true
+        type: string
+      ci_run_id:
+        description: 本次 Release 复核的准确成功 CI run_id
+        required: true
+        type: string
+      version_tag:
+        description: 公民协议 WASM 正式版本 Tag
+        required: true
+        type: string
+      spec_version:
+        description: 本次构建使用的 Substrate spec_version
+        required: true
+        type: string
+
+concurrency:
+  group: citizenchain-runtime-release-wasm
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
+  GMB_VERSION_TAG: ${{ inputs.version_tag }}
+  GMB_SPEC_VERSION: ${{ inputs.spec_version }}
+
+jobs:
+  build-wasm:
+    name: 编译 WASM
+    runs-on: ubuntu-24.04
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+
+      # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
+      - name: 拉取 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/github-release.mjs
+            .github/scripts/version-tag-contract.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: 验证公民协议 Release 的正式版本 Tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          --ci-run-id "$GMB_CI_RUN_ID"
+          --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
+          --prefix citizenchain-runtime-wasm-v --product-id citizenchain-runtime
+          --target wasm --workflow citizenchain-runtime-ci-wasm.yml --spec-version "$GMB_SPEC_VERSION"
+
+      - name: 校验代码来源并应用 Runtime 候选版本
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/dependencies.mjs check --scope citizenchain-runtime
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          runtime_path = Path("citizenchain/runtime/src/lib.rs")
+          test_path = Path("citizenchain/runtime/src/tests/cases.rs")
+          runtime_text = runtime_path.read_text(encoding="utf-8")
+          test_text = test_path.read_text(encoding="utf-8")
+          runtime_pattern = re.compile(r"(?m)^(\s*spec_version:\s*)(\d+)(\s*,\s*)$")
+          test_pattern = re.compile(r"assert_eq!\(VERSION\.spec_version,\s*(\d+)\);")
+          runtime_matches = list(runtime_pattern.finditer(runtime_text))
+          test_matches = list(test_pattern.finditer(test_text))
+          if len(runtime_matches) != 1 or len(test_matches) != 1:
+              raise SystemExit("Runtime spec_version 真源或测试断言不唯一")
+          source_version = int(runtime_matches[0].group(2))
+          test_version = int(test_matches[0].group(1))
+          if source_version != test_version:
+              raise SystemExit("Runtime 源码与测试断言的 spec_version 不一致")
+          target_text = os.environ["GMB_SPEC_VERSION"]
+          if not re.fullmatch(r"(?:0|[1-9]\d*)", target_text) or int(target_text) > 2**32 - 1:
+              raise SystemExit("Runtime 候选 spec_version 输入无效")
+          target_version = int(target_text)
+          if source_version not in (target_version - 1, target_version):
+              raise SystemExit("Runtime Release 候选与 GitHub main 版本差值不是 0 或 1")
+          if source_version != target_version:
+              runtime_match = runtime_matches[0]
+              test_match = test_matches[0]
+              runtime_text = runtime_text[:runtime_match.start(2)] + target_text + runtime_text[runtime_match.end(2):]
+              test_text = test_text[:test_match.start(1)] + target_text + test_text[test_match.end(1):]
+              test_path.write_text(test_text, encoding="utf-8")
+              runtime_path.write_text(runtime_text, encoding="utf-8")
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+
+          with summary.open("a", encoding="utf-8") as out:
+              out.write("## CitizenChain WASM 构建来源\n\n")
+              out.write("- 构建用途：正式 Release\n")
+              out.write(f"- 源码 spec_version：`{source_version}`\n")
+              out.write(f"- 构建 spec_version：`{target_version}`\n")
+              out.write(f"- 源码提交：`{os.environ['GMB_SOURCE_SHA']}`\n")
+              out.write("- 候选版本只存在于本次 runner，不提交或推送源码\n")
+          PY
+
+      - name: 安装 Rust 工具链
+        # 1.97.1 在上游是可移动分支；固定当前生成提交，action 内仍硬编码 toolchain=1.97.1。
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: wasm32v1-none
+          components: rust-src, clippy
+
+      - name: 安装 Node.js
+        # NodeGuard 行为探针编译完整 Node/Tauri 宿主；固定 Node.js 24 并复用锁文件缓存，
+        # 保证编译期读取的 frontendDist 来自真实前端构建，而不是占位目录或本机残留。
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+          cache-dependency-path: citizenchain/node/frontend/package-lock.json
+
+      - name: 安装系统依赖
+        # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，
+        # 否则 glib-sys 等桌面依赖会在探针真正执行前因缺少 pkg-config 元数据失败。
+        run: bash .github/scripts/citizenchain-linux-deps.sh
+
+      - name: 校验锁文件并记录构建环境
+        working-directory: citizenchain
+        run: |
+          cargo metadata --locked --no-deps --format-version 1 >/dev/null
+          python3 - <<'PY'
+          import hashlib
+          import os
+          import subprocess
+          from pathlib import Path
+
+          def command_output(*command: str) -> str:
+              return subprocess.check_output(
+                  command,
+                  text=True,
+                  stderr=subprocess.STDOUT,
+              ).strip()
+
+          lock_data = Path("Cargo.lock").read_bytes()
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          with summary.open("a", encoding="utf-8") as out:
+              out.write("\n## CitizenChain WASM 固定构建环境\n\n")
+              out.write("- runner label：`ubuntu-24.04`\n")
+              out.write(f"- runner OS / arch：`{os.environ['RUNNER_OS']} / {os.environ['RUNNER_ARCH']}`\n")
+              out.write(f"- runner image OS：`{os.environ.get('ImageOS', 'unknown')}`\n")
+              out.write(f"- runner image version：`{os.environ.get('ImageVersion', 'unknown')}`\n")
+              out.write(
+                  "- checkout action："
+                  "`fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09` (`v5.1.0`)\n"
+              )
+              out.write(
+                  "- rust-toolchain action："
+                  "`46511b1c83438f0dd37c02d843619ece5a4abb5b` (`1.97.1`)\n"
+              )
+              out.write(f"- Cargo.lock SHA-256：`{hashlib.sha256(lock_data).hexdigest()}`\n")
+              for label, command in (
+                  ("rustc", ("rustc", "--version", "--verbose")),
+                  ("cargo", ("cargo", "--version", "--verbose")),
+                  ("protoc", ("protoc", "--version")),
+                  ("clang", ("clang", "--version")),
+              ):
+                  out.write(f"\n### {label}\n\n```\n{command_output(*command)}\n```\n")
+          PY
+
+      - name: 删除全部旧编译产物
+        working-directory: citizenchain
+        run: |
+          rm -rf target
+          echo "已删除全部 target 目录，从零开始编译"
+
+      - name: 校验正式 WASM 构建特性
+        working-directory: citizenchain
+        run: |
+          if cargo tree --locked -p citizenchain -e features --no-default-features --features std \
+            | grep -F 'citizenchain feature "runtime-benchmarks"'; then
+            echo "正式 WASM 依赖图禁止启用 runtime-benchmarks" >&2
+            exit 1
+          fi
+
+      - name: 执行 Runtime Clippy
+        working-directory: citizenchain
+        # 不设 WASM_BUILD_FROM_SOURCE/WASM_FILE：build.rs 走 else 分支不编 wasm，clippy 为纯 lint 快闸。
+        # scope 与「编译 WASM」同 feature 配置（-p citizenchain --features std），仅覆盖 runtime 装配 crate。
+        run: cargo clippy --locked -p citizenchain --no-default-features --features std -- -D warnings
+
+      - name: 编译 WASM
+        working-directory: citizenchain
+        env:
+          WASM_BUILD_FROM_SOURCE: "1"
+          # build.rs 只对正式候选 WASM 启用 feature 构建闸，不影响权重 benchmark runtime。
+          CITIZENCHAIN_PRODUCTION_WASM_BUILD: "1"
+        run: cargo build --locked --release -p citizenchain --no-default-features --features std
+
+      - name: 校验 WASM 产物并记录摘要
+        working-directory: citizenchain
+        run: |
+          python3 - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          output_dir = Path("target/release/wbuild/citizenchain")
+          filenames = (
+              "citizenchain.wasm",
+              "citizenchain.compact.wasm",
+              "citizenchain.compact.compressed.wasm",
+          )
+          summary = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          rows = []
+          for filename in filenames:
+              path = output_dir / filename
+              if not path.is_file() or path.stat().st_size == 0:
+                  raise SystemExit(f"WASM 产物不存在或为空：{path}")
+              data = path.read_bytes()
+              digest = hashlib.blake2b(data, digest_size=32).hexdigest()
+              rows.append((filename, len(data), digest))
+
+          with summary.open("a", encoding="utf-8") as out:
+              out.write("\n## CitizenChain WASM 产物\n\n")
+              out.write("| 文件 | 字节数 | Blake2-256 |\n")
+              out.write("| --- | ---: | --- |\n")
+              for filename, size, digest in rows:
+                  out.write(f"| `{filename}` | {size} | `0x{digest}` |\n")
+          PY
+
+      # tauri::generate_context! 在 node 测试编译期读取 frontendDist；必须使用锁文件构建
+      # 真实前端产物，不能提交 dist 或创建空占位文件绕过 Tauri 校验。
+      - name: 构建公民链节点前端
+        run: |
+          npm --prefix citizenchain/node/frontend ci
+          npm --prefix citizenchain/node/frontend run build
+
+      - name: 校验候选 WASM 安全行为
+        working-directory: citizenchain
+        env:
+          # 对上一步刚生成、随后将上传的同一份压缩 WASM 执行 NodeGuard 行为探针。
+          WASM_FILE: ${{ github.workspace }}/citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.compressed.wasm
+        run: |
+          cargo test --locked -p node \
+            current_wasm_passes_candidate_runtime_policy_behavior_probes -- --nocapture
+
+      - name: 签署正式 WASM 构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            citizenchain/target/release/wbuild/citizenchain/citizenchain.wasm
+            citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.wasm
+            citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.compressed.wasm
+
+      # 中文注释：GitHub runner 在同一受审工作流内直接固化正式 Release；公民控制台不再
+      # 下载 Actions 候选、不再本地签名或二次发布。草稿只作为资产上传的原子事务边界。
+      - name: 固化公民协议正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_dir="$GITHUB_WORKSPACE/citizenchain/target/release/wbuild/citizenchain"
+          notes_file="$RUNNER_TEMP/citizenchain-runtime-release-notes.md"
+          {
+            echo '公民协议正式 Release，可直接用于链上 Runtime 升级。'
+            echo
+            echo "- spec_version：\`${GMB_SPEC_VERSION}\`"
+            echo "- 源码提交：\`${GMB_SOURCE_SHA}\`"
+            echo "- Release workflow run：\`${GITHUB_RUN_ID}\`"
+            echo
+            echo '| 产物 | SHA-256 |'
+            echo '| --- | --- |'
+            for filename in citizenchain.wasm citizenchain.compact.wasm citizenchain.compact.compressed.wasm; do
+              digest="$(sha256sum "$release_dir/$filename" | awk '{print $1}')"
+              echo "| \`$filename\` | \`$digest\` |"
+            done
+          } >"$notes_file"
+          test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tool/.github/scripts/github-release.mjs \
+            --tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA" \
+            --title '公民协议 · Release · WASM' --notes-file "$notes_file" --latest false \
+            --assets "$release_dir/citizenchain.wasm" \
+            "$release_dir/citizenchain.compact.wasm" \
+            "$release_dir/citizenchain.compact.compressed.wasm"

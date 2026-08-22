@@ -1,0 +1,10 @@
+# 真打包产物由 node/scripts/prepack.* 生成,不入库;仅保留占位让 dev 构建路径存在。
+onchina-bin/*
+!onchina-bin/.gitkeep
+postgres/*
+!postgres/.gitkeep
+onchina-frontend/dist/*
+!onchina-frontend/dist/.gitkeep
+# 创世状态包由 bake/prepack 生成并随安装包分发,体积大且不作为源码入库。
+genesis-state/*
+china.sqlite

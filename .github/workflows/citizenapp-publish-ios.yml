@@ -1,0 +1,72 @@
+name: 公民 · 发布 · iOS
+run-name: 公民 · 发布 · iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: 正式 Release 准确提交
+        required: true
+        type: string
+      version_tag:
+        description: 公民 iOS 正式版本 Tag
+        required: true
+        type: string
+
+concurrency:
+  group: citizenapp-publish-ios
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+
+jobs:
+  publish:
+    name: 提交公民 iOS 到 App Store
+    runs-on: ubuntu-24.04
+    environment: citizenapp-ios-production
+    steps:
+      - name: 拉取发布工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: 校验发布依赖契约
+        run: node .github/scripts/dependencies.mjs check --scope citizenapp
+
+      - name: 锁定不可变正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+          GMB_VERSION_TAG: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$GMB_VERSION_TAG" =~ ^citizenapp-ios-v[0-9]+\.[0-9]{1,2}\.[0-9]{1,2}$ ]]
+          test "$(gh release view "$GMB_VERSION_TAG" --json isDraft,isPrerelease --jq '[.isDraft,.isPrerelease] | @tsv')" = $'false\tfalse'
+          git fetch --quiet origin "refs/tags/${GMB_VERSION_TAG}:refs/tags/${GMB_VERSION_TAG}"
+          test "$(git rev-list -n 1 "$GMB_VERSION_TAG")" = "$GMB_SOURCE_SHA"
+          mkdir -p "$RUNNER_TEMP/release"
+          gh release download "$GMB_VERSION_TAG" --dir "$RUNNER_TEMP/release" \
+            --pattern citizenapp.ipa --pattern citizenapp-release-ios.json
+
+      - name: 在 GitHub Runner 提交 App Store
+        env:
+          ASC_ISS: ${{ secrets.ASC_ISS }}
+          ASC_KID: ${{ secrets.ASC_KID }}
+          ASC_KEY: ${{ secrets.ASC_KEY }}
+          GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+        run: >-
+          node .github/scripts/mobile-store.mjs --platform ios --product citizenapp
+          --version-tag '${{ inputs.version_tag }}'
+          --manifest "$RUNNER_TEMP/release/citizenapp-release-ios.json"
+          --asset "$RUNNER_TEMP/release/citizenapp.ipa"
+          --receipt "$RUNNER_TEMP/publish-receipt.json"
+
+      - name: 在 GitHub 记录发布结果
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node .github/scripts/publish-record.mjs
+          --receipt "$RUNNER_TEMP/publish-receipt.json"
+          --environment citizenapp-ios-production --description '公民 iOS App Store 发布'
+          --url 'https://apps.apple.com/'
