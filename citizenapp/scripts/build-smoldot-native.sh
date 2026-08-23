@@ -16,7 +16,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CITIZENAPP_DIR="$(dirname "$SCRIPT_DIR")"
-RUST_DIR="$CITIZENAPP_DIR/rust"
+RUST_DIR="$CITIZENAPP_DIR/smoldot/ffi"
 TARGET="${1:-all}"
 
 # 确保 Rust 交叉编译目标已安装

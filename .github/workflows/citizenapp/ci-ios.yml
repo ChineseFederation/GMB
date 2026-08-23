@@ -46,14 +46,14 @@ jobs:
         with:
           ref: ${{ inputs.source_sha }}
 
-      # 全产品 Logo 只允许由 docs/logo.png 唯一母版生成。
+      # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenapp
+          node .github/scripts/citizenapp/ci-ios.mjs dependencies check --scope citizenapp
           python3 - <<'PY'
           import os, re
           from pathlib import Path
@@ -80,7 +80,7 @@ jobs:
           import json
           from pathlib import Path
 
-          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          version = json.loads(Path(".github/dependencies.json").read_text(encoding="utf-8"))["toolchains"]["flutter"]
           print(f"version={version}")
           PY
 
@@ -122,7 +122,7 @@ jobs:
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenapp
+          node .github/scripts/citizenapp/ci-ios.mjs dependencies check --scope citizenapp
           python3 - <<'PY'
           import os, re
           from pathlib import Path
@@ -147,7 +147,7 @@ jobs:
           import json
           from pathlib import Path
 
-          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          version = json.loads(Path(".github/dependencies.json").read_text(encoding="utf-8"))["toolchains"]["flutter"]
           print(f"version={version}")
           PY
 
@@ -180,7 +180,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "citizenapp-rust-ios"
-          workspaces: citizenapp/rust -> target
+          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 构建 iOS Release 候选
         working-directory: citizenapp

@@ -16,7 +16,7 @@
 #   2. citizenapp/assets/chainspec.json                        (smoldot 轻形态:stateRootHash)
 #   3. citizenapp/assets/light_sync_state.json                 (smoldot checkpoint)
 #   4. citizenapp/assets/public_institutions/*.json            (块 0 公权机构缓存)
-#   5. citizenapp/cloudflare/wrangler.toml                     (公开链身份派生配置)
+#   5. citizenserve/wrangler.toml                     (公开链身份派生配置)
 #
 # 流程:导出 plain spec → 临时节点物化创世(记录耗时)→ RPC 宪法创世检查
 #       → 读块 0 头生成轻形态与 lightSyncState → 从同一块生成公权机构缓存
@@ -320,7 +320,7 @@ PYEOF
 
 echo "==> 从同一块 0 生成 CitizenApp 公权机构缓存..."
 rm -rf "$APP_PUBLIC_INSTITUTION_OUT"
-node "$REPO_ROOT/citizenapp/tools/generate_public_institution_bundle.mjs" \
+node "$REPO_ROOT/citizenapp/scripts/generate_public_institution_bundle.mjs" \
     --rpc-url "http://127.0.0.1:$RPC_PORT" \
     --at "$GENESIS_HASH_STR" \
     --chainspec "$APP_OUT" \
@@ -383,7 +383,7 @@ PYEOF
 echo "==> 公权机构缓存根: $PUBLIC_INSTITUTION_ROOT"
 
 echo "==> 暂存 Cloudflare 公开链身份配置..."
-python3 - "$REPO_ROOT/citizenapp/cloudflare/wrangler.toml" "$CLOUDFLARE_WRANGLER_OUT" "$GENESIS_HASH_STR" "$STATE_ROOT" <<'PYEOF'
+python3 - "$REPO_ROOT/citizenserve/wrangler.toml" "$CLOUDFLARE_WRANGLER_OUT" "$GENESIS_HASH_STR" "$STATE_ROOT" <<'PYEOF'
 import os
 import re
 import sys
@@ -492,7 +492,7 @@ if [[ "$FINALIZE" == "1" ]]; then
     CITIZENCHAIN_PLAIN_SPEC="$OUT" \
     CITIZENCHAIN_GENESIS_STATE_MANIFEST="$GENESIS_STATE_OUT/manifest.json" \
     CITIZENAPP_PUBLIC_INSTITUTION_MANIFEST="$APP_PUBLIC_INSTITUTION_OUT/manifest.json" \
-    CITIZENAPP_CLOUDFLARE_WRANGLER="$CLOUDFLARE_WRANGLER_OUT" \
+    CITIZENSERVE_CLOUDFLARE_WRANGLER="$CLOUDFLARE_WRANGLER_OUT" \
     CITIZENAPP_REQUIRE_STATE_ROOT=1 \
         "$REPO_ROOT/citizenapp/scripts/check-chainspec-frozen.sh"
 
@@ -500,7 +500,7 @@ if [[ "$FINALIZE" == "1" ]]; then
     APP_SPEC="$REPO_ROOT/citizenapp/assets/chainspec.json"
     APP_LIGHT_SYNC_STATE="$REPO_ROOT/citizenapp/assets/light_sync_state.json"
     APP_PUBLIC_INSTITUTION="$REPO_ROOT/citizenapp/assets/public_institutions"
-    CLOUDFLARE_WRANGLER="$REPO_ROOT/citizenapp/cloudflare/wrangler.toml"
+    CLOUDFLARE_WRANGLER="$REPO_ROOT/citizenserve/wrangler.toml"
     install -m 0644 "$OUT" "$NODE_SPEC"
     install -m 0644 "$APP_OUT" "$APP_SPEC"
     install -m 0644 "$APP_LIGHT_SYNC_STATE_OUT" "$APP_LIGHT_SYNC_STATE"

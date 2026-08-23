@@ -51,7 +51,7 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
-      # 桌面端与两款移动产品共用 docs/logo.png 唯一母版。
+      # 桌面端与两款移动产品共用 shared/branding/logo.png 唯一母版。
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenchain-node
+          node .github/scripts/citizenchain/ci-node-linux-amd.mjs dependencies check --scope citizenchain-node
           echo "citizenchain=true" >> "$GITHUB_OUTPUT"
           echo "desktop=true" >> "$GITHUB_OUTPUT"
           test "$GMB_NODE_PLATFORM" = linux-amd
@@ -86,7 +86,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: 安装系统依赖
-        run: bash .github/scripts/citizenchain-linux-deps.sh
+        run: node .github/scripts/citizenchain/ci-node-linux-amd.mjs linux-deps
 
       - name: 配置 libclang 与 protoc
         run: |
@@ -177,8 +177,8 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenchain-node
-          node .github/scripts/citizenchain-node-version.mjs apply "$GMB_SOFTWARE_VERSION"
+          node .github/scripts/citizenchain/ci-node-linux-amd.mjs dependencies check --scope citizenchain-node
+          node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -241,7 +241,7 @@ jobs:
 
       - name: 安装 Linux 构建依赖
         if: startsWith(matrix.platform, 'linux-')
-        run: bash .github/scripts/citizenchain-linux-deps.sh
+        run: node .github/scripts/citizenchain/ci-node-linux-amd.mjs linux-deps
 
       - name: 配置 Linux libclang 环境变量
         if: startsWith(matrix.platform, 'linux-')
@@ -259,7 +259,7 @@ jobs:
           workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
-        run: node .github/scripts/citizenchain-node-version.mjs lock "$GMB_SOFTWARE_VERSION"
+        run: node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |

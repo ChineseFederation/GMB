@@ -14,8 +14,7 @@ const sources = [
     key: 'whitepaper',
     title: '白皮书',
     sourcePath: 'citizenweb/src/whitepaper.md',
-    // 白皮书正文迁入官网源码目录后，图片仍沿用 docs/assets 资源目录。
-    assetFallbackRoots: ['docs'],
+    // 白皮书正文迁入官网源码目录后，图片与正文统一归入 citizenweb/src/assets 资源目录。
   }
 ];
 

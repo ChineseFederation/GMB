@@ -65,8 +65,7 @@ jobs:
           ref: ${{ github.sha }}
           path: release-tool
           sparse-checkout: |
-            .github/scripts/github-release.mjs
-            .github/scripts/version-tag-contract.mjs
+            .github/scripts/citizenapp/release-ios.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -74,7 +73,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          node release-tool/.github/scripts/citizenapp/release-ios.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenapp-ios-v --product-id citizenapp
@@ -83,7 +82,7 @@ jobs:
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenapp
+          node .github/scripts/citizenapp/release-ios.mjs dependencies check --scope citizenapp
           python3 - <<'PY'
           import os, re
           from pathlib import Path
@@ -108,7 +107,7 @@ jobs:
           import json
           from pathlib import Path
 
-          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          version = json.loads(Path(".github/dependencies.json").read_text(encoding="utf-8"))["toolchains"]["flutter"]
           print(f"version={version}")
           PY
 
@@ -142,7 +141,7 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           shared-key: "citizenapp-rust-ios"
-          workspaces: citizenapp/rust -> target
+          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 构建 iOS Release 正式包
         working-directory: citizenapp
@@ -269,7 +268,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
-          node release-tool/.github/scripts/github-release.mjs \
+          node release-tool/.github/scripts/citizenapp/release-ios.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民 · Release · iOS' \
             --notes "公民 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \

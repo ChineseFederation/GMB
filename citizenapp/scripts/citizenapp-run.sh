@@ -27,7 +27,7 @@ cd "$APP_ROOT"
 
 # 本地编译与 CI/Release 共用仓库根 Flutter 版本真源。禁止直接接受 PATH 中任意
 # Flutter；否则同一 iOS 工程会在旧 CocoaPods 与新 SPM 生成状态之间来回切换。
-EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["flutterSdkVersion"])' "$REPO_ROOT/.fvm/fvm_config.json")"
+EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
 ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])' 2>/dev/null || true)"
 [[ "$ACTUAL_FLUTTER_VERSION" == "$EXPECTED_FLUTTER_VERSION" ]] || {
   echo "Flutter 版本不一致：要求 ${EXPECTED_FLUTTER_VERSION}，实际 ${ACTUAL_FLUTTER_VERSION:-未安装}" >&2
@@ -37,7 +37,7 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
 # iOS 与 Android 是两个独立本机任务，禁止 `flutter clean`：它会跨平台执行 Xcode Clean，
 # 曾在 Android 编译启动时删除正在使用的 iOS build.db 与 Swift 文件清单。iOS 的全部 Flutter/
 # Xcode 中间产物固定在 build/ios；Android 的 Gradle 子项目位于 build/ 其它一级目录。
-# 精确清理目标平台即可让两个任务同时执行，并永久保护最近两份已验真本机包。
+# 精确清理目标平台即可让两个任务同时执行；已验真本机包保存在公民控制台运行时目录。
 clean_platform_build_outputs() {
   mkdir -p "$APP_ROOT/build"
   if [[ "$PLATFORM" == ios ]]; then
@@ -45,12 +45,12 @@ clean_platform_build_outputs() {
     return
   fi
   find "$APP_ROOT/build" -mindepth 1 -maxdepth 1 \
-    ! -name ios ! -name local-artifacts -exec rm -rf {} +
+    ! -name ios -exec rm -rf {} +
 }
 
 # iOS 的 Runner.app 已由系统签名并经设备安装回读验证；成功后归档，按内部构建号只保留两份。
 retain_ios_local_artifact() {
-  local app_bundle="$1" root="$APP_ROOT/build/local-artifacts/ios"
+  local app_bundle="$1" root="${CITIZENCONSOLE_ARTIFACT_ROOT:-$HOME/Library/Application Support/CitizenConsole/artifacts}/citizenapp/ios"
   local staging="$root/.staging-${BUILD_NUMBER}-$$" destination="$root/$BUILD_NUMBER"
   mkdir -p "$root"
   rm -rf "$staging"

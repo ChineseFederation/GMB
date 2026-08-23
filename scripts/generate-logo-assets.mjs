@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // 公民产品 Logo 唯一派生器。
-// 唯一设计真源是 docs/logo.png；产品目录里的 PNG/ICNS/ICO 都只是生成物。
+// 唯一设计真源是 shared/branding/logo.png；产品目录里的 PNG/ICNS/ICO 都只是生成物。
 
 import assert from 'node:assert/strict';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
@@ -10,7 +10,7 @@ import process from 'node:process';
 import { deflateSync, inflateSync } from 'node:zlib';
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const masterPath = path.join(repoRoot, 'docs/logo.png');
+const masterPath = path.join(repoRoot, 'shared/branding/logo.png');
 const checkOnly = process.argv.includes('--check');
 const sanitizeMaster = process.argv.includes('--sanitize-master');
 const teal = [24, 120, 125, 255];
@@ -487,7 +487,7 @@ async function writeOrCheck() {
     }
   }
   if (mismatches.length > 0) {
-    throw new Error(`以下 Logo 派生物未由 docs/logo.png 生成：\n${mismatches.map((item) => `- ${item}`).join('\n')}`);
+    throw new Error(`以下 Logo 派生物未由 shared/branding/logo.png 生成：\n${mismatches.map((item) => `- ${item}`).join('\n')}`);
   }
   if (checkOnly) {
     const forbiddenLegacyAssets = [
@@ -513,7 +513,7 @@ async function writeOrCheck() {
   }
   process.stdout.write(checkOnly
     ? `Logo 唯一真源检查通过：${outputs.size} 个派生文件。\n`
-    : `已从 docs/logo.png 生成 ${outputs.size} 个 Logo 派生文件。\n`);
+    : `已从 shared/branding/logo.png 生成 ${outputs.size} 个 Logo 派生文件。\n`);
 }
 
 await buildOutputs();

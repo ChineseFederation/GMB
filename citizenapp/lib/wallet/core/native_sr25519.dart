@@ -8,7 +8,7 @@ import 'package:smoldot/smoldot.dart' show SmoldotPlatform;
 ///
 /// 实现来自 `shared/citizen-signer`，与 CitizenWallet 冷端**共用同一份
 /// 源码**（冷热派生口径一旦分叉，同一助记词会算出不同账户）。热端的 FFI 外壳由
-/// `rust/src/lib.rs` 里的 `citizen_signer::export_citizen_signer_ffi!()` 导出，与
+/// `smoldot/ffi/src/lib.rs` 里的 `citizen_signer::export_citizen_signer_ffi!()` 导出，与
 /// smoldot 同处 `libsmoldot` 一个库，因此这里复用 `SmoldotPlatform.loadLibrary()`
 /// 而不另开库句柄。
 ///

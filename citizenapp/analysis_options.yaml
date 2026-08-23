@@ -6,8 +6,8 @@ analyzer:
     # 项目唯一编译产物目录；其中可包含 Xcode SourcePackages 的示例/测试，
     # 不属于 CitizenApp 源码，禁止全项目 analyze 误扫第三方生成内容。
     - "build/**"
-    - "smoldotdart/**"
-    - "smoldotpow/**"
+    - "smoldot/dart/**"
+    - "smoldot/pow/**"
 
 linter:
   rules:

@@ -77,8 +77,7 @@ jobs:
           ref: ${{ github.sha }}
           path: release-tool
           sparse-checkout: |
-            .github/scripts/github-release.mjs
-            .github/scripts/version-tag-contract.mjs
+            .github/scripts/citizenchain/release-runtime-wasm.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -86,7 +85,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-runtime-wasm.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-runtime-wasm-v --product-id citizenchain-runtime
@@ -95,7 +94,7 @@ jobs:
       - name: 校验代码来源并应用 Runtime 候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenchain-runtime
+          node .github/scripts/citizenchain/release-runtime-wasm.mjs dependencies check --scope citizenchain-runtime
           python3 - <<'PY'
           import os
           import re
@@ -173,7 +172,7 @@ jobs:
       - name: 安装系统依赖
         # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，
         # 否则 glib-sys 等桌面依赖会在探针真正执行前因缺少 pkg-config 元数据失败。
-        run: bash .github/scripts/citizenchain-linux-deps.sh
+        run: node .github/scripts/citizenchain/release-runtime-wasm.mjs linux-deps
 
       - name: 校验锁文件并记录构建环境
         working-directory: citizenchain
@@ -327,7 +326,7 @@ jobs:
             done
           } >"$notes_file"
           test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
-          node release-tool/.github/scripts/github-release.mjs \
+          node release-tool/.github/scripts/citizenchain/release-runtime-wasm.mjs github-release \
             --tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA" \
             --title '公民协议 · Release · WASM' --notes-file "$notes_file" --latest false \
             --assets "$release_dir/citizenchain.wasm" \

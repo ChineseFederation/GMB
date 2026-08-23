@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: 校验发布依赖契约
-        run: node .github/scripts/dependencies.mjs check --scope citizenweb
+        run: node .github/scripts/citizenweb/publish-web.mjs dependencies check --scope citizenweb
 
       - name: 下载并验真不可变正式 Release
         env:
@@ -50,7 +50,7 @@ jobs:
             --pattern citizenweb-release.tgz --pattern release-manifest.json --pattern SHA256SUMS
           GMB_SOURCE_SHA="$(node -p "JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/release/release-manifest.json')).git_commit_sha")"
           [[ "$GMB_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          node .github/scripts/build-citizenweb-release.mjs \
+          node .github/scripts/citizenweb/publish-web.mjs citizenweb-release \
             --extract "$RUNNER_TEMP/release/citizenweb-release.tgz" \
             --output "$RUNNER_TEMP/candidate" --expected-git-sha "$GMB_SOURCE_SHA"
           echo "GMB_SOURCE_SHA=$GMB_SOURCE_SHA" >> "$GITHUB_ENV"
@@ -284,7 +284,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/publish-record.mjs
+          node .github/scripts/citizenweb/publish-web.mjs publish-record
           --receipt "$RUNNER_TEMP/publish-receipt.json"
           --environment citizenweb-production --description '公民网 Cloudflare Pages 发布'
           --url 'https://www.crcfrcn.com/'

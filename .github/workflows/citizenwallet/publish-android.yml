@@ -31,7 +31,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: 校验发布依赖契约
-        run: node .github/scripts/dependencies.mjs check --scope citizenwallet
+        run: node .github/scripts/citizenwallet/publish-android.mjs dependencies check --scope citizenwallet
 
       - name: 锁定不可变正式 Release
         env:
@@ -54,7 +54,7 @@ jobs:
           PLAY_KEY: ${{ secrets.PLAY_KEY }}
           GMB_SOURCE_SHA: ${{ inputs.source_sha }}
         run: >-
-          node .github/scripts/mobile-store.mjs --platform android --product citizenwallet
+          node .github/scripts/citizenwallet/publish-android.mjs mobile-store --platform android --product citizenwallet
           --version-tag '${{ inputs.version_tag }}'
           --manifest "$RUNNER_TEMP/release/citizenwallet-release-android.json"
           --asset "$RUNNER_TEMP/release/citizenwallet.aab"
@@ -64,7 +64,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/publish-record.mjs
+          node .github/scripts/citizenwallet/publish-android.mjs publish-record
           --receipt "$RUNNER_TEMP/publish-receipt.json"
           --environment citizenwallet-android-production --description '公民钱包 Android Google Play 发布'
           --url 'https://play.google.com/store/apps/details?id=com.crcfrcn.citizenwallet'

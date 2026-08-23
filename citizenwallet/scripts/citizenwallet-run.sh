@@ -24,7 +24,7 @@ cd "$CITIZENWALLET_DIR"
 
 # 与 CitizenApp、CI、Release 共用仓库根 Flutter 版本真源；版本不符必须在
 # 依赖解析之前失败，不能生成另一套 iOS 依赖状态污染工程。
-EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["flutterSdkVersion"])' "$REPO_ROOT/.fvm/fvm_config.json")"
+EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
 ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])' 2>/dev/null || true)"
 [[ "$ACTUAL_FLUTTER_VERSION" == "$EXPECTED_FLUTTER_VERSION" ]] || {
   echo "Flutter 版本不一致：要求 ${EXPECTED_FLUTTER_VERSION}，实际 ${ACTUAL_FLUTTER_VERSION:-未安装}" >&2

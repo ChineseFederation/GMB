@@ -17,8 +17,8 @@ if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then
 fi
 
 EXPECTED_FLUTTER_VERSION="$(
-  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["flutterSdkVersion"])' \
-    "$REPO_ROOT/.fvm/fvm_config.json"
+  python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' \
+    "$REPO_ROOT/.github/dependencies.json"
 )"
 ACTUAL_FLUTTER_VERSION="$(
   "$FLUTTER_BIN" --version --machine \

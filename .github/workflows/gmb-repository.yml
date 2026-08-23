@@ -66,7 +66,7 @@ jobs:
       # 中文注释：这里只做全仓确定性契约检查；依赖升级必须产生明确 manifest/lockfile diff，
       # 禁止在 push 门禁或产品 CI/Release 中自动选择新的上游版本。
       - name: 检查全仓依赖契约
-        run: node .github/scripts/dependencies.mjs check --scope repository
+        run: node .github/scripts/gmb-repository/ci-repository.mjs dependencies check --scope repository
 
   cross-platform-contracts:
     name: 全仓跨端契约一致
@@ -83,15 +83,15 @@ jobs:
         run: test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
 
       - name: 校验金标向量跨端一致
-        run: node .github/scripts/check-golden-vectors-sync.mjs
+        run: node .github/scripts/gmb-repository/ci-repository.mjs golden-vectors
 
       - name: 校验 pallet 注册表与链上一致
-        run: node .github/scripts/check-pallet-registry-sync.mjs
+        run: node .github/scripts/gmb-repository/ci-repository.mjs pallet-registry
 
       - name: 校验全仓统一数据字典
         run: |
-          node --test .github/scripts/data-dictionary.test.mjs
-          node .github/scripts/data-dictionary.mjs
+          node --test .github/scripts/gmb-repository/ci-repository.test.mjs
+          node .github/scripts/gmb-repository/ci-repository.mjs data-dictionary
 
   repository-guardrails:
     name: 文档、残留与统一仓库规则
@@ -118,8 +118,8 @@ jobs:
           else
             base_ref="${GMB_SOURCE_SHA}^"
           fi
-          BASE_REF="$base_ref" ./.github/scripts/repository-guardrails.sh
-          node .github/scripts/data-dictionary.mjs --base-ref "$base_ref"
+          BASE_REF="$base_ref" node .github/scripts/gmb-repository/ci-repository.mjs guardrails
+          node .github/scripts/gmb-repository/ci-repository.mjs data-dictionary --base-ref "$base_ref"
 
   shared-contracts:
     name: 统一签名、账户密码学与 QR 协议

@@ -241,7 +241,7 @@
         "mutuals"
       ],
       "paths": [
-        "citizenapp/cloudflare/src/**",
+        "citizenserve/src/**",
         "citizenapp/lib/8964/**",
         "citizenapp/test/8964/**"
       ]
@@ -1052,7 +1052,7 @@
       "contract_name_zh": "公民会员",
       "authority": "gmb",
       "paths": [
-        "citizenapp/cloudflare/**",
+        "citizenserve/**",
         "citizenapp/lib/**",
         "citizenapp/test/**"
       ],
@@ -1078,7 +1078,7 @@
       "contract_name_zh": "公民广场",
       "authority": "gmb",
       "paths": [
-        "citizenapp/cloudflare/**",
+        "citizenserve/**",
         "citizenapp/lib/8964/**",
         "citizenapp/test/8964/**"
       ],
@@ -1096,8 +1096,8 @@
       "contract_name_zh": "Cloudflare 资源预留",
       "authority": "gmb",
       "paths": [
-        "citizenapp/cloudflare/schema/**",
-        "citizenapp/cloudflare/src/**"
+        "citizenserve/schema/**",
+        "citizenserve/src/**"
       ],
       "fields": [
         "reservation_id",
@@ -1314,11 +1314,11 @@
     "**/*.pbjson.dart",
     "**/gen/schemas/**",
     "**/package-lock.json",
-    ".github/scripts/data-dictionary.mjs",
+    ".github/scripts/gmb-repository/ci-repository.mjs",
     ".github/scripts/data-dictionary.test.mjs",
     "citizenapp/assets/topup/walletconnect.bundle.js",
-    "citizenapp/cloudflare/worker-configuration.d.ts",
-    "citizenapp/smoldotpow/**",
+    "citizenserve/worker-configuration.d.ts",
+    "citizenapp/smoldot/pow/**",
     "shared/data-dictionary.json",
     "shared/qr-protocol/tests/registry_consistency.rs"
   ]

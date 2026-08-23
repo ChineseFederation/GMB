@@ -58,8 +58,7 @@ jobs:
           ref: ${{ github.sha }}
           path: release-tool
           sparse-checkout: |
-            .github/scripts/github-release.mjs
-            .github/scripts/version-tag-contract.mjs
+            .github/scripts/citizenweb/release-web.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -67,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          node release-tool/.github/scripts/citizenweb/release-web.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenweb-v --product-id citizenweb
@@ -76,7 +75,7 @@ jobs:
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenweb
+          node .github/scripts/citizenweb/release-web.mjs dependencies check --scope citizenweb
           node - <<'NODE'
           const fs = require('node:fs');
           const version = process.env.GMB_SOFTWARE_VERSION;
@@ -104,7 +103,7 @@ jobs:
         run: npm ci
 
       - name: 执行依赖安全审计
-        run: node .github/scripts/dependencies.mjs audit --scope citizenweb
+        run: node .github/scripts/citizenweb/release-web.mjs dependencies audit --scope citizenweb
 
       - name: 检查官网代码
         working-directory: citizenweb
@@ -120,7 +119,7 @@ jobs:
 
       - name: 生成不可变官网候选与规范归档
         run: |
-          node .github/scripts/build-citizenweb-release.mjs \
+          node .github/scripts/citizenweb/release-web.mjs citizenweb-release \
             --project citizenweb \
             --dist citizenweb/dist \
             --output "$RUNNER_TEMP/citizenweb-candidate" \
@@ -142,7 +141,7 @@ jobs:
           candidate_dir="$RUNNER_TEMP/citizenweb-candidate"
           archive="$RUNNER_TEMP/citizenweb-release.tgz"
           test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
-          node release-tool/.github/scripts/github-release.mjs \
+          node release-tool/.github/scripts/citizenweb/release-web.mjs github-release \
             --tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA" \
             --title '公民网 · Release · Web' \
             --notes "公民网 ${GMB_SOFTWARE_VERSION}。" --latest false \

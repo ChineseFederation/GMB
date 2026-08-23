@@ -43,7 +43,7 @@ jobs:
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenweb
+          node .github/scripts/citizenweb/ci-web.mjs dependencies check --scope citizenweb
           node - <<'NODE'
           const fs = require('node:fs');
           const version = process.env.GMB_SOFTWARE_VERSION;
@@ -71,7 +71,7 @@ jobs:
         run: npm ci
 
       - name: 执行依赖安全审计
-        run: node .github/scripts/dependencies.mjs audit --scope citizenweb
+        run: node .github/scripts/citizenweb/ci-web.mjs dependencies audit --scope citizenweb
 
       - name: 检查官网代码
         working-directory: citizenweb
@@ -87,7 +87,7 @@ jobs:
 
       - name: 生成不可变官网候选与规范归档
         run: |
-          node .github/scripts/build-citizenweb-release.mjs \
+          node .github/scripts/citizenweb/ci-web.mjs citizenweb-release \
             --project citizenweb \
             --dist citizenweb/dist \
             --output "$RUNNER_TEMP/citizenweb-candidate" \

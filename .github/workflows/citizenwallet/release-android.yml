@@ -61,8 +61,7 @@ jobs:
           ref: ${{ github.sha }}
           path: release-tool
           sparse-checkout: |
-            .github/scripts/github-release.mjs
-            .github/scripts/version-tag-contract.mjs
+            .github/scripts/citizenwallet/release-android.mjs
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
@@ -70,7 +69,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node release-tool/.github/scripts/version-tag-contract.mjs verify-release-source
+          node release-tool/.github/scripts/citizenwallet/release-android.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenwallet-android-v --product-id citizenwallet
@@ -79,7 +78,7 @@ jobs:
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenwallet
+          node .github/scripts/citizenwallet/release-android.mjs dependencies check --scope citizenwallet
           python3 - <<'PY'
           import os, re
           from pathlib import Path
@@ -99,7 +98,7 @@ jobs:
           import json
           from pathlib import Path
 
-          version = json.loads(Path(".fvm/fvm_config.json").read_text(encoding="utf-8"))["flutterSdkVersion"]
+          version = json.loads(Path(".github/dependencies.json").read_text(encoding="utf-8"))["toolchains"]["flutter"]
           print(f"version={version}")
           PY
 
@@ -142,7 +141,7 @@ jobs:
         run: cargo install cargo-audit --version 0.22.2 --locked
 
       - name: 执行依赖安全审计
-        run: node .github/scripts/dependencies.mjs audit --scope citizenwallet
+        run: node .github/scripts/citizenwallet/release-android.mjs dependencies audit --scope citizenwallet
 
       - name: 编译原生签名库 (Android ARM64)
         working-directory: citizenwallet
@@ -262,7 +261,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
-          node release-tool/.github/scripts/github-release.mjs \
+          node release-tool/.github/scripts/citizenwallet/release-android.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民钱包 · Release · Android' \
             --notes "公民钱包 Android 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \

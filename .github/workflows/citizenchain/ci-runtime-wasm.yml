@@ -42,7 +42,7 @@ jobs:
       - name: 校验代码来源与 Runtime 源码版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
-          node .github/scripts/dependencies.mjs check --scope citizenchain-runtime
+          node .github/scripts/citizenchain/ci-runtime-wasm.mjs dependencies check --scope citizenchain-runtime
           python3 - <<'PY'
           import os
           import re
@@ -93,7 +93,7 @@ jobs:
       - name: 安装系统依赖
         # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，
         # 否则 glib-sys 等桌面依赖会在探针真正执行前因缺少 pkg-config 元数据失败。
-        run: bash .github/scripts/citizenchain-linux-deps.sh
+        run: node .github/scripts/citizenchain/ci-runtime-wasm.mjs linux-deps
 
       - name: 校验锁文件并记录构建环境
         working-directory: citizenchain

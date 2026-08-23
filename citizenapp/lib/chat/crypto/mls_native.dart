@@ -554,7 +554,7 @@ class MlsNativeBindings {
 
 DynamicLibrary _loadSmoldotLibrary() {
   // iOS 把 libsmoldot.a 静态链接进 Runner 主二进制；不存在可 dlopen 的 dylib。
-  // 必须直接查当前进程符号，和 smoldotdart 的平台加载真源保持一致。
+  // 必须直接查当前进程符号，和 smoldot/dart 包的平台加载真源保持一致。
   if (Platform.isIOS) {
     return DynamicLibrary.process();
   }

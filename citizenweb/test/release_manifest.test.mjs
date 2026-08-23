@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 const projectPath = resolve(import.meta.dirname, '..');
 const downloadButtonSource = readFileSync(join(projectPath, 'src', 'components', 'DownloadButton.tsx'), 'utf8');
@@ -21,16 +22,40 @@ const supportSource = readFileSync(join(projectPath, 'src', 'pages', 'Support.ts
 const termsSource = readFileSync(join(projectPath, 'src', 'pages', 'Terms.tsx'), 'utf8');
 const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots = [];
-const releaseModule = await import(resolve(
-  import.meta.dirname,
-  '../../.github/scripts/build-citizenweb-release.mjs',
-));
-const {
-  buildCitizenWebRelease,
-  extractCitizenWebArchive,
-  verifyCitizenWebRelease,
-  writeCitizenWebArchive,
-} = releaseModule;
+const releaseAction = resolve(import.meta.dirname, '../../.github/scripts/citizenweb/ci-web.mjs');
+
+function runRelease(argumentsList) {
+  const result = spawnSync(process.execPath, [releaseAction, 'citizenweb-release', ...argumentsList], {
+    cwd: resolve(import.meta.dirname, '../..'),
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) throw new Error((result.stderr || result.stdout).trim());
+}
+
+function buildCitizenWebRelease({ projectPath, distPath, outputPath, gitCommitSha, archivePath = null }) {
+  const args = ['--project', projectPath, '--dist', distPath, '--output', outputPath, '--git-sha', gitCommitSha];
+  if (archivePath) args.push('--archive', archivePath);
+  runRelease(args);
+  return JSON.parse(readFileSync(join(outputPath, 'release-manifest.json'), 'utf8'));
+}
+
+function extractCitizenWebArchive(archivePath, outputPath, expectedGitCommitSha = null) {
+  const args = ['--extract', archivePath, '--output', outputPath];
+  if (expectedGitCommitSha) args.push('--expected-git-sha', expectedGitCommitSha);
+  runRelease(args);
+  return JSON.parse(readFileSync(join(outputPath, 'release-manifest.json'), 'utf8'));
+}
+
+function verifyCitizenWebRelease(candidatePath, expectedGitCommitSha = null) {
+  const args = ['--verify', candidatePath];
+  if (expectedGitCommitSha) args.push('--expected-git-sha', expectedGitCommitSha);
+  runRelease(args);
+  return JSON.parse(readFileSync(join(candidatePath, 'release-manifest.json'), 'utf8'));
+}
+
+function writeCitizenWebArchive(candidatePath, archivePath) {
+  runRelease(['--verify', candidatePath, '--archive', archivePath]);
+}
 
 function temporaryRoot() {
   const path = mkdtempSync(join(tmpdir(), 'gmb-citizenweb-release-'));
