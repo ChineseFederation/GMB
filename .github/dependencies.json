@@ -51,14 +51,14 @@
     },
     "citizenchain-node": {
       "workflows": [
-        ".github/workflows/citizenchain-node-ci-linux-amd.yml",
-        ".github/workflows/citizenchain-node-ci-linux-arm.yaml",
-        ".github/workflows/citizenchain-node-ci-macos.yml",
-        ".github/workflows/citizenchain-node-ci-windows.yml",
-        ".github/workflows/citizenchain-node-release-linux-amd.yml",
-        ".github/workflows/citizenchain-node-release-linux-arm.yml",
-        ".github/workflows/citizenchain-node-release-macos.yml",
-        ".github/workflows/citizenchain-node-release-windows.yml"
+        ".github/workflows/citizenchain/ci-node-linux-amd.yml",
+        ".github/workflows/citizenchain/ci-node-linux-arm.yaml",
+        ".github/workflows/citizenchain/ci-node-macos.yml",
+        ".github/workflows/citizenchain/ci-node-windows.yml",
+        ".github/workflows/citizenchain/release-node-linux-amd.yml",
+        ".github/workflows/citizenchain/release-node-linux-arm.yml",
+        ".github/workflows/citizenchain/release-node-macos.yml",
+        ".github/workflows/citizenchain/release-node-windows.yml"
       ],
       "requiredFiles": [
         "citizenchain/Cargo.toml",
@@ -78,8 +78,8 @@
     },
     "citizenchain-runtime": {
       "workflows": [
-        ".github/workflows/citizenchain-runtime-ci-wasm.yml",
-        ".github/workflows/citizenchain-runtime-release-wasm.yml"
+        ".github/workflows/citizenchain/ci-runtime-wasm.yml",
+        ".github/workflows/citizenchain/release-runtime-wasm.yml"
       ],
       "requiredFiles": [
         "citizenchain/Cargo.toml",
@@ -90,12 +90,12 @@
     },
     "citizenapp": {
       "workflows": [
-        ".github/workflows/citizenapp-ci-android.yml",
-        ".github/workflows/citizenapp-ci-ios.yml",
-        ".github/workflows/citizenapp-publish-android.yml",
-        ".github/workflows/citizenapp-publish-ios.yml",
-        ".github/workflows/citizenapp-release-android.yml",
-        ".github/workflows/citizenapp-release-ios.yml"
+        ".github/workflows/citizenapp/ci-android.yml",
+        ".github/workflows/citizenapp/ci-ios.yml",
+        ".github/workflows/citizenapp/publish-android.yml",
+        ".github/workflows/citizenapp/publish-ios.yml",
+        ".github/workflows/citizenapp/release-android.yml",
+        ".github/workflows/citizenapp/release-ios.yml"
       ],
       "requiredFiles": [
         "citizenapp/pubspec.yaml",
@@ -121,9 +121,9 @@
     },
     "citizenapp-cloudflare": {
       "workflows": [
-        ".github/workflows/citizenapp-cloudflare-ci-cloudflare.yml",
-        ".github/workflows/citizenapp-cloudflare-publish-cloudflare.yml",
-        ".github/workflows/citizenapp-cloudflare-release-cloudflare.yml"
+        ".github/workflows/citizenweb/ci-cloudflare.yml",
+        ".github/workflows/citizenweb/publish-cloudflare.yml",
+        ".github/workflows/citizenweb/release-cloudflare.yml"
       ],
       "requiredFiles": [
         "citizenapp/cloudflare/package.json",
@@ -132,12 +132,12 @@
     },
     "citizenwallet": {
       "workflows": [
-        ".github/workflows/citizenwallet-ci-android.yml",
-        ".github/workflows/citizenwallet-ci-ios.yml",
-        ".github/workflows/citizenwallet-publish-android.yml",
-        ".github/workflows/citizenwallet-publish-ios.yml",
-        ".github/workflows/citizenwallet-release-android.yml",
-        ".github/workflows/citizenwallet-release-ios.yml"
+        ".github/workflows/citizenwallet/ci-android.yml",
+        ".github/workflows/citizenwallet/ci-ios.yml",
+        ".github/workflows/citizenwallet/publish-android.yml",
+        ".github/workflows/citizenwallet/publish-ios.yml",
+        ".github/workflows/citizenwallet/release-android.yml",
+        ".github/workflows/citizenwallet/release-ios.yml"
       ],
       "requiredFiles": [
         "citizenwallet/pubspec.yaml",
@@ -156,9 +156,9 @@
     },
     "citizenweb": {
       "workflows": [
-        ".github/workflows/citizenweb-ci-web.yml",
-        ".github/workflows/citizenweb-publish-web.yml",
-        ".github/workflows/citizenweb-release-web.yml"
+        ".github/workflows/citizenweb/ci-web.yml",
+        ".github/workflows/citizenweb/publish-web.yml",
+        ".github/workflows/citizenweb/release-web.yml"
       ],
       "requiredFiles": [
         "citizenweb/package.json",

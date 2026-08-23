@@ -7,7 +7,7 @@ import { pathToFileURL } from 'node:url';
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d?)\.(0|[1-9]\d?)$/;
 const tagPrefixPattern = /^[a-z0-9][a-z0-9-]*-v$/;
 const sourceSHAPattern = /^[0-9a-f]{40}$/;
-const workflowFilePattern = /^[a-z0-9-]+\.ya?ml$/;
+const workflowFilePattern = /^(?:[a-z0-9-]+\/)*[a-z0-9-]+\.ya?ml$/;
 
 export function validateWorkflowFileName(value) {
   if (!workflowFilePattern.test(String(value))) throw new Error('workflow 无效');

@@ -90,7 +90,7 @@ jobs:
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-runtime-wasm-v --product-id citizenchain-runtime
-          --target wasm --workflow citizenchain-runtime-ci-wasm.yml --spec-version "$GMB_SPEC_VERSION"
+          --target wasm --workflow citizenchain/ci-runtime-wasm.yml --spec-version "$GMB_SPEC_VERSION"
 
       - name: 校验代码来源并应用 Runtime 候选版本
         run: |

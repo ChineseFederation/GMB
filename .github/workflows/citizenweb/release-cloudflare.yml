@@ -71,7 +71,7 @@ jobs:
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenapp-cloudflare-v --product-id citizenapp-cloudflare
-          --target cloudflare --workflow citizenapp-cloudflare-ci-cloudflare.yml
+          --target cloudflare --workflow citizenweb/ci-cloudflare.yml
 
       - name: 校验代码来源并应用候选版本
         run: |

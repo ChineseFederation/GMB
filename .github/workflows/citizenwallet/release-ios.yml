@@ -74,7 +74,7 @@ jobs:
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenwallet-ios-v --product-id citizenwallet
-          --target ios --workflow citizenwallet-ci-ios.yml
+          --target ios --workflow citizenwallet/ci-ios.yml
 
       - name: 校验代码来源并应用候选版本
         run: |

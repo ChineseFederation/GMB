@@ -60,7 +60,7 @@ jobs:
       - name: 从 GitHub Runner 执行预览、生产、逐文件验收和失败回滚
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.DEPLOY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           GMB_VERSION_TAG: ${{ inputs.version_tag }}
         run: |
           set -euo pipefail

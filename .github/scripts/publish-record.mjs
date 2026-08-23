@@ -5,11 +5,26 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 function fail(message) { throw new Error(message); }
+const FAILED_DEPLOYMENT_STATES = new Set(['error', 'failure']);
+
 function exactKeys(value, expected) {
   if (Object.keys(value).sort().join(',') !== [...expected].sort().join(',')) {
     fail('GitHub 发布回执字段集合无效');
   }
 }
+
+function keepLatestFailure(deployments, createdAt = Date.parse) {
+  const failed = deployments
+    .filter((value) => FAILED_DEPLOYMENT_STATES.has(String(value?.state || ''))
+      && value?.id !== undefined)
+    .map((value) => ({
+      ...value,
+      createdAt: Number.isNaN(createdAt(value.created_at || '')) ? 0 : createdAt(value.created_at || ''),
+    }))
+    .sort((left, right) => right.createdAt - left.createdAt);
+  return failed;
+}
+
 function parseArgs(argv) {
   const values = {};
   for (let index = 0; index < argv.length; index += 2) {
@@ -81,12 +96,40 @@ function githubClient({ repository, token }) {
     if (!response.ok) fail(`GitHub 发布记录失败：HTTP ${response.status}`);
     return text ? JSON.parse(text) : {};
   };
-  return { request };
+
+  const parseDate = (value) => Number(Date.parse(String(value || '')));
+  return {
+    request,
+    async listDeployments(environment) {
+      const values = [];
+      for (let page = 1; page <= 20; page += 1) {
+        const output = await request(`deployments?environment=${encodeURIComponent(environment)}&per_page=100&page=${page}`);
+        required(Array.isArray(output), 'GitHub 发布记录列表无效');
+        values.push(...output);
+        if (output.length < 100) return values;
+      }
+      fail('GitHub 发布记录列表超过安全分页上限');
+    },
+    async deleteDeployment(deploymentId) {
+      if (!Number.isSafeInteger(deploymentId) || deploymentId <= 0) fail('GitHub 部署 id 无效');
+      await request(`deployments/${deploymentId}`, { method: 'DELETE' });
+    },
+  };
+}
+
+async function pruneOldFailedDeployments(client, environment) {
+  const deployments = await client.listDeployments(environment);
+  const failed = keepLatestFailure(deployments);
+  if (failed.length <= 1) return;
+  for (const deployment of failed.slice(1)) {
+    await client.deleteDeployment(deployment.id);
+  }
 }
 
 export async function recordPublish({ receipt, environment, description, url, client }) {
   // 中文注释：先创建绑定正式 Tag 的 Deployment，再写成功状态，避免无来源的孤立状态记录。
   verifyPublishReceipt(receipt, { environment, url });
+  await pruneOldFailedDeployments(client, environment);
   const deployment = await client.request('deployments', {
     ref: receipt.version_tag, environment, description,
     auto_merge: false, required_contexts: [], payload: receipt,

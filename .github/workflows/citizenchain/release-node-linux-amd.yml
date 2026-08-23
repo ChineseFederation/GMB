@@ -1,5 +1,5 @@
-name: 公民链 · Release · Windows
-run-name: 公民链 · Release · Windows
+name: 公民链 · Release · LinuxAMD
+run-name: 公民链 · Release · LinuxAMD
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
 # CI 只能由公民控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       version_tag:
-        description: 公民链 Windows 正式版本 Tag
+        description: 公民链 LinuxAMD 正式版本 Tag
         required: true
         type: string
       software_version:
@@ -32,9 +32,8 @@ permissions:
   attestations: write
 
 concurrency:
-  # 中文注释：目标是并发键的一部分，四个目标互不取消；同目标新任务也只排队，绝不
-  # 把已经运行数小时的任务掐掉。CitizenConsole 会在 dispatch 前负责精确去重。
-  group: citizenchain-node-release-windows
+  # 中文注释：LinuxAMD 拥有独立并发键；ARM、macOS、Windows 的任务不会阻塞或取消它。
+  group: citizenchain-node-release-linux-amd
   cancel-in-progress: false
 
 env:
@@ -45,12 +44,13 @@ env:
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
-  GMB_NODE_PLATFORM: windows
+  GMB_NODE_PLATFORM: linux-amd
 
 jobs:
   changes:
-    name: 锁定公民链节点构建范围
+    name: 锁定公民链 LinuxAMD 构建范围
     runs-on: ubuntu-24.04
+    timeout-minutes: 20
     outputs:
       citizenchain: ${{ steps.scope.outputs.citizenchain }}
       desktop: ${{ steps.scope.outputs.desktop }}
@@ -62,15 +62,15 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
-      - name: 验证公民链 Windows Release 的正式版本 Tag
+      - name: 验证公民链 LinuxAMD Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
           node .github/scripts/version-tag-contract.mjs verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
-          --prefix citizenchain-node-windows-v --product-id citizenchain-node
-          --target windows --workflow citizenchain-node-ci-windows.yml
+          --prefix citizenchain-node-linux-amd-v --product-id citizenchain-node
+          --target linux-amd --workflow citizenchain/ci-node-linux-amd.yml
 
       # 桌面端与两款移动产品共用 docs/logo.png 唯一母版。
       - name: 校验 Logo 唯一真源派生物
@@ -84,8 +84,8 @@ jobs:
           node .github/scripts/dependencies.mjs check --scope citizenchain-node
           echo "citizenchain=true" >> "$GITHUB_OUTPUT"
           echo "desktop=true" >> "$GITHUB_OUTPUT"
-          test "$GMB_NODE_PLATFORM" = windows
-          echo 'desktop_matrix=[{"platform":"windows","name":"Windows","os":"windows-2025","artifact":"公民链Windows","installer_name":"citizenchain-node-windows-x86_64.exe","manual_bundle_targets":"nsis","updater_manifest_name":"citizenchain-node-latest-windows-x86_64.json","expected_runner_arch":"X64","cache_key":"citizenchain-windows"}]' >> "$GITHUB_OUTPUT"
+          test "$GMB_NODE_PLATFORM" = linux-amd
+          echo 'desktop_matrix=[{"platform":"linux-amd","name":"LinuxAMD","os":"ubuntu-24.04","artifact":"公民链AMD","installer_name":"citizenchain-node-linux-amd64.deb","manual_bundle_targets":"deb,appimage","updater_asset_name":"citizenchain-node-linux-amd64.AppImage","updater_manifest_name":"citizenchain-node-latest-linux-amd64.json","expected_runner_arch":"X64","deb_arch":"amd64","cache_key":"citizenchain-linux-amd"}]' >> "$GITHUB_OUTPUT"
 
   build-desktop:
     name: 打包公民链桌面端 (${{ matrix.name }})
@@ -93,6 +93,7 @@ jobs:
     # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -172,9 +173,9 @@ jobs:
           const tauri = JSON.parse(fs.readFileSync(tauriPath, 'utf8'));
           const version = tauri.version;
           tauri.bundle = tauri.bundle || {};
-          // 中文注释：Release 生成安装包与 updater 正式文件；updater 在同一 runner 内签名。
+          // 中文注释：Release 生成安装包与 updater 正式文件；正式签名在同一 runner 的后续步骤完成。
           tauri.bundle.targets = bundleTargets;
-          // 中文注释：按现有 Windows NSIS 文件格式在后续步骤签名并生成清单。
+          // 中文注释：显式关闭 Tauri 自动 updater 归档；本 workflow 按现有平台文件格式签名并生成清单。
           delete tauri.bundle.createUpdaterArtifacts;
           // 中文注释：平台 Release 可以独立成功，因此每个安装包只读取自己的更新清单；
           // 不能再用一个根 version 同时描述版本可能不同的四个目标。
@@ -189,12 +190,18 @@ jobs:
           console.log(`Tauri bundle targets: ${bundleTargets.join(',')}`);
           NODE
 
-      - name: 安装 Windows 构建依赖
-        if: matrix.platform == 'windows'
+      - name: 安装 Linux 构建依赖
+        if: startsWith(matrix.platform, 'linux-')
+        run: bash .github/scripts/citizenchain-linux-deps.sh
+
+      - name: 配置 Linux libclang 环境变量
+        if: startsWith(matrix.platform, 'linux-')
         run: |
-          choco install protoc -y
-          choco install llvm -y
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> "$env:GITHUB_ENV"
+          {
+            echo "LLVM_CONFIG_PATH=$(command -v llvm-config)"
+            echo "LIBCLANG_PATH=$(llvm-config --libdir)"
+            echo "PROTOC=$(command -v protoc)"
+          } >> "$GITHUB_ENV"
 
       - name: 缓存 Rust 依赖
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
@@ -203,8 +210,6 @@ jobs:
           workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
-        # Windows 默认 shell 是 PowerShell；统一版本脚本使用 POSIX 环境变量语法，必须固定 Bash。
-        shell: bash
         run: node release-tool/.github/scripts/citizenchain-node-version.mjs lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
@@ -222,65 +227,76 @@ jobs:
         working-directory: citizenchain/node
         run: node frontend/node_modules/@tauri-apps/cli/tauri.js build --ci -- --locked
 
-      - name: 整理 Windows 产物
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          $installerName = "${{ matrix.installer_name }}"
-          $versionedName = $installerName -replace '\.exe$', "-v$env:GMB_SOFTWARE_VERSION.exe"
-          New-Item -ItemType Directory -Force citizenchain-release | Out-Null
-
-          $exe = Get-ChildItem -Path "citizenchain/target/release/bundle/nsis" -Filter "*.exe" | Select-Object -First 1
-          if ($null -eq $exe) {
-            Write-Error "未找到 Windows exe 安装包。"
-            exit 1
-          }
-
-          Copy-Item $exe.FullName (Join-Path "citizenchain-release" $versionedName)
-          # 中文注释：NSIS exe 同时作为 Windows updater 正式文件；后续步骤在同一 runner 内签名。
-          Get-ChildItem citizenchain-release | Format-Table Name, Length
-
-      - name: 签名 Windows updater 并生成正式清单
+      - name: 整理 Linux 产物
+        if: startsWith(matrix.platform, 'linux-')
         shell: bash
         env:
+          INSTALLER_NAME: ${{ matrix.installer_name }}
+          UPDATER_ASSET_NAME: ${{ matrix.updater_asset_name }}
+          EXPECTED_DEB_ARCH: ${{ matrix.deb_arch }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.UPDATE_PASS }}
         run: |
           set -euo pipefail
-          updater="$(find citizenchain-release -maxdepth 1 -type f -name '*.exe' -print)"
-          test "$(printf '%s\n' "$updater" | sed '/^$/d' | wc -l | tr -d ' ')" = 1
-          (cd citizenchain/node && node frontend/node_modules/@tauri-apps/cli/tauri.js signer sign "$GITHUB_WORKSPACE/$updater")
-          signature="$(tr -d '\r\n' < "${updater}.sig")"
+          mkdir -p citizenchain-release
+          versioned_installer="${INSTALLER_NAME%.deb}-v${GMB_SOFTWARE_VERSION}.deb"
+          versioned_updater="${UPDATER_ASSET_NAME%.AppImage}-v${GMB_SOFTWARE_VERSION}.AppImage"
+
+          deb_file="$(find citizenchain/target/release/bundle/deb -name '*.deb' | head -1)"
+          if [ -z "$deb_file" ]; then
+            echo "::error::未找到 Linux deb 安装包。"
+            exit 1
+          fi
+          actual_deb_arch="$(dpkg-deb -f "$deb_file" Architecture)"
+          if [ "$actual_deb_arch" != "$EXPECTED_DEB_ARCH" ]; then
+            echo "::error::deb 架构不符合 ${EXPECTED_DEB_ARCH}: 当前为 ${actual_deb_arch}"
+            exit 1
+          fi
+          cp "$deb_file" "citizenchain-release/${versioned_installer}"
+
+          appimage_file=""
+          if [ -d citizenchain/target/release/bundle/appimage ]; then
+            appimage_file="$(find citizenchain/target/release/bundle/appimage -name '*.AppImage' | head -1)"
+          fi
+
+          if [ -z "$appimage_file" ]; then
+            echo "::error::Release 缺少 Linux updater AppImage。"
+            exit 1
+          fi
+          cp "$appimage_file" "citizenchain-release/${versioned_updater}"
+          (cd citizenchain/node && node frontend/node_modules/@tauri-apps/cli/tauri.js signer sign "$GITHUB_WORKSPACE/citizenchain-release/${versioned_updater}")
+          signature="$(tr -d '\r\n' < "citizenchain-release/${versioned_updater}.sig")"
           test -n "$signature"
-          node - "$(basename "$updater")" "$signature" <<'NODE'
+          node - "$versioned_updater" "$signature" <<'NODE'
           const fs = require('node:fs');
           const [asset, signature] = process.argv.slice(2);
-          fs.writeFileSync('citizenchain-release/citizenchain-node-latest-windows-x86_64.json', `${JSON.stringify({
+          fs.writeFileSync('citizenchain-release/citizenchain-node-latest-linux-amd64.json', `${JSON.stringify({
             version: process.env.GMB_SOFTWARE_VERSION,
-            notes: `CitizenChain Windows v${process.env.GMB_SOFTWARE_VERSION}。`,
+            notes: `CitizenChain LinuxAMD v${process.env.GMB_SOFTWARE_VERSION}。`,
             pub_date: new Date().toISOString(),
-            platforms: { 'windows-x86_64': {
+            platforms: { 'linux-x86_64': {
               signature,
               url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.GMB_VERSION_TAG}/${asset}`,
             } },
           }, null, 2)}\n`);
           NODE
 
+          ls -lh citizenchain-release
+
       - name: 签署节点平台正式资产构建来源
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: citizenchain-release/*
 
-      - name: 固化 Windows 正式 Release
-        shell: bash
+      - name: 固化 LinuxAMD 正式 Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          test "$(find citizenchain-release -type f | wc -l | tr -d ' ')" = 3
+          test "$(find citizenchain-release -type f | wc -l | tr -d ' ')" = 4
           test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
           node release-tool/.github/scripts/github-release.mjs \
             --tag "$GMB_VERSION_TAG" \
-            --source-sha "$GMB_SOURCE_SHA" --title '公民链 · Release · Windows' \
-            --notes "公民链 Windows 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
+            --source-sha "$GMB_SOURCE_SHA" --title '公民链 · Release · LinuxAMD' \
+            --notes "公民链 LinuxAMD 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenchain-release/*

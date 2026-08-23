@@ -271,7 +271,12 @@ function checkToolchains(name) {
     requireText(file, `gradle-${gradle}-all.zip`, "Gradle 版本统一契约");
   }
   const workflows = name === "repository"
-    ? trackedFiles([".github/workflows/*.yml", ".github/workflows/*.yaml"])
+    ? trackedFiles([
+      ".github/workflows/*.yml",
+      ".github/workflows/*.yaml",
+      ".github/workflows/*/*.yml",
+      ".github/workflows/*/*.yaml",
+    ])
     : contract.scopes[name].workflows;
   for (const workflow of workflows) {
     const text = read(workflow);
@@ -369,7 +374,12 @@ function checkWorkflowScopes() {
   if (productWorkflows.length !== 28) {
     fail(`产品 workflow 必须精确为 28 条，当前契约登记 ${productWorkflows.length} 条`);
   }
-  const actualWorkflows = trackedFiles([".github/workflows/*.yml", ".github/workflows/*.yaml"]);
+  const actualWorkflows = trackedFiles([
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
+    ".github/workflows/*/*.yml",
+    ".github/workflows/*/*.yaml",
+  ]);
   const expected = [...expectedWorkflows].sort();
   const actual = [...actualWorkflows].sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -452,7 +462,12 @@ function checkScope(name) {
     }
     checkSharedDartDependencies();
     checkToolchains(name);
-    const workflows = trackedFiles([".github/workflows/*.yml", ".github/workflows/*.yaml"]);
+    const workflows = trackedFiles([
+      ".github/workflows/*.yml",
+      ".github/workflows/*.yaml",
+      ".github/workflows/*/*.yml",
+      ".github/workflows/*/*.yaml",
+    ]);
     checkActions(workflows);
     checkOfficialRunners(workflows);
     checkGitDependencies(trackedFiles(["**/Cargo.toml", "Cargo.toml"]));

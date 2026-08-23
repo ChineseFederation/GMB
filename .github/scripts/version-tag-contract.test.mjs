@@ -12,11 +12,11 @@ import {
 import { validateLockChange } from './citizenchain-node-version.mjs';
 
 test('workflow 合同同时接受 yml 与 yaml 且拒绝路径和伪扩展名', () => {
-  assert.equal(validateWorkflowFileName('citizenchain-node-ci-linux-amd.yml'), 'citizenchain-node-ci-linux-amd.yml');
-  assert.equal(validateWorkflowFileName('citizenchain-node-ci-linux-arm.yaml'), 'citizenchain-node-ci-linux-arm.yaml');
+  assert.equal(validateWorkflowFileName('citizenchain/ci-node-linux-amd.yml'), 'citizenchain/ci-node-linux-amd.yml');
+  assert.equal(validateWorkflowFileName('citizenchain/ci-node-linux-arm.yaml'), 'citizenchain/ci-node-linux-arm.yaml');
   for (const value of [
-    '.github/workflows/citizenchain-node-ci-linux-arm.yaml',
-    'citizenchain-node-ci-linux-arm.yaml.bak',
+    '.github/workflows/citizenchain/ci-node-linux-arm.yaml',
+    'citizenchain/ci-node-linux-arm.yaml.bak',
     'citizenchain-node-ci-linux-arm.YAML',
     'citizenchain_node_ci_linux_arm.yaml',
   ]) assert.throws(() => validateWorkflowFileName(value), /workflow 无效/);
@@ -62,8 +62,8 @@ test('节点锁文件只允许本地 workspace 包同步到候选版本', () => 
 
 test('Windows 节点 CI 与 Release 固定用 Bash 传入候选版本', () => {
   for (const workflow of [
-    'citizenchain-node-ci-windows.yml',
-    'citizenchain-node-release-windows.yml',
+    'citizenchain/ci-node-windows.yml',
+    'citizenchain/release-node-windows.yml',
   ]) {
     const source = readFileSync(new URL(`../workflows/${workflow}`, import.meta.url), 'utf8');
     assert.match(source,
@@ -73,7 +73,16 @@ test('Windows 节点 CI 与 Release 固定用 Bash 传入候选版本', () => {
 
 test('全部 CI 只验证构建，不创建 Tag、不推进正式版本', () => {
   const workflowsUrl = new URL('../workflows/', import.meta.url);
-  const ciFiles = readdirSync(workflowsUrl).filter((value) => /-ci-.*\.ya?ml$/.test(value));
+  const workflowDirs = [
+    ['../workflows/', ''],
+    ['../workflows/citizenapp/', 'citizenapp/'],
+    ['../workflows/citizenwallet/', 'citizenwallet/'],
+    ['../workflows/citizenweb/', 'citizenweb/'],
+    ['../workflows/citizenchain/', 'citizenchain/'],
+  ];
+  const ciFiles = workflowDirs.flatMap(([directory, prefix]) =>
+    readdirSync(new URL(directory, import.meta.url)).map((value) => `${prefix}${value}`))
+    .filter((value) => /-ci-.*\.ya?ml$/.test(value));
   assert.equal(ciFiles.length, 11);
   for (const workflow of ciFiles) {
     const source = readFileSync(new URL(workflow, workflowsUrl), 'utf8');
@@ -81,27 +90,27 @@ test('全部 CI 只验证构建，不创建 Tag、不推进正式版本', () => 
     assert.doesNotMatch(source, /contents:\s*write/);
     assert.doesNotMatch(source, /GMB_VERSION_TAG/);
   }
-  const runtimeCI = readFileSync(new URL('../workflows/citizenchain-runtime-ci-wasm.yml', import.meta.url), 'utf8');
+  const runtimeCI = readFileSync(new URL('../workflows/citizenchain/ci-runtime-wasm.yml', import.meta.url), 'utf8');
   assert.doesNotMatch(runtimeCI, /chain_spec_version:|genesis_hash:|finalized_head:|inputs\.spec_version/u);
   assert.doesNotMatch(runtimeCI, /chain_getFinalizedHead|state_getRuntimeVersion|runtime-ci-candidate/u);
-  const runtimeRelease = readFileSync(new URL('../workflows/citizenchain-runtime-release-wasm.yml', import.meta.url), 'utf8');
+  const runtimeRelease = readFileSync(new URL('../workflows/citizenchain/release-runtime-wasm.yml', import.meta.url), 'utf8');
   assert.match(runtimeRelease, /chain_spec_version:[\s\S]*genesis_hash:[\s\S]*finalized_head:/u);
   assert.match(runtimeRelease, /target_version != chain_version \+ 1/u);
 });
 
 test('每个 Release 用成功 ci_run_id 复核来源并创建唯一正式 Tag', () => {
   const releases = [
-    ['citizenapp-release-ios', 'citizenapp-ios-v', 'citizenapp', 'ios', 'citizenapp-ci-ios.yml'],
-    ['citizenapp-release-android', 'citizenapp-android-v', 'citizenapp', 'android', 'citizenapp-ci-android.yml'],
-    ['citizenwallet-release-ios', 'citizenwallet-ios-v', 'citizenwallet', 'ios', 'citizenwallet-ci-ios.yml'],
-    ['citizenwallet-release-android', 'citizenwallet-android-v', 'citizenwallet', 'android', 'citizenwallet-ci-android.yml'],
-    ['citizenapp-cloudflare-release-cloudflare', 'citizenapp-cloudflare-v', 'citizenapp-cloudflare', 'cloudflare', 'citizenapp-cloudflare-ci-cloudflare.yml'],
-    ['citizenweb-release-web', 'citizenweb-v', 'citizenweb', 'web', 'citizenweb-ci-web.yml'],
-    ['citizenchain-node-release-linux-arm', 'citizenchain-node-linux-arm-v', 'citizenchain-node', 'linux-arm', 'citizenchain-node-ci-linux-arm.yaml'],
-    ['citizenchain-node-release-linux-amd', 'citizenchain-node-linux-amd-v', 'citizenchain-node', 'linux-amd', 'citizenchain-node-ci-linux-amd.yml'],
-    ['citizenchain-node-release-macos', 'citizenchain-node-macos-v', 'citizenchain-node', 'macos', 'citizenchain-node-ci-macos.yml'],
-    ['citizenchain-node-release-windows', 'citizenchain-node-windows-v', 'citizenchain-node', 'windows', 'citizenchain-node-ci-windows.yml'],
-    ['citizenchain-runtime-release-wasm', 'citizenchain-runtime-wasm-v', 'citizenchain-runtime', 'wasm', 'citizenchain-runtime-ci-wasm.yml'],
+    ['citizenapp/release-ios', 'citizenapp-ios-v', 'citizenapp', 'ios', 'citizenapp/ci-ios.yml'],
+    ['citizenapp/release-android', 'citizenapp-android-v', 'citizenapp', 'android', 'citizenapp/ci-android.yml'],
+    ['citizenwallet/release-ios', 'citizenwallet-ios-v', 'citizenwallet', 'ios', 'citizenwallet/ci-ios.yml'],
+    ['citizenwallet/release-android', 'citizenwallet-android-v', 'citizenwallet', 'android', 'citizenwallet/ci-android.yml'],
+    ['citizenweb/release-cloudflare', 'citizenapp-cloudflare-v', 'citizenapp-cloudflare', 'cloudflare', 'citizenweb/ci-cloudflare.yml'],
+    ['citizenweb/release-web', 'citizenweb-v', 'citizenweb', 'web', 'citizenweb/ci-web.yml'],
+    ['citizenchain/release-node-linux-arm', 'citizenchain-node-linux-arm-v', 'citizenchain-node', 'linux-arm', 'citizenchain/ci-node-linux-arm.yaml'],
+    ['citizenchain/release-node-linux-amd', 'citizenchain-node-linux-amd-v', 'citizenchain-node', 'linux-amd', 'citizenchain/ci-node-linux-amd.yml'],
+    ['citizenchain/release-node-macos', 'citizenchain-node-macos-v', 'citizenchain-node', 'macos', 'citizenchain/ci-node-macos.yml'],
+    ['citizenchain/release-node-windows', 'citizenchain-node-windows-v', 'citizenchain-node', 'windows', 'citizenchain/ci-node-windows.yml'],
+    ['citizenchain/release-runtime-wasm', 'citizenchain-runtime-wasm-v', 'citizenchain-runtime', 'wasm', 'citizenchain/ci-runtime-wasm.yml'],
   ];
   for (const [release, prefix, product, target, workflow] of releases) {
     const source = readFileSync(new URL(`../workflows/${release}.yml`, import.meta.url), 'utf8');
@@ -127,7 +136,7 @@ test('Release 公共工具先创建事务 Tag，正式资产失败时回滚草�
 });
 
 test('Android Release 接受自签名上传证书且不产生 detached v4 文件', () => {
-  for (const workflow of ['citizenapp-release-android.yml', 'citizenwallet-release-android.yml']) {
+  for (const workflow of ['citizenapp/release-android.yml', 'citizenwallet/release-android.yml']) {
     const source = readFileSync(new URL(`../workflows/${workflow}`, import.meta.url), 'utf8');
     assert.match(source, /--v4-signing-enabled false/);
     assert.match(source, /test "\$apk_certificate_sha256" = "\$key_certificate_sha256"/);
@@ -138,8 +147,8 @@ test('Android Release 接受自签名上传证书且不产生 detached v4 文件
 test('移动端正式 Release 资产名统一使用 ASCII 产品 id', () => {
   const products = ['citizenapp', 'citizenwallet'];
   for (const product of products) {
-    const android = readFileSync(new URL(`../workflows/${product}-release-android.yml`, import.meta.url), 'utf8');
-    const ios = readFileSync(new URL(`../workflows/${product}-release-ios.yml`, import.meta.url), 'utf8');
+    const android = readFileSync(new URL(`../workflows/${product}/release-android.yml`, import.meta.url), 'utf8');
+    const ios = readFileSync(new URL(`../workflows/${product}/release-ios.yml`, import.meta.url), 'utf8');
     for (const extension of ['apk', 'aab']) {
       assert.ok(android.includes(`asset_name: "${product}.${extension}"`));
     }
@@ -151,7 +160,7 @@ test('移动端正式 Release 资产名统一使用 ASCII 产品 id', () => {
 
 test('iOS Release 不依赖 runner 钥匙串解包描述文件且强制核对正式证书', () => {
   for (const product of ['citizenapp', 'citizenwallet']) {
-    const source = readFileSync(new URL(`../workflows/${product}-release-ios.yml`, import.meta.url), 'utf8');
+    const source = readFileSync(new URL(`../workflows/${product}/release-ios.yml`, import.meta.url), 'utf8');
     assert.match(source, /security list-keychains -d user -s "\$keychain"/);
     assert.match(source, /security find-identity -v -p codesigning "\$keychain"[\s\S]*grep -Fq "\$certificate_sha1"/);
     assert.match(source, /openssl smime -verify -inform DER[\s\S]*-noverify -out "\$work\/profile\.plist"/);

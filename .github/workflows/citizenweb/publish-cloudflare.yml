@@ -64,7 +64,7 @@ jobs:
       - name: 从 GitHub Runner 零流量验收并原子切换生产版本
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.DEPLOY }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           ZONE_ID: ${{ secrets.ZONE_ID }}
           CHAIN_URL: ${{ secrets.CHAIN_URL }}
           APNS_KID: ${{ secrets.APNS_KID }}

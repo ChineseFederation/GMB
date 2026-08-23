@@ -51,9 +51,9 @@ test('GitHub Deployment 先创建记录再写成功状态', async () => {
 
 test('六条发布 Workflow 只消费 GitHub Release 且不编译产品', () => {
   const workflows = [
-    'citizenapp-publish-ios.yml', 'citizenapp-publish-android.yml',
-    'citizenwallet-publish-ios.yml', 'citizenwallet-publish-android.yml',
-    'citizenapp-cloudflare-publish-cloudflare.yml', 'citizenweb-publish-web.yml',
+    'citizenapp/publish-ios.yml', 'citizenapp/publish-android.yml',
+    'citizenwallet/publish-ios.yml', 'citizenwallet/publish-android.yml',
+    'citizenweb/publish-cloudflare.yml', 'citizenweb/publish-web.yml',
   ];
   for (const workflow of workflows) {
     const source = readFileSync(new URL(`../workflows/${workflow}`, import.meta.url), 'utf8');
@@ -69,7 +69,7 @@ test('六条发布 Workflow 只消费 GitHub Release 且不编译产品', () => 
 });
 
 test('公民网发布保留预览逐文件验收和生产失败回滚', () => {
-  const source = readFileSync(new URL('../workflows/citizenweb-publish-web.yml', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../workflows/citizenweb/publish-web.yml', import.meta.url), 'utf8');
   assert.match(source, /--branch citizenweb-candidate/);
   assert.match(source, /manifest\.files\.filter/);
   assert.match(source, /createHash.*require\('node:crypto'\)/);
@@ -81,7 +81,7 @@ test('公民网发布保留预览逐文件验收和生产失败回滚', () => {
 
 test('公民后端发布回滚后复核旧 Worker 版本', () => {
   const source = readFileSync(new URL(
-    '../workflows/citizenapp-cloudflare-publish-cloudflare.yml', import.meta.url,
+    '../workflows/citizenweb/publish-cloudflare.yml', import.meta.url,
   ), 'utf8');
   assert.match(source, /versions deploy "\$\{stable\}@100"/);
   assert.match(source, /&& health "\$stable"/);
