@@ -110,10 +110,16 @@ class SmoldotPlatform {
       path.join(Directory.current.path, 'lib'),
       // Build directory
       path.join(Directory.current.path, 'build'),
-      // CitizenApp 主工程执行 flutter test 时的真实 Rust 构建目录。
-      path.join(Directory.current.path, 'rust', 'target', 'release'),
-      // smoldot/dart 包目录执行 dart test 时的真实 Rust 构建目录。
-      path.join(Directory.current.path, '..', 'rust', 'target', 'release'),
+      // CitizenApp 主工程执行 flutter test 时的真实 FFI 构建目录。
+      path.join(
+        Directory.current.path,
+        'smoldot',
+        'ffi',
+        'target',
+        'release',
+      ),
+      // smoldot/dart 包目录执行 dart test 时的真实 FFI 构建目录。
+      path.join(Directory.current.path, '..', 'ffi', 'target', 'release'),
     ];
 
     for (final searchPath in searchPaths) {

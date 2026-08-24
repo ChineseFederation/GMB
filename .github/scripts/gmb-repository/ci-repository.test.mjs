@@ -1619,6 +1619,16 @@ test5("\u79FB\u52A8\u7AEF CI\u3001Release \u4E0E\u672C\u5730\u6784\u5EFA\u90FD\u
     }
   }
 });
+test5("CitizenApp \u5BBF\u4E3B\u6D4B\u8BD5\u53EA\u4ECE smoldot/ffi \u65B0\u76EE\u5F55\u52A0\u8F7D\u539F\u751F\u5E93", () => {
+  const platform = readFileSync7(new URL("../../../citizenapp/smoldot/dart/lib/src/platform.dart", import.meta.url), "utf8");
+  const mls = readFileSync7(new URL("../../../citizenapp/lib/chat/crypto/mls_native.dart", import.meta.url), "utf8");
+  const testEntry = readFileSync7(new URL("../../../citizenapp/scripts/citizenapp-test.sh", import.meta.url), "utf8");
+  assert5.ok(platform.includes("'smoldot',\n        'ffi',\n        'target',\n        'release'"));
+  assert5.ok(platform.includes("'..', 'ffi', 'target', 'release'"));
+  assert5.ok(mls.includes("'smoldot',\n        'ffi',\n        'target',\n        'release'"));
+  assert5.doesNotMatch(`${platform}\n${mls}`, /(?:'native'|'rust'),\s*'target'/u);
+  assert5.match(testEntry, /build-smoldot-native\.sh" host[\s\S]*FLUTTER_BIN" test/u);
+});
 test5("\u672C\u5730\u516C\u6C11\u94FE\u5165\u53E3\u7EDF\u4E00\u51C6\u5907\u7CBE\u786E\u5DE5\u5177\u94FE\u4E0E\u9501\u5B9A\u4F9D\u8D56", () => {
   const repositoryRoot = new URL("../../../", import.meta.url);
   const prepare = readFileSync7(new URL("scripts/prepare-toolchain.sh", repositoryRoot), "utf8");

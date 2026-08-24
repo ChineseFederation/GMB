@@ -16,7 +16,7 @@
 //   ./scripts/citizenapp-test.sh \
 //     test/chat/mls_native_test.dart test/chat/mls_native_session_test.dart
 //
-// 设备构建会 `cargo clean` 整个 rust/target；统一测试入口与 `citizenapp-run.sh`
+// 设备构建会 `cargo clean` 整个 smoldot/ffi/target；统一测试入口与 `citizenapp-run.sh`
 // 已共用跨进程锁，设备构建不得在测试中途删除宿主库。设备构建完成后下一次测试入口仍会
 // 自动重建 host 库，不依赖历史产物。
 

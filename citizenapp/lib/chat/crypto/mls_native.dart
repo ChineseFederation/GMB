@@ -562,20 +562,38 @@ DynamicLibrary _loadSmoldotLibrary() {
   final cwd = Directory.current.path;
   if (Platform.isMacOS) {
     candidates.addAll([
-      path.join(cwd, 'native', 'libsmoldot.dylib'),
-      path.join(cwd, 'rust', 'target', 'release', 'libsmoldot.dylib'),
+      path.join(
+        cwd,
+        'smoldot',
+        'ffi',
+        'target',
+        'release',
+        'libsmoldot.dylib',
+      ),
       'libsmoldot.dylib',
     ]);
   } else if (Platform.isWindows) {
     candidates.addAll([
-      path.join(cwd, 'native', 'smoldot.dll'),
-      path.join(cwd, 'rust', 'target', 'release', 'smoldot.dll'),
+      path.join(
+        cwd,
+        'smoldot',
+        'ffi',
+        'target',
+        'release',
+        'smoldot.dll',
+      ),
       'smoldot.dll',
     ]);
   } else {
     candidates.addAll([
-      path.join(cwd, 'native', 'libsmoldot.so'),
-      path.join(cwd, 'rust', 'target', 'release', 'libsmoldot.so'),
+      path.join(
+        cwd,
+        'smoldot',
+        'ffi',
+        'target',
+        'release',
+        'libsmoldot.so',
+      ),
       'libsmoldot.so',
     ]);
   }
