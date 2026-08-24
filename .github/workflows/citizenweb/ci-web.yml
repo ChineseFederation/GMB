@@ -5,11 +5,6 @@ run-name: 公民网 · CI · Web
 # 不读取 Cloudflare 生产令牌，不创建 Pages Deployment，也不复用 CitizenApp 移动端流水线。
 on:
   workflow_dispatch:
-    inputs:
-      software_version:
-        description: 本次候选软件版本
-        required: true
-        type: string
 
 concurrency:
   group: citizenweb-ci-web
@@ -24,7 +19,6 @@ env:
   CI: 1
   WRANGLER_SEND_METRICS: false
   GMB_SOURCE_SHA: ${{ github.sha }}
-  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
 
 jobs:
   check:
@@ -40,20 +34,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenweb/ci-web.mjs dependencies check --scope citizenweb
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const version = process.env.GMB_SOFTWARE_VERSION;
-          if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(version)) throw new Error('官网候选版本输入无效');
-          for (const path of ['citizenweb/package.json', 'citizenweb/package-lock.json']) {
-            const value = JSON.parse(fs.readFileSync(path, 'utf8'));
-            value.version = version;
-            if (path.endsWith('package-lock.json')) {
-              if (!value.packages?.['']) throw new Error('官网 package-lock 缺少根 package');
-              value.packages[''].version = version;
-            }
-            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-          }
-          NODE
 
       - name: 安装 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0

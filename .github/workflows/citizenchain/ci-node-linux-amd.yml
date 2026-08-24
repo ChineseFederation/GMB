@@ -7,11 +7,6 @@ run-name: 公民链 · CI · LinuxAMD
 # 后者用 concurrency 把前者掐掉」的空跑 runner 浪费。
 on:
   workflow_dispatch:
-    inputs:
-      software_version:
-        description: 本次候选软件版本
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -28,7 +23,6 @@ env:
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
   GMB_SOURCE_SHA: ${{ github.sha }}
-  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
   GMB_NODE_PLATFORM: linux-amd
 
 jobs:
@@ -174,7 +168,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenchain/ci-node-linux-amd.mjs dependencies check --scope citizenchain-node
-          node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -253,9 +246,6 @@ jobs:
         with:
           shared-key: ${{ matrix.cache_key }}
           workspaces: citizenchain -> target
-
-      - name: 同步并锁定节点候选版本
-        run: node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |

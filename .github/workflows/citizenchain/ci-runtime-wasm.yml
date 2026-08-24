@@ -9,7 +9,6 @@ run-name: 公民协议 · CI · WASM
 # finalized Runtime、spec_version +1、正式构建与 Tag 全部只属于独立 Release。
 on:
   workflow_dispatch:
-    inputs:
 
 concurrency:
   group: citizenchain-runtime-ci-wasm

@@ -1398,7 +1398,6 @@ checksum = "abc"
 });
 test5("Windows \u8282\u70B9 CI \u4E0E Release \u56FA\u5B9A\u7528 Bash \u4F20\u5165\u5019\u9009\u7248\u672C", () => {
   for (const workflow of [
-    "citizenchain/ci-node-windows.yml",
     "citizenchain/release-node-windows.yml"
   ]) {
     const source = readFileSync7(new URL(`../../workflows/${workflow}`, import.meta.url), "utf8");
@@ -1428,6 +1427,7 @@ test5("\u5168\u90E8 CI \u53EA\u9A8C\u8BC1\u6784\u5EFA\uFF0C\u4E0D\u521B\u5EFA Ta
     assert5.doesNotMatch(source, /inputs\.source_sha|source_sha:\s*\n/);
     assert5.match(source, /GMB_SOURCE_SHA: \$\{\{ github\.sha \}\}/);
     assert5.match(source, /ref: \$\{\{ github\.sha \}\}/);
+    assert5.doesNotMatch(source, /inputs\.software_version|GMB_SOFTWARE_VERSION/);
   }
   const runtimeCI = readFileSync7(new URL("../../workflows/citizenchain/ci-runtime-wasm.yml", import.meta.url), "utf8");
   assert5.doesNotMatch(runtimeCI, /chain_spec_version:|genesis_hash:|finalized_head:|inputs\.spec_version/u);

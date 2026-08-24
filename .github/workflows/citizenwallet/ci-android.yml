@@ -5,15 +5,9 @@ run-name: 公民钱包 · CI · Android
 # CI 只能由公民控制台「公民 → 公民钱包 → 运行 CI / Release」按钮经 workflow_dispatch 发起。
 on:
   workflow_dispatch:
-    inputs:
-      software_version:
-        description: 本次候选软件版本
-        required: true
-        type: string
 
 env:
   GMB_SOURCE_SHA: ${{ github.sha }}
-  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
 
 concurrency:
   group: citizenwallet-ci-android
@@ -42,17 +36,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenwallet/ci-android.mjs dependencies check --scope citizenwallet
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenWallet 候选版本输入无效")
-          path = Path("citizenwallet/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 读取 Flutter 版本
         id: flutter-version

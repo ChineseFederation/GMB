@@ -86,6 +86,7 @@ jobs:
           PIPELINE: ${{ inputs.pipeline }}
           RUN_TITLE: ${{ inputs.run_title }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          SOFTWARE_VERSION: ${{ inputs.software_version }}
         run: |
           node <<'NODE'
           const routes = new Map([
@@ -120,6 +121,9 @@ jobs:
           const isRelease = /\/release-[^/]+\.ya?ml$/.test(process.env.PIPELINE);
           if (isCI && process.env.SOURCE_SHA !== '') {
             throw new Error('CI 禁止接收 source_sha；源码必须使用任务创建时的 github.sha');
+          }
+          if (isCI && process.env.SOFTWARE_VERSION !== '') {
+            throw new Error('CI 禁止接收 software_version；正式版本只属于 Release');
           }
           if (isRelease && !/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA)) {
             throw new Error('Release 必须指定成功 CI 的准确 source_sha');
@@ -299,20 +303,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenapp/ci-android.mjs dependencies check --scope citizenapp
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-
-          version = os.environ["GMB_SOFTWARE_VERSION"]
-          build = os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenApp 候选版本输入无效")
-          path = Path("citizenapp/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1:
-              raise SystemExit("CitizenApp pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 校验 chainspec.json 冻结
         run: |
@@ -373,17 +363,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenapp/ci-android.mjs dependencies check --scope citizenapp
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenApp 候选版本输入无效")
-          path = Path("citizenapp/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenApp pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -525,20 +504,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenapp/ci-ios.mjs dependencies check --scope citizenapp
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-
-          version = os.environ["GMB_SOFTWARE_VERSION"]
-          build = os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenApp 候选版本输入无效")
-          path = Path("citizenapp/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1:
-              raise SystemExit("CitizenApp pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 校验 chainspec.json 冻结
         run: |
@@ -599,17 +564,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenapp/ci-ios.mjs dependencies check --scope citizenapp
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenApp 候选版本输入无效")
-          path = Path("citizenapp/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenApp pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -1342,7 +1296,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenchain/ci-node-linux-amd.mjs dependencies check --scope citizenchain-node
-          node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -1421,9 +1374,6 @@ jobs:
         with:
           shared-key: ${{ matrix.cache_key }}
           workspaces: citizenchain -> target
-
-      - name: 同步并锁定节点候选版本
-        run: node .github/scripts/citizenchain/ci-node-linux-amd.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |
@@ -1636,7 +1586,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenchain/ci-node-linux-arm.mjs dependencies check --scope citizenchain-node
-          node .github/scripts/citizenchain/ci-node-linux-arm.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -1715,9 +1664,6 @@ jobs:
         with:
           shared-key: ${{ matrix.cache_key }}
           workspaces: citizenchain -> target
-
-      - name: 同步并锁定节点候选版本
-        run: node .github/scripts/citizenchain/ci-node-linux-arm.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |
@@ -1928,7 +1874,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenchain/ci-node-macos.mjs dependencies check --scope citizenchain-node
-          node .github/scripts/citizenchain/ci-node-macos.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -2012,9 +1957,6 @@ jobs:
         with:
           shared-key: ${{ matrix.cache_key }}
           workspaces: citizenchain -> target
-
-      - name: 同步并锁定节点候选版本
-        run: node .github/scripts/citizenchain/ci-node-macos.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |
@@ -2265,7 +2207,6 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenchain/ci-node-windows.mjs dependencies check --scope citizenchain-node
-          node .github/scripts/citizenchain/ci-node-windows.mjs node-version apply "$GMB_SOFTWARE_VERSION"
 
       - name: 校验 runner 架构
         shell: bash
@@ -2338,11 +2279,6 @@ jobs:
         with:
           shared-key: ${{ matrix.cache_key }}
           workspaces: citizenchain -> target
-
-      - name: 同步并锁定节点候选版本
-        # Windows 默认 shell 是 PowerShell；统一版本脚本使用 POSIX 环境变量语法，必须固定 Bash。
-        shell: bash
-        run: node .github/scripts/citizenchain/ci-node-windows.mjs node-version lock "$GMB_SOFTWARE_VERSION"
 
       - name: 安装前端依赖并构建
         run: |
@@ -3993,20 +3929,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenserve/ci-cloudflare.mjs dependencies check --scope citizenserve
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const version = process.env.GMB_SOFTWARE_VERSION;
-          if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(version)) throw new Error('后端候选版本输入无效');
-          for (const path of ['citizenserve/package.json', 'citizenserve/package-lock.json']) {
-            const value = JSON.parse(fs.readFileSync(path, 'utf8'));
-            value.version = version;
-            if (path.endsWith('package-lock.json')) {
-              if (!value.packages?.['']) throw new Error('后端 package-lock 缺少根 package');
-              value.packages[''].version = version;
-            }
-            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-          }
-          NODE
 
       - name: 安装 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
@@ -4242,17 +4164,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenwallet/ci-android.mjs dependencies check --scope citizenwallet
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenWallet 候选版本输入无效")
-          path = Path("citizenwallet/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 读取 Flutter 版本
         id: flutter-version
@@ -4404,17 +4315,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenwallet/ci-ios.mjs dependencies check --scope citizenwallet
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenWallet 候选版本输入无效")
-          path = Path("citizenwallet/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 读取 Flutter 版本
         id: flutter-version
@@ -4492,17 +4392,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenwallet/ci-ios.mjs dependencies check --scope citizenwallet
-          python3 - <<'PY'
-          import os, re
-          from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
-          if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
-              raise SystemExit("CitizenWallet 候选版本输入无效")
-          path = Path("citizenwallet/pubspec.yaml")
-          text, count = re.subn(r"(?m)^version:\s*\d+\.\d+\.\d+\+\d+\s*$", f"version: {version}+{build}", path.read_text(), count=1)
-          if count != 1: raise SystemExit("CitizenWallet pubspec 版本真源无效")
-          path.write_text(text)
-          PY
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -5078,20 +4967,6 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizenweb/ci-web.mjs dependencies check --scope citizenweb
-          node - <<'NODE'
-          const fs = require('node:fs');
-          const version = process.env.GMB_SOFTWARE_VERSION;
-          if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(version)) throw new Error('官网候选版本输入无效');
-          for (const path of ['citizenweb/package.json', 'citizenweb/package-lock.json']) {
-            const value = JSON.parse(fs.readFileSync(path, 'utf8'));
-            value.version = version;
-            if (path.endsWith('package-lock.json')) {
-              if (!value.packages?.['']) throw new Error('官网 package-lock 缺少根 package');
-              value.packages[''].version = version;
-            }
-            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-          }
-          NODE
 
       - name: 安装 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
