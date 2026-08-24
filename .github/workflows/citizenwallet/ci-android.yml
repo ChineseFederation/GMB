@@ -149,6 +149,10 @@ jobs:
         working-directory: citizenwallet
         run: flutter build apk --release --target-platform android-arm64
 
+      - name: 核验 APK 内钱包原生库
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh verify-android-package build/app/outputs/flutter-apk/app-release.apk
+
       - name: 使用当次 CI 证书签名并核验 APK
         run: |
           set -euo pipefail

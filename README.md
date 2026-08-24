@@ -10,7 +10,9 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 - 统一数据字典：[`shared/data-dictionary.json`](shared/data-dictionary.json)
 - 统一二维码协议：[`shared/qr-protocol/`](shared/qr-protocol/)
 - 产品与发布边界：[本文件“产品与发布边界”](#产品与发布边界)
-- GitHub Actions：[`gmb-repository.yml`](.github/workflows/gmb-repository.yml)
+- GitHub Actions：[`gmb-repository.yml`](.github/workflows/gmb-repository.yml) 是 GitHub 唯一注册入口；
+  22 条产品 CI/Release 仍按产品保存在 `.github/workflows/<product>/`，由该入口按准确路径路由，
+  不移动分组文件，也不生成顶层镜像文件。
 
 ## 产品与发布边界
 
@@ -22,7 +24,9 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 - `citizenwallet`：公民钱包 iOS、Android 离线冷钱包。
 - `citizenweb`：公民网 Web 前端，不包含公民服务端。
 
-每个产品、端和动作独立管理。CitizenServe 的 `cloudflare` 端分别使用独立的 CI、Release、Publish workflow、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算。
+每个产品、端和动作独立管理。CitizenServe 的 `cloudflare` 端分别使用独立的 CI、Release
+逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish 只由本机
+CitizenConsole 执行，不属于 GitHub Workflow。
 
 产品目录只保留代码实现、公开配置、测试、脚本与资源文件；私人运维源码、长期记忆、任务卡、
 证书和机密不属于本仓库。

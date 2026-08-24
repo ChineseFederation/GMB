@@ -204,6 +204,10 @@ jobs:
         working-directory: citizenapp
         run: flutter build apk --release --target-platform android-arm64
 
+      - name: 核验 APK 内 smoldot 原生库
+        working-directory: citizenapp
+        run: ./scripts/build-smoldot-native.sh verify-android-package build/app/outputs/flutter-apk/app-release.apk
+
       - name: 核验 Android CI 候选中英文系统弹窗应用名
         working-directory: citizenapp
         run: bash scripts/citizenapp-run.sh verify-android-localization build/app/outputs/flutter-apk/app-release.apk

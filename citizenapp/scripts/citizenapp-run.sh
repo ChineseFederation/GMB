@@ -338,6 +338,7 @@ fi
 echo "==> 编译 Release 产品..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release --build-number="$BUILD_NUMBER" ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
+  "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
   verify_ios_release_localization build/ios/iphoneos/Runner.app
   install_ios_update "$DEVICE_ID" ios.citizenapp build/ios/iphoneos/Runner.app citizenapp.isar "$BUILD_NUMBER"
   retain_ios_local_artifact build/ios/iphoneos/Runner.app
@@ -350,6 +351,7 @@ elif [[ "$PLATFORM" == android ]]; then
     echo "Android Release 无私钥候选不存在" >&2
     exit 1
   }
+  "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package build/app/outputs/flutter-apk/app-release.apk
   verify_android_release_localization build/app/outputs/flutter-apk/app-release.apk
   echo "==> Android Release 候选完成，正在交给原生安全进程做本机开发签名并安装。"
 else
@@ -362,5 +364,6 @@ else
     echo "Google Play 基线 AAB 无私钥候选不存在" >&2
     exit 1
   }
+  "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package build/app/outputs/bundle/release/app-release.aab
   echo "==> Google Play 基线 AAB 候选完成，正在交给原生安全进程签名。"
 fi

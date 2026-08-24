@@ -148,6 +148,10 @@ jobs:
         working-directory: citizenapp
         run: flutter build ios --release --no-codesign
 
+      - name: 核验 iOS Runner 架构与 smoldot 符号
+        working-directory: citizenapp
+        run: ./scripts/build-smoldot-native.sh verify-ios-package build/ios/iphoneos/Runner.app
+
       - name: 核验 iOS 正式包中英文系统弹窗本地化
         working-directory: citizenapp
         run: bash scripts/citizenapp-run.sh verify-ios-localization build/ios/iphoneos/Runner.app

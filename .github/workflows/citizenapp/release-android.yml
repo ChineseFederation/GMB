@@ -165,6 +165,12 @@ jobs:
           flutter build apk --release --target-platform android-arm64
           flutter build appbundle --release --target-platform android-arm64
 
+      - name: 核验 APK 与 AAB 内 smoldot 原生库
+        working-directory: citizenapp
+        run: |
+          ./scripts/build-smoldot-native.sh verify-android-package build/app/outputs/flutter-apk/app-release.apk
+          ./scripts/build-smoldot-native.sh verify-android-package build/app/outputs/bundle/release/app-release.aab
+
       - name: 核验 Android Release 中英文系统弹窗应用名
         working-directory: citizenapp
         run: bash scripts/citizenapp-run.sh verify-android-localization build/app/outputs/flutter-apk/app-release.apk

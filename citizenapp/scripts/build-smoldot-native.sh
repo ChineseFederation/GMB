@@ -203,6 +203,66 @@ build_host() {
   fi
 }
 
+verify_android_package() {
+  local package="$1" expected="$CITIZENAPP_DIR/android/app/src/main/jniLibs/arm64-v8a/libsmoldot.so" entry temporary packaged nm_bin symbols
+  [[ -f "$package" ]] || { echo "错误: Android 包不存在：$package"; return 1; }
+  [[ -f "$expected" ]] || { echo "错误: Android 原生库不存在：$expected"; return 1; }
+  case "$package" in
+    *.apk) entry="lib/arm64-v8a/libsmoldot.so" ;;
+    *.aab) entry="base/lib/arm64-v8a/libsmoldot.so" ;;
+    *) echo "错误: 只支持校验 APK/AAB：$package"; return 1 ;;
+  esac
+  # 中文注释：Android 打包会剥离调试段；从最终包提取后验证 ELF 架构和全部 FFI
+  # 符号族，避免源码库存在但 APK/AAB 漏包或装入错误 ABI。
+  temporary="$(mktemp -d)"
+  packaged="$temporary/libsmoldot.so"
+  unzip -p "$package" "$entry" > "$packaged" || { rm -rf "$temporary"; return 1; }
+  [[ -s "$packaged" ]] || { rm -rf "$temporary"; echo "错误: Android 包内 libsmoldot 为空。"; return 1; }
+  file "$packaged" | grep -Eq 'ARM aarch64|ARM64' || {
+    rm -rf "$temporary"; echo "错误: Android 包内 libsmoldot 不是 arm64。"; return 1;
+  }
+  nm_bin="$(command -v llvm-nm || true)"
+  if [[ -z "$nm_bin" ]]; then
+    local sdk_home="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
+    nm_bin="$(ls "$sdk_home"/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-nm 2>/dev/null | tail -1 || true)"
+  fi
+  [[ -n "$nm_bin" ]] || { rm -rf "$temporary"; echo "错误: 未找到 llvm-nm。"; return 1; }
+  symbols="$("$nm_bin" -D --defined-only "$packaged" 2>/dev/null | awk '{print $NF}' || true)"
+  for family in smoldot_ citizen_sr25519_ citizen_chat_mls_; do
+    [[ "$(printf '%s\n' "$symbols" | grep -c "^$family" || true)" -gt 0 ]] || {
+      rm -rf "$temporary"; echo "错误: Android 包内 libsmoldot 缺少 $family 符号。"; return 1;
+    }
+  done
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
+    rm -rf "$temporary"; echo "错误: Android 包内 account_crypto_* 符号必须正好 4 个。"; return 1;
+  }
+  rm -rf "$temporary"
+  if unzip -Z1 "$package" | grep -E '(^|/)lib/(armeabi-v7a|x86|x86_64)/libsmoldot\.so$'; then
+    echo "错误: Android 包含未支持 ABI 的 libsmoldot。"; return 1
+  fi
+  echo "Android 包原生库门禁通过：$entry"
+}
+
+verify_ios_package() {
+  local app_bundle="$1" executable nm_bin symbols
+  executable="$app_bundle/Runner"
+  [[ -f "$executable" ]] || { echo "错误: iOS Runner 不存在：$executable"; return 1; }
+  [[ "$(lipo -archs "$executable")" = "arm64" ]] || {
+    echo "错误: iOS 真机包必须且只能包含 arm64：$(lipo -archs "$executable")"; return 1;
+  }
+  nm_bin="$(xcrun --find llvm-nm)"
+  symbols="$("$nm_bin" -gU "$executable" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' || true)"
+  for family in smoldot_ citizen_sr25519_ citizen_chat_mls_; do
+    [[ "$(printf '%s\n' "$symbols" | grep -c "^$family" || true)" -gt 0 ]] || {
+      echo "错误: iOS Runner 缺少 $family 导出符号。"; return 1;
+    }
+  done
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
+    echo "错误: iOS Runner 的 account_crypto_* 符号必须正好 4 个。"; return 1;
+  }
+  echo "iOS 包原生库门禁通过：arm64 与全部 FFI 符号族完整"
+}
+
 case "$TARGET" in
   android)
     build_android
@@ -213,13 +273,23 @@ case "$TARGET" in
   host|macos|linux)
     build_host
     ;;
+  verify-android-package)
+    [[ "$#" -eq 2 ]] || { echo "用法: $0 verify-android-package <apk|aab>"; exit 1; }
+    verify_android_package "$2"
+    exit 0
+    ;;
+  verify-ios-package)
+    [[ "$#" -eq 2 ]] || { echo "用法: $0 verify-ios-package <Runner.app>"; exit 1; }
+    verify_ios_package "$2"
+    exit 0
+    ;;
   all)
     build_android
     build_ios
     build_host
     ;;
   *)
-    echo "用法: $0 [android|ios|host|all]"
+    echo "用法: $0 [android|ios|host|all|verify-android-package|verify-ios-package]"
     exit 1
     ;;
 esac

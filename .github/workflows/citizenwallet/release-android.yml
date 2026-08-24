@@ -159,6 +159,12 @@ jobs:
           flutter build apk --release --target-platform android-arm64
           flutter build appbundle --release --target-platform android-arm64
 
+      - name: 核验 APK 与 AAB 内钱包原生库
+        working-directory: citizenwallet
+        run: |
+          ./scripts/build-signer-native.sh verify-android-package build/app/outputs/flutter-apk/app-release.apk
+          ./scripts/build-signer-native.sh verify-android-package build/app/outputs/bundle/release/app-release.aab
+
       - name: 使用 APP_KEY 签名并回读验证正式包
         env:
           APP_KEY: ${{ secrets.APP_KEY }}

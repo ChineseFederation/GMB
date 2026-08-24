@@ -1516,7 +1516,7 @@ test5("iOS Release \u4E0D\u4F9D\u8D56 runner \u94A5\u5319\u4E32\u89E3\u5305\u63C
     assert5.doesNotMatch(source, /security cms -D/);
   }
 });
-test5("\u4ED3\u5E93\u7EDF\u4E00\u95E8\u7981\u542F\u52A8\u540E\u53EA\u4FDD\u7559\u5F53\u524D\u8BB0\u5F55\u4E14\u4E0E\u4EA7\u54C1\u6D41\u7A0B\u89E3\u8026", () => {
+test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\u95E8\u7981\u5E76\u8DEF\u7531 22 \u6761\u5206\u7EC4\u4EA7\u54C1\u6D41\u6C34\u7EBF", () => {
   const workflowsUrl = new URL("../../workflows/", import.meta.url);
   const repositoryWorkflow = "gmb-repository.yml";
   const repositorySource = readFileSync7(new URL(repositoryWorkflow, workflowsUrl), "utf8");
@@ -1534,7 +1534,16 @@ test5("\u4ED3\u5E93\u7EDF\u4E00\u95E8\u7981\u542F\u52A8\u540E\u53EA\u4FDD\u7559\
   assert5.match(repositorySource, /retain-current-run:/);
   assert5.match(repositorySource, /actions\/runs\/\$\{previous\}/);
   assert5.match(repositorySource, /needs: retain-current-run/g);
-  assert5.doesNotMatch(repositorySource, /actions\/upload-artifact|finalize-semantic-ci|create-release/);
+  assert5.match(repositorySource, /inputs\.pipeline/);
+  assert5.match(repositorySource, /actions\/upload-artifact/);
+  const contract = JSON.parse(readFileSync7(new URL("../../../.github/dependencies.json", import.meta.url), "utf8"));
+  const productWorkflows = Object.entries(contract.scopes)
+    .filter(([name]) => name !== "repository")
+    .flatMap(([, scope]) => scope.workflows);
+  assert5.equal(productWorkflows.length, 22);
+  for (const workflow of productWorkflows) {
+    assert5.ok(repositorySource.includes(`inputs.pipeline == '${workflow}'`), `\u7EDF\u4E00\u5165\u53E3\u7F3A\u5C11\u8DEF\u7531\uFF1A${workflow}`);
+  }
   for (const file of readdirSync(workflowsUrl).filter((value2) => /\.ya?ml$/.test(value2))) {
     if (file === repositoryWorkflow) continue;
     const source = readFileSync7(new URL(file, workflowsUrl), "utf8");
@@ -1563,6 +1572,28 @@ test5("\u5168\u90E8\u7B2C\u4E00\u65B9 npm \u9879\u76EE\u4E0E Workflow \u7EDF\u4E
       if (source.includes("node-version:")) {
         assert5.ok(source.includes(`node-version: ${contract.toolchains.node}`), `${workflow} Node.js \u672A\u7EDF\u4E00`);
       }
+    }
+  }
+});
+// 中文注释：以下合同防止统一入口或原生打包门禁在后续同步时只改分组文件的一侧。
+test5("\u5168\u4ED3\u4F9D\u8D56\u95E8\u7981\u771F\u5B9E\u89E3\u6790\u672C\u5730\u8DEF\u5F84\u4E0E Cargo workspace", () => {
+  const source = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
+  assert5.match(source, /checkLocalDependencyPaths/);
+  assert5.match(source, /cargo[^\n]+metadata/);
+  assert5.match(source, /--locked/);
+  assert5.match(source, /--no-deps/);
+});
+test5("\u79FB\u52A8\u7AEF CI\u3001Release \u4E0E\u672C\u5730\u6784\u5EFA\u90FD\u6838\u9A8C\u6700\u7EC8\u5305\u5185\u539F\u751F\u5E93", () => {
+  for (const product of ["citizenapp", "citizenwallet"]) {
+    const scriptName = product === "citizenapp" ? "build-smoldot-native.sh" : "build-signer-native.sh";
+    const script = readFileSync7(new URL(`../../../${product}/scripts/${scriptName}`, import.meta.url), "utf8");
+    assert5.match(script, /verify-android-package/);
+    assert5.match(script, /verify-ios-package/);
+    assert5.match(script, /lipo -archs/);
+    for (const workflow of ["ci-android.yml", "release-android.yml", "ci-ios.yml", "release-ios.yml"]) {
+      const source = readFileSync7(new URL(`../../workflows/${product}/${workflow}`, import.meta.url), "utf8");
+      assert5.ok(source.includes(scriptName));
+      assert5.match(source, /verify-(?:android|ios)-package/);
     }
   }
 });

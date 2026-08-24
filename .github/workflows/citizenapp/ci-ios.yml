@@ -186,6 +186,10 @@ jobs:
         working-directory: citizenapp
         run: flutter build ios --release --no-codesign
 
+      - name: 核验 iOS Runner 架构与 smoldot 符号
+        working-directory: citizenapp
+        run: ./scripts/build-smoldot-native.sh verify-ios-package build/ios/iphoneos/Runner.app
+
       - name: 使用 ad-hoc CI 身份签名并核验 iOS 产物
         run: |
           codesign --force --deep --sign - citizenapp/build/ios/iphoneos/Runner.app

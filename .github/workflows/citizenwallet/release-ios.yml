@@ -147,6 +147,10 @@ jobs:
         working-directory: citizenwallet
         run: flutter build ios --release --no-codesign
 
+      - name: 核验 iOS Runner 架构与钱包原生符号
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh verify-ios-package build/ios/iphoneos/Runner.app
+
       - name: 使用 Apple Distribution 签名并生成 IPA
         env:
           IOS_KEY: ${{ secrets.IOS_KEY }}

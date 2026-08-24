@@ -6,7 +6,7 @@
 #
 # 为什么用静态库而不是 dylib：裸 .dylib 需要嵌入 App 并单独代码签名，且 App Store
 # 要求动态库必须包在 .framework 里；静态库直接链进 App 二进制，无这些坑。
-# `-force_load` 保证 `#[no_mangle]` 的 4 个 FFI 符号不被链接器当未引用剔除，
+# `-force_load` 与逐符号 `-u` 保证两组共 8 个 FFI 符号不被链接器当未引用剔除，
 # Dart 侧因此可用 DynamicLibrary.process() 直接取到。
 #
 # 符号检查要查对文件（查错了会误判成"没链接进去"）：
@@ -41,7 +41,7 @@ CitizenWallet 冷钱包 sr25519 原生签名（schnorrkel）。全端唯一实�
   # 两件事缺一不可，否则运行时 DynamicLibrary.process().lookup 找不到符号：
   # 1) -force_load：整库加载。App 侧没有任何 ObjC/Swift 代码引用这些 Rust 符号，
   #    普通链接会把整个 .a 当无用直接跳过。
-  # 2) -u（force undefined）：把 4 个 FFI 符号声明为"必需"。**Release 开启
+  # 2) -u（force undefined）：把签名和账户用途钥共 8 个 FFI 符号声明为"必需"。**Release 开启
   #    -dead_strip**，即使 force_load 进来了，没被引用的符号仍会被剔除——
   #    表现为 Debug 正常、Release 静默失效（实测：release 二进制里连
   #    schnorrkel 特征串都没有）。-u 让链接器必须保留它们。
@@ -54,6 +54,10 @@ CitizenWallet 冷钱包 sr25519 原生签名（schnorrkel）。全端唯一实�
                        '-Wl,-u,_citizen_sr25519_derive_hard ' \
                        '-Wl,-u,_citizen_sr25519_public_key ' \
                        '-Wl,-u,_citizen_sr25519_sign ' \
-                       '-Wl,-u,_citizen_sr25519_verify',
+                       '-Wl,-u,_citizen_sr25519_verify ' \
+                       '-Wl,-u,_account_crypto_derive_key ' \
+                       '-Wl,-u,_account_crypto_x25519_public_key ' \
+                       '-Wl,-u,_account_crypto_seal ' \
+                       '-Wl,-u,_account_crypto_open',
   }
 end

@@ -196,6 +196,10 @@ jobs:
         working-directory: citizenwallet
         run: flutter build ios --release --no-codesign
 
+      - name: 核验 iOS Runner 架构与钱包原生符号
+        working-directory: citizenwallet
+        run: ./scripts/build-signer-native.sh verify-ios-package build/ios/iphoneos/Runner.app
+
       - name: 使用 ad-hoc CI 身份签名并核验 iOS 产物
         run: |
           codesign --force --deep --sign - citizenwallet/build/ios/iphoneos/Runner.app
