@@ -24,6 +24,10 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 - `citizenwallet`：公民钱包 iOS、Android 离线冷钱包。
 - `citizenweb`：公民网 Web 前端，不包含公民服务端。
 
+生产发布授权中的 `platform` 表示产品端，不表示部署供应商：公民网唯一使用
+`citizenweb/web`，公民服务端唯一使用 `citizenserve/cloudflare`。Cloudflare Pages 是
+公民网的部署实现，不得改写公民网的 `web` 产品端身份。
+
 每个产品、端和动作独立管理。CitizenServe 的 `cloudflare` 端分别使用独立的 CI、Release
 逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish 只由本机
 CitizenConsole 执行，不属于 GitHub Workflow。

@@ -3824,7 +3824,9 @@ class PayloadDecoder {
     const productPlatforms = <String, Set<String>>{
       'citizenapp': {'ios', 'android'},
       'citizenwallet': {'ios', 'android'},
-      'citizenweb': {'cloudflare'},
+      // 产品端与部署供应商必须分离：公民网的端是 web，Cloudflare Pages
+      // 只是部署实现；公民服务端的正式端才是 cloudflare。
+      'citizenweb': {'web'},
       'citizenserve': {'cloudflare'},
     };
     if (!(productPlatforms[product.$1]?.contains(platform.$1) ?? false)) {

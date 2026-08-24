@@ -133,7 +133,7 @@ List<int> _switchDefaultAccountPayload({
 
 List<int> _publishAuthorizationPayload({required int expiresAt}) => <int>[
       ..._scaleString('citizenweb'),
-      ..._scaleString('cloudflare'),
+      ..._scaleString('web'),
       ..._scaleString('1.2.3'),
       ...List<int>.generate(20, (index) => index + 1),
       ...List<int>.generate(32, (index) => index + 21),
@@ -275,7 +275,7 @@ void main() {
       expect(verification.status, SignDecisionStatus.normal);
       expect(verification.actionLabel, '生产发布授权');
       expect(verification.decoded?.fields['product_id'], 'citizenweb');
-      expect(verification.decoded?.fields['platform'], 'cloudflare');
+      expect(verification.decoded?.fields['platform'], 'web');
 
       final response = await service.signParsedRequest(
         accountId: signingAccount.accountId,
