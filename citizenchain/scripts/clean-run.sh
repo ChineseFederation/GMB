@@ -41,7 +41,12 @@ esac
 APP_DATA_DIR="$HOME/Library/Application Support/gmb.dev"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHAIN_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
+GMB_REPOSITORY_ROOT="$(dirname "$CHAIN_ROOT")"
 GENESIS_STATE_RESOURCE_DIR="$CHAIN_ROOT/node/resources/genesis-state"
+
+# 在杀进程、清库之前先完成工具链校验与锁定依赖安装；准备失败不得触碰运行数据。
+# 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
+source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 
 cleanup() {
     echo ""
@@ -82,7 +87,7 @@ mkdir -p "$GENESIS_STATE_RESOURCE_DIR"
 echo "==> 构建 onchina 二进制 + 前端..."
 ( cd "$CHAIN_ROOT" && cargo build -p onchina )
 echo "==> 构建链上中国平台前端产物..."
-( cd "$CHAIN_ROOT/onchina/frontend" && if [ ! -d node_modules ]; then npm ci; fi && npm run build )
+( cd "$CHAIN_ROOT/onchina/frontend" && npm run build )
 PG_PREFIX=""
 for v in postgresql@17 postgresql@16 postgresql@15 postgresql; do
     if p="$(brew --prefix "$v" 2>/dev/null)" && [ -x "$p/bin/initdb" ]; then PG_PREFIX="$p"; break; fi

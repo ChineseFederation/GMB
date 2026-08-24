@@ -108,8 +108,13 @@ resolve_macos_profile() {
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
+GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
 TARGET_DIR="$REPO_ROOT/target"
 GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
+
+# 与 CI/Release 共用 .github/dependencies.json 的精确 Node.js 版本和 npm lockfile。
+# 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
+source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 
 # 本地启动脚本只使用当前源码构建 runtime WASM。
 # runtime 正式升级走链上 setCode，桌面端启动不再从 GitHub CI 下载 wasm 产物。
@@ -127,7 +132,7 @@ mkdir -p "$TARGET_DIR" "$GENESIS_STATE_RESOURCE_DIR"
 echo "==> 构建 OnChina Release 二进制 + 前端..."
 ( cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 cargo build --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
-( cd "$REPO_ROOT/onchina/frontend" && if [ ! -d node_modules ]; then npm ci; fi && npm run build )
+( cd "$REPO_ROOT/onchina/frontend" && npm run build )
 PG_PREFIX=""
 for v in postgresql@17 postgresql@16 postgresql@15 postgresql; do
     if p="$(brew --prefix "$v" 2>/dev/null)" && [ -x "$p/bin/initdb" ]; then PG_PREFIX="$p"; break; fi

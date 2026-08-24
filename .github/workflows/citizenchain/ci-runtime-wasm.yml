@@ -82,11 +82,11 @@ jobs:
           components: rust-src, clippy
 
       - name: 安装 Node.js
-        # NodeGuard 行为探针编译完整 Node/Tauri 宿主；固定 Node.js 24 并复用锁文件缓存，
+        # NodeGuard 行为探针编译完整 Node/Tauri 宿主；固定 Node.js 25.2.1 并复用锁文件缓存，
         # 保证编译期读取的 frontendDist 来自真实前端构建，而不是占位目录或本机残留。
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24.19.0
+          node-version: 25.2.1
           cache: npm
           cache-dependency-path: citizenchain/node/frontend/package-lock.json
 

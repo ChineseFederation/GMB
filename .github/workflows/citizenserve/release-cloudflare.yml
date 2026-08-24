@@ -94,7 +94,7 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24.19.0
+          node-version: 25.2.1
           cache: npm
           cache-dependency-path: citizenserve/package-lock.json
 

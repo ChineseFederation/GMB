@@ -9,6 +9,7 @@ citizenchain/target
 /scripts/*
 !/scripts/generate-logo-assets.mjs
 !/scripts/generate_citizenapp_governance_registry.mjs
+!/scripts/prepare-toolchain.sh
 !/scripts/rederive_accounts.py
 !/scripts/rebake_china_codes.py
 !/scripts/sync-derive-vectors.sh

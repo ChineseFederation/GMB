@@ -99,7 +99,7 @@ jobs:
       - name: 安装 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24.19.0
+          node-version: 25.2.1
           cache: npm
           cache-dependency-path: |
             shared/scanner-react/package-lock.json
@@ -194,10 +194,10 @@ jobs:
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
 
       - name: 安装 Node.js
-        # 固定使用 Node.js 24,与项目 package.json engines 和 GitHub Actions node24 运行时一致。
+        # 固定使用 Node.js 25.2.1,与项目 package.json engines 统一 Node.js 工具链一致。
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
-          node-version: 24.19.0
+          node-version: 25.2.1
           cache: npm
           cache-dependency-path: citizenchain/node/frontend/package-lock.json
 

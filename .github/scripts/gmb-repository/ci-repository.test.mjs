@@ -2325,3 +2325,41 @@ test5("\u4ED3\u5E93\u7EDF\u4E00\u95E8\u7981\u542F\u52A8\u540E\u53EA\u4FDD\u7559\
     ]) assert5.ok(!source.includes(command), `${file} \u7981\u6B62\u91CD\u590D\u8C03\u7528\u4ED3\u5E93\u95E8\u7981 ${command}`);
   }
 });
+test5("\u5168\u90E8\u7B2C\u4E00\u65B9 npm \u9879\u76EE\u4E0E Workflow \u7EDF\u4E00\u7CBE\u786E Node.js \u7248\u672C", () => {
+  const repositoryRoot = new URL("../../../", import.meta.url);
+  const contract = JSON.parse(readFileSync7(new URL(".github/dependencies.json", repositoryRoot), "utf8"));
+  assert5.equal(contract.toolchains.node, "25.2.1");
+  for (const project of contract.npmProjects) {
+    const manifest = JSON.parse(readFileSync7(new URL(`${project}/package.json`, repositoryRoot), "utf8"));
+    const lock = JSON.parse(readFileSync7(new URL(`${project}/package-lock.json`, repositoryRoot), "utf8"));
+    assert5.equal(manifest.engines?.node, contract.toolchains.node, `${project} manifest Node.js \u672A\u7EDF\u4E00`);
+    assert5.equal(lock.packages?.[""]?.engines?.node, contract.toolchains.node, `${project} lockfile Node.js \u672A\u7EDF\u4E00`);
+  }
+  for (const scope of Object.values(contract.scopes)) {
+    for (const workflow of scope.workflows) {
+      const source = readFileSync7(new URL(workflow, repositoryRoot), "utf8");
+      if (source.includes("node-version:")) {
+        assert5.ok(source.includes(`node-version: ${contract.toolchains.node}`), `${workflow} Node.js \u672A\u7EDF\u4E00`);
+      }
+    }
+  }
+});
+test5("\u672C\u5730\u516C\u6C11\u94FE\u5165\u53E3\u7EDF\u4E00\u51C6\u5907\u7CBE\u786E\u5DE5\u5177\u94FE\u4E0E\u9501\u5B9A\u4F9D\u8D56", () => {
+  const repositoryRoot = new URL("../../../", import.meta.url);
+  const prepare = readFileSync7(new URL("scripts/prepare-toolchain.sh", repositoryRoot), "utf8");
+  assert5.match(prepare, /\.github\/dependencies\.json/);
+  assert5.match(prepare, /CURRENT_NODE_VERSION[\s\S]*EXPECTED_NODE_VERSION/);
+  for (const project of [
+    "shared/scanner-react",
+    "citizenchain/node/frontend",
+    "citizenchain/onchina/frontend"
+  ]) assert5.ok(prepare.includes(project), `\u5DE5\u5177\u94FE\u51C6\u5907\u7F3A\u5C11 ${project}`);
+  assert5.match(prepare, /npm --prefix[\s\S]* ci/);
+  for (const script of ["run.sh", "clean-run.sh"]) {
+    const source = readFileSync7(new URL(`citizenchain/scripts/${script}`, repositoryRoot), "utf8");
+    const prepareIndex = source.indexOf('source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"');
+    const tauriIndex = source.indexOf("frontend/node_modules/@tauri-apps/cli/tauri.js");
+    assert5.ok(prepareIndex >= 0 && tauriIndex > prepareIndex, `${script} \u5FC5\u987B\u5148\u51C6\u5907\u5DE5\u5177\u94FE\u518D\u8C03\u7528 Tauri`);
+    assert5.doesNotMatch(source, /\[ ! -d node_modules \]/);
+  }
+});
