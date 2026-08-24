@@ -1141,6 +1141,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/ci-node-linux-amd.yml ──
   citizenchain_ci_node_linux_amd__changes:
+    env:
+      GMB_NODE_PLATFORM: linux-amd
     permissions:
       contents: read
       id-token: write
@@ -1431,6 +1433,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/ci-node-linux-arm.yaml ──
   citizenchain_ci_node_linux_arm__changes:
+    env:
+      GMB_NODE_PLATFORM: linux-arm
     permissions:
       contents: read
       id-token: write
@@ -1721,6 +1725,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/ci-node-macos.yml ──
   citizenchain_ci_node_macos__changes:
+    env:
+      GMB_NODE_PLATFORM: macos
     permissions:
       contents: read
       id-token: write
@@ -2054,6 +2060,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/ci-node-windows.yml ──
   citizenchain_ci_node_windows__changes:
+    env:
+      GMB_NODE_PLATFORM: windows
     permissions:
       contents: read
       id-token: write
@@ -2545,6 +2553,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/release-node-linux-amd.yml ──
   citizenchain_release_node_linux_amd__changes:
+    env:
+      GMB_NODE_PLATFORM: linux-amd
     permissions:
       actions: read
       contents: write
@@ -2810,6 +2820,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/release-node-linux-arm.yml ──
   citizenchain_release_node_linux_arm__changes:
+    env:
+      GMB_NODE_PLATFORM: linux-arm
     permissions:
       actions: read
       contents: write
@@ -3075,6 +3087,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/release-node-macos.yml ──
   citizenchain_release_node_macos__changes:
+    env:
+      GMB_NODE_PLATFORM: macos
     permissions:
       actions: read
       contents: write
@@ -3383,6 +3397,8 @@ jobs:
 
   # ── .github/workflows/citizenchain/release-node-windows.yml ──
   citizenchain_release_node_windows__changes:
+    env:
+      GMB_NODE_PLATFORM: windows
     permissions:
       actions: read
       contents: write

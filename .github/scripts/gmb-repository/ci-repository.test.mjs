@@ -1542,6 +1542,22 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   assert5.match(repositorySource, /CI 禁止接收 source_sha/);
   assert5.match(repositorySource, /Release 必须指定成功 CI 的准确 source_sha/);
   assert5.match(repositorySource, /actions\/upload-artifact/);
+  // \u8282\u70B9\u7AEF\u7684 CI \u4E0E Release \u5728\u552F\u4E00\u5165\u53E3\u4E2D\u4ECD\u662F\u72EC\u7ACB\u4EFB\u52A1\uFF0C\u5FC5\u987B\u4FDD\u7559\u5404\u81EA\u7684\u5E73\u53F0\u5E38\u91CF\u3002
+  for (const [jobId, platform] of [
+    ["citizenchain_ci_node_linux_amd__changes", "linux-amd"],
+    ["citizenchain_ci_node_linux_arm__changes", "linux-arm"],
+    ["citizenchain_ci_node_macos__changes", "macos"],
+    ["citizenchain_ci_node_windows__changes", "windows"],
+    ["citizenchain_release_node_linux_amd__changes", "linux-amd"],
+    ["citizenchain_release_node_linux_arm__changes", "linux-arm"],
+    ["citizenchain_release_node_macos__changes", "macos"],
+    ["citizenchain_release_node_windows__changes", "windows"]
+  ]) {
+    assert5.ok(
+      repositorySource.includes(`  ${jobId}:\n    env:\n      GMB_NODE_PLATFORM: ${platform}\n`),
+      `${jobId} \u7F3A\u5C11\u72EC\u7ACB\u5E73\u53F0\u5E38\u91CF ${platform}`
+    );
+  }
   const contract = JSON.parse(readFileSync7(new URL("../../../.github/dependencies.json", import.meta.url), "utf8"));
   const productWorkflows = Object.entries(contract.scopes)
     .filter(([name]) => name !== "repository")
