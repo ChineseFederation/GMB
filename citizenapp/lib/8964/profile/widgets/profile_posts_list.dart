@@ -23,6 +23,7 @@ class ProfilePostsTab extends StatefulWidget {
     required this.emptyLabel,
     required this.session,
     required this.sessionReady,
+    this.sessionUnavailableMessage,
     required this.isSelf,
     this.onSessionExpired,
     this.category,
@@ -45,6 +46,9 @@ class ProfilePostsTab extends StatefulWidget {
   /// 上层是否已经完成首次会话解析。false 表示仍在握手，禁止拿 null 抢跑远端请求；
   /// true + null 表示本次确实没有可用钱包会话。
   final bool sessionReady;
+
+  /// 上层解析出的真实失败原因；为空只用于极短的未决窗口，不推断本地钱包事实。
+  final String? sessionUnavailableMessage;
 
   /// Worker 明确返回 401 时由上层清理缓存并重新握手；每个请求最多调用一次。
   final Future<SquareSession?> Function()? onSessionExpired;
@@ -332,7 +336,9 @@ class _ProfilePostsTabState extends State<ProfilePostsTab> {
       return [_message('加载失败，下拉重试')];
     }
     if (_sessionUnavailable && _posts.isEmpty) {
-      return [_message('需要钱包账户才能浏览主页')];
+      return [
+        _message(widget.sessionUnavailableMessage ?? '公民服务暂时不可用，请稍后重试'),
+      ];
     }
     if (widget.mediaKind != null) {
       return _mediaSlivers();

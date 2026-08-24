@@ -259,6 +259,22 @@ describe('square login (op_tag OP_SIGN_SQUARE_LOGIN)', () => {
     return `0x${toHex(sig)}`;
   }
 
+  // 中文注释：缺少链配置代表服务侧不可用，不构成账户确实未绑定的证据。
+  it('用户投影不可用时不把 D1 缺失账户误报成未绑定', async () => {
+    const db = new AuthDb();
+    const env = {
+      DB: db,
+      SQUARE_CACHE: new FakeKv(),
+    } as unknown as Env;
+
+    await expect(
+      createLoginChallenge(req('/square/auth/challenge', { account_id: ACCOUNT_ID }), env),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'identity_projection_unavailable',
+    });
+  });
+
   it('按 D1 finalized 用户投影归属挑战，未配置链 RPC 也能完成登录', async () => {
     const { env, db, kv, keyPair } = await setup();
 

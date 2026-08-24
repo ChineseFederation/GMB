@@ -200,9 +200,10 @@ class CreatorService {
   ///
   /// 页面首帧不等待本方法；[expectedCidNumber] 防止旧会话结果写入新身份页面。
   Future<CreatorPageData> load({String? expectedCidNumber}) async {
-    final session = await _session.ensureSession();
+    final resolution = await _session.resolveSession();
+    final session = resolution.session;
     if (session == null) {
-      throw const CreatorException('会话不可用，请稍后重试');
+      throw CreatorException(resolution.message);
     }
     final expected = expectedCidNumber?.trim() ?? '';
     if (expected.isNotEmpty && session.cidNumber != expected) {

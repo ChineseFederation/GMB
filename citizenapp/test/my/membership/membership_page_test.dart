@@ -460,7 +460,7 @@ void main() {
 
     pendingSession.complete(null);
     await tester.pumpAndSettle();
-    expect(find.text('请先添加钱包账户'), findsNWidgets(3));
+    expect(find.text('请先添加钱包账户'), findsNWidgets(4));
   });
 
   testWidgets('有效缓存直接展示且不重复读取链上订阅和价格', (tester) async {
@@ -816,7 +816,8 @@ void main() {
       find.byKey(const ValueKey('membership-load-failure-banner')),
       findsOneWidget,
     );
-    expect(find.textContaining('会员数据加载失败'), findsOneWidget);
+    expect(find.text('钱包设备认证暂时不可用，请稍后重试'), findsNWidgets(4));
+    expect(find.text('请先添加钱包账户'), findsNothing);
     expect(find.text('重试'), findsOneWidget);
     expect(find.byKey(const ValueKey('membership-front-card')), findsOneWidget);
   });
@@ -894,6 +895,38 @@ void main() {
       membershipConfirmed: false,
     );
     expect(snapshot.decision, MembershipDisplayDecision.unknown);
+  });
+
+  // 中文注释：同一状态在会员卡和详情页都必须保真，且按钮不得再与价格拼接。
+  testWidgets('本机已有绑定但 Worker 未投影 → 显示身份同步故障而不是无钱包', (tester) async {
+    final sessionProvider = _CidNotBoundSessionProvider();
+    await _pump(
+      tester,
+      _state(active: false),
+      prices: const {'freedom': 299, 'democracy': 999, 'spark': 9999},
+      sessionProvider: sessionProvider,
+    );
+
+    expect(find.text('当前钱包身份尚未同步或绑定，请稍后重试'), findsWidgets);
+    expect(find.text('请先添加钱包账户'), findsNothing);
+    expect(find.text('注册用户'), findsNothing);
+    expect(sessionProvider.calls, 1);
+
+    await tester.tap(
+      find.descendant(
+        of: find.byKey(const ValueKey('membership-front-card')),
+        matching: find.text('查看详细权益'),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('会员详情'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('当前钱包身份尚未同步或绑定，请稍后重试'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
+    expect(find.text('当前钱包身份尚未同步或绑定，请稍后重试'), findsWidgets);
+    expect(find.text('请先添加钱包账户'), findsNothing);
   });
 
   testWidgets('本机无绑定 → Worker 判未注册后显示注册引导', (tester) async {

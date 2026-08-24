@@ -235,9 +235,6 @@ class MembershipDetailPage extends StatelessWidget {
   }
 
   Widget _subscribeButton(BuildContext context, Color tierColor, Color onTier) {
-    final label = priceFen == null
-        ? actionLabel
-        : '$actionLabel · ${fenToYuanMoneyLabel(priceFen!)}/月';
     return Material(
       color: subscribeEnabled ? tierColor : AppTheme.border,
       borderRadius: BorderRadius.circular(AppLayout.scaledValue(12)),
@@ -255,7 +252,9 @@ class MembershipDetailPage extends StatelessWidget {
               EdgeInsets.symmetric(vertical: AppLayout.scaled(context, 14)),
           child: Center(
             child: Text(
-              label,
+              // 价格已经在详情头部单独展示；按钮只表达动作或不可用原因，避免把
+              // “服务不可用/添加钱包”等状态与金额拼成一句错误文案。
+              actionLabel,
               style: TextStyle(
                 color: subscribeEnabled ? onTier : AppTheme.textTertiary,
                 fontSize: AppLayout.scaled(context, 15),

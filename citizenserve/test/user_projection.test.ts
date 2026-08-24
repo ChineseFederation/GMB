@@ -5,6 +5,8 @@ import { Miniflare } from 'miniflare';
 
 import { purgeIdentity } from '../src/account/purge';
 import {
+  inspectCachedUserProjectionHealth,
+  inspectUserProjectionHealth,
   projectFinalizedUserBlock,
   reconcileFinalizedUserProjection,
   type UserProjectionDeps,
@@ -153,6 +155,56 @@ describe('finalized 用户投影', () => {
       revoked_user_count: 1,
     });
     expect(await readUserByCidNumber(env, CID_NUMBER)).toBeNull();
+  });
+
+  // 中文注释：同一现有游标依次覆盖落后、追平和链配置缺失三种公开健康状态。
+  it('缺失账户只有在游标追平 finalized 后才能解释为确实未绑定', async () => {
+    chain.failedEventBlock = 2;
+    await expect(
+      reconcileFinalizedUserProjection(env, chain.deps()),
+    ).rejects.toThrow('events unavailable');
+    await expect(inspectUserProjectionHealth(env, chain.deps())).resolves.toEqual({
+      identity_projection_status: 'pending',
+      finalized_block_number: 3,
+      cursor_block_number: 1,
+    });
+
+    chain.failedEventBlock = null;
+    await reconcileFinalizedUserProjection(env, chain.deps());
+    await expect(inspectUserProjectionHealth(env, chain.deps())).resolves.toEqual({
+      identity_projection_status: 'ready',
+      finalized_block_number: 3,
+      cursor_block_number: 3,
+    });
+
+    const withoutChain = { ...env, CHAIN_URL: undefined } as Env;
+    await expect(inspectUserProjectionHealth(withoutChain, chain.deps())).resolves.toEqual({
+      identity_projection_status: 'unavailable',
+      finalized_block_number: null,
+      cursor_block_number: null,
+    });
+  });
+
+  // 中文注释：公共健康接口可以短时复用真值，但缺失账户鉴权不会调用这个缓存入口。
+  it('公共投影健康检查使用现有 KV 短缓存避免放大链 RPC', async () => {
+    await reconcileFinalizedUserProjection(env, chain.deps());
+    let finalizedReads = 0;
+    const deps = chain.deps();
+    const healthDeps = {
+      ...deps,
+      fetchFinalizedHead: async (bindings: Env) => {
+        finalizedReads += 1;
+        return deps.fetchFinalizedHead(bindings);
+      },
+    };
+
+    await expect(inspectCachedUserProjectionHealth(env, healthDeps)).resolves.toMatchObject({
+      identity_projection_status: 'ready',
+    });
+    await expect(inspectCachedUserProjectionHealth(env, healthDeps)).resolves.toMatchObject({
+      identity_projection_status: 'ready',
+    });
+    expect(finalizedReads).toBe(1);
   });
 
   it('较旧区块重放不能覆盖已经确认的较新绑定和身份', async () => {

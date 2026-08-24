@@ -1,5 +1,8 @@
 import type { Env, FeedKind } from "./types";
-import { confirmFinalizedUsersRoute } from "./account/user_projection";
+import {
+  confirmFinalizedUsersRoute,
+  inspectCachedUserProjectionHealth,
+} from "./account/user_projection";
 import { createLoginChallenge, createSession, registerDeviceSubkey } from "./auth/service";
 import { chainBootstrapRoute } from "./chain/bootstrap";
 import { constitutionRoute } from "./chain/constitution";
@@ -57,6 +60,7 @@ export async function routeRequest(
   await guardRequest(request, env, path);
 
   if (request.method === "GET" && path === "/health") {
+    const projection = await inspectCachedUserProjectionHealth(env);
     return jsonResponse({
       ok: true,
       service: "citizenapp",
@@ -65,6 +69,8 @@ export async function routeRequest(
       worker_version_id: env.CF_VERSION_METADATA?.id ?? null,
       // 广场正文元数据进入 D1，manifest、图片、视频和衍生图统一进入 R2。
       content_on_chain: false,
+      // 发布器据此确认用户投影已追到当前 finalized 头；这里只读现有游标，不迁移数据。
+      ...projection,
     });
   }
 

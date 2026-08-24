@@ -14,6 +14,7 @@ import {
 } from './session_index';
 import { closeStaleChatRealtime } from '../chat/realtime';
 import { readUserByAccountId, readUserByCidNumber } from '../account/user_repository';
+import { inspectUserProjectionHealth } from '../account/user_projection';
 import {
   assertP256PublicKeyHex,
   buildDeviceBindingSigningMessage,
@@ -80,7 +81,7 @@ export async function createLoginChallenge(request: Request, env: Env): Promise<
   // 登录是普通鉴权，只读取 finalized 用户 D1 投影；未投影账户不能产生无归属挑战。
   const identity = await readUserByAccountId(env, accountId);
   if (!identity) {
-    throw new HttpError(403, 'cid_not_bound', '该钱包账户未绑定 CID,无法登录');
+    return throwMissingIdentity(env, '该钱包账户未绑定 CID,无法登录');
   }
   const cidNumber = identity.cid_number;
 
@@ -159,7 +160,7 @@ export async function createSession(request: Request, env: Env): Promise<Respons
   // Session 签发再次读取强一致 D1 用户投影；挑战后投影发生换绑时必须拒绝。
   const identity = await readUserByCidNumber(env, challenge.cid_number);
   if (!identity) {
-    throw new HttpError(403, 'cid_not_bound', '该钱包账户未绑定 CID,无法登录');
+    return throwMissingIdentity(env, '该钱包账户未绑定 CID,无法登录');
   }
   const cidNumber = identity.cid_number;
   if (
@@ -300,7 +301,7 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
   // 设备登记是普通鉴权，只读取 finalized 用户 D1 投影；账户签名证明实际控制权。
   const identity = await readUserByAccountId(env, accountId);
   if (!identity || identity.binding_revision <= 0) {
-    throw new HttpError(403, 'cid_not_bound', '该钱包账户未绑定 CID,无法注册设备子钥');
+    return throwMissingIdentity(env, '该钱包账户未绑定 CID,无法注册设备子钥');
   }
   const cidNumber = identity.cid_number;
   const bindingMessage = buildDeviceBindingSigningMessage({
@@ -366,6 +367,18 @@ export async function registerDeviceSubkey(request: Request, env: Env): Promise<
     cid_number: cidNumber,
     binding_revision: identity.binding_revision,
   });
+}
+
+/// D1 没查到用户时，必须先证明投影已经追到当前 finalized 头；否则不能误报未绑定。
+async function throwMissingIdentity(env: Env, unboundMessage: string): Promise<never> {
+  const projection = await inspectUserProjectionHealth(env);
+  if (projection.identity_projection_status === 'pending') {
+    throw new HttpError(409, 'identity_projection_pending', '当前钱包身份仍在同步，请稍后重试');
+  }
+  if (projection.identity_projection_status === 'unavailable') {
+    throw new HttpError(503, 'identity_projection_unavailable', '身份投影服务暂时不可用，请稍后重试');
+  }
+  throw new HttpError(403, 'cid_not_bound', unboundMessage);
 }
 
 /// finalized 当前绑定的新设备登记成功后，收敛全部可撤销的旧鉴权材料。

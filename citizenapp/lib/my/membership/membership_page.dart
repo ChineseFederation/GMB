@@ -71,6 +71,7 @@ class _MembershipPageState extends State<MembershipPage>
   /// 当前钱包未注册 CID。三张会员卡照常完整显示(价格是链上公开数据),
   /// 只把订阅按钮换成「注册用户」引导注册;**不显示任何失败/重试横幅**。
   bool _unregistered = false;
+  SquareSessionStatus? _sessionStatus;
 
   /// 订阅 / 取消上链进行中：期间禁用按钮、显示按钮内进度圈。
   bool _busy = false;
@@ -129,6 +130,11 @@ class _MembershipPageState extends State<MembershipPage>
   /// 失败静默——价格缺失时卡片自己显示占位,不该为此弹故障横幅。
   Future<void> _enterUnregistered({required bool forceRefresh}) async {
     if (mounted) setState(() => _unregistered = true);
+    await _loadPublicPrices(forceRefresh: forceRefresh);
+  }
+
+  /// 价格是公开链状态；会话或身份投影失败不能阻止用户查看套餐价格。
+  Future<void> _loadPublicPrices({required bool forceRefresh}) async {
     try {
       final prices = await _chainService.fetchAllPlatformPrices(
         forceFresh: forceRefresh,
@@ -157,10 +163,17 @@ class _MembershipPageState extends State<MembershipPage>
     try {
       // 普通会员展示直接建立 Cloudflare 会话。首次安装没有本机绑定时由登录挑战
       // 的 finalized 用户投影恢复；不得以本机缓存未命中武断判未注册或启动 smoldot。
-      final session = await _sessionProvider.ensureSession();
+      final resolution = await _sessionProvider.resolveSession();
+      _sessionStatus = resolution.status;
+      final session = resolution.session;
       if (session == null) {
-        // 无默认钱包账户才会拿不到 provider(非异常);三卡照常展示,横幅说明原因。
-        _loadFailure = '请先在「我的 → 我的钱包」添加钱包账户';
+        if (resolution.status == SquareSessionStatus.identityUnbound) {
+          await _enterUnregistered(forceRefresh: forceRefresh);
+        } else {
+          _unregistered = false;
+          _loadFailure = resolution.message;
+          await _loadPublicPrices(forceRefresh: forceRefresh);
+        }
         return;
       }
       if (_unregistered && mounted) setState(() => _unregistered = false);
@@ -259,16 +272,6 @@ class _MembershipPageState extends State<MembershipPage>
           subscriptionReady: updated.subscriptionFetchedAtMs > 0,
         ),
       );
-    } on SquareApiException catch (error) {
-      refreshError = error;
-      // 未注册(Worker 真源判定)绝不是故障:不给失败横幅、不给重试——没注册,
-      // 重试一万次也是同一结果。改为整页按「未注册」呈现:三卡照常 + 按钮引导注册。
-      if (error.errorCode == 'cid_not_bound') {
-        await _enterUnregistered(forceRefresh: forceRefresh);
-      } else if (_data.accountId.isEmpty) {
-        // 真故障且页面还没有可展示数据时才给可见解释 + 重试。
-        _loadFailure = '会员数据加载失败，请点右上刷新重试';
-      }
     } on Object catch (error) {
       refreshError = error;
       if (_data.accountId.isEmpty) {
@@ -307,9 +310,10 @@ class _MembershipPageState extends State<MembershipPage>
   Future<void> _handleAction(String level) async {
     if (_busy) return;
     if (_data.accountId.isEmpty) {
+      final message = _sessionStatus?.message ?? '会员状态尚未就绪，请稍后重试';
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('请先在「我的 → 我的钱包」添加钱包账户')));
+      ).showSnackBar(SnackBar(content: Text(message)));
       return;
     }
     // 未注册 CID:就地弹全 App 统一注册面板;占号成功后订阅由用户重新发起。
@@ -371,18 +375,25 @@ class _MembershipPageState extends State<MembershipPage>
     SquareMembershipState state,
   ) {
     final action = _actionFor(state, plan.membershipLevel);
-    final noWallet = _data.accountId.isEmpty;
+    final noWallet = _sessionStatus == SquareSessionStatus.noWallet;
+    final sessionUnavailable = _data.accountId.isEmpty && !noWallet;
     final stateNotReady = !_data.subscriptionReady;
-    final label = noWallet
-        ? '请先添加钱包账户'
-        : stateNotReady
-            ? '会员状态同步中'
-            : action != _SubscribeAction.cancel && priceFen == null
-                ? '链上价格未就绪'
-                : _actionLabel(action);
-    final enabled = !noWallet &&
-        !stateNotReady &&
-        (action == _SubscribeAction.cancel || priceFen != null);
+    final label = _unregistered
+        ? '请先注册用户'
+        : noWallet
+            ? '请先添加钱包账户'
+            : sessionUnavailable
+                ? _sessionStatus?.message ?? '会员状态同步中'
+                : stateNotReady
+                    ? '会员状态同步中'
+                    : action != _SubscribeAction.cancel && priceFen == null
+                        ? '链上价格未就绪'
+                        : _actionLabel(action);
+    final enabled = _unregistered ||
+        (!noWallet &&
+            !sessionUnavailable &&
+            !stateNotReady &&
+            (action == _SubscribeAction.cancel || priceFen != null));
     Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => MembershipDetailPage(
@@ -390,7 +401,9 @@ class _MembershipPageState extends State<MembershipPage>
           priceFen: priceFen,
           actionLabel: label,
           subscribeEnabled: enabled,
-          onSubscribe: () => _handleAction(plan.membershipLevel),
+          onSubscribe: _unregistered
+              ? _onRegisterFromCard
+              : () => _handleAction(plan.membershipLevel),
         ),
       ),
     );
@@ -499,10 +512,11 @@ class _MembershipPageState extends State<MembershipPage>
                         priceFen: data.prices[plans[index].membershipLevel],
                         // 未注册者按钮永远可点(点了弹注册面板),不受订阅态就绪影响。
                         canSubscribe: _unregistered ||
-                            (data.accountId.isNotEmpty &&
+                            (_sessionStatus == SquareSessionStatus.ready &&
+                                data.accountId.isNotEmpty &&
                                 data.subscriptionReady),
                         unavailableLabel: data.accountId.isEmpty && !_refreshing
-                            ? '请先添加钱包账户'
+                            ? _sessionStatus?.message ?? '会员状态同步中'
                             : '会员状态同步中',
                         // 未注册:按钮文案换成「注册用户」,点击弹全 App 同一注册面板。
                         registerInsteadOfSubscribe: _unregistered,

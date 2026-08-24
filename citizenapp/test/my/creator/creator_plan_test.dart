@@ -43,6 +43,17 @@ class _SnapshotCreatorService extends _PendingCreatorService {
       snapshot;
 }
 
+class _IdentityUnavailableCreatorService extends CreatorService {
+  @override
+  Future<CreatorDisplaySnapshot?> readDisplaySnapshot(String cidNumber) async =>
+      null;
+
+  @override
+  Future<CreatorPageData> load({String? expectedCidNumber}) {
+    throw const CreatorException('当前钱包身份尚未同步或绑定，请稍后重试');
+  }
+}
+
 void main() {
   const cidNumber = 'CN220-CTZN2-100000001-2026';
 
@@ -121,6 +132,24 @@ void main() {
         overview: CreatorOverview.zero,
       ),
     );
+  });
+
+  // 中文注释：创作者页只展示稳定用户文案，不泄漏 Worker 原始错误码和错误前缀。
+  testWidgets('身份投影不可用时创作者页显示稳定状态而不是原始后端异常', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: CreatorPage(
+          service: _IdentityUnavailableCreatorService(),
+          initialCidNumber: cidNumber,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前钱包身份尚未同步或绑定，请稍后重试'), findsOneWidget);
+    expect(find.textContaining('刷新失败'), findsNothing);
+    expect(find.textContaining('cid_not_bound'), findsNothing);
+    expect(find.text('请先添加钱包账户'), findsNothing);
   });
 
   group('CreatorTier JSON', () {

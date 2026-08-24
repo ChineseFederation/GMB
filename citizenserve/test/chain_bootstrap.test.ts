@@ -21,7 +21,11 @@ describe('chain bootstrap manifest', () => {
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       service: 'citizenapp',
-      worker_version_id: 'candidate-version'
+      worker_version_id: 'candidate-version',
+      // 测试环境没有链 RPC；健康接口必须明确报告投影不可用，不能伪造为已就绪。
+      identity_projection_status: 'unavailable',
+      finalized_block_number: null,
+      cursor_block_number: null,
     });
   });
 

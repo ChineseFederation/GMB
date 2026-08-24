@@ -63,6 +63,15 @@ class _RefreshingSessionProvider extends SquareSessionProvider {
   }
 }
 
+class _IdentityUnavailableSessionProvider extends SquareSessionProvider {
+  @override
+  Future<SquareSessionResolution> resolveSession(
+          {bool refresh = false}) async =>
+      const SquareSessionResolution(
+        SquareSessionStatus.identityUnavailable,
+      );
+}
+
 class _PendingAuthorPostsApi extends FakeProfileApi {
   _PendingAuthorPostsApi() : super(sampleProfile());
 
@@ -318,7 +327,26 @@ void main() {
     expect(api.authorPostCalls, 0);
     expect(find.text('本机保留的正文'), findsNothing);
     expect(find.text('加载失败，下拉重试'), findsNothing);
-    expect(find.text('需要钱包账户才能浏览主页'), findsOneWidget);
+    expect(find.text('请先添加钱包账户'), findsOneWidget);
+    expect(find.text('需要钱包账户才能浏览主页'), findsNothing);
+  });
+
+  // 中文注释：本地钱包仍存在时，后端投影故障不能降级成“需要钱包账户”。
+  testWidgets('身份投影不可用时主页不得误报需要钱包账户', (tester) async {
+    final api = FakeProfileApi(sampleProfile(), throwOnAuthorPosts: true);
+
+    await tester.pumpWidget(
+      _page(
+        api,
+        isSelf: false,
+        sessionProvider: _IdentityUnavailableSessionProvider(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('当前钱包身份尚未同步或绑定，请稍后重试'), findsOneWidget);
+    expect(find.text('请先添加钱包账户'), findsNothing);
+    expect(find.text('需要钱包账户才能浏览主页'), findsNothing);
   });
 
   testWidgets('首次会话仍在建立时不抢跑，Session 到达后当前帖子 Tab 自动加载', (tester) async {

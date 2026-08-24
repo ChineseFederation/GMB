@@ -28,6 +28,8 @@ import {
 
 const BLOCK_HASH_PATTERN = /^0x[0-9a-f]{64}$/;
 const USER_PROJECTION_BLOCK_BATCH = 10;
+const USER_PROJECTION_HEALTH_CACHE_KEY = 'health:user_projection';
+const USER_PROJECTION_HEALTH_CACHE_SECONDS = 60;
 
 export interface UserProjectionDeps {
   fetchFinalizedHead: typeof fetchFinalizedHead;
@@ -62,6 +64,13 @@ export interface UserProjectionReconcileResult {
   processed_block_count: number;
   projected_user_count: number;
   revoked_user_count: number;
+  finalized_block_number: number | null;
+  cursor_block_number: number | null;
+}
+
+/// 对外只暴露投影是否已经追到当前 finalized 头；它复用现有游标表，不创建新表或迁移数据。
+export interface UserProjectionHealth {
+  identity_projection_status: 'ready' | 'pending' | 'unavailable';
   finalized_block_number: number | null;
   cursor_block_number: number | null;
 }
@@ -188,6 +197,116 @@ export async function reconcileFinalizedUserProjection(
     finalized_block_number: finalizedNumber,
     cursor_block_number: cursor.finalized_block_number,
   };
+}
+
+/// 判断用户投影是否足以证明一个账户“确实未绑定”。游标落后时只能判同步中，
+/// 链配置或 RPC 不可用时只能判服务不可用，禁止把这两种情况降级成 cid_not_bound。
+export async function inspectUserProjectionHealth(
+  env: Env,
+  deps: Pick<UserProjectionDeps, 'fetchFinalizedHead' | 'fetchBlockHeader'> = defaultDeps,
+): Promise<UserProjectionHealth> {
+  if (!isChainRpcConfigured(env)) {
+    return {
+      identity_projection_status: 'unavailable',
+      finalized_block_number: null,
+      cursor_block_number: null,
+    };
+  }
+
+  let cursor: UserProjectionCursorRow | null;
+  try {
+    cursor = await readProjectionCursor(env);
+  } catch {
+    return {
+      identity_projection_status: 'unavailable',
+      finalized_block_number: null,
+      cursor_block_number: null,
+    };
+  }
+  if (!cursor) {
+    return {
+      identity_projection_status: 'pending',
+      finalized_block_number: null,
+      cursor_block_number: null,
+    };
+  }
+
+  try {
+    const finalizedHash = await deps.fetchFinalizedHead(env);
+    const finalizedHeader = await deps.fetchBlockHeader(env, finalizedHash);
+    const finalizedNumber = parseBlockNumber(finalizedHeader.number);
+    const cursorNumber = cursor.finalized_block_number;
+    if (cursorNumber < finalizedNumber) {
+      return {
+        identity_projection_status: 'pending',
+        finalized_block_number: finalizedNumber,
+        cursor_block_number: cursorNumber,
+      };
+    }
+    if (cursorNumber === finalizedNumber && cursor.finalized_block_hash === finalizedHash) {
+      return {
+        identity_projection_status: 'ready',
+        finalized_block_number: finalizedNumber,
+        cursor_block_number: cursorNumber,
+      };
+    }
+    // 游标超前或同高度哈希不一致都不是“未绑定”证据，按投影不可用失败关闭。
+    return {
+      identity_projection_status: 'unavailable',
+      finalized_block_number: finalizedNumber,
+      cursor_block_number: cursorNumber,
+    };
+  } catch {
+    return {
+      identity_projection_status: 'unavailable',
+      finalized_block_number: null,
+      cursor_block_number: cursor.finalized_block_number,
+    };
+  }
+}
+
+/// 公共健康接口复用短时 KV 结果，避免匿名探活请求按次数放大内部链 RPC；登录缺失账户的
+/// 安全判定仍直接调用上面的实时检查，不读取此缓存。
+export async function inspectCachedUserProjectionHealth(
+  env: Env,
+  deps: Pick<UserProjectionDeps, 'fetchFinalizedHead' | 'fetchBlockHeader'> = defaultDeps,
+): Promise<UserProjectionHealth> {
+  try {
+    const cached = await env.SQUARE_CACHE.get<UserProjectionHealth>(
+      USER_PROJECTION_HEALTH_CACHE_KEY,
+      'json',
+    );
+    if (isUserProjectionHealth(cached)) return cached;
+  } catch {
+    // KV 探活缓存损坏或暂时不可读时回退实时检查，不能把缓存故障伪装成投影故障。
+  }
+  const health = await inspectUserProjectionHealth(env, deps);
+  try {
+    await env.SQUARE_CACHE.put(
+      USER_PROJECTION_HEALTH_CACHE_KEY,
+      JSON.stringify(health),
+      { expirationTtl: USER_PROJECTION_HEALTH_CACHE_SECONDS },
+    );
+  } catch {
+    // 缓存写失败只影响探活成本，不改变本次真实投影结论。
+  }
+  return health;
+}
+
+function isUserProjectionHealth(value: unknown): value is UserProjectionHealth {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<UserProjectionHealth>;
+  return (
+    candidate.identity_projection_status === 'ready'
+    || candidate.identity_projection_status === 'pending'
+    || candidate.identity_projection_status === 'unavailable'
+  ) && (
+    candidate.finalized_block_number === null
+    || Number.isSafeInteger(candidate.finalized_block_number)
+  ) && (
+    candidate.cursor_block_number === null
+    || Number.isSafeInteger(candidate.cursor_block_number)
+  );
 }
 
 async function projectCanonicalBlock(

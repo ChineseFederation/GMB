@@ -107,6 +107,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
   CitizenProfileMediaSnapshot _profileMedia =
       const CitizenProfileMediaSnapshot();
   SquareSession? _session;
+  SquareSessionStatus? _sessionStatus;
   Future<SquareSession?>? _sessionFuture;
   bool _sessionResolved = false;
   int _postsRevision = 0;
@@ -276,29 +277,17 @@ class _UserProfilePageState extends State<UserProfilePage> {
     return future;
   }
 
-  /// 把成功、无钱包和异常统一收敛成同一个共享 Future，保证并发调用者不会有的收到
-  /// null、有的却收到未捕获异常。
+  /// 首次握手仍由本页统一持有，但失败原因必须保留给内容区，禁止把远端故障伪装成无钱包。
   Future<SquareSession?> _resolveSession(bool refresh) async {
-    try {
-      final session = await (refresh
-          ? _sessionProvider.refreshSession()
-          : _sessionProvider.ensureSession());
-      if (mounted) {
-        setState(() {
-          _session = session;
-          _sessionResolved = true;
-        });
-      }
-      return session;
-    } on Exception {
-      if (mounted) {
-        setState(() {
-          _session = null;
-          _sessionResolved = true;
-        });
-      }
-      return null;
+    final resolution = await _sessionProvider.resolveSession(refresh: refresh);
+    if (mounted) {
+      setState(() {
+        _session = resolution.session;
+        _sessionStatus = resolution.status;
+        _sessionResolved = true;
+      });
     }
+    return resolution.session;
   }
 
   /// 帖子请求收到 401 时清缓存并只重新握手一次；新 Session 仍由本页统一持有。
@@ -635,6 +624,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           emptyLabel: '还没有公文',
           session: session,
           sessionReady: _sessionResolved,
+          sessionUnavailableMessage: _sessionStatus?.message,
           onSessionExpired: _refreshSessionAfterUnauthorized,
           isSelf: widget.isSelf,
           onOpenPost: _openPost,
@@ -648,6 +638,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           emptyLabel: '还没有竞选内容',
           session: session,
           sessionReady: _sessionResolved,
+          sessionUnavailableMessage: _sessionStatus?.message,
           onSessionExpired: _refreshSessionAfterUnauthorized,
           isSelf: widget.isSelf,
           onOpenPost: _openPost,
@@ -663,6 +654,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           emptyLabel: '还没有视频',
           session: session,
           sessionReady: _sessionResolved,
+          sessionUnavailableMessage: _sessionStatus?.message,
           onSessionExpired: _refreshSessionAfterUnauthorized,
           isSelf: widget.isSelf,
           onOpenPost: _openPost,
@@ -677,6 +669,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
           emptyLabel: '还没有文章',
           session: session,
           sessionReady: _sessionResolved,
+          sessionUnavailableMessage: _sessionStatus?.message,
           onSessionExpired: _refreshSessionAfterUnauthorized,
           isSelf: widget.isSelf,
           onOpenPost: _openArticle,

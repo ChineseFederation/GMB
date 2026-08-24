@@ -141,6 +141,15 @@
       ]
     },
     {
+      "domain": "citizenapp",
+      "concept_id": "cursor_block_number",
+      "field_name": "cursor_block_number",
+      "field_name_zh": "用户投影游标区块高度",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": []
+    },
+    {
       "domain": "citizenchain",
       "concept_id": "expected_price_fen",
       "field_name": "expected_price_fen",
@@ -159,12 +168,31 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizenapp",
+      "concept_id": "finalized_block_number",
+      "field_name": "finalized_block_number",
+      "field_name_zh": "链上最终确认区块高度",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": []
+    },
+    {
       "domain": "citizenchain",
       "concept_id": "genesis_hash",
       "field_name": "genesis_hash",
       "field_name_zh": "创世哈希",
       "authority": "polkadot_sdk",
       "data_type": "hash",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "identity_projection_status",
+      "field_name": "identity_projection_status",
+      "field_name_zh": "用户身份投影状态",
+      "authority": "gmb",
+      "data_type": "enum",
+      "value_set_id": "identity_projection_status",
       "forbidden_names": []
     },
     {
@@ -665,6 +693,37 @@
     },
     {
       "domain": "citizenapp",
+      "value_set_id": "identity_projection_status",
+      "value_set_zh": "用户身份投影状态",
+      "authority": "gmb",
+      "value_type": "string",
+      "forbidden_values": [],
+      "values": [
+        {
+          "value": "pending",
+          "full_name_en": "Identity Projection Pending",
+          "short_name_en": "Pending",
+          "full_name_zh": "用户身份投影同步中",
+          "short_name_zh": "同步中"
+        },
+        {
+          "value": "ready",
+          "full_name_en": "Identity Projection Ready",
+          "short_name_en": "Ready",
+          "full_name_zh": "用户身份投影已就绪",
+          "short_name_zh": "已就绪"
+        },
+        {
+          "value": "unavailable",
+          "full_name_en": "Identity Projection Unavailable",
+          "short_name_en": "Unavailable",
+          "full_name_zh": "用户身份投影不可用",
+          "short_name_zh": "不可用"
+        }
+      ]
+    },
+    {
+      "domain": "citizenapp",
       "value_set_id": "membership_level",
       "value_set_zh": "会员档位",
       "authority": "gmb",
@@ -1153,10 +1212,14 @@
         "citizenserve/**"
       ],
       "fields": [
+        "cursor_block_number",
+        "finalized_block_number",
+        "identity_projection_status",
         "mutual_following",
         "post_state"
       ],
       "value_sets": [
+        "identity_projection_status",
         "post_state"
       ]
     },

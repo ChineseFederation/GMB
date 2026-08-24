@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:io';
+
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/rpc/chain_bootstrap_api.dart';
@@ -5,13 +8,49 @@ import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/wallet/core/device_subkey.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
 
+/// 页面建立 CitizenServe 会话后的互斥结果。
+///
+/// `noWallet` 只来自本地默认账户不存在；远端投影、网络和设备认证故障必须保留自己的
+/// 状态，禁止再用 nullable session 把它们伪装成“没有钱包”。
+enum SquareSessionStatus {
+  ready,
+  noWallet,
+  identityUnavailable,
+  identityUnbound,
+  serviceUnavailable,
+  networkUnavailable,
+  deviceUnavailable,
+}
+
+extension SquareSessionStatusText on SquareSessionStatus {
+  String get message => switch (this) {
+        SquareSessionStatus.ready => '',
+        SquareSessionStatus.noWallet => '请先添加钱包账户',
+        SquareSessionStatus.identityUnavailable => '当前钱包身份尚未同步或绑定，请稍后重试',
+        SquareSessionStatus.identityUnbound => '当前默认钱包账户尚未绑定 CID',
+        SquareSessionStatus.serviceUnavailable => '公民服务暂时不可用，请稍后重试',
+        SquareSessionStatus.networkUnavailable => '网络连接失败，请检查网络后重试',
+        SquareSessionStatus.deviceUnavailable => '钱包设备认证暂时不可用，请稍后重试',
+      };
+}
+
+class SquareSessionResolution {
+  const SquareSessionResolution(this.status, {this.session});
+
+  final SquareSessionStatus status;
+  final SquareSession? session;
+
+  String get message => status.message;
+}
+
 /// 广场登录态提供器（全 App 共享单例）。
 ///
 /// 后端会话握手用**当前 CID 的 P-256 硬件设备子钥静默签名**（不读 seed、不弹
 /// 生物识别）换取 session token，由 [SquareApiClient] 内部按 accountId 缓存复用。
 ///
-/// 已有子钥直接静默登录。只有实际登录被 Worker 明确拒绝为 `device_not_registered` 时，
-/// 才鉴权一次生成并登记子钥，然后重试原登录；页面门禁不检查、不生成设备子钥。
+/// 已有子钥直接静默登录。实际登录被 Worker 明确拒绝为 `device_not_registered` 或
+/// `invalid_signature` 时，底层客户端才鉴权一次登记本机子钥并重试；页面门禁不检查、
+/// 不生成设备子钥。
 class SquareSessionProvider {
   SquareSessionProvider({
     SquareApiClient? client,
@@ -64,6 +103,61 @@ class SquareSessionProvider {
     );
     await _activateSessionBinding(session);
     return session;
+  }
+
+  /// 为页面保留失败原因；动作服务仍可使用 [ensureSession] 让异常失败关闭。
+  Future<SquareSessionResolution> resolveSession({bool refresh = false}) async {
+    try {
+      final session = await (refresh ? refreshSession() : ensureSession());
+      if (session == null) {
+        return const SquareSessionResolution(SquareSessionStatus.noWallet);
+      }
+      return SquareSessionResolution(
+        SquareSessionStatus.ready,
+        session: session,
+      );
+    } on SquareApiException catch (error) {
+      if (error.errorCode == 'cid_not_bound' ||
+          error.errorCode == 'identity_projection_pending') {
+        if (error.errorCode == 'cid_not_bound') {
+          final current = await _currentUser.resolve();
+          if (current?.binding == null) {
+            return const SquareSessionResolution(
+              SquareSessionStatus.identityUnbound,
+            );
+          }
+        }
+        // 本机已有 finalized 绑定时，旧 Worker 的 cid_not_bound 只能视为投影未同步。
+        return const SquareSessionResolution(
+          SquareSessionStatus.identityUnavailable,
+        );
+      }
+      if (error.errorCode == 'identity_projection_unavailable' ||
+          (error.statusCode ?? 0) >= 500) {
+        return const SquareSessionResolution(
+          SquareSessionStatus.serviceUnavailable,
+        );
+      }
+      return const SquareSessionResolution(
+        SquareSessionStatus.deviceUnavailable,
+      );
+    } on SocketException {
+      return const SquareSessionResolution(
+        SquareSessionStatus.networkUnavailable,
+      );
+    } on TimeoutException {
+      return const SquareSessionResolution(
+        SquareSessionStatus.networkUnavailable,
+      );
+    } on WalletAuthException {
+      return const SquareSessionResolution(
+        SquareSessionStatus.deviceUnavailable,
+      );
+    } on Exception {
+      return const SquareSessionResolution(
+        SquareSessionStatus.serviceUnavailable,
+      );
+    }
   }
 
   /// Worker 明确返回 401 后清除当前身份账户的本地缓存并重新握手一次。
