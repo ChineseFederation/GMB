@@ -225,16 +225,23 @@ void main() {
     // 防止钱包把其它动作或带有未解释附加数据的载荷展示成可签名发布请求。
     test('生产发布授权严格绑定产品端并拒绝尾字节', () {
       const expiresAt = 1900000000;
-      List<int> publishPayload(String product, String platform) => <int>[
+      // 中文注释：发布授权中的 platform 是产品端身份；官网只能是 web，
+      // 公民服务端只能是 cloudflare，交叉组合必须在冷钱包解码阶段拒绝。
+      List<int> publishPayload(String product, String platform) {
+        final versionTag = product == 'citizenweb'
+            ? 'citizenweb-v1.2.3'
+            : 'citizenserve-cloudflare-v1.2.3';
+        return <int>[
             ...compactVec(product),
             ...compactVec(platform),
-            ...compactVec('$product-v1.2.3'),
+            ...compactVec(versionTag),
             ...List<int>.filled(20, 0x11),
             ...List<int>.filled(32, 0x22),
             ...compactVec('deployment-previous'),
             ...u64Le(expiresAt),
             ...List<int>.filled(32, 0x33),
           ];
+      }
       final payload = publishPayload('citizenweb', 'web');
 
       final decoded = PayloadDecoder.decode(
