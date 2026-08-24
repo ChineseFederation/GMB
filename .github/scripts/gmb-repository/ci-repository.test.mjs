@@ -1653,3 +1653,26 @@ test5("仓库中文注释门禁使用跨平台 Unicode 汉字检测", () => {
   assert5.match(source, /Script=Han/);
   assert5.doesNotMatch(source, /一-龥/);
 });
+
+test5("11 个独立 Release 动作锚定成功 CI 源码且首次版本不递增", () => {
+  const actions = [
+    "citizenapp/release-ios.mjs",
+    "citizenapp/release-android.mjs",
+    "citizenwallet/release-ios.mjs",
+    "citizenwallet/release-android.mjs",
+    "citizenchain/release-node-linux-arm.mjs",
+    "citizenchain/release-node-linux-amd.mjs",
+    "citizenchain/release-node-macos.mjs",
+    "citizenchain/release-node-windows.mjs",
+    "citizenchain/release-runtime-wasm.mjs",
+    "citizenserve/release-cloudflare.mjs",
+    "citizenweb/release-web.mjs",
+  ];
+  for (const action of actions) {
+    const source = readFileSync7(new URL(`../${action}`, import.meta.url), "utf8");
+    assert5.match(source, /process\.env\.GITHUB_WORKSPACE/);
+    assert5.match(source, /realpathSync\(process\.env\.GITHUB_WORKSPACE\)/);
+    assert5.match(source, /normalized\.length === 0 \? seed : nextSemanticVersion\(normalized\.at\(-1\)\)/);
+    assert5.doesNotMatch(source, /nextSemanticVersion\(normalized\.length === 0 \? seed/);
+  }
+});
