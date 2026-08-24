@@ -62,11 +62,23 @@ jobs:
           ref: ${{ inputs.source_sha }}
           fetch-depth: 0
 
+      # 中文注释：产品源码继续固定在成功 CI；前置版本验证必须使用本次 Release
+      # workflow 的隔离工具，禁止从旧 CI 源码执行过期版本算法。
+      - name: 拉取前置 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/citizenchain/release-node-windows.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 验证公民链 Windows Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/citizenchain/release-node-windows.mjs version-tag verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-node-windows.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-node-windows-v --product-id citizenchain-node

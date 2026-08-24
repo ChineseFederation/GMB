@@ -1676,3 +1676,19 @@ test5("11 个独立 Release 动作锚定成功 CI 源码且首次版本不递增
     assert5.doesNotMatch(source, /nextSemanticVersion\(normalized\.length === 0 \? seed/);
   }
 });
+
+test5("节点 Release 前置验证与正式构建统一使用隔离工具", () => {
+  const workflows = [
+    ["release-node-linux-arm.yml", "release-node-linux-arm.mjs"],
+    ["release-node-linux-amd.yml", "release-node-linux-amd.mjs"],
+    ["release-node-macos.yml", "release-node-macos.mjs"],
+    ["release-node-windows.yml", "release-node-windows.mjs"],
+  ];
+  for (const [workflow, action] of workflows) {
+    const source = readFileSync7(new URL(`../../workflows/citizenchain/${workflow}`, import.meta.url), "utf8");
+    const verifier = `node release-tool/.github/scripts/citizenchain/${action} version-tag verify-release-source`;
+    assert5.ok(source.includes(verifier), `${workflow} 前置验证未使用隔离 Release 工具`);
+    assert5.doesNotMatch(source, new RegExp(`node \.github/scripts/citizenchain/${action} version-tag verify-release-source`));
+    assert5.ok(source.indexOf("拉取前置 Release 工具") < source.indexOf(verifier));
+  }
+});
