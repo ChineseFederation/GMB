@@ -1,73 +1,26 @@
-# React + TypeScript + Vite
+# CitizenWeb
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+CitizenWeb 是公民官网的 React、TypeScript 与 Vite 静态站点产品。正式发布由本机
+CitizenConsole 从 GitHub 正式 Release 读取已构建产物，并通过 Cloudflare Pages
+Direct Upload API 发布；GitHub 只执行 CI 和 Release，不执行官网发布。
 
-Currently, two official plugins are available:
+## 本地命令
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
-
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
+npm run build
+npm run lint
+npm test
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## 发布契约
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+- 正式产物位于 `dist/`，必须包含 `index.html`、内容哈希静态资源和
+  `citizenweb-release.json`。
+- Release 的 `release-manifest.json` 与 `SHA256SUMS` 是产物完整性真源，发布器必须逐项
+  复核后才能上传。
+- Cloudflare Pages 在没有顶层 `404.html` 时原生提供 SPA 路由回退。禁止增加
+  `/* /index.html 200` 的 `_redirects`，因为该规则会优先改写真实 JS、CSS 和图片请求。
+- CitizenConsole 使用 Cloudflare 官方 Direct Upload 的 asset store、deployment、状态轮询、
+  生产切换和回滚接口；发布后必须确认本次 deployment 已成为最新生产 deployment，并按
+  Release SHA-256 验收所有公开文件。

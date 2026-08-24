@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import {
   cpSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -70,7 +71,6 @@ function fixture(root, name = 'fixture') {
   cpSync(join(projectPath, 'package-lock.json'), join(path, 'package-lock.json'));
   writeFileSync(join(path, 'dist', 'index.html'), '<!doctype html><script src="/assets/app.js"></script>\n');
   writeFileSync(join(path, 'dist', 'assets', 'app.js'), 'console.log("citizenweb");\n');
-  writeFileSync(join(path, 'dist', '_redirects'), '/* /index.html 200\n');
   return path;
 }
 
@@ -148,6 +148,10 @@ test('官网公开版本标记绑定软件版本、Git SHA 和全部静态资源
     assets_sha256: candidate.manifest.assets_sha256,
   });
   assert.ok(candidate.manifest.files.some(({ path }) => path === 'dist/assets/app.js'));
+});
+
+test('官网依赖 Cloudflare Pages 原生 SPA 回退，不发布全局资源改写规则', () => {
+  assert.equal(existsSync(join(projectPath, 'public', '_redirects')), false);
 });
 
 test('规范归档可安全解包并复核为原候选', () => {
