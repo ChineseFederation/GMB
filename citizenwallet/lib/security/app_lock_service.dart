@@ -410,6 +410,7 @@ class AppLockService {
       }
     }
 
+    // 先确认硬件密钥删除并保留可重试索引，再清空平台安全存储，避免失败后丢失密钥清理依据。
     if (markerReady && walletSecretsDeleted) {
       await _attemptWipe(
         'SecureStorage',

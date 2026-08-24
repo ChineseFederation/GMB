@@ -153,6 +153,7 @@ class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
   void initState() {
     super.initState();
     _result = widget.initialResult;
+    // 擦除待重试时不再等待用户操作；完成态也立即退出，禁止停留在恢复页面重新进入业务流程。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_result == AppDataWipeStartupResult.retryRequired) {
         unawaited(_retryUntilComplete());

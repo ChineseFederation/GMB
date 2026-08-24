@@ -65,6 +65,7 @@ class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
   void initState() {
     super.initState();
     _result = widget.initialResult;
+    // 擦除待重试时自动进入受保护执行；完成态立即退出，冷钱包页面不得在任一终态重新开放。
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_result == AppDataWipeStartupResult.retryRequired) {
         unawaited(_retryUntilComplete());
