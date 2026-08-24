@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 清理目标平台缓存 + 重新编译 + 把 Release 公民覆盖升级到设备。
+# 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
 # CitizenConsole 原生安全进程在 Touch ID 后签名并安装。
 #
-# 用法：citizenapp-run.sh <ios|android|google-play-baseline>
-# CI 只读产物门禁：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
+# 用法：citizenapp-run.sh <ios|android>
+# 只读包检查：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
 #
 # 目标平台是必填参数，不做任何自动探测：探测总要在失败时选一个回落，
 # 而回落的那一端会被当成用户想编的那一端——「以为编了 iOS、实际编的 Android」
@@ -17,15 +17,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_ROOT="$SCRIPT_DIR/.."
 REPO_ROOT="$SCRIPT_DIR/../.."
-PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android|google-play-baseline>}"
-[[ "$PLATFORM" == ios || "$PLATFORM" == android || "$PLATFORM" == google-play-baseline \
+PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
+[[ "$PLATFORM" == ios || "$PLATFORM" == android \
   || "$PLATFORM" == verify-ios-localization || "$PLATFORM" == verify-android-localization ]] \
   || { echo "目标平台或检查模式不合法：$PLATFORM" >&2; exit 1; }
-NATIVE_PLATFORM="$PLATFORM"
-[[ "$PLATFORM" != google-play-baseline ]] || NATIVE_PLATFORM=android
 cd "$APP_ROOT"
 
-# 本地编译与 CI/Release 共用仓库根 Flutter 版本真源。禁止直接接受 PATH 中任意
+# 本机编译只读取仓库统一的 Flutter 依赖真源。禁止直接接受 PATH 中任意
 # Flutter；否则同一 iOS 工程会在旧 CocoaPods 与新 SPM 生成状态之间来回切换。
 EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
 ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])' 2>/dev/null || true)"
@@ -197,8 +195,7 @@ if len(apps) != 1 or str(apps[0].get("bundleVersion", "")) != expected:
 }
 
 # 系统权限弹窗由操作系统渲染；App 唯一能提供的是最终包内的受支持语言和本地化产品名。
-# 只检查源码会漏掉 Xcode variant group 未入 Resources 等问题，故本机安装和 CI 都必须
-# 对最终 Runner.app 做同一道回读门禁。
+# 只检查源码会漏掉 Xcode variant group 未入 Resources 等问题，本机安装必须回读最终包。
 verify_ios_release_localization() {
   local app_bundle="$1" info="$1/Info.plist"
   local zh_strings="$1/zh-Hans.lproj/InfoPlist.strings"
@@ -286,7 +283,7 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # Rust 的 iOS、Android 与宿主产物分别位于不同 target 子目录。禁止设备构建执行根级
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
 echo "==> 编译 Rust 原生库（${PLATFORM}）..."
-"$SCRIPT_DIR/build-smoldot-native.sh" "$NATIVE_PLATFORM"
+"$SCRIPT_DIR/build-smoldot-native.sh" "$PLATFORM"
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
 clean_platform_build_outputs
@@ -319,17 +316,18 @@ except Exception:
   echo "    设备: $DEVICE_ID"
 fi
 
-# 「编译」= 把**能直接使用**的最新软件覆盖升级到设备,与 CI / Release 是两条独立通路。
-# 因此一律 build + install,不用 `flutter run`(它只把 App 挂在调试器上跑):
+# 本机「编译」只处理当前工作区源码并覆盖安装到设备，不读取或触发任何远端流程。
+# 一律 build + install，不用 `flutter run`（它只把 App 挂在调试器上跑）：
 #
-# - iOS 必须 release。iOS 14+ 禁止 Flutter debug 版脱离 flutter tooling / Xcode 启动;
+# - `--release` 只是 Flutter 的本机优化配置，不表示或触发项目的 Release 流程。
+# - iOS 必须使用该优化配置。iOS 14+ 禁止 Flutter debug 版脱离 flutter tooling / Xcode 启动;
 #   debug 版装进手机后从桌面点图标必然起不来(系统提示 "Cannot create a FlutterEngine
 #   instance in debug mode",随后 signal 11)——表现就是"一点就闪退"。
 #   iOS 安装直接走 `devicectl device install app`:它接受 flutter 返回的硬件 UDID，
 #   且不会先卸载旧 App；`flutter install` 默认先卸载，会删除钱包数据，永久禁用。
-# - Android 同样只构建 Release。Gradle 输出无私钥候选；脚本退出后由原生安全进程使用
+# - Android 同样构建本机优化包。Gradle 输出无私钥候选；脚本退出后由原生安全进程使用
 #   Data Protection Keychain 内的固定本机开发证书签名，证书一致才保留数据覆盖安装。
-echo "==> 编译 Release 产品..."
+echo "==> 编译本机优化安装包..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
@@ -342,22 +340,10 @@ elif [[ "$PLATFORM" == android ]]; then
   flutter build apk --release --target-platform android-arm64 \
     ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
   [[ -f build/app/outputs/flutter-apk/app-release.apk ]] || {
-    echo "Android Release 无私钥候选不存在" >&2
+    echo "Android 本机无私钥 APK 不存在" >&2
     exit 1
   }
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package build/app/outputs/flutter-apk/app-release.apk
   verify_android_release_localization build/app/outputs/flutter-apk/app-release.apk
-  echo "==> Android Release 候选完成，正在交给原生安全进程做本机开发签名并安装。"
-else
-  # Google Play 新应用只有首个正式签名 AAB 建立轨道基线后，Android Publisher API
-  # 才能完成应用级访问核验。这里只生成无私钥 Release 候选；APP_KEY 仍只由
-  # CitizenConsole 原生安全进程在全新 Touch ID 后读取和签名。
-  flutter build appbundle --release --target-platform android-arm64 \
-    ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
-  [[ -f build/app/outputs/bundle/release/app-release.aab ]] || {
-    echo "Google Play 基线 AAB 无私钥候选不存在" >&2
-    exit 1
-  }
-  "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package build/app/outputs/bundle/release/app-release.aab
-  echo "==> Google Play 基线 AAB 候选完成，正在交给原生安全进程签名。"
+  echo "==> Android 本机候选完成，正在交给原生安全进程做本机开发签名并安装。"
 fi

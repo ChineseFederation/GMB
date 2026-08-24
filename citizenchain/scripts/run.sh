@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CitizenConsole 本机产品启动入口:只构建并运行 Release，不清库，继续使用
+# CitizenConsole 本机产品启动入口：只构建并运行本机优化软件，不清库，继续使用
 # 【冻结 SSOT】(node/chainspecs/citizenchain.plain.json)续跑现有开发数据。
 # 单元测试和开发者手工 Debug 不走本入口；需要清理开发数据或 fresh 链时改用 clean-run.sh。
 #
@@ -112,14 +112,13 @@ GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
 TARGET_DIR="$REPO_ROOT/target"
 GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 
-# 与 CI/Release 共用 .github/dependencies.json 的精确 Node.js 版本和 npm lockfile。
+# 读取仓库统一依赖真源中的精确 Node.js 版本和 npm lockfile。
 # 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
 source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 
-# 本地启动脚本只使用当前源码构建 runtime WASM。
-# runtime 正式升级走链上 setCode，桌面端启动不再从 GitHub CI 下载 wasm 产物。
+# 本机启动脚本只使用当前工作区源码构建 runtime WASM，禁止接受外部 WASM 覆盖。
 unset WASM_FILE
-# Release 是控制台运行的软件构建类型；gmb.dev 是本机开发数据隔离环境，两者彼此独立。
+# Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
 # 本任务不迁移、不删除正式 gmb 数据，也不让控制台启动的软件争用正式安装版 RocksDB。
 export CITIZENCHAIN_DATA_PROFILE=dev
 mkdir -p "$TARGET_DIR" "$GENESIS_STATE_RESOURCE_DIR"
@@ -129,7 +128,7 @@ mkdir -p "$TARGET_DIR" "$GENESIS_STATE_RESOURCE_DIR"
 #   ① 构建 onchina 二进制(节点同目录,设置页手动启动时由 onchina_proc 拉起)+ 前端产物;
 #   ② DB 用内嵌私有 PG(方案 A):借本机 PostgreSQL 二进制起一个 onchina 专属实例(127.0.0.1)。
 # 本机构的"系统签名钥 / 机构身份"是可选配置(签登录 QR / 签发凭证才需要),非启动前提。
-echo "==> 构建 OnChina Release 二进制 + 前端..."
+echo "==> 构建 OnChina 本机优化二进制 + 前端..."
 ( cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 cargo build --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
 ( cd "$REPO_ROOT/onchina/frontend" && npm run build )
@@ -155,9 +154,9 @@ export ONCHINA_TLS_DIR="$HOME/Library/Application Support/gmb.dev/onchina-tls"
 # OnChina 后端不再持有任何链上签名钥:机构操作全部由管理员冷钱包直接冷签,
 # 原平台签名钥与注销凭证签发配置已随注销凭证链路整体删除。
 
-echo "==> 使用本地源码构建 runtime WASM，不下载 GitHub CI WASM..."
+echo "==> 使用当前工作区源码构建本机 runtime WASM..."
 echo "    节点启动产物目录: $TARGET_DIR"
-echo "    Release 运行数据目录: $HOME/Library/Application Support/gmb.dev"
+echo "    本机运行数据目录: $HOME/Library/Application Support/gmb.dev"
 echo "==> 链上中国平台:节点设置页点击「启动」后访问 https://onchina.local:8964"
 
 # ── 启动 ──
@@ -170,11 +169,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     }
     export APPLE_SIGNING_IDENTITY="$MACOS_SIGNING_IDENTITY"
     macos_profile="$(resolve_macos_profile)"
-    echo "    使用新团队 Developer ID 构建带摄像头权限的 Release App"
+    echo "    使用新团队 Developer ID 构建带摄像头权限的本机优化 App"
     # 使用 frontend/package-lock.json 固定的仓库 CLI；禁止回退到本机全局 cargo-tauri 造成版本漂移。
     app_bundle="$TARGET_DIR/release/bundle/macos/citizenchain.app"
     MACOS_APP_BUNDLE="$app_bundle"
-    # Tauri 2 的 build 默认且唯一正式模式就是 Release；--debug 才会切换为开发产物。
+    # Tauri 2 的 build 默认使用优化 profile；--debug 才会切换为调试产物。
     # 编译与封装分离，时间戳瞬时失败时只重试封装签名，不重复整轮 Rust 编译。
     CARGO_INCREMENTAL=0 node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked
     MACOS_APP_PENDING=1
@@ -190,7 +189,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         echo "    [error] Tauri 构建完成但缺少 App 主程序：$app_executable" >&2
         exit 1
     }
-    # Tauri 负责生成产品 App；描述文件属于本机正式材料，绝不进入仓库或 GitHub 候选。
+    # Tauri 负责生成产品 App；描述文件属于本机签名材料，绝不进入仓库或其它产物路径。
     # 嵌入后必须重新封签根 App，使描述文件、唯一 App ID 与权限成为同一个签名整体。
     /usr/bin/ditto "$macos_profile" "$app_bundle/Contents/embedded.provisionprofile"
     run_with_macos_timestamp_retry "描述文件嵌入后的 App 封签" \
@@ -242,11 +241,11 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         | plutil -extract 'com\.apple\.security\.get-task-allow' raw - 2>/dev/null \
         || printf 'false')"
     [[ "$get_task_allow" == "false" ]] || {
-        echo "    [error] macOS Release App 禁止 get-task-allow" >&2
+        echo "    [error] macOS 本机优化 App 禁止 get-task-allow" >&2
         exit 1
     }
     MACOS_APP_PENDING=0
-    echo "    Release 路径、新团队签名、Bundle ID、Hardened Runtime、安全时间戳与 entitlement 校验通过"
+    echo "    本机优化路径、新团队签名、Bundle ID、Hardened Runtime、安全时间戳与 entitlement 校验通过"
     # Build 成功产物只进入 citizenchain 唯一 target/ 根；按完成时间保留最近两份。
     # 先写同卷 staging，完整压缩成功后再原子改名，任何失败都不形成成功代际。
     local_artifact_root="$TARGET_DIR/local-artifacts/macos"

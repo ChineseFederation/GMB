@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 清理目标平台缓存 + 重新编译 + 把 Release CitizenWallet 覆盖升级到设备。
+# 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
 # CitizenConsole 原生安全进程在 Touch ID 后签名并安装。
 #
@@ -15,14 +15,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CITIZENWALLET_DIR="$SCRIPT_DIR/.."
 REPO_ROOT="$SCRIPT_DIR/../.."
-PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android|google-play-baseline>}"
-[[ "$PLATFORM" == ios || "$PLATFORM" == android || "$PLATFORM" == google-play-baseline ]] \
-  || { echo "目标平台只接受 ios、android 或 google-play-baseline：$PLATFORM" >&2; exit 1; }
-NATIVE_PLATFORM="$PLATFORM"
-[[ "$PLATFORM" != google-play-baseline ]] || NATIVE_PLATFORM=android
+PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
+[[ "$PLATFORM" == ios || "$PLATFORM" == android ]] \
+  || { echo "本机目标平台只接受 ios 或 android：$PLATFORM" >&2; exit 1; }
 cd "$CITIZENWALLET_DIR"
 
-# 与 CitizenApp、CI、Release 共用仓库根 Flutter 版本真源；版本不符必须在
+# 与 CitizenApp 共用仓库根 Flutter 依赖真源；版本不符必须在
 # 依赖解析之前失败，不能生成另一套 iOS 依赖状态污染工程。
 EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
 ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])' 2>/dev/null || true)"
@@ -158,15 +156,15 @@ if len(apps) != 1 or str(apps[0].get("bundleVersion", "")) != expected:
   echo "    iOS 原位覆盖完成：Bundle ID=${expected_bundle_id}，Team ID=${team_id}，钱包数据库已保留"
 }
 
-# 索引同步的唯一实现；CI 的两个 job 调的是同一个脚本，三处不会漂移。
+# 本机编译只调用仓库内唯一的索引同步实现，禁止在本脚本复制第二份规则。
 "$SCRIPT_DIR/sync-pallet-registry.sh" "$REPO_ROOT"
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
 clean_platform_build_outputs
 echo "==> 获取依赖..."
 flutter pub get
-# Isar 与 QR 生成文件已经纳入仓库并由 CI 校验。本机四端编译只消费同一份源码，禁止两个
-# 平台在构建过程中同时运行 build_runner 改写源文件。
+# Isar 与 QR 生成文件已经纳入仓库。本机四端编译只消费同一份源码，禁止两个平台在
+# 构建过程中同时运行 build_runner 改写源文件。
 
 # sr25519 原生签名库(schnorrkel)。签名、派生、验签全走它，缺库会在运行时才炸，
 # 所以必须先于 flutter build 产出；实现来自 shared/citizen-signer，
@@ -174,7 +172,7 @@ flutter pub get
 echo "==> 编译原生签名库（${PLATFORM}）..."
 # 必须用绝对路径 SCRIPT_DIR:上方已 cd 进 CITIZENWALLET_DIR,而控制台以相对路径
 # 调本脚本时 $0 是相对串,$(dirname "$0") 会拼在新 cwd 上多套一层目录。
-"$SCRIPT_DIR/build-signer-native.sh" "$NATIVE_PLATFORM"
+"$SCRIPT_DIR/build-signer-native.sh" "$PLATFORM"
 
 # iOS 在脚本内挑选设备并把 id 显式传给系统安装命令；Android 的设备选择、签名证书
 # 比对与覆盖安装全部归原生安全进程，脚本不得取得 APP_KEY 或自行调用 adb 安装。
@@ -198,16 +196,17 @@ except Exception:
   echo "    设备: $DEVICE_ID"
 fi
 
-# 「编译」= 把**能直接使用**的最新软件覆盖升级到设备,与 CI / Release 是两条独立通路。
-# 因此一律 build + install,不用 `flutter run`(它只把 App 挂在调试器上跑)。
+# 本机「编译」只处理当前工作区源码并覆盖安装到设备，不读取或触发任何远端流程。
+# 一律 build + install，不用 `flutter run`（它只把 App 挂在调试器上跑）。
 # 口径与 citizenapp-run.sh 完全一致,详细理由见该脚本同位置注释:
-# - iOS 必须 release:iOS 14+ 禁止 Flutter debug 版脱离 flutter tooling / Xcode 启动,
+# - `--release` 只是 Flutter 的本机优化配置，不表示或触发项目的 Release 流程。
+# - iOS 必须使用该优化配置：iOS 14+ 禁止 Flutter debug 版脱离 flutter tooling / Xcode 启动,
 #   装了 debug 版从桌面点图标必然起不来(表现为"一点就闪退")。安装直接走
 #   `devicectl device install app`，接受 flutter 返回的硬件 UDID 且不先卸载旧 App；
 #   `flutter install` 默认先卸载，会删除钱包数据，永久禁用。
-# - Android 同样只构建 Release。Gradle 输出无私钥候选；脚本退出后由原生安全进程使用
+# - Android 同样构建本机优化包。Gradle 输出无私钥候选；脚本退出后由原生安全进程使用
 #   Data Protection Keychain 内的固定本机开发证书签名，证书一致才保留数据覆盖安装。
-echo "==> 编译 Release 产品..."
+echo "==> 编译本机优化安装包..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release
   "$SCRIPT_DIR/build-signer-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
@@ -218,19 +217,9 @@ if [[ "$PLATFORM" == ios ]]; then
 elif [[ "$PLATFORM" == android ]]; then
   flutter build apk --release --target-platform android-arm64
   [[ -f build/app/outputs/flutter-apk/app-release.apk ]] || {
-    echo "Android Release 无私钥候选不存在" >&2
+    echo "Android 本机无私钥 APK 不存在" >&2
     exit 1
   }
   "$SCRIPT_DIR/build-signer-native.sh" verify-android-package build/app/outputs/flutter-apk/app-release.apk
-  echo "==> Android Release 候选完成，正在交给原生安全进程做本机开发签名并安装。"
-else
-  # 首个 Google Play AAB 只建立应用轨道基线，不属于 CI、Release 或发布流程。
-  # Gradle 继续产出无私钥候选，随后由 CitizenConsole 原生进程经 Touch ID 签名。
-  flutter build appbundle --release --target-platform android-arm64
-  [[ -f build/app/outputs/bundle/release/app-release.aab ]] || {
-    echo "Google Play 基线 AAB 无私钥候选不存在" >&2
-    exit 1
-  }
-  "$SCRIPT_DIR/build-signer-native.sh" verify-android-package build/app/outputs/bundle/release/app-release.aab
-  echo "==> Google Play 基线 AAB 候选完成，正在交给原生安全进程签名。"
+  echo "==> Android 本机候选完成，正在交给原生安全进程做本机开发签名并安装。"
 fi
