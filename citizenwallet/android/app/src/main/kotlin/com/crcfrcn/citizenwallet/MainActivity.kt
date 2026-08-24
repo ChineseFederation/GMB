@@ -27,6 +27,19 @@ class MainActivity : FlutterFragmentActivity() {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                         result.success(null)
                     }
+                    "beginEmergencyWipe" -> {
+                        // 任务退到后台但不销毁 Flutter 引擎，当前进程继续完成不可逆擦除。
+                        window.setFlags(
+                            WindowManager.LayoutParams.FLAG_SECURE,
+                            WindowManager.LayoutParams.FLAG_SECURE
+                        )
+                        moveTaskToBack(true)
+                        result.success(null)
+                    }
+                    "finishEmergencyWipe" -> {
+                        result.success(null)
+                        window.decorView.post { finishAndRemoveTask() }
+                    }
                     "isDeviceRooted" -> {
                         result.success(checkRoot())
                     }

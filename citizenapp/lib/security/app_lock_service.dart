@@ -456,12 +456,9 @@ class AppLockService {
     }
     final failures = <String>[];
     final deleteSecureStorage =
-        debugDeleteSecureStorage ?? appSecureStorage.deleteAll;
-    final clearSharedPreferences = debugClearSharedPreferences ??
-        () async {
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.clear();
-        };
+        debugDeleteSecureStorage ?? _deleteAndVerifySecureStorage;
+    final clearSharedPreferences =
+        debugClearSharedPreferences ?? _clearAndVerifySharedPreferences;
 
     var persistentGateReady = false;
     Object? persistentGateError;
@@ -474,9 +471,9 @@ class AppLockService {
       persistentGateError = error;
     }
 
-    // 持久门闩就绪后按域顺序收口。libmdbx 的进程级实例注册表不保证多个不同 schema
-    // 同时 cold-open/delete；终态擦除没有并行性能诉求，逐域全尝试反而能保证每个失败
-    // 都被准确归因。平台存储仍须等所有业务域尝试结束后才能清理。
+    // 先关闭可能继续写入秘密的 Chat 生产者，再按“硬件密钥 -> 通用安全存储 ->
+    // 数据库和文件”执行。libmdbx 的进程级实例注册表不保证多个不同 schema 同时
+    // cold-open/delete，因此各业务域仍逐项处理并准确归因失败。
     await _attemptWipe(
       'ChatFiles',
       () => ChatRuntime.closeAndDeleteLocalFiles(
@@ -496,6 +493,26 @@ class AppLockService {
       if (walletSecretsDeleted) {
         _walletHardwareSecretsDeletedInProcess = true;
       }
+    }
+    // begin 调用超时不代表原子 marker 没有完成落盘；读取持久态后再决定是否允许
+    // 删除平台安全存储，避免把一次迟到的成功错误降级成跳过密钥清理。
+    if (!persistentGateReady) {
+      try {
+        final state = await ChatRuntime.readPersistentAppDataWipeState(
+          documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
+        ).timeout(_wipeStepTimeout);
+        persistentGateReady = state != ChatPersistentWipeState.none;
+      } catch (error) {
+        persistentGateError ??= error;
+      }
+    }
+    if (persistentGateReady && walletSecretsDeleted) {
+      await _attemptWipe('SecureStorage', deleteSecureStorage, failures);
+    } else if (!persistentGateReady) {
+      failures.add('持久擦除门闩：${persistentGateError ?? '未能落盘'}');
+      failures.add('SecureStorage：持久擦除门闩未就绪，已安全跳过');
+    } else {
+      failures.add('SecureStorage：硬件密钥未全部确认删除，已安全保留重试索引');
     }
     if (walletSecretsDeleted) {
       await _attemptWipe(
@@ -543,33 +560,14 @@ class AppLockService {
       failures,
     );
 
-    if (!persistentGateReady) {
-      try {
-        final state = await ChatRuntime.readPersistentAppDataWipeState(
-          documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
-        ).timeout(_wipeStepTimeout);
-        persistentGateReady = state != ChatPersistentWipeState.none;
-      } catch (error) {
-        persistentGateError ??= error;
-      }
-    }
-
     if (persistentGateReady && walletSecretsDeleted) {
-      await Future.wait<void>(<Future<void>>[
-        _attemptWipe('SecureStorage', deleteSecureStorage, failures),
-        _attemptWipe(
-          'SharedPreferences',
-          clearSharedPreferences,
-          failures,
-        ),
-      ]);
-    } else if (!persistentGateReady) {
-      failures.add('持久擦除门闩：${persistentGateError ?? '未能落盘'}');
-      failures.add('SecureStorage：持久擦除门闩未就绪，已安全跳过');
-      failures.add('SharedPreferences：持久擦除门闩未就绪，已安全跳过');
+      await _attemptWipe(
+        'SharedPreferences',
+        clearSharedPreferences,
+        failures,
+      );
     } else {
-      failures.add('SecureStorage：硬件密钥未全部确认删除，已安全保留重试索引');
-      failures.add('SharedPreferences：硬件密钥未全部确认删除，已安全跳过');
+      failures.add('SharedPreferences：关键擦除前置条件未完成，已安全跳过');
     }
 
     if (failures.isEmpty) {
@@ -584,6 +582,20 @@ class AppLockService {
 
     if (failures.isNotEmpty) {
       throw AppDataWipeException(failures);
+    }
+  }
+
+  static Future<void> _deleteAndVerifySecureStorage() async {
+    await appSecureStorage.deleteAll();
+    if ((await appSecureStorage.readAll()).isNotEmpty) {
+      throw StateError('安全存储仍有残留');
+    }
+  }
+
+  static Future<void> _clearAndVerifySharedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.clear() || prefs.getKeys().isNotEmpty) {
+      throw StateError('偏好设置仍有残留');
     }
   }
 

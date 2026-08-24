@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../ui/app_theme.dart';
 import 'app_lock_service.dart';
+import 'emergency_wipe_platform.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 
 /// 在设置页内输入并确认独立的防共匪密码。
@@ -356,7 +357,7 @@ class _PinInputPageState extends State<PinInputPage> {
   }
 
   Future<void> _triggerDuressModeWipe() async {
-    // 必须先持久化擦除意图；只有门闩落盘成功才允许退出前台。
+    // 必须先持久化擦除意图；只有门闩落盘成功才允许隐藏真实界面。
     await AppLockService.latchPersistentWipe();
     if (!mounted) return;
     _wipeTerminal = true;
@@ -365,14 +366,24 @@ class _PinInputPageState extends State<PinInputPage> {
       _pin = '';
       _error = null;
     });
-    unawaited(() async {
+    // 先让不可返回的中性页面完成绘制，再请求 Android 退到后台；禁止继续暴露密码页。
+    await Future.any<void>(<Future<void>>[
+      WidgetsBinding.instance.endOfFrame,
+      // 某些嵌入器在当前帧之后不再回报 endOfFrame；短兜底不能阻塞擦除启动。
+      Future<void>.delayed(const Duration(milliseconds: 50)),
+    ]);
+    await EmergencyWipePlatform.beginProtectedExecution();
+    while (mounted) {
       try {
         await AppLockService.wipeAllData();
+        await EmergencyWipePlatform.finishProtectedExecution();
+        await SystemNavigator.pop();
+        return;
       } catch (_) {
-        // pending marker 保留，下一次启动会在任何业务初始化前继续擦除。
+        // 不可逆状态下不再询问或允许退出；当前进程自动重试，进程被杀后由启动门闩恢复。
+        await Future<void>.delayed(const Duration(seconds: 1));
       }
-    }());
-    await SystemNavigator.pop();
+    }
   }
 
   Future<void> _showRejectedPin() async {
@@ -491,6 +502,12 @@ class _PinInputPageState extends State<PinInputPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_wipeTerminal) {
+      return const PopScope(
+        canPop: false,
+        child: ColoredBox(color: Colors.black),
+      );
+    }
     return Scaffold(
       appBar: widget.mode != PinInputMode.verify
           ? AppBar(

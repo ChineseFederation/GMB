@@ -13,6 +13,7 @@ import UserNotifications
   private var permissionsChannel: FlutterMethodChannel?
   private var squareMediaChannel: SquareMediaChannel?
   private var updateChannel: FlutterMethodChannel?
+  private var emergencyWipeBackgroundTask: UIBackgroundTaskIdentifier = .invalid
 
   override func application(
     _ application: UIApplication,
@@ -117,6 +118,12 @@ import UserNotifications
         self?.screenshotProtectionEnabled = false
         self?.removeBlur()
         result(nil)
+      case "beginEmergencyWipe":
+        self?.beginEmergencyWipeBackgroundTask()
+        result(nil)
+      case "finishEmergencyWipe":
+        self?.endEmergencyWipeBackgroundTask()
+        result(nil)
       case "isDeviceRooted":
         result(AppDelegate.checkJailbreak())
       case "excludeChatDataFromBackup":
@@ -212,6 +219,23 @@ import UserNotifications
       }
     }
     self.updateChannel = updateChannel
+  }
+
+  /// iOS 不允许应用自行退出后无限运行；这里只申请系统提供的有限后台时间。
+  /// 时间耗尽或进程终止后，已经落盘的 pending 门闩会在下次启动前继续擦除。
+  private func beginEmergencyWipeBackgroundTask() {
+    guard emergencyWipeBackgroundTask == .invalid else { return }
+    emergencyWipeBackgroundTask = UIApplication.shared.beginBackgroundTask(
+      withName: "EmergencyDataWipe"
+    ) { [weak self] in
+      self?.endEmergencyWipeBackgroundTask()
+    }
+  }
+
+  private func endEmergencyWipeBackgroundTask() {
+    guard emergencyWipeBackgroundTask != .invalid else { return }
+    UIApplication.shared.endBackgroundTask(emergencyWipeBackgroundTask)
+    emergencyWipeBackgroundTask = .invalid
   }
 
   static func currentApnsEnvironment(

@@ -13,6 +13,7 @@ import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/chat/chat_tab.dart';
 import 'package:citizenapp/rpc/smoldot_client.dart';
 import 'package:citizenapp/security/app_lock_service.dart';
+import 'package:citizenapp/security/emergency_wipe_platform.dart';
 import 'package:citizenapp/security/pin_input_page.dart';
 import 'package:citizenapp/security/secure_storage.dart';
 import 'package:citizenapp/transaction/transaction_tab_page.dart';
@@ -152,29 +153,43 @@ class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
   void initState() {
     super.initState();
     _result = widget.initialResult;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_result == AppDataWipeStartupResult.retryRequired) {
+        unawaited(_retryUntilComplete());
+      } else if (_result == AppDataWipeStartupResult.dataWiped) {
+        unawaited(SystemNavigator.pop());
+      }
+    });
   }
 
-  Future<void> _retry() async {
+  Future<void> _retryUntilComplete() async {
     if (_retrying || _result != AppDataWipeStartupResult.retryRequired) return;
     setState(() => _retrying = true);
-    try {
-      await AppLockService.wipeAllData();
-      if (!mounted) return;
-      setState(() => _result = AppDataWipeStartupResult.dataWiped);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _result = AppDataWipeStartupResult.retryRequired);
-    } finally {
-      if (mounted) setState(() => _retrying = false);
+    await EmergencyWipePlatform.beginProtectedExecution();
+    while (mounted) {
+      try {
+        await AppLockService.wipeAllData();
+        if (!mounted) return;
+        setState(() => _result = AppDataWipeStartupResult.dataWiped);
+        await EmergencyWipePlatform.finishProtectedExecution();
+        await SystemNavigator.pop();
+        return;
+      } catch (_) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final completed = _result == AppDataWipeStartupResult.dataWiped;
     final preflightBlocked =
         _result == AppDataWipeStartupResult.preflightBlocked;
-    final canRetryWipe = _result == AppDataWipeStartupResult.retryRequired;
+    if (!preflightBlocked) {
+      return const PopScope(
+        canPop: false,
+        child: ColoredBox(color: Colors.black),
+      );
+    }
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -183,42 +198,28 @@ class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(
-                  completed ? Icons.delete_forever : Icons.warning_amber,
+                const Icon(
+                  Icons.warning_amber,
                   size: 56,
-                  color: completed ? AppTheme.primary : AppTheme.danger,
+                  color: AppTheme.danger,
                 ),
                 const SizedBox(height: 20),
-                Text(
-                  completed
-                      ? '数据已清空'
-                      : preflightBlocked
-                          ? '安全状态无法确认'
-                          : '数据清理未完成',
-                  style: const TextStyle(
+                const Text(
+                  '安全状态无法确认',
+                  style: TextStyle(
                     fontSize: 20,
                     fontWeight: FontWeight.w700,
                   ),
                 ),
                 const SizedBox(height: 12),
-                Text(
-                  completed
-                      ? '请退出并重新启动应用。'
-                      : preflightBlocked
-                          ? '应用不会擅自清理任何数据。请退出后重新启动。'
-                          : '为保护本机数据，应用不会继续进入任何功能页。',
+                const Text(
+                  '应用不会擅自清理任何数据。请退出后重新启动。',
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: AppTheme.textSecondary),
+                  style: TextStyle(color: AppTheme.textSecondary),
                 ),
                 const SizedBox(height: 24),
-                if (canRetryWipe)
-                  FilledButton(
-                    onPressed: _retrying ? null : _retry,
-                    child: Text(_retrying ? '正在重试擦除…' : '重试擦除'),
-                  ),
-                if (canRetryWipe) const SizedBox(height: 8),
                 TextButton(
-                  onPressed: _retrying ? null : () => SystemNavigator.pop(),
+                  onPressed: () => SystemNavigator.pop(),
                   child: const Text('退出'),
                 ),
               ],

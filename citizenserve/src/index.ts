@@ -24,29 +24,23 @@ export default {
     }
   },
 
-  // 五个 Cron 达到 Free 账户上限；链投影、订阅对账、R2 巡检和过期上传严格错峰，
-  // 禁止把多组外部调用串进同一次 50 subrequest 配额。
+  // Workers Paid 的五分钟事件顺序执行四组各自有硬批次上限的任务；顺序执行避免并发峰值，
+  // 任一组失败会终止本轮并由下一次 Cron 从各自游标续跑。每日 R2 巡检保持独立。
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     let label = 'unknown';
     let job: Promise<unknown>;
     if (_controller.cron === '*/5 * * * *') {
-      label = 'cleanup';
-      job = Promise.all([
-        cleanupExpiredUploads(env),
-        cleanupSecurityState(env),
-        cleanupExpiredReservations(env),
-        cleanupExpiredSessionIndexes(env),
-        cleanupExpiredChatPushEndpoints(env),
-      ]);
-    } else if (_controller.cron === '1-56/5 * * * *') {
-      label = 'user-projection';
-      job = reconcileFinalizedUserProjection(env);
-    } else if (_controller.cron === '2-57/5 * * * *') {
-      label = 'membership-projection';
-      job = reconcileFinalizedMembershipProjection(env);
-    } else if (_controller.cron === '3-58/5 * * * *') {
-      label = 'subscription-reconcile';
+      label = 'periodic';
       job = (async () => {
+        await Promise.all([
+          cleanupExpiredUploads(env),
+          cleanupSecurityState(env),
+          cleanupExpiredReservations(env),
+          cleanupExpiredSessionIndexes(env),
+          cleanupExpiredChatPushEndpoints(env),
+        ]);
+        await reconcileFinalizedUserProjection(env);
+        await reconcileFinalizedMembershipProjection(env);
         const result = await reconcileSubscriptions(env);
         if (
           isDailyCleanupTime(_controller.scheduledTime) &&

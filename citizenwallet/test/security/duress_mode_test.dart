@@ -82,38 +82,70 @@ void main() {
     var latchCalls = 0;
     var wipeCalls = 0;
     var exitCalls = 0;
+    final events = <String>[];
     AppLockService.debugConfigureForTest(
       isLocked: () async => false,
       verifyPin: (pin) async => pin == '654321'
           ? AppPinVerificationResult.duressMode
           : AppPinVerificationResult.rejected,
-      latchPersistentWipe: () async => latchCalls += 1,
-      wipeAllData: () async => wipeCalls += 1,
+      latchPersistentWipe: () async {
+        latchCalls += 1;
+        events.add('latch');
+      },
+      wipeAllData: () async {
+        wipeCalls += 1;
+        events.add('wipe');
+      },
     );
     tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
       SystemChannels.platform,
       (call) async {
-        if (call.method == 'SystemNavigator.pop') exitCalls += 1;
+        if (call.method == 'SystemNavigator.pop') {
+          exitCalls += 1;
+          events.add('exit');
+        }
+        return null;
+      },
+    );
+    const securityChannel = MethodChannel('citizenwallet/security');
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      securityChannel,
+      (call) async {
+        events.add(call.method);
         return null;
       },
     );
     addTearDown(
-      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
-        SystemChannels.platform,
-        null,
-      ),
+      () async {
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        );
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          securityChannel,
+          null,
+        );
+      },
     );
     await tester.pumpWidget(
       const MaterialApp(home: PinInputPage(mode: PinInputMode.verify)),
     );
     await tester.pump();
     await _enterSixDigitPin(tester, <int>[6, 5, 4, 3, 2, 1]);
-    await tester.pump(const Duration(milliseconds: 300));
+    // 第一个新帧先提交不可返回的中性遮蔽页，随后才开始后台擦除。
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
     expect(find.byType(AlertDialog), findsNothing);
     expect(find.textContaining('密码错误'), findsNothing);
     expect(latchCalls, 1);
     expect(wipeCalls, 1);
     expect(exitCalls, 1);
+    expect(events, <String>[
+      'latch',
+      'beginEmergencyWipe',
+      'wipe',
+      'finishEmergencyWipe',
+      'exit',
+    ]);
   });
 
   testWidgets('单次命中但擦除门闩失败时不得退出或启动擦除', (tester) async {

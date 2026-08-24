@@ -178,7 +178,7 @@ describe("链上 storage 项名锁(Worker ⇔ citizenchain pallet)", () => {
   });
 });
 
-describe("Cloudflare Free 成本硬边界", () => {
+describe("Cloudflare Workers Paid 成本硬边界", () => {
   const wrangler = readFileSync(join(import.meta.dirname, "../wrangler.toml"), "utf8");
   const worker = readFileSync(join(import.meta.dirname, "../src/index.ts"), "utf8");
   const media = readFileSync(join(import.meta.dirname, "../src/media/service.ts"), "utf8");
@@ -187,22 +187,28 @@ describe("Cloudflare Free 成本硬边界", () => {
     "utf8",
   );
 
-  it("只登记五个错峰 Cron，并固定单次 50 subrequest", () => {
+  it("只登记五分钟与每日两条 Cron，并保持各任务批次硬顶", () => {
     const cronConfig = wrangler.match(/crons = (\[[^\n]+\])/);
     expect(cronConfig).not.toBeNull();
     expect(JSON.parse(cronConfig![1])).toEqual([
       "*/5 * * * *",
-      "1-56/5 * * * *",
-      "2-57/5 * * * *",
-      "3-58/5 * * * *",
       "4 3 * * *",
     ]);
     expect(wrangler).not.toContain("[limits]");
     expect(wrangler).not.toContain("cpu_ms");
     expect(wrangler).not.toContain("subrequests =");
-    for (const cron of ["*/5 * * * *", "1-56/5 * * * *", "2-57/5 * * * *", "3-58/5 * * * *", "4 3 * * *"]) {
+    for (const cron of ["*/5 * * * *", "4 3 * * *"]) {
       expect(worker).toContain(`_controller.cron === '${cron}'`);
     }
+    for (const removed of ["1-56/5 * * * *", "2-57/5 * * * *", "3-58/5 * * * *"]) {
+      expect(worker).not.toContain(`_controller.cron === '${removed}'`);
+      expect(wrangler).not.toContain(removed);
+    }
+    for (const task of [
+      "reconcileFinalizedUserProjection(env)",
+      "reconcileFinalizedMembershipProjection(env)",
+      "reconcileSubscriptions(env)",
+    ]) expect(worker).toContain(task);
   });
 
   it("R2、Cache Purge 与每日内容清理均有官方批次硬顶", () => {

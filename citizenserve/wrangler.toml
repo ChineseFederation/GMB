@@ -88,8 +88,9 @@ max_batch_size = 1
 max_retries = 3
 
 [triggers]
-# Free 账户最多五个 Cron；四组五分钟任务逐分钟错峰，R2 巡检独占每日调用。
-crons = ["*/5 * * * *", "1-56/5 * * * *", "2-57/5 * * * *", "3-58/5 * * * *", "4 3 * * *"]
+# Workers Paid 由同一次五分钟事件顺序执行四组有界任务；每日 R2 巡检保持独立。
+# CitizenConsole 发布器必须把这两条准确同步到生产，禁止保留旧五触发器残留。
+crons = ["*/5 * * * *", "4 3 * * *"]
 
 [vars]
 SESSION_TTL_SECONDS = "86400"

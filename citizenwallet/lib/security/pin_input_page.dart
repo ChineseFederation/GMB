@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 
 import '../ui/app_theme.dart';
 import 'app_lock_service.dart';
+import 'emergency_wipe_platform.dart';
 
 Future<bool> showDuressModeSetupDialog(BuildContext context) async {
   return await showDialog<bool>(
@@ -350,14 +351,24 @@ class _PinInputPageState extends State<PinInputPage> {
       _pin = '';
       _error = null;
     });
-    unawaited(() async {
+    // 先绘制不可返回的中性页面，再请求 Android 退到后台，避免残留密码输入界面。
+    await Future.any<void>(<Future<void>>[
+      WidgetsBinding.instance.endOfFrame,
+      // 某些嵌入器在当前帧之后不再回报 endOfFrame；短兜底不能阻塞擦除启动。
+      Future<void>.delayed(const Duration(milliseconds: 50)),
+    ]);
+    await EmergencyWipePlatform.beginProtectedExecution();
+    while (mounted) {
       try {
         await AppLockService.wipeAllData();
+        await EmergencyWipePlatform.finishProtectedExecution();
+        await SystemNavigator.pop();
+        return;
       } catch (_) {
-        // pending marker 保留，下次启动会在页面构造前继续擦除。
+        // 不可逆状态下不再询问或允许退出；当前进程自动重试，进程被杀后由启动门闩恢复。
+        await Future<void>.delayed(const Duration(seconds: 1));
       }
-    }());
-    await SystemNavigator.pop();
+    }
   }
 
   Future<void> _showDataWipedTerminal() async {
@@ -439,6 +450,12 @@ class _PinInputPageState extends State<PinInputPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_wipeTerminal) {
+      return const PopScope(
+        canPop: false,
+        child: ColoredBox(color: Colors.black),
+      );
+    }
     return Scaffold(
       appBar: widget.mode != PinInputMode.verify
           ? AppBar(title: Text(_title), centerTitle: true)

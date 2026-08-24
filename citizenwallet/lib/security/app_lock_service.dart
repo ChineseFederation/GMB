@@ -410,6 +410,18 @@ class AppLockService {
       }
     }
 
+    if (markerReady && walletSecretsDeleted) {
+      await _attemptWipe(
+        'SecureStorage',
+        debugDeleteSecureStorage ?? _deleteAndVerifySecureStorage,
+        failures,
+      );
+    } else if (!markerReady) {
+      failures.add('SecureStorage：持久擦除门闩未就绪，已安全跳过');
+    } else {
+      failures.add('SecureStorage：硬件密钥未全部确认删除，已安全保留重试索引');
+    }
+
     if (walletSecretsDeleted) {
       await _attemptWipe(
         'WalletIsar',
@@ -422,25 +434,12 @@ class AppLockService {
 
     if (markerReady && walletSecretsDeleted) {
       await _attemptWipe(
-        'SecureStorage',
-        debugDeleteSecureStorage ?? _secure.deleteAll,
-        failures,
-      );
-      await _attemptWipe(
         'SharedPreferences',
-        debugClearSharedPreferences ??
-            () async {
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.clear();
-            },
+        debugClearSharedPreferences ?? _clearAndVerifySharedPreferences,
         failures,
       );
-    } else if (!markerReady) {
-      failures.add('SecureStorage：持久擦除门闩未就绪，已安全跳过');
-      failures.add('SharedPreferences：持久擦除门闩未就绪，已安全跳过');
     } else {
-      failures.add('SecureStorage：硬件密钥未全部确认删除，已安全保留重试索引');
-      failures.add('SharedPreferences：硬件密钥未全部确认删除，已安全跳过');
+      failures.add('SharedPreferences：关键擦除前置条件未完成，已安全跳过');
     }
 
     if (failures.isEmpty) {
@@ -453,6 +452,20 @@ class AppLockService {
       }
     }
     if (failures.isNotEmpty) throw AppDataWipeException(failures);
+  }
+
+  static Future<void> _deleteAndVerifySecureStorage() async {
+    await _secure.deleteAll();
+    if ((await _secure.readAll()).isNotEmpty) {
+      throw StateError('安全存储仍有残留');
+    }
+  }
+
+  static Future<void> _clearAndVerifySharedPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!await prefs.clear() || prefs.getKeys().isNotEmpty) {
+      throw StateError('偏好设置仍有残留');
+    }
   }
 
   static Future<void> _attemptWipe(

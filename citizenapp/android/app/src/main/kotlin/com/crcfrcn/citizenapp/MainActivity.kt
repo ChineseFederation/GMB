@@ -76,6 +76,21 @@ class MainActivity : FlutterFragmentActivity() {
                         window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
                         result.success(null)
                     }
+                    "beginEmergencyWipe" -> {
+                        // 先把任务移出最近使用界面，但不 finish Activity，保留 Flutter
+                        // 引擎继续清除密钥与数据；进程若被系统终止则由 pending 门闩恢复。
+                        window.setFlags(
+                            WindowManager.LayoutParams.FLAG_SECURE,
+                            WindowManager.LayoutParams.FLAG_SECURE
+                        )
+                        moveTaskToBack(true)
+                        result.success(null)
+                    }
+                    "finishEmergencyWipe" -> {
+                        // 先回复 Dart，下一轮主线程消息再移除任务，避免通道响应被销毁截断。
+                        result.success(null)
+                        window.decorView.post { finishAndRemoveTask() }
+                    }
                     "isDeviceRooted" -> {
                         result.success(checkRoot())
                     }
