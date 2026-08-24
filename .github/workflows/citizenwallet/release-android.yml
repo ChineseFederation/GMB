@@ -22,17 +22,12 @@ on:
         description: 本次候选软件版本
         required: true
         type: string
-      build_number:
-        description: 本次候选构建号
-        required: true
-        type: string
 
 env:
   GMB_SOURCE_SHA: ${{ inputs.source_sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
-  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
 
 concurrency:
   group: citizenwallet-release-android
@@ -82,7 +77,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -235,7 +230,7 @@ jobs:
           test "$apk_certificate_sha256" = "$key_certificate_sha256"
           test "$apk_certificate_sha256" = "$aab_certificate_sha256"
           test "$(apkanalyzer manifest application-id "$publish/citizenwallet.apk")" = com.crcfrcn.citizenwallet
-          test "$(apkanalyzer manifest version-code "$publish/citizenwallet.apk")" = "$GMB_BUILD_NUMBER"
+          test "$(apkanalyzer manifest version-code "$publish/citizenwallet.apk")" = "$GITHUB_RUN_NUMBER"
 
       - name: 生成并核验 Android 正式清单
         run: |
@@ -247,7 +242,7 @@ jobs:
             const digest = (name) => createHash("sha256").update(fs.readFileSync(`${root}/${name}`)).digest("hex");
             fs.writeFileSync(`${root}/citizenwallet-release-android.json`, `${JSON.stringify({
               product_id: "citizenwallet", version: process.env.GMB_SOFTWARE_VERSION,
-              build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+              github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
               bundle_id: "ios.citizenwallet", package_name: "com.crcfrcn.citizenwallet",
               assets: [
                 { platform: "android", asset_name: "citizenwallet.apk", asset_sha256: digest("citizenwallet.apk") },

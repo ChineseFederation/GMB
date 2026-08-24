@@ -18,8 +18,8 @@ on:
         required: true
         type: string
       source_sha:
-        description: GitHub main 准确提交
-        required: true
+        description: 成功 CI 准确提交（仅 Release）
+        required: false
         type: string
       ci_run_id:
         description: 对应成功 CI run id（仅 Release）
@@ -31,10 +31,6 @@ on:
         type: string
       software_version:
         description: 候选软件版本
-        required: false
-        type: string
-      build_number:
-        description: 移动端候选构建号
         required: false
         type: string
       spec_version:
@@ -68,11 +64,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
-  GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && inputs.source_sha || github.sha }}
+  # CI 始终使用 workflow_dispatch 创建时由 GitHub 锁定的 main 提交；只有 Release
+  # 使用对应成功 CI 的 source_sha。禁止控制台给 CI 注入预读或历史提交。
+  GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && contains(inputs.pipeline, '/release-') && inputs.source_sha || github.sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
-  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
   GMB_SPEC_VERSION: ${{ inputs.spec_version }}
   GMB_CHAIN_SPEC_VERSION: ${{ inputs.chain_spec_version }}
   GMB_CHAIN_GENESIS_HASH: ${{ inputs.genesis_hash }}
@@ -88,6 +85,7 @@ jobs:
         env:
           PIPELINE: ${{ inputs.pipeline }}
           RUN_TITLE: ${{ inputs.run_title }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
         run: |
           node <<'NODE'
           const routes = new Map([
@@ -117,6 +115,14 @@ jobs:
           ]);
           if (routes.get(process.env.PIPELINE) !== process.env.RUN_TITLE) {
             throw new Error(`未登记或标题不匹配的分组流水线：${process.env.PIPELINE}`);
+          }
+          const isCI = /\/ci-[^/]+\.ya?ml$/.test(process.env.PIPELINE);
+          const isRelease = /\/release-[^/]+\.ya?ml$/.test(process.env.PIPELINE);
+          if (isCI && process.env.SOURCE_SHA !== '') {
+            throw new Error('CI 禁止接收 source_sha；源码必须使用任务创建时的 github.sha');
+          }
+          if (isRelease && !/^[0-9a-f]{40}$/.test(process.env.SOURCE_SHA)) {
+            throw new Error('Release 必须指定成功 CI 的准确 source_sha');
           }
           NODE
 
@@ -283,7 +289,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
@@ -298,7 +304,7 @@ jobs:
           from pathlib import Path
 
           version = os.environ["GMB_SOFTWARE_VERSION"]
-          build = os.environ["GMB_BUILD_NUMBER"]
+          build = os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -360,7 +366,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
       - name: 校验代码来源并应用候选版本
@@ -370,7 +376,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -509,7 +515,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
@@ -524,7 +530,7 @@ jobs:
           from pathlib import Path
 
           version = os.environ["GMB_SOFTWARE_VERSION"]
-          build = os.environ["GMB_BUILD_NUMBER"]
+          build = os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -586,7 +592,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
       - name: 校验代码来源并应用候选版本
@@ -596,7 +602,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -710,7 +716,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
@@ -741,7 +747,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -901,7 +907,7 @@ jobs:
           test "$apk_certificate_sha256" = "$key_certificate_sha256"
           test "$apk_certificate_sha256" = "$aab_certificate_sha256"
           test "$(apkanalyzer manifest application-id "$publish/citizenapp.apk")" = com.crcfrcn.citizenapp
-          test "$(apkanalyzer manifest version-code "$publish/citizenapp.apk")" = "$GMB_BUILD_NUMBER"
+          test "$(apkanalyzer manifest version-code "$publish/citizenapp.apk")" = "$GITHUB_RUN_NUMBER"
 
       - name: 生成并核验 Android 正式清单
         run: |
@@ -913,7 +919,7 @@ jobs:
             const digest = (name) => createHash("sha256").update(fs.readFileSync(`${root}/${name}`)).digest("hex");
             fs.writeFileSync(`${root}/citizenapp-release-android.json`, `${JSON.stringify({
               product_id: "citizenapp", version: process.env.GMB_SOFTWARE_VERSION,
-              build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+              github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
               bundle_id: "ios.citizenapp", package_name: "com.crcfrcn.citizenapp",
               assets: [
                 { platform: "android", asset_name: "citizenapp.apk", asset_sha256: digest("citizenapp.apk") },
@@ -956,7 +962,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
@@ -987,7 +993,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -1156,7 +1162,7 @@ jobs:
           const digest = createHash('sha256').update(fs.readFileSync(`${root}/citizenapp.ipa`)).digest('hex');
           fs.writeFileSync(`${root}/citizenapp-release-ios.json`, `${JSON.stringify({
             product_id: 'citizenapp', version: process.env.GMB_SOFTWARE_VERSION,
-            build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+            github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
             bundle_id: 'ios.citizenapp', package_name: 'com.crcfrcn.citizenapp',
             assets: [{ platform: 'ios', asset_name: 'citizenapp.ipa', asset_sha256: digest }],
           }, null, 2)}\n`);
@@ -1198,7 +1204,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       # 桌面端与两款移动产品共用 shared/branding/logo.png 唯一母版。
@@ -1232,7 +1238,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -1328,7 +1334,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用节点候选版本
         shell: bash
@@ -1492,7 +1498,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       # 桌面端与两款移动产品共用 shared/branding/logo.png 唯一母版。
@@ -1526,7 +1532,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -1622,7 +1628,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用节点候选版本
         shell: bash
@@ -1785,7 +1791,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       # 桌面端与两款移动产品共用 shared/branding/logo.png 唯一母版。
@@ -1818,7 +1824,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -1914,7 +1920,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用节点候选版本
         shell: bash
@@ -2122,7 +2128,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       # 桌面端与两款移动产品共用 shared/branding/logo.png 唯一母版。
@@ -2155,7 +2161,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
@@ -2251,7 +2257,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用节点候选版本
         shell: bash
@@ -2400,7 +2406,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源与 Runtime 源码版本
         run: |
@@ -2621,7 +2627,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       - name: 验证公民链 LinuxAMD Release 的正式版本 Tag
@@ -2669,7 +2675,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -2886,7 +2892,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       - name: 验证公民链 LinuxARM Release 的正式版本 Tag
@@ -2934,7 +2940,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -3150,7 +3156,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       - name: 验证公民链 macOS Release 的正式版本 Tag
@@ -3197,7 +3203,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -3458,7 +3464,7 @@ jobs:
       - name: 拉取完整变更历史
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
       - name: 验证公民链 Windows Release 的正式版本 Tag
@@ -3505,7 +3511,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -3702,7 +3708,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -3981,7 +3987,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用候选版本
         run: |
@@ -4091,7 +4097,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -4226,7 +4232,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
@@ -4239,7 +4245,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -4388,7 +4394,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
@@ -4401,7 +4407,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -4480,7 +4486,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用候选版本
         run: |
@@ -4489,7 +4495,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -4594,7 +4600,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -4624,7 +4630,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -4777,7 +4783,7 @@ jobs:
           test "$apk_certificate_sha256" = "$key_certificate_sha256"
           test "$apk_certificate_sha256" = "$aab_certificate_sha256"
           test "$(apkanalyzer manifest application-id "$publish/citizenwallet.apk")" = com.crcfrcn.citizenwallet
-          test "$(apkanalyzer manifest version-code "$publish/citizenwallet.apk")" = "$GMB_BUILD_NUMBER"
+          test "$(apkanalyzer manifest version-code "$publish/citizenwallet.apk")" = "$GITHUB_RUN_NUMBER"
 
       - name: 生成并核验 Android 正式清单
         run: |
@@ -4789,7 +4795,7 @@ jobs:
             const digest = (name) => createHash("sha256").update(fs.readFileSync(`${root}/${name}`)).digest("hex");
             fs.writeFileSync(`${root}/citizenwallet-release-android.json`, `${JSON.stringify({
               product_id: "citizenwallet", version: process.env.GMB_SOFTWARE_VERSION,
-              build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+              github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
               bundle_id: "ios.citizenwallet", package_name: "com.crcfrcn.citizenwallet",
               assets: [
                 { platform: "android", asset_name: "citizenwallet.apk", asset_sha256: digest("citizenwallet.apk") },
@@ -4830,7 +4836,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具
@@ -4860,7 +4866,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenWallet 候选版本输入无效")
           path = Path("citizenwallet/pubspec.yaml")
@@ -5029,7 +5035,7 @@ jobs:
           const digest = createHash('sha256').update(fs.readFileSync(`${root}/citizenwallet.ipa`)).digest('hex');
           fs.writeFileSync(`${root}/citizenwallet-release-ios.json`, `${JSON.stringify({
             product_id: 'citizenwallet', version: process.env.GMB_SOFTWARE_VERSION,
-            build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+            github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
             bundle_id: 'ios.citizenwallet', package_name: 'com.crcfrcn.citizenwallet',
             assets: [{ platform: 'ios', asset_name: 'citizenwallet.ipa', asset_sha256: digest }],
           }, null, 2)}\n`);
@@ -5066,7 +5072,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       - name: 校验代码来源并应用候选版本
         run: |
@@ -5153,7 +5159,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 中文注释：产品源码保持在成功 CI 提交；Release 工具从本次 workflow 提交隔离读取。
       - name: 拉取 Release 工具

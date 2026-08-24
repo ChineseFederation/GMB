@@ -22,10 +22,6 @@ on:
         description: 本次候选软件版本
         required: true
         type: string
-      build_number:
-        description: 本次候选构建号
-        required: true
-        type: string
 
 concurrency:
   group: citizenapp-release-ios
@@ -44,7 +40,6 @@ env:
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
-  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
 
 jobs:
   # Release 在同一个 GitHub macOS runner 内完成构建、Apple Distribution 签名和 GitHub Release 固化；
@@ -87,7 +82,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -256,7 +251,7 @@ jobs:
           const digest = createHash('sha256').update(fs.readFileSync(`${root}/citizenapp.ipa`)).digest('hex');
           fs.writeFileSync(`${root}/citizenapp-release-ios.json`, `${JSON.stringify({
             product_id: 'citizenapp', version: process.env.GMB_SOFTWARE_VERSION,
-            build_number: Number(process.env.GMB_BUILD_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
+            github_run_number: Number(process.env.GITHUB_RUN_NUMBER), head_sha: process.env.GMB_SOURCE_SHA,
             bundle_id: 'ios.citizenapp', package_name: 'com.crcfrcn.citizenapp',
             assets: [{ platform: 'ios', asset_name: 'citizenapp.ipa', asset_sha256: digest }],
           }, null, 2)}\n`);

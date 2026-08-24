@@ -1425,6 +1425,9 @@ test5("\u5168\u90E8 CI \u53EA\u9A8C\u8BC1\u6784\u5EFA\uFF0C\u4E0D\u521B\u5EFA Ta
     assert5.doesNotMatch(source, /finalize-version-tag|finalize-semantic-ci|finalize-runtime-ci/);
     assert5.doesNotMatch(source, /contents:\s*write/);
     assert5.doesNotMatch(source, /GMB_VERSION_TAG/);
+    assert5.doesNotMatch(source, /inputs\.source_sha|source_sha:\s*\n/);
+    assert5.match(source, /GMB_SOURCE_SHA: \$\{\{ github\.sha \}\}/);
+    assert5.match(source, /ref: \$\{\{ github\.sha \}\}/);
   }
   const runtimeCI = readFileSync7(new URL("../../workflows/citizenchain/ci-runtime-wasm.yml", import.meta.url), "utf8");
   assert5.doesNotMatch(runtimeCI, /chain_spec_version:|genesis_hash:|finalized_head:|inputs\.spec_version/u);
@@ -1535,6 +1538,9 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   assert5.match(repositorySource, /actions\/runs\/\$\{previous\}/);
   assert5.match(repositorySource, /needs: retain-current-run/g);
   assert5.match(repositorySource, /inputs\.pipeline/);
+  assert5.match(repositorySource, /contains\(inputs\.pipeline, '\/release-'\)[\s\S]*inputs\.source_sha \|\| github\.sha/);
+  assert5.match(repositorySource, /CI 禁止接收 source_sha/);
+  assert5.match(repositorySource, /Release 必须指定成功 CI 的准确 source_sha/);
   assert5.match(repositorySource, /actions\/upload-artifact/);
   const contract = JSON.parse(readFileSync7(new URL("../../../.github/dependencies.json", import.meta.url), "utf8"));
   const productWorkflows = Object.entries(contract.scopes)

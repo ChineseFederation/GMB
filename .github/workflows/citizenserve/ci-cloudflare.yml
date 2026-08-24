@@ -6,10 +6,6 @@ run-name: 公民服务端 · CI · Cloudflare
 on:
   workflow_dispatch:
     inputs:
-      source_sha:
-        description: GitHub main 准确提交
-        required: true
-        type: string
       software_version:
         description: 本次候选软件版本
         required: true
@@ -27,7 +23,7 @@ permissions:
 env:
   CI: 1
   WRANGLER_SEND_METRICS: false
-  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOURCE_SHA: ${{ github.sha }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
 
 jobs:
@@ -38,7 +34,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
 
       - name: 校验代码来源并应用候选版本
         run: |

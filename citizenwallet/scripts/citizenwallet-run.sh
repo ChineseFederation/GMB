@@ -9,7 +9,7 @@
 # 而回落的那一端会被当成用户想编的那一端。控制台的「编译iOS端 / 编译Android端」
 # 两个按钮各自传死这个参数。与 citizenapp-run.sh 同口径。
 #
-# 本机成功 Build 的最终签名包按端保存在本项目唯一 build/ 根内，只留最近两个构建号；
+# 本机成功 Build 的最终签名包按端保存在本项目唯一 build/ 根内，只留最近两个任务产物；
 # Flutter 中间树与失败候选不属于成功产物，失败后不得进入该目录。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -45,7 +45,10 @@ clean_platform_build_outputs() {
 
 retain_ios_local_artifact() {
   local app_bundle="$1" root="$CITIZENWALLET_DIR/build/local-artifacts/ios"
-  local staging="$root/.staging-${BUILD_NUMBER}-$$" destination="$root/$BUILD_NUMBER"
+  local artifact_id staging destination
+  artifact_id="$(date -u +%Y%m%dT%H%M%SZ)-$"
+  staging="$root/.staging-${artifact_id}"
+  destination="$root/$artifact_id"
   mkdir -p "$root"
   rm -rf "$staging"
   mkdir -p "$staging"
@@ -59,17 +62,14 @@ retain_ios_local_artifact() {
     | sort -nr | tail -n +3 | while IFS= read -r old; do rm -rf "$root/$old"; done
 }
 
-# 内部构建号只由 CitizenConsole 分配；公开软件版本继续由 pubspec.yaml 管理。
-[[ "${GMB_BUILD_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
-  || { echo '缺少 CitizenConsole 分配的内部构建号' >&2; exit 1; }
-BUILD_NUMBER="$GMB_BUILD_NUMBER"
 
 # iOS 必须走 CoreDevice 的原位安装，禁止 `flutter install`：该命令的卸载式安装
 # install 命令默认先卸载旧 App，会连带删除 Application Support 中的钱包 Isar 数据库。
 # `devicectl` 直接接受 Flutter 返回的硬件 UDID。iOS 更新时允许迁移数据容器并改变
 # 绝对路径，因此不能比较 UUID；改为在覆盖前后复读钱包 Isar 文件并核对大小。
 install_ios_update() {
-  local device_id="$1" expected_bundle_id="$2" app_bundle="$3" wallet_database="$4" expected_build_number="$5"
+  local device_id="$1" expected_bundle_id="$2" app_bundle="$3" wallet_database="$4" expected_bundle_version
+  expected_bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_bundle/Info.plist")"
   local actual_bundle_id team_id before_data_container after_data_container
   local before_database_size after_database_size
 
@@ -77,10 +77,6 @@ install_ios_update() {
   actual_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Info.plist" 2>/dev/null || true)"
   [[ "$actual_bundle_id" == "$expected_bundle_id" ]] || {
     echo "iOS Bundle ID 不匹配：期望 ${expected_bundle_id}，实际 ${actual_bundle_id:-空}" >&2
-    return 1
-  }
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_bundle/Info.plist")" == "$expected_build_number" ]] || {
-    echo "iOS App 内部构建号与分配值不一致" >&2
     return 1
   }
   team_id="$(codesign -d --verbose=4 "$app_bundle" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
@@ -150,8 +146,8 @@ import json, sys
 expected = sys.argv[1]
 apps = json.load(sys.stdin).get("result", {}).get("apps", [])
 if len(apps) != 1 or str(apps[0].get("bundleVersion", "")) != expected:
-    raise SystemExit("iOS 设备安装后的内部构建号不一致")
-' "$expected_build_number"
+    raise SystemExit("iOS 设备安装后的包版本标识不一致")
+' "$expected_bundle_version"
   if [[ -n "$before_database_size" ]]; then
     after_database_size="$(ios_wallet_database_size)"
     [[ "$after_database_size" == "$before_database_size" ]] || {
@@ -213,14 +209,14 @@ fi
 #   Data Protection Keychain 内的固定本机开发证书签名，证书一致才保留数据覆盖安装。
 echo "==> 编译 Release 产品..."
 if [[ "$PLATFORM" == ios ]]; then
-  flutter build ios --release --build-number="$BUILD_NUMBER"
+  flutter build ios --release
   "$SCRIPT_DIR/build-signer-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
-  install_ios_update "$DEVICE_ID" ios.citizenwallet build/ios/iphoneos/Runner.app citizenwallet.isar "$BUILD_NUMBER"
+  install_ios_update "$DEVICE_ID" ios.citizenwallet build/ios/iphoneos/Runner.app citizenwallet.isar
   retain_ios_local_artifact build/ios/iphoneos/Runner.app
   echo ""
   echo "==> 安装完成:请在设备桌面点开「公民钱包」。"
 elif [[ "$PLATFORM" == android ]]; then
-  flutter build apk --release --target-platform android-arm64 --build-number="$BUILD_NUMBER"
+  flutter build apk --release --target-platform android-arm64
   [[ -f build/app/outputs/flutter-apk/app-release.apk ]] || {
     echo "Android Release 无私钥候选不存在" >&2
     exit 1
@@ -230,7 +226,7 @@ elif [[ "$PLATFORM" == android ]]; then
 else
   # 首个 Google Play AAB 只建立应用轨道基线，不属于 CI、Release 或发布流程。
   # Gradle 继续产出无私钥候选，随后由 CitizenConsole 原生进程经 Touch ID 签名。
-  flutter build appbundle --release --target-platform android-arm64 --build-number="$BUILD_NUMBER"
+  flutter build appbundle --release --target-platform android-arm64
   [[ -f build/app/outputs/bundle/release/app-release.aab ]] || {
     echo "Google Play 基线 AAB 无私钥候选不存在" >&2
     exit 1

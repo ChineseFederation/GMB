@@ -6,16 +6,8 @@ run-name: 公民 · CI · iOS
 on:
   workflow_dispatch:
     inputs:
-      source_sha:
-        description: GitHub main 准确提交
-        required: true
-        type: string
       software_version:
         description: 本次候选软件版本
-        required: true
-        type: string
-      build_number:
-        description: 本次候选构建号
         required: true
         type: string
 
@@ -31,9 +23,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  GMB_SOURCE_SHA: ${{ inputs.source_sha }}
+  GMB_SOURCE_SHA: ${{ github.sha }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
-  GMB_BUILD_NUMBER: ${{ inputs.build_number }}
 
 jobs:
   # ── 代码检查 ──
@@ -44,7 +35,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
       - name: 校验 Logo 唯一真源派生物
@@ -59,7 +50,7 @@ jobs:
           from pathlib import Path
 
           version = os.environ["GMB_SOFTWARE_VERSION"]
-          build = os.environ["GMB_BUILD_NUMBER"]
+          build = os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
@@ -116,7 +107,7 @@ jobs:
       - name: 拉取代码
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: ${{ github.sha }}
           submodules: recursive
 
       - name: 校验代码来源并应用候选版本
@@ -126,7 +117,7 @@ jobs:
           python3 - <<'PY'
           import os, re
           from pathlib import Path
-          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GMB_BUILD_NUMBER"]
+          version, build = os.environ["GMB_SOFTWARE_VERSION"], os.environ["GITHUB_RUN_NUMBER"]
           if not re.fullmatch(r"\d+\.\d{1,2}\.\d{1,2}", version) or not re.fullmatch(r"[1-9]\d*", build):
               raise SystemExit("CitizenApp 候选版本输入无效")
           path = Path("citizenapp/pubspec.yaml")
