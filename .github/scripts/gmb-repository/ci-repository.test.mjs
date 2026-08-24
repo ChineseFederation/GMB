@@ -547,481 +547,171 @@ test("\u95ED\u96C6\u5B57\u6BB5\u65B0\u589E\u503C\u5FC5\u987B\u5148\u8FDB\u5165\u
   assert.deepEqual(addedClosedValues("signMode: 'hot', label: '\u672C\u673A'", dictionary.concepts, dictionary.valueSets), []);
 });
 
-// ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/github-release.test.mjs
+// GitHub Release 统一事务合同
 import assert2 from "node:assert/strict";
 import test2 from "node:test";
+import { readFileSync as readReleaseScript } from "node:fs";
 
-// ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/citizenapp/release-ios.mjs github-release
-import { lstatSync } from "node:fs";
-import { basename } from "node:path";
-import { spawnSync } from "node:child_process";
-import { pathToFileURL as pathToFileURL2 } from "node:url";
-var SHA_PATTERN = /^[0-9a-f]{40}$/;
-var REPOSITORY_PATTERN = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-var TAG_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/;
-var READ_ATTEMPTS = 7;
-var READ_RETRY_MS = 1e4;
-function required2(condition, message) {
-  if (!condition) throw new Error(message);
-}
-function gh(args, options = {}) {
-  const run = options.run || spawnSync;
-  const wait = options.wait || ((milliseconds) => {
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-  });
-  const attempts = options.retryRead ? READ_ATTEMPTS : 1;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const result = run("gh", args, {
-      encoding: "utf8",
-      input: options.input,
-      env: process.env,
-      maxBuffer: 16 * 1024 * 1024
-    });
-    if (result.error) throw result.error;
-    if (result.status === 0) return String(result.stdout || "").trim();
-    const detail = String(result.stderr || result.stdout || "").trim();
-    if (options.notFound && /(?:HTTP 404|Not Found)/i.test(detail)) return null;
-    const integrationDenied = /HTTP 403:\s*Resource not accessible by integration/i.test(detail);
-    const retryable = options.retryRead && (integrationDenied || /HTTP 5\d\d/i.test(detail));
-    if (!retryable || attempt === attempts) {
-      throw new Error(detail || `gh \u6267\u884C\u5931\u8D25\uFF0C\u9000\u51FA\u7801 ${result.status}`);
-    }
-    console.error(`[GitHub] Release \u53EA\u8BFB\u63A5\u53E3\u6682\u65F6\u4E0D\u53EF\u7528\uFF0C${READ_RETRY_MS / 1e3} \u79D2\u540E\u91CD\u8BD5\uFF08${attempt}/${attempts - 1}\uFF09`);
-    wait(READ_RETRY_MS);
-  }
-  throw new Error("GitHub Release \u53EA\u8BFB\u63A5\u53E3\u91CD\u8BD5\u72B6\u6001\u5F02\u5E38");
-}
-function json(output, context) {
-  try {
-    return JSON.parse(output);
-  } catch {
-    throw new Error(`${context}\u8FD4\u56DE\u4E86\u65E0\u6548 JSON`);
-  }
-}
-function createClient() {
-  return {
-    async listReleases(repository) {
-      const releases = [];
-      for (let page = 1; page <= 100; page += 1) {
-        const output = gh(["api", `repos/${repository}/releases?per_page=100&page=${page}`], {
-          retryRead: true
-        });
-        const values = json(output, "GitHub Release \u5217\u8868");
-        required2(Array.isArray(values), "GitHub Release \u5217\u8868\u683C\u5F0F\u65E0\u6548");
-        releases.push(...values);
-        if (values.length < 100) return releases;
-      }
-      throw new Error("GitHub Release \u5217\u8868\u8D85\u8FC7\u5B89\u5168\u5206\u9875\u4E0A\u9650");
-    },
-    async getTag(repository, tag) {
-      const output = gh(["api", `repos/${repository}/git/ref/tags/${encodeURIComponent(tag)}`], {
-        notFound: true,
-        retryRead: true
-      });
-      return output === null ? null : json(output, "GitHub Tag");
-    },
-    async getTagObject(repository, objectSHA) {
-      return json(gh(["api", `repos/${repository}/git/tags/${objectSHA}`], { retryRead: true }), "GitHub Tag \u5BF9\u8C61");
-    },
-    async createTag(repository, tag, releaseSHA) {
-      const payload = JSON.stringify({ ref: `refs/tags/${tag}`, sha: releaseSHA });
-      gh(["api", "--method", "POST", `repos/${repository}/git/refs`, "--input", "-"], {
-        input: payload
-      });
-    },
-    async createDraft(input2) {
-      const args = [
-        "release",
-        "create",
-        input2.tag,
-        "--repo",
-        input2.repository,
-        "--verify-tag",
-        "--draft",
-        "--title",
-        input2.title
-      ];
-      if (input2.notes) args.push("--notes", input2.notes);
-      else args.push("--notes-file", input2.notesFile);
-      args.push(...input2.assets.map((asset) => asset.path));
-      gh(args);
-    },
-    async getRelease(repository, releaseId) {
-      return json(gh(["api", `repos/${repository}/releases/${releaseId}`], { retryRead: true }), "GitHub Release");
-    },
-    async getReleaseByTag(repository, tag) {
-      const output = gh(
-        ["api", `repos/${repository}/releases/tags/${encodeURIComponent(tag)}`],
-        { notFound: true, retryRead: true }
-      );
-      return output === null ? null : json(output, "GitHub Tag Release");
-    },
-    async publish(repository, releaseId, latest) {
-      const payload = JSON.stringify({ draft: false, make_latest: latest ? "true" : "false" });
-      gh(["api", "--method", "PATCH", `repos/${repository}/releases/${releaseId}`, "--input", "-"], {
-        input: payload
-      });
-    },
-    async deleteRelease(repository, releaseId) {
-      gh(["api", "--method", "DELETE", `repos/${repository}/releases/${releaseId}`]);
-    },
-    async deleteTag(repository, tag) {
-      gh(["api", "--method", "DELETE", `repos/${repository}/git/refs/tags/${encodeURIComponent(tag)}`]);
-    },
-    async wait() {
-      await new Promise((resolve4) => setTimeout(resolve4, 1e3));
-    }
-  };
-}
-function verifyAssets(release2, assets) {
-  required2(Array.isArray(release2.assets), "GitHub Release \u8D44\u4EA7\u683C\u5F0F\u65E0\u6548");
-  required2(release2.assets.length === assets.length, "GitHub Release \u8D44\u4EA7\u6570\u91CF\u4E0D\u7B26");
-  const actual = /* @__PURE__ */ new Map();
-  for (const asset of release2.assets) {
-    required2(typeof asset?.name === "string" && !actual.has(asset.name), "GitHub Release \u8D44\u4EA7\u540D\u79F0\u91CD\u590D\u6216\u65E0\u6548");
-    actual.set(asset.name, asset);
-  }
-  for (const expected of assets) {
-    const asset = actual.get(expected.name);
-    required2(asset, `GitHub Release \u7F3A\u5C11\u8D44\u4EA7\uFF1A${expected.name}`);
-    required2(asset.state === "uploaded", `GitHub Release \u8D44\u4EA7\u672A\u5B8C\u6210\u4E0A\u4F20\uFF1A${expected.name}`);
-    required2(asset.size === expected.size, `GitHub Release \u8D44\u4EA7\u5927\u5C0F\u4E0D\u7B26\uFF1A${expected.name}`);
-  }
-}
-function verifyRelease(release2, input2, draft) {
-  required2(Number.isSafeInteger(release2?.id) && release2.id > 0, "GitHub Release id \u65E0\u6548");
-  required2(release2.tag_name === input2.tag, "GitHub \u7248\u672C Tag \u4E0D\u7B26");
-  required2(release2.name === input2.title, "GitHub Release \u6807\u9898\u4E0D\u7B26");
-  required2(release2.draft === draft, draft ? "GitHub Release \u4E0D\u662F\u8349\u7A3F" : "GitHub Release \u5C1A\u672A\u56FA\u5316");
-  verifyAssets(release2, input2.assets);
-}
-async function findDraft(client2, input2) {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    const matches = (await client2.listReleases(input2.repository)).filter((value2) => value2?.tag_name === input2.tag && value2?.name === input2.title && value2?.draft === true);
-    required2(matches.length <= 1, `\u53D1\u73B0\u591A\u4E2A\u540C\u540D GitHub Release\uFF1A${input2.tag}`);
-    if (matches.length === 1) return matches[0];
-    await client2.wait();
-  }
-  return null;
-}
-async function versionTagCommit(client2, input2) {
-  const reference = await client2.getTag(input2.repository, input2.tag);
-  required2(reference?.ref === `refs/tags/${input2.tag}` && SHA_PATTERN.test(String(reference?.object?.sha || "")), "\u6B63\u5F0F\u7248\u672C Tag \u4E0D\u5B58\u5728\u6216\u65E0\u6548");
-  if (reference.object.type === "commit") {
-    required2(reference.object.sha === input2.releaseSHA, "\u6B63\u5F0F\u7248\u672C Tag \u672A\u6307\u5411\u672C\u6B21 Release \u63D0\u4EA4");
-    return reference.object.sha;
-  }
-  required2(reference.object.type === "tag", "\u6B63\u5F0F\u7248\u672C Tag \u7C7B\u578B\u65E0\u6548");
-  const object = await client2.getTagObject(input2.repository, reference.object.sha);
-  required2(object?.tag === input2.tag && object?.object?.type === "commit" && object.object.sha === input2.releaseSHA, "\u6B63\u5F0F\u7248\u672C Tag \u672A\u6307\u5411\u672C\u6B21 Release \u63D0\u4EA4");
-  return object.object.sha;
-}
-async function release(input2, client2 = createClient()) {
-  let releaseId = null;
-  let transactionStarted = false;
-  let reuseExistingTag = false;
-  const existing = (await client2.listReleases(input2.repository)).filter((value2) => value2?.tag_name === input2.tag);
-  const published = existing.filter((value2) => value2?.draft === false);
-  required2(published.length === 0, `\u6B63\u5F0F Release \u5DF2\u5B58\u5728\uFF0C\u7981\u6B62\u8986\u76D6\uFF1A${input2.tag}`);
-  const drafts = existing.filter((value2) => value2?.draft === true);
-  required2(drafts.length <= 1, `\u53D1\u73B0\u591A\u4E2A\u540C Tag \u8349\u7A3F Release\uFF1A${input2.tag}`);
-  if (drafts.length === 1) {
-    const draftTag = await client2.getTag(input2.repository, input2.tag);
-    if (draftTag) {
-      await versionTagCommit(client2, input2);
-    } else {
-      required2(
-        drafts[0]?.target_commitish === input2.sourceSHA,
-        "\u9057\u7559\u8349\u7A3F\u672A\u7ED1\u5B9A\u672C\u6B21\u6210\u529F CI \u6E90\u63D0\u4EA4\uFF0C\u7981\u6B62\u6E05\u7406"
-      );
-    }
-    await client2.deleteRelease(input2.repository, drafts[0].id);
-    if (draftTag) await client2.deleteTag(input2.repository, input2.tag);
-  } else {
-    const staleTag = await client2.getTag(input2.repository, input2.tag);
-    if (staleTag) {
-      await versionTagCommit(client2, input2);
-      reuseExistingTag = true;
-    }
-  }
-  try {
-    transactionStarted = true;
-    if (!reuseExistingTag) await client2.createTag(input2.repository, input2.tag, input2.releaseSHA);
-    await client2.createDraft(input2);
-    let draft = await findDraft(client2, input2);
-    required2(draft, `\u65E0\u6CD5\u53D6\u5F97\u65B0\u5EFA\u8349\u7A3F Release\uFF1A${input2.tag}`);
-    releaseId = draft.id;
-    draft = await client2.getRelease(input2.repository, releaseId);
-    verifyRelease(draft, input2, true);
-    await client2.publish(input2.repository, releaseId, input2.latest);
-    const result = await client2.getRelease(input2.repository, releaseId);
-    verifyRelease(result, input2, false);
-    const byTag = await client2.getReleaseByTag(input2.repository, input2.tag);
-    required2(byTag?.id === releaseId, "\u7248\u672C Tag \u672A\u5173\u8054\u672C\u6B21 GitHub Release");
-    await versionTagCommit(client2, input2);
-    console.log(`\u6B63\u5F0F Release \u4E0E\u552F\u4E00\u7248\u672C Tag \u5DF2\u56FA\u5316\uFF1A${input2.tag}`);
-    return result;
-  } catch (error) {
-    const cleanupErrors = [];
-    if (transactionStarted) {
-      try {
-        if (releaseId) await client2.deleteRelease(input2.repository, releaseId);
-        else {
-          const draft = await findDraft(client2, input2);
-          if (draft) await client2.deleteRelease(input2.repository, draft.id);
-        }
-      } catch (cleanupError) {
-        cleanupErrors.push(`\u8349\u7A3F\u56DE\u6EDA\u5931\u8D25\uFF1A${cleanupError.message}`);
-      }
-      try {
-        const tag = await client2.getTag(input2.repository, input2.tag);
-        if (tag) {
-          await versionTagCommit(client2, input2);
-          await client2.deleteTag(input2.repository, input2.tag);
-        }
-      } catch (cleanupError) {
-        cleanupErrors.push(`Tag \u56DE\u6EDA\u5931\u8D25\uFF1A${cleanupError.message}`);
-      }
-    }
-    const suffix = cleanupErrors.length > 0 ? `\uFF1B${cleanupErrors.join("\uFF1B")}` : "";
-    throw new Error(`${error.message}${suffix}`);
-  }
-}
-function parseArgs(argv, environment = process.env) {
-  const values = /* @__PURE__ */ new Map();
-  const assetIndex = argv.indexOf("--assets");
-  required2(assetIndex >= 0 && assetIndex < argv.length - 1, "\u7F3A\u5C11 --assets");
-  const assetPaths = argv.slice(assetIndex + 1);
-  const optionArgs = argv.slice(0, assetIndex);
-  required2(optionArgs.length % 2 === 0, "Release \u53C2\u6570\u5FC5\u987B\u6210\u5BF9\u63D0\u4F9B");
-  for (let index = 0; index < optionArgs.length; index += 2) {
-    const key = optionArgs[index];
-    required2(/^--[a-z-]+$/.test(key) && !values.has(key), `Release \u53C2\u6570\u65E0\u6548\u6216\u91CD\u590D\uFF1A${key}`);
-    values.set(key, optionArgs[index + 1]);
-  }
-  const repository = environment.GITHUB_REPOSITORY;
-  const releaseSHA = environment.GITHUB_SHA;
-  const tag = values.get("--tag");
-  const sourceSHA = values.get("--source-sha");
-  const title = values.get("--title");
-  const notes = values.get("--notes");
-  const notesFile = values.get("--notes-file");
-  const latestValue = values.get("--latest");
-  required2(REPOSITORY_PATTERN.test(repository || ""), "GITHUB_REPOSITORY \u65E0\u6548");
-  required2(SHA_PATTERN.test(releaseSHA || ""), "Release workflow \u63D0\u4EA4\u65E0\u6548");
-  required2(TAG_PATTERN.test(tag || ""), "\u7248\u672C Tag \u65E0\u6548");
-  required2(SHA_PATTERN.test(sourceSHA || ""), "Release \u6E90\u63D0\u4EA4\u65E0\u6548");
-  required2(typeof title === "string" && title.trim() === title && title.length > 0, "Release \u6807\u9898\u65E0\u6548");
-  required2(Boolean(notes) !== Boolean(notesFile), "\u5FC5\u987B\u4E14\u53EA\u80FD\u63D0\u4F9B --notes \u6216 --notes-file");
-  required2(latestValue === "true" || latestValue === "false", "--latest \u53EA\u5141\u8BB8 true \u6216 false");
-  const assets = assetPaths.map((path) => {
-    const value2 = lstatSync(path);
-    required2(value2.isFile() && value2.size > 0, `Release \u8D44\u4EA7\u4E0D\u662F\u975E\u7A7A\u666E\u901A\u6587\u4EF6\uFF1A${path}`);
-    return { path, name: basename(path), size: value2.size };
-  });
-  required2(new Set(assets.map((asset) => asset.name)).size === assets.length, "Release \u8D44\u4EA7\u6587\u4EF6\u540D\u91CD\u590D");
-  return {
-    repository,
-    releaseSHA,
-    tag,
-    sourceSHA,
-    title,
-    notes,
-    notesFile,
-    latest: latestValue === "true",
-    assets
-  };
-}
-if (false && process.argv[1] && import.meta.url === pathToFileURL2(process.argv[1]).href) {
-  try {
-    await release(parseArgs(process.argv.slice(2)));
-  } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
-  }
+const releaseScriptPaths2 = [
+  ".github/scripts/citizenapp/release-ios.mjs",
+  ".github/scripts/citizenapp/release-android.mjs",
+  ".github/scripts/citizenwallet/release-ios.mjs",
+  ".github/scripts/citizenwallet/release-android.mjs",
+  ".github/scripts/citizenchain/release-node-linux-arm.mjs",
+  ".github/scripts/citizenchain/release-node-linux-amd.mjs",
+  ".github/scripts/citizenchain/release-node-macos.mjs",
+  ".github/scripts/citizenchain/release-node-windows.mjs",
+  ".github/scripts/citizenchain/release-runtime-wasm.mjs",
+  ".github/scripts/citizenserve/release-cloudflare.mjs",
+  ".github/scripts/citizenweb/release-web.mjs",
+];
+
+function embeddedReleaseSource2(path) {
+  const text = readReleaseScript(new URL(`../../../${path}`, import.meta.url), "utf8");
+  const prefix = "const implementations = Object.freeze(";
+  const start = text.indexOf(prefix) + prefix.length;
+  const end = text.indexOf(");\nconst [command", start);
+  assert2.ok(start >= prefix.length && end > start, `${path} 缺少独立实现登记`);
+  return JSON.parse(text.slice(start, end))["github-release"];
 }
 
-// ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/github-release.test.mjs
-function input() {
+const releaseSources2 = releaseScriptPaths2.map(embeddedReleaseSource2);
+const releaseSource2 = releaseSources2[0];
+const releaseModule2 = await import(`data:text/javascript;base64,${Buffer.from(releaseSource2).toString("base64")}#unified-release`);
+const { release: release2 } = releaseModule2;
+
+function input2() {
   return {
     repository: "ChineseFederation/GMB",
-    releaseSHA: "7a46f2f7c2e58a2672961a2b66d4e882b725f560",
-    tag: `citizenserve-cloudflare-v${["1", "0", "1"].join(".")}`,
+    tag: "citizenserve-cloudflare-v1.0.0",
     sourceSHA: "6f2c0e5355156db2fd36216ab7f928f8090ab3e0",
-    title: "\u516C\u6C11\u540E\u7AEF \xB7 Release \xB7 Cloudflare",
-    notes: "\u516C\u6C11\u540E\u7AEF 1.0.1\u3002",
+    title: "公民服务端 · Release · Cloudflare",
+    notes: "公民服务端 1.0.0。",
     latest: false,
-    assets: [
-      { path: "/candidate/archive.tgz", name: "archive.tgz", size: 12 },
-      { path: "/candidate/SHA256SUMS", name: "SHA256SUMS", size: 64 }
-    ]
+    assets: [{ path: "/tmp/release.tgz", name: "release.tgz", size: 7 }],
   };
 }
-function client(options = {}) {
+
+function marker2(value = input2()) {
+  return `<!-- GMB_RELEASE_SOURCE_SHA:${value.sourceSHA} -->`;
+}
+
+function client2(options = {}) {
   const calls = [];
-  const tagTargets = [];
-  const value2 = input();
+  const value = input2();
+  const defaultSHA = "8b1a9953c4611296a827abf8c47804d7fddf6abc";
+  let tagExists = options.staleTag === true || options.staleDraft === true;
   let created = false;
-  let published = false;
-  let tagExists = options.staleDraft === true && options.staleDraftWithoutTag !== true || options.staleTag === true;
-  let staleDraft = options.staleDraft === true;
-  const remote = (id = 42, draft = !published) => ({
-    id,
-    name: value2.title,
-    tag_name: value2.tag,
-    target_commitish: value2.sourceSHA,
-    draft,
-    assets: value2.assets.map((asset, index) => ({
+  let draft = options.staleDraft === true;
+  let published = options.publishedExisting === true;
+  const remote = (isDraft = draft) => ({
+    id: 42,
+    name: value.title,
+    tag_name: value.tag,
+    target_commitish: "main",
+    body: `${value.notes}\n\n${marker2(value)}\n`,
+    draft: isDraft,
+    assets: value.assets.map((asset) => ({
       name: asset.name,
-      size: index === 0 && options.badSize ? asset.size + 1 : asset.size,
-      state: "uploaded"
-    }))
+      size: options.badSize ? asset.size + 1 : asset.size,
+      state: "uploaded",
+    })),
   });
   return {
     calls,
-    tagTargets,
     async listReleases() {
       calls.push("list");
-      if (options.publishedExisting) return [remote(7, false)];
-      if (staleDraft) return [remote(7, true)];
-      return created ? [remote()] : [];
+      if (published) return [remote(false)];
+      if (draft || created) return [remote(true)];
+      return [];
     },
     async getTag() {
-      calls.push("tag");
-      return tagExists ? { ref: `refs/tags/${value2.tag}`, object: { type: "commit", sha: value2.releaseSHA } } : null;
+      calls.push("get-tag");
+      return tagExists
+        ? { ref: `refs/tags/${value.tag}`, object: { type: "commit", sha: defaultSHA } }
+        : null;
     },
-    async getTagObject() {
-      calls.push("tag-object");
-      return { tag: value2.tag, object: { type: "commit", sha: value2.releaseSHA } };
-    },
-    async createTag(_repository, _tag, targetSHA) {
-      calls.push("create-tag");
-      tagTargets.push(targetSHA);
-      if (options.tagFailure) throw new Error("Tag \u521B\u5EFA\u5931\u8D25");
+    async getTagObject() { throw new Error("轻量 Tag 不应读取 Tag 对象"); },
+    async createDraft() {
+      calls.push("create-draft");
+      created = true;
+      draft = true;
       tagExists = true;
     },
-    async createDraft() {
-      calls.push("create");
-      created = true;
-      if (options.createFailure) throw new Error("\u8D44\u4EA7\u4E0A\u4F20\u5931\u8D25");
-    },
-    async getRelease() {
-      calls.push("get");
-      return remote();
-    },
+    async getRelease() { calls.push("get-release"); return remote(!published); },
     async getReleaseByTag() {
       calls.push("by-tag");
-      return remote();
+      return published ? remote(false) : null;
     },
     async publish() {
       calls.push("publish");
       published = true;
-      tagExists = true;
+      draft = false;
+      if (options.publishResponseFailure) throw new Error("发布响应中断");
     },
     async deleteRelease() {
       calls.push("delete-release");
-      staleDraft = false;
       created = false;
+      draft = false;
+      published = false;
     },
-    async deleteTag() {
-      calls.push("delete-tag");
-      tagExists = false;
-    },
-    async wait() {
-      calls.push("wait");
-    }
+    async deleteTag() { calls.push("delete-tag"); tagExists = false; },
+    async wait() { calls.push("wait"); },
   };
 }
-test2("Release \u4E8B\u52A1\u5148\u521B\u5EFA\u552F\u4E00 Tag\uFF0C\u6B63\u5F0F\u8D44\u4EA7\u5B8C\u6210\u540E\u53D1\u5E03", async () => {
-  const fake = client();
-  const result = await release(input(), fake);
+
+// 中文注释：11 个直接文件必须内嵌完全相同的事务，禁止产品例外、公共运行文件或旧双提交模型。
+test2("11 个独立 Release 动作使用完全相同的原子 Tag 事务", () => {
+  for (const [index, source] of releaseSources2.entries()) {
+    assert2.equal(source, releaseSource2, `${releaseScriptPaths2[index]} 的 Release 事务发生漂移`);
+  }
+  assert2.doesNotMatch(releaseSource2, /releaseSHA|createTag\(|--verify-tag|--target/);
+  assert2.doesNotMatch(releaseSource2, /GITHUB_SHA/);
+  assert2.match(releaseSource2, /'release', 'create'[\s\S]*'--draft'/);
+  assert2.match(releaseSource2, /GMB_RELEASE_SOURCE_SHA/);
+  assert2.match(releaseSource2, /await client\.createDraft\(input\)/);
+});
+
+// 中文注释：GitHub 必须在草稿创建请求中原子生成 Tag，成功 CI 源提交由隐藏标记和资产证明绑定。
+test2("Release 不预建 Tag 并在资产验真后发布", async () => {
+  const fake = client2();
+  const result = await release2(input2(), fake);
   assert2.equal(result.draft, false);
-  assert2.ok(fake.calls.indexOf("create-tag") < fake.calls.indexOf("create"));
-  assert2.equal(fake.calls.includes("create"), true);
-  assert2.equal(fake.calls.includes("publish"), true);
-  assert2.equal(fake.calls.includes("delete-tag"), false);
-  assert2.deepEqual(fake.tagTargets, [input().releaseSHA]);
-  assert2.notEqual(input().releaseSHA, input().sourceSHA);
-});
-test2("\u8349\u7A3F\u8D44\u4EA7\u4E0D\u4E00\u81F4\u65F6\u56DE\u6EDA\u8349\u7A3F\u4E0E\u4E8B\u52A1 Tag", async () => {
-  const fake = client({ badSize: true });
-  await assert2.rejects(release(input(), fake), /资产大小不符/);
-  assert2.equal(fake.calls.includes("publish"), false);
-  assert2.equal(fake.calls.includes("delete-release"), true);
-  assert2.equal(fake.calls.includes("delete-tag"), true);
-});
-test2("\u4E0B\u4E00\u6761\u540C\u7248\u672C Release \u5148\u56DE\u6EDA\u4E0A\u6B21\u4E2D\u65AD\u9057\u7559\u8349\u7A3F\u4E0E Tag", async () => {
-  const fake = client({ staleDraft: true });
-  await release(input(), fake);
-  assert2.ok(fake.calls.filter((value2) => value2 === "delete-release").length >= 1);
-  assert2.ok(fake.calls.filter((value2) => value2 === "delete-tag").length >= 1);
-  assert2.equal(fake.calls.includes("create"), true);
-});
-test2("\u4E0B\u4E00\u6761\u540C\u7248\u672C Release \u53EF\u56DE\u6EDA\u5C1A\u672A\u521B\u5EFA Tag \u7684\u9057\u7559\u8349\u7A3F", async () => {
-  const fake = client({ staleDraft: true, staleDraftWithoutTag: true });
-  await release(input(), fake);
-  assert2.ok(fake.calls.filter((value2) => value2 === "delete-release").length >= 1);
-  assert2.equal(fake.calls.includes("delete-tag"), false);
-  assert2.equal(fake.calls.includes("publish"), true);
-});
-test2("\u590D\u7528\u4E0A\u6B21\u4E8B\u52A1\u9884\u5EFA\u4E14\u51C6\u786E\u6307\u5411 Release workflow \u7684 Tag", async () => {
-  const fake = client({ staleTag: true });
-  await release(input(), fake);
+  assert2.ok(fake.calls.indexOf("create-draft") < fake.calls.indexOf("publish"));
   assert2.equal(fake.calls.includes("create-tag"), false);
   assert2.equal(fake.calls.includes("delete-tag"), false);
-  assert2.equal(fake.calls.includes("publish"), true);
 });
-test2("\u5DF2\u6709\u6B63\u5F0F Release \u65F6\u62D2\u7EDD\u8986\u76D6", async () => {
-  const fake = client({ publishedExisting: true });
-  await assert2.rejects(release(input(), fake), /正式 Release 已存在/);
-  assert2.equal(fake.calls.includes("create"), false);
-  assert2.equal(fake.calls.includes("delete-release"), false);
+
+test2("同版本遗留草稿和孤立 Tag 统一清理后重新原子创建", async () => {
+  for (const options of [{ staleDraft: true }, { staleTag: true }]) {
+    const fake = client2(options);
+    await release2(input2(), fake);
+    assert2.ok(fake.calls.indexOf("delete-tag") < fake.calls.indexOf("create-draft"));
+    if (options.staleDraft) {
+      assert2.ok(fake.calls.indexOf("delete-release") < fake.calls.indexOf("create-draft"));
+    }
+  }
 });
-test2("\u521B\u5EFA\u547D\u4EE4\u90E8\u5206\u5931\u8D25\u65F6\u56DE\u6EDA\u53EF\u80FD\u5DF2\u7ECF\u751F\u6210\u7684\u8349\u7A3F\u4E14\u4E0D\u5360\u7528 Tag", async () => {
-  const fake = client({ createFailure: true });
-  await assert2.rejects(release(input(), fake), /资产上传失败/);
+
+test2("资产不一致时精确回滚草稿与本次 Tag", async () => {
+  const fake = client2({ badSize: true });
+  await assert2.rejects(release2(input2(), fake), /资产大小不符/);
   assert2.equal(fake.calls.includes("delete-release"), true);
   assert2.equal(fake.calls.includes("delete-tag"), true);
-  assert2.equal(fake.calls.includes("publish"), false);
 });
-test2("Release \u53EA\u8BFB\u63A5\u53E3\u5BF9 GitHub integration \u4E34\u65F6 403 \u6709\u9650\u91CD\u8BD5", () => {
-  let attempts = 0;
-  const delays = [];
-  const output = gh(["api", "repos/ChineseFederation/GMB/releases"], {
-    retryRead: true,
-    run() {
-      attempts += 1;
-      if (attempts < 3) {
-        return { status: 1, stdout: "", stderr: "HTTP 403: Resource not accessible by integration" };
-      }
-      return { status: 0, stdout: "[]\n", stderr: "" };
-    },
-    wait(milliseconds) {
-      delays.push(milliseconds);
-    }
-  });
-  assert2.equal(output, "[]");
-  assert2.equal(attempts, 3);
-  assert2.deepEqual(delays, [1e4, 1e4]);
+
+test2("发布响应中断但正式终态完整时禁止误回滚", async () => {
+  const fake = client2({ publishResponseFailure: true });
+  const result = await release2(input2(), fake);
+  assert2.equal(result.draft, false);
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
 });
-test2("Release \u5199\u64CD\u4F5C\u9047\u5230 integration 403 \u4E0D\u81EA\u52A8\u91CD\u653E", () => {
-  let attempts = 0;
-  assert2.throws(() => gh(["release", "create"], {
-    run() {
-      attempts += 1;
-      return { status: 1, stdout: "", stderr: "HTTP 403: Resource not accessible by integration" };
-    },
-    wait() {
-      throw new Error("\u5199\u64CD\u4F5C\u4E0D\u5F97\u7B49\u5F85\u91CD\u8BD5");
-    }
-  }), /Resource not accessible by integration/);
-  assert2.equal(attempts, 1);
-});
-test2("Tag \u521B\u5EFA\u5931\u8D25\u65F6\u4E0D\u521B\u5EFA\u8349\u7A3F\u4E14\u4E0D\u5360\u7528\u7248\u672C\u53F7", async () => {
-  const fake = client({ tagFailure: true });
-  await assert2.rejects(release(input(), fake), /Tag 创建失败/);
-  assert2.equal(fake.calls.includes("create"), false);
-  assert2.equal(fake.calls.includes("publish"), false);
+
+test2("已有正式 Release 时拒绝覆盖", async () => {
+  const fake = client2({ publishedExisting: true });
+  await assert2.rejects(release2(input2(), fake), /正式 Release 已存在/);
+  assert2.equal(fake.calls.includes("create-draft"), false);
 });
 
 // ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/version-tag-contract.test.mjs
@@ -1461,13 +1151,16 @@ test5("\u6BCF\u4E2A Release \u7528\u6210\u529F ci_run_id \u590D\u6838\u6765\u6E9
     assert5.match(source, /--tag "\$GMB_VERSION_TAG"/);
   }
 });
-test5("Release \u516C\u5171\u5DE5\u5177\u5148\u521B\u5EFA\u4E8B\u52A1 Tag\uFF0C\u6B63\u5F0F\u8D44\u4EA7\u5931\u8D25\u65F6\u56DE\u6EDA\u8349\u7A3F\u4E0E Tag", () => {
-  const source = readFileSync7(new URL("../citizenapp/release-ios.mjs", import.meta.url), "utf8");
-  assert5.match(source, /async createTag[\s\S]*repos\/\$\{repository\}\/git\/refs/);
-  assert5.match(source, /release', 'create'[\s\S]*'--verify-tag'/);
-  assert5.doesNotMatch(source, /release', 'create'[\s\S]*'--target'/);
-  assert5.match(source, /reuseExistingTag[\s\S]*await versionTagCommit[\s\S]*reuseExistingTag = true/);
-  assert5.match(source, /await client\.createTag[\s\S]*await client\.createDraft/);
+// 中文注释：所有产品直接脚本统一由 GitHub 原子创建 Tag，不再绑定可能落后于 main 的 workflow 提交。
+test5("Release 公共工具禁止预建 Tag 与双提交模型", () => {
+  const wrapper = readFileSync7(new URL("../citizenapp/release-ios.mjs", import.meta.url), "utf8");
+  const prefix = "const implementations = Object.freeze(";
+  const start = wrapper.indexOf(prefix) + prefix.length;
+  const end = wrapper.indexOf(");\nconst [command", start);
+  const source = JSON.parse(wrapper.slice(start, end))["github-release"];
+  assert5.doesNotMatch(source, /async createTag|releaseSHA|--verify-tag|--target/);
+  assert5.match(source, /GMB_RELEASE_SOURCE_SHA/);
+  assert5.match(source, /await client\.createDraft\(input\)[\s\S]*await client\.publish/);
   assert5.match(source, /async deleteTag/);
   assert5.match(source, /Tag 回滚失败/);
 });
