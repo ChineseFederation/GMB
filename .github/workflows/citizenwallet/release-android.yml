@@ -46,7 +46,7 @@ permissions:
 
 jobs:
   build-apk:
-    name: 签名并发布公民钱包 Android 正式版
+    name: 签名并固化公民钱包 Android Release
     runs-on: ubuntu-24.04
     steps:
       - name: 拉取代码

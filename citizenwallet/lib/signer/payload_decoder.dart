@@ -235,6 +235,10 @@ class PayloadDecoder {
           );
         }
       }
+      if (expectedAction == 'publish') {
+        final publish = _decodePublishAuthorization(raw);
+        if (publish != null) return publish;
+      }
       if (raw.length == _activateAdminPayloadLen &&
           _hasPrefix(raw, _activateAdminPrefix)) {
         return _decodeActivateAdminAccount(raw);
@@ -3795,6 +3799,69 @@ class PayloadDecoder {
         '${local.day.toString().padLeft(2, '0')} '
         '${local.hour.toString().padLeft(2, '0')}:'
         '${local.minute.toString().padLeft(2, '0')}';
+  }
+
+  /// 严格解码 CitizenConsole 生产发布授权。
+  ///
+  /// SCALE 布局固定为：product_id、platform、version_tag 三个字符串，20 字节
+  /// source_sha，32 字节 artifact_sha256，previous_deployment_id 字符串，
+  /// expires_at:u64 LE，nonce:[u8;32]。必须消费全部字节，防止尾部夹带字段。
+  static DecodedPayload? _decodePublishAuthorization(Uint8List bytes) {
+    var offset = 0;
+    final product = _readStrictBoundedUtf8(bytes, offset, maxLength: 32);
+    if (product == null || product.$1.isEmpty) return null;
+    offset = product.$2;
+    final platform = _readStrictBoundedUtf8(bytes, offset, maxLength: 32);
+    if (platform == null || platform.$1.isEmpty) return null;
+    offset = platform.$2;
+    final version = _readStrictBoundedUtf8(bytes, offset, maxLength: 64);
+    if (version == null ||
+        !RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$').hasMatch(version.$1)) {
+      return null;
+    }
+    offset = version.$2;
+
+    const productPlatforms = <String, Set<String>>{
+      'citizenapp': {'ios', 'android'},
+      'citizenwallet': {'ios', 'android'},
+      'citizenweb': {'cloudflare'},
+      'citizenserve': {'cloudflare'},
+    };
+    if (!(productPlatforms[product.$1]?.contains(platform.$1) ?? false)) {
+      return null;
+    }
+    if (offset + 20 + 32 > bytes.length) return null;
+    final sourceSha = _bytesToLowerHex(bytes.sublist(offset, offset + 20));
+    offset += 20;
+    final artifactSha = _bytesToLowerHex(bytes.sublist(offset, offset + 32));
+    offset += 32;
+    final previous = _readStrictBoundedUtf8(bytes, offset, maxLength: 128);
+    if (previous == null || previous.$1.isEmpty) return null;
+    offset = previous.$2;
+    if (offset + 8 + 32 != bytes.length) return null;
+    final expiresAt = _readU64Le(bytes, offset);
+    offset += 8;
+    final nonce = bytes.sublist(offset, offset + 32);
+    if (expiresAt <= 0 || nonce.every((byte) => byte == 0)) {
+      return null;
+    }
+
+    final fields = <String, String>{
+      'product_id': product.$1,
+      'platform': platform.$1,
+      'version_tag': version.$1,
+      'source_sha': sourceSha,
+      'artifact_sha256': artifactSha,
+      'previous_deployment_id': previous.$1,
+      'expires_at': expiresAt.toString(),
+      'nonce': _bytesToLowerHex(nonce),
+    };
+    return DecodedPayload(
+      action: 'publish',
+      summary: '授权发布 ${product.$1} ${version.$1} 到 ${platform.$1}',
+      fields: fields,
+      reviewFields: fields,
+    );
   }
 
   /// 32 字节账户/公钥 bytes → CitizenChain SS58 地址。

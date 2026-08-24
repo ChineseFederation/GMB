@@ -80,6 +80,9 @@ const int kOpSignAccountDataKeyProvision = 0x22;
 /// 只用于 CitizenApp 本机重标验证，不提交链。
 const int kOpSignWalletMode = 0x23;
 
+/// CitizenConsole 生产发布授权；CitizenApp 不签此域，仅镜像全仓签名真源。
+const int kOpSignPublish = 0x24;
+
 /// 注册局代办换绑：新钱包对完整 `CidRebindAuthorization` 的授权签名；载荷与自助
 /// 换绑相同，签名域与自助换绑 0x11、首次占号 0x12 分离。
 const int kOpSignCidAdminRebind = 0x1F;
@@ -185,9 +188,7 @@ Uint8List _adminBinaryPayload({
 }) {
   final cidBytes = utf8.encode(cidNumber);
   if (cidBytes.isEmpty || cidBytes.length > kAdminCidSlotLength) {
-    throw ArgumentError(
-      '机构 CID 的 UTF-8 长度必须为 1..$kAdminCidSlotLength 字节',
-    );
+    throw ArgumentError('机构 CID 的 UTF-8 长度必须为 1..$kAdminCidSlotLength 字节');
   }
   final nonceBytes = _requireFixedBytes(nonce, kAdminNonceLength, 'nonce');
   return Uint8List.fromList([
@@ -215,11 +216,7 @@ Uint8List signingMessage({
   required int opTag,
   required List<int> scalePayload,
 }) {
-  final input = <int>[
-    ...kGmbSignDomain,
-    opTag & 0xFF,
-    ...scalePayload,
-  ];
+  final input = <int>[...kGmbSignDomain, opTag & 0xFF, ...scalePayload];
   return Hasher.blake2b256.hash(Uint8List.fromList(input));
 }
 

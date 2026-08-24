@@ -267,10 +267,10 @@ fn product_ci_runs_shared_scanner_gates() {
     let mut violations = Vec::new();
 
     for workflow in [
-        ".github/workflows/citizenapp-ci-ios.yml",
-        ".github/workflows/citizenapp-ci-android.yml",
-        ".github/workflows/citizenwallet-ci-ios.yml",
-        ".github/workflows/citizenwallet-ci-android.yml",
+        ".github/workflows/citizenapp/ci-ios.yml",
+        ".github/workflows/citizenapp/ci-android.yml",
+        ".github/workflows/citizenwallet/ci-ios.yml",
+        ".github/workflows/citizenwallet/ci-android.yml",
     ] {
         let path = repo_root.join(workflow);
         let text = fs::read_to_string(&path)
@@ -287,10 +287,10 @@ fn product_ci_runs_shared_scanner_gates() {
     }
 
     for workflow in [
-        ".github/workflows/citizenchain-node-ci-linux-arm.yaml",
-        ".github/workflows/citizenchain-node-ci-linux-amd.yml",
-        ".github/workflows/citizenchain-node-ci-macos.yml",
-        ".github/workflows/citizenchain-node-ci-windows.yml",
+        ".github/workflows/citizenchain/ci-node-linux-arm.yaml",
+        ".github/workflows/citizenchain/ci-node-linux-amd.yml",
+        ".github/workflows/citizenchain/ci-node-macos.yml",
+        ".github/workflows/citizenchain/ci-node-windows.yml",
     ] {
         let path = repo_root.join(workflow);
         let text = fs::read_to_string(&path)
@@ -363,7 +363,7 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
             ][..],
         ),
         (
-            ".github/workflows/citizenchain-node-ci-macos.yml",
+            ".github/workflows/citizenchain/ci-node-macos.yml",
             &[
                 "从最终 DMG 提取并验证 macOS App",
                 "com.apple.security.device.camera",
@@ -422,7 +422,7 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
     }
     for relative in [
         "citizenchain/scripts/run.sh",
-        ".github/workflows/citizenchain-node-ci-macos.yml",
+        ".github/workflows/citizenchain/ci-node-macos.yml",
     ] {
         let text = fs::read_to_string(repo_root.join(relative))
             .unwrap_or_else(|e| panic!("读取 {relative} 失败: {e}"));

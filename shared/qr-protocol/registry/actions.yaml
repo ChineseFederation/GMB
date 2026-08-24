@@ -125,6 +125,28 @@
     - key_purposes
     - expires_at
 
+# 公民控制台本机发布授权——冷钱包审阅并签署精确产品、平台、Release、产物摘要、
+# 回滚锚点和短时随机挑战。该签名只授权一次本机发布，不向平台发送钱包信息。
+- action_key: publish
+  action_code: 15
+  action_label_zh: 生产发布授权
+  kind: offchain_sign
+  qr_kind: sign_request
+  pallet:
+  call:
+  decoder: publish
+  hash_only_allowed: false
+  signing_category: publish
+  required_fields:
+    - product_id
+    - platform
+    - version_tag
+    - source_sha
+    - artifact_sha256
+    - previous_deployment_id
+    - expires_at
+    - nonce
+
 - action_key: onchina_admin_action
   action_code: 3
   action_label_zh: 链上中国管理员确认

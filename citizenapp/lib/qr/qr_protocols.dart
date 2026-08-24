@@ -56,6 +56,7 @@ class QrActions {
   static const int switchDefaultAccount = 12;
   static const int squareDeviceBind = 13;
   static const int accountDataKeyProvision = 14;
+  static const int publish = 15;
   static const int onchinaAdmin = 3;
   static const int activateAdmin = 5;
   static const int decryptAdmin = 6;

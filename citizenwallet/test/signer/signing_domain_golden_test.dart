@@ -181,7 +181,21 @@ void main() {
       );
     });
 
-    test('冷钱包六个哈希域的 op_tag 均在真源登记', () {
+    test('OP_SIGN_PUBLISH 走 signingBytesFor 产出链端金标摘要', () {
+      final vector = vectorNamed('OP_SIGN_PUBLISH');
+      expect(vector, isNotNull, reason: '真源缺少 OP_SIGN_PUBLISH 向量');
+      final body = SignRequestBody.fromHex(
+        action: QrActions.publish,
+        signerPublicKeyHex: _testSignerPublicKeyHex,
+        payloadHex: '0x${vector!['scale_payload_hex']}',
+      );
+      expect(
+        _bytesToHex(QrSigner.signingBytesFor(body)),
+        (vector['message_hex'] as String).toLowerCase(),
+      );
+    });
+
+    test('冷钱包七个哈希域的 op_tag 均在真源登记', () {
       // 冷钱包私有常量 _opSignCitizenIdentity/_opSignCidOccupy/_opSignCidAdminRebind
       // 测试访问不到,改为断言真源侧登记值,任一端重排域编号都会在此暴露。
       expect(vectorNamed('OP_SIGN_CITIZEN_IDENTITY')?['op_tag'], '0x10');
@@ -193,6 +207,7 @@ void main() {
         vectorNamed('OP_SIGN_ACCOUNT_DATA_KEY_PROVISION')?['op_tag'],
         '0x22',
       );
+      expect(vectorNamed('OP_SIGN_PUBLISH')?['op_tag'], '0x24');
     });
   });
 }

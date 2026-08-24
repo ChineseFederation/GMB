@@ -51,6 +51,7 @@ pub enum SigningCategory {
     SwitchDefaultAccount,
     SquareDeviceBind,
     AccountDataKeyProvision,
+    Publish,
 }
 
 /// 单个 QR action 登记项。

@@ -49,7 +49,7 @@ env:
 jobs:
   # Release 在同一个受控 runner 内完成构建、正式签名、验签和正式资产发布。
   android:
-    name: 签名并发布公民 Android 正式版
+    name: 签名并固化公民 Android Release
     runs-on: ubuntu-24.04
     steps:
       - name: 拉取代码

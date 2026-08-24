@@ -55,6 +55,9 @@ class QrSigner {
 
   /// 广场账户敏感动作；与 primitives::sign::OP_SIGN_SQUARE_ACTION 同值。
   static const int _opSignSquareAction = 0x1d;
+
+  /// CitizenConsole 生产发布授权；对齐 primitives::sign::OP_SIGN_PUBLISH。
+  static const int _opSignPublish = 0x24;
   static final RegExp _idPattern = RegExp(r'^[A-Za-z0-9_-]{16,128}$');
 
   /// 请求 ID 合法性(共享单源:登录/离线签名同一规则,防两处漂移)。
@@ -203,6 +206,9 @@ class QrSigner {
     }
     if (body.action == QrActions.squareAccountAction) {
       return _gmbSigningMessage(_opSignSquareAction, payload);
+    }
+    if (body.action == QrActions.publish) {
+      return _gmbSigningMessage(_opSignPublish, payload);
     }
     if (body.action == QrActions.accountDataKeyProvision) {
       // 真正签名内容还必须包含发送公钥、nonce 和密文摘要；普通签名路径无法构造。

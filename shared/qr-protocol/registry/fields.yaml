@@ -67,6 +67,20 @@
   field_label_zh: 用途钥范围
 - field_key: expires_at
   field_label_zh: 过期时间
+- field_key: product_id
+  field_label_zh: 发布产品
+- field_key: platform
+  field_label_zh: 发布平台
+- field_key: version_tag
+  field_label_zh: 版本标签
+- field_key: source_sha
+  field_label_zh: 源码提交
+- field_key: artifact_sha256
+  field_label_zh: 产物 SHA-256
+- field_key: previous_deployment_id
+  field_label_zh: 上一部署编号
+- field_key: nonce
+  field_label_zh: 一次性随机数
 - field_key: expected_binding_revision
   field_label_zh: 预期绑定版本
 - field_key: expected_price_fen

@@ -221,6 +221,41 @@ void main() {
   String ss58FromBytes(List<int> bytes) => Keyring().encodeAddress(bytes, 2027);
 
   group('PayloadDecoder', () {
+    // 发布授权必须按链端定义完整消费所有 SCALE 字段；同时覆盖 action 绑定与尾字节拒绝，
+    // 防止钱包把其它动作或带有未解释附加数据的载荷展示成可签名发布请求。
+    test('生产发布授权严格解码全部 SCALE 字段并拒绝尾字节', () {
+      const expiresAt = 1900000000;
+      final payload = <int>[
+        ...compactVec('citizenweb'),
+        ...compactVec('cloudflare'),
+        ...compactVec('citizenweb-v1.2.3'),
+        ...List<int>.filled(20, 0x11),
+        ...List<int>.filled(32, 0x22),
+        ...compactVec('pages-deployment-previous'),
+        ...u64Le(expiresAt),
+        ...List<int>.filled(32, 0x33),
+      ];
+
+      final decoded = PayloadDecoder.decode(
+        hexOf(payload),
+        expectedAction: 'publish',
+      );
+      expect(decoded?.action, 'publish');
+      expect(decoded?.fields['product_id'], 'citizenweb');
+      expect(decoded?.fields['platform'], 'cloudflare');
+      expect(decoded?.fields['source_sha'], '0x${'11' * 20}');
+      expect(decoded?.fields['artifact_sha256'], '0x${'22' * 32}');
+      expect(decoded?.fields['expires_at'], '$expiresAt');
+      expect(PayloadDecoder.decode(hexOf(payload)), isNull);
+      expect(
+        PayloadDecoder.decode(
+          hexOf([...payload, 0]),
+          expectedAction: 'publish',
+        ),
+        isNull,
+      );
+    });
+
     test('账户用途钥请求只在 action 14 下严格解码并拒绝重复用途', () {
       const cid = 'CN220-CTZN2-198805200-2026';
       const expiresAt = 1900000000;

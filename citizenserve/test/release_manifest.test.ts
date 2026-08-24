@@ -5,26 +5,38 @@ import { afterEach, describe, expect, test } from 'vitest';
 const projectPath = resolve(import.meta.dirname, '..');
 const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots: string[] = [];
-// 生成器属于仓库级 ESM 脚本，不复制 TypeScript 镜像；动态导入让测试直接执行唯一实现。
-const ciModule = await import(resolve(
+
+// 中文注释：GitHub 动作入口把唯一实现内嵌为 JSON 字符串。测试只把该实现解包到临时目录，
+// 不维护第二份 TypeScript 镜像，因而覆盖的仍是 Workflow 真正执行的代码。
+function unpackActionImplementation(wrapperPath: string): string {
+  const source = readFileSync(wrapperPath, 'utf8');
+  const prefix = 'const implementations = Object.freeze(';
+  const start = source.indexOf(prefix);
+  const end = source.indexOf(');\nconst [command', start + prefix.length);
+  if (start < 0 || end < 0) throw new Error(`动作入口结构无效：${wrapperPath}`);
+  const implementations = JSON.parse(source.slice(start + prefix.length, end));
+  if (typeof implementations.action !== 'string') throw new Error('动作入口缺少 action 实现');
+  const root = mkdtempSync(join(tmpdir(), 'gmb-action-test-'));
+  temporaryRoots.push(root);
+  const path = join(root, 'implementation.mjs');
+  writeFileSync(path, implementations.action);
+  return path;
+}
+
+const ciModule = await import(unpackActionImplementation(resolve(
   import.meta.dirname,
   '../../.github/scripts/citizenserve/ci-cloudflare.mjs',
-));
+)));
 const { buildCitizenServeCloudflareRelease: buildCitizenServeCloudflareCI } = ciModule;
-const releaseModule = await import(resolve(
+const releaseModule = await import(unpackActionImplementation(resolve(
   import.meta.dirname,
   '../../.github/scripts/citizenserve/release-cloudflare.mjs',
-));
+)));
 const {
   buildCitizenServeCloudflareRelease,
   extractCitizenServeCloudflareArchive,
   verifyCitizenServeCloudflareRelease,
 } = releaseModule;
-const publishModule = await import(resolve(
-  import.meta.dirname,
-  '../../.github/scripts/citizenserve/publish-cloudflare.mjs',
-));
-const { planCitizenServeCloudflarePublish } = publishModule;
 
 function temporaryRoot(): string {
   const path = mkdtempSync(join(tmpdir(), 'gmb-cloudflare-release-'));
@@ -45,14 +57,6 @@ function buildCandidate(root: string, name: string, sourceProject = projectPath)
   return { manifest, outputPath };
 }
 
-function liveState() {
-  return {
-    active_percentage: 100,
-    stable_version_id: '11111111-1111-4111-8111-111111111111',
-    worker_name: 'citizenapp',
-  };
-}
-
 function fixtureProject(root: string): string {
   const fixture = join(root, 'project');
   mkdirSync(join(fixture, 'schema'), { recursive: true });
@@ -68,7 +72,7 @@ afterEach(() => {
 });
 
 describe('CitizenServe Cloudflare Release 候选', () => {
-  test('CI、Release 与 Publish 使用独立动作文件并保持 CitizenServe 产品身份', () => {
+  test('CI 与 Release 使用独立动作文件并保持 CitizenServe 产品身份', () => {
     const root = temporaryRoot();
     const bundlePath = join(root, 'ci-worker.mjs');
     writeFileSync(bundlePath, 'export default { fetch() { return new Response("ok"); } };\n');
@@ -79,15 +83,10 @@ describe('CitizenServe Cloudflare Release 候选', () => {
       gitCommitSha,
     });
     const releaseCandidate = buildCandidate(root, 'release-candidate');
-    const plan = planCitizenServeCloudflarePublish({
-      candidatePath: releaseCandidate.outputPath,
-      liveState: liveState(),
-    });
 
     expect(ciManifest.product_id).toBe('citizenserve');
     expect(ciManifest).toEqual(releaseCandidate.manifest);
     expect(releaseCandidate.manifest.product_id).toBe('citizenserve');
-    expect(plan.product_id).toBe('citizenserve');
   });
 
   test('相同代码、工具和 Git SHA 重复生成完全一致的候选', () => {
@@ -192,134 +191,5 @@ describe('CitizenServe Cloudflare Release 候选', () => {
       .toEqual(['citizenserve_0001.sql', 'citizenserve_0002.sql']);
   });
 
-  test('首次发布计划只读取生产稳定版本并将已声明资源列为逐项验证', () => {
-    const root = temporaryRoot();
-    const candidate = buildCandidate(root, 'bootstrap');
-    const plan = planCitizenServeCloudflarePublish({
-      candidatePath: candidate.outputPath,
-      liveState: liveState(),
-    });
 
-    expect(plan.bootstrap).toBe(true);
-    expect(plan.stable_version_id).toBe(liveState().stable_version_id);
-    expect(plan.migrations).toEqual([]);
-    expect(plan.resources.d1.action).toBe('verify');
-    expect(plan.resources.r2.action).toBe('verify');
-  });
-
-  test('后续发布只允许更高版本且不重写既有 migration', () => {
-    const root = temporaryRoot();
-    const currentProject = fixtureProject(join(root, 'current-fixture'));
-    const nextProject = fixtureProject(join(root, 'next-fixture'));
-    const currentPackage = JSON.parse(readFileSync(join(currentProject, 'package.json'), 'utf8'));
-    const currentLock = JSON.parse(readFileSync(join(currentProject, 'package-lock.json'), 'utf8'));
-    currentPackage.version = '1.0.0';
-    currentLock.version = '1.0.0';
-    currentLock.packages[''].version = '1.0.0';
-    writeFileSync(join(currentProject, 'package.json'), `${JSON.stringify(currentPackage, null, 2)}\n`);
-    writeFileSync(join(currentProject, 'package-lock.json'), `${JSON.stringify(currentLock, null, 2)}\n`);
-    const nextPackage = JSON.parse(readFileSync(join(nextProject, 'package.json'), 'utf8'));
-    const nextLock = JSON.parse(readFileSync(join(nextProject, 'package-lock.json'), 'utf8'));
-    nextPackage.version = '1.1.0';
-    nextLock.version = '1.1.0';
-    nextLock.packages[''].version = '1.1.0';
-    writeFileSync(join(nextProject, 'package.json'), `${JSON.stringify(nextPackage, null, 2)}\n`);
-    writeFileSync(join(nextProject, 'package-lock.json'), `${JSON.stringify(nextLock, null, 2)}\n`);
-    const current = buildCandidate(root, 'current', currentProject);
-    const next = buildCandidate(root, 'next', nextProject);
-
-    const plan = planCitizenServeCloudflarePublish({
-      candidatePath: next.outputPath,
-      currentCandidatePath: current.outputPath,
-      liveState: liveState(),
-    });
-    expect(plan.bootstrap).toBe(false);
-    expect(plan.resources.d1.action).toBe('skip');
-    expect(() => planCitizenServeCloudflarePublish({
-      candidatePath: current.outputPath,
-      currentCandidatePath: next.outputPath,
-      liveState: liveState(),
-    })).toThrow('发布版本必须高于当前已发布版本');
-
-    const migrationCurrentProject = fixtureProject(join(root, 'migration-current-fixture'));
-    const migrationNextProject = fixtureProject(join(root, 'migration-next-fixture'));
-    mkdirSync(join(migrationCurrentProject, 'migrations'));
-    mkdirSync(join(migrationNextProject, 'migrations'));
-    writeFileSync(
-      join(migrationCurrentProject, 'migrations/citizenserve_0001.sql'),
-      'CREATE INDEX IF NOT EXISTS users_account_idx ON users(account_id);\n',
-    );
-    writeFileSync(
-      join(migrationNextProject, 'migrations/citizenserve_0001.sql'),
-      'CREATE INDEX IF NOT EXISTS users_account_idx ON users(cid_number);\n',
-    );
-    const migrationNextPackage = JSON.parse(readFileSync(join(migrationNextProject, 'package.json'), 'utf8'));
-    const migrationNextLock = JSON.parse(readFileSync(join(migrationNextProject, 'package-lock.json'), 'utf8'));
-    migrationNextPackage.version = '1.1.0';
-    migrationNextLock.version = '1.1.0';
-    migrationNextLock.packages[''].version = '1.1.0';
-    writeFileSync(join(migrationNextProject, 'package.json'), `${JSON.stringify(migrationNextPackage, null, 2)}\n`);
-    writeFileSync(join(migrationNextProject, 'package-lock.json'), `${JSON.stringify(migrationNextLock, null, 2)}\n`);
-    const migrationCurrent = buildCandidate(root, 'migration-current', migrationCurrentProject);
-    const migrationNext = buildCandidate(root, 'migration-next', migrationNextProject);
-    expect(() => planCitizenServeCloudflarePublish({
-      candidatePath: migrationNext.outputPath,
-      currentCandidatePath: migrationCurrent.outputPath,
-      liveState: liveState(),
-    })).toThrow('Release 改写了已经登记的 D1 migration：citizenserve_0001.sql');
-  });
-
-  test('发布计划拒绝删除持久绑定、Durable Object 生命周期变化和破坏性 D1 SQL', () => {
-    const root = temporaryRoot();
-    const currentProject = fixtureProject(join(root, 'current-resources'));
-    const nextProject = fixtureProject(join(root, 'next-resources'));
-    const nextConfigPath = join(nextProject, 'wrangler.toml');
-    const nextConfig = readFileSync(nextConfigPath, 'utf8')
-      .replace(/\n\[\[r2_buckets\]\]\nbinding = "SQUARE_PRIVATE"\nbucket_name = "citizenapp-private"\n/, '\n');
-    writeFileSync(nextConfigPath, nextConfig);
-    const nextPackage = JSON.parse(readFileSync(join(nextProject, 'package.json'), 'utf8'));
-    const nextLock = JSON.parse(readFileSync(join(nextProject, 'package-lock.json'), 'utf8'));
-    nextPackage.version = '1.1.0';
-    nextLock.version = '1.1.0';
-    nextLock.packages[''].version = '1.1.0';
-    writeFileSync(join(nextProject, 'package.json'), `${JSON.stringify(nextPackage, null, 2)}\n`);
-    writeFileSync(join(nextProject, 'package-lock.json'), `${JSON.stringify(nextLock, null, 2)}\n`);
-    const current = buildCandidate(root, 'resource-current', currentProject);
-    const next = buildCandidate(root, 'resource-next', nextProject);
-    expect(() => planCitizenServeCloudflarePublish({
-      candidatePath: next.outputPath,
-      currentCandidatePath: current.outputPath,
-      liveState: liveState(),
-    })).toThrow('r2 禁止自动删除或解绑生产持久资源：SQUARE_PRIVATE');
-
-    const durableProject = fixtureProject(join(root, 'durable-change'));
-    const durableConfigPath = join(durableProject, 'wrangler.toml');
-    writeFileSync(
-      durableConfigPath,
-      readFileSync(durableConfigPath, 'utf8')
-        .replace('storage = "sqlite"', 'state = "deleted"'),
-    );
-    const durablePackage = JSON.parse(readFileSync(join(durableProject, 'package.json'), 'utf8'));
-    const durableLock = JSON.parse(readFileSync(join(durableProject, 'package-lock.json'), 'utf8'));
-    durablePackage.version = '1.1.0';
-    durableLock.version = '1.1.0';
-    durableLock.packages[''].version = '1.1.0';
-    writeFileSync(join(durableProject, 'package.json'), `${JSON.stringify(durablePackage, null, 2)}\n`);
-    writeFileSync(join(durableProject, 'package-lock.json'), `${JSON.stringify(durableLock, null, 2)}\n`);
-    const durable = buildCandidate(root, 'durable-next', durableProject);
-    expect(() => planCitizenServeCloudflarePublish({
-      candidatePath: durable.outputPath,
-      currentCandidatePath: current.outputPath,
-      liveState: liveState(),
-    })).toThrow('Durable Object 类生命周期变化会阻断旧 Worker 回退');
-
-    const migrationProject = fixtureProject(join(root, 'destructive-migration'));
-    mkdirSync(join(migrationProject, 'migrations'));
-    writeFileSync(join(migrationProject, 'migrations/citizenserve_0001.sql'), 'DROP TABLE users;\n');
-    const migrationCandidate = buildCandidate(root, 'destructive', migrationProject);
-    expect(() => planCitizenServeCloudflarePublish({
-      candidatePath: migrationCandidate.outputPath,
-      liveState: liveState(),
-    })).toThrow('D1 migration 包含禁止的数据破坏操作');
-  });
 });

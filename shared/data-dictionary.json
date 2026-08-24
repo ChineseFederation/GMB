@@ -50,6 +50,15 @@
       ]
     },
     {
+      "domain": "release",
+      "concept_id": "artifact_sha256",
+      "field_name": "artifact_sha256",
+      "field_name_zh": "发布产物 SHA-256",
+      "authority": "gmb",
+      "data_type": "hash",
+      "forbidden_names": []
+    },
+    {
       "domain": "governance",
       "concept_id": "assignment_source",
       "field_name": "assignment_source",
@@ -136,6 +145,15 @@
       "concept_id": "expected_price_fen",
       "field_name": "expected_price_fen",
       "field_name_zh": "预期价格（分）",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": []
+    },
+    {
+      "domain": "release",
+      "concept_id": "expires_at",
+      "field_name": "expires_at",
+      "field_name_zh": "授权过期时间",
       "authority": "gmb",
       "data_type": "integer",
       "forbidden_names": []
@@ -241,10 +259,19 @@
         "mutuals"
       ],
       "paths": [
-        "citizenserve/src/**",
         "citizenapp/lib/8964/**",
-        "citizenapp/test/8964/**"
+        "citizenapp/test/8964/**",
+        "citizenserve/src/**"
       ]
+    },
+    {
+      "domain": "release",
+      "concept_id": "nonce",
+      "field_name": "nonce",
+      "field_name_zh": "一次性随机数",
+      "authority": "gmb",
+      "data_type": "hex_32",
+      "forbidden_names": []
     },
     {
       "domain": "onchina",
@@ -254,6 +281,15 @@
       "authority": "gmb",
       "data_type": "enum",
       "value_set_id": "partnership_kind",
+      "forbidden_names": []
+    },
+    {
+      "domain": "release",
+      "concept_id": "platform",
+      "field_name": "platform",
+      "field_name_zh": "发布平台",
+      "authority": "gmb",
+      "data_type": "string",
       "forbidden_names": []
     },
     {
@@ -285,6 +321,15 @@
       "forbidden_names": []
     },
     {
+      "domain": "release",
+      "concept_id": "previous_deployment_id",
+      "field_name": "previous_deployment_id",
+      "field_name_zh": "上一部署编号",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": []
+    },
+    {
       "domain": "onchina",
       "concept_id": "private_type",
       "field_name": "private_type",
@@ -292,6 +337,15 @@
       "authority": "gmb",
       "data_type": "enum",
       "value_set_id": "private_type",
+      "forbidden_names": []
+    },
+    {
+      "domain": "release",
+      "concept_id": "product_id",
+      "field_name": "product_id",
+      "field_name_zh": "发布产品",
+      "authority": "gmb",
+      "data_type": "string",
       "forbidden_names": []
     },
     {
@@ -395,6 +449,15 @@
         "signerPubkey",
         "signer_pubkey"
       ]
+    },
+    {
+      "domain": "release",
+      "concept_id": "source_sha",
+      "field_name": "source_sha",
+      "field_name_zh": "发布源码提交",
+      "authority": "gmb",
+      "data_type": "hash",
+      "forbidden_names": []
     },
     {
       "domain": "substrate",
@@ -667,6 +730,13 @@
       "forbidden_values": [],
       "values": [
         {
+          "value": "pending",
+          "full_name_en": "Publication Pending",
+          "short_name_en": "Pending",
+          "full_name_zh": "尚未执行发布",
+          "short_name_zh": "待发布"
+        },
+        {
           "value": "published",
           "full_name_en": "Published Post",
           "short_name_en": "Published",
@@ -736,18 +806,18 @@
       "forbidden_values": [],
       "values": [
         {
+          "value": "failed",
+          "full_name_en": "Publication Failed",
+          "short_name_en": "Failed",
+          "full_name_zh": "发布未成功并已回滚",
+          "short_name_zh": "失败"
+        },
+        {
           "value": "published",
           "full_name_en": "Publication Published",
           "short_name_en": "Published",
           "full_name_zh": "发布已完成",
           "short_name_zh": "已发布"
-        },
-        {
-          "value": "reviewing",
-          "full_name_en": "Publication Under Review",
-          "short_name_en": "Reviewing",
-          "full_name_zh": "发布审核中",
-          "short_name_zh": "审核中"
         }
       ]
     },
@@ -1052,9 +1122,9 @@
       "contract_name_zh": "公民会员",
       "authority": "gmb",
       "paths": [
-        "citizenserve/**",
         "citizenapp/lib/**",
-        "citizenapp/test/**"
+        "citizenapp/test/**",
+        "citizenserve/**"
       ],
       "fields": [
         "billing_period",
@@ -1078,9 +1148,9 @@
       "contract_name_zh": "公民广场",
       "authority": "gmb",
       "paths": [
-        "citizenserve/**",
         "citizenapp/lib/8964/**",
-        "citizenapp/test/8964/**"
+        "citizenapp/test/8964/**",
+        "citizenserve/**"
       ],
       "fields": [
         "mutual_following",
@@ -1189,8 +1259,16 @@
         ".github/**"
       ],
       "fields": [
+        "artifact_sha256",
+        "expires_at",
+        "nonce",
+        "platform",
+        "previous_deployment_id",
+        "product_id",
         "publish_receipt_id",
-        "publish_state"
+        "publish_state",
+        "source_sha",
+        "version_tag"
       ],
       "value_sets": [
         "publish_state"
@@ -1315,10 +1393,10 @@
     "**/gen/schemas/**",
     "**/package-lock.json",
     ".github/scripts/gmb-repository/ci-repository.mjs",
-    ".github/scripts/data-dictionary.test.mjs",
+    ".github/scripts/gmb-repository/ci-repository.test.mjs",
     "citizenapp/assets/topup/walletconnect.bundle.js",
-    "citizenserve/worker-configuration.d.ts",
     "citizenapp/smoldot/pow/**",
+    "citizenserve/worker-configuration.d.ts",
     "shared/data-dictionary.json",
     "shared/qr-protocol/tests/registry_consistency.rs"
   ]

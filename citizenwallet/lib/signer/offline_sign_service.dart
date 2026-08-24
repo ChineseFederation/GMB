@@ -295,6 +295,17 @@ class OfflineSignService {
         );
       }
     }
+    if (body.action == QrActions.publish) {
+      final payloadExpiresAt = int.tryParse(decoded.fields['expires_at'] ?? '');
+      if (payloadExpiresAt != request.expiresAt) {
+        return OfflineSignVerification(
+          decoded: decoded,
+          status: SignDecisionStatus.reject,
+          actionLabel: qrActionLabel,
+          rejectReason: '发布授权过期时间与签名请求不一致，已拒绝签名',
+        );
+      }
+    }
 
     final decodedActionLabel = actionLabelForDecodedAction(decoded.action);
     if (decodedActionLabel == null) {

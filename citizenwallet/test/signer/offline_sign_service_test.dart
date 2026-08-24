@@ -131,6 +131,17 @@ List<int> _switchDefaultAccountPayload({
       ...List<int>.filled(16, 0x66),
     ];
 
+List<int> _publishAuthorizationPayload({required int expiresAt}) => <int>[
+      ..._scaleString('citizenweb'),
+      ..._scaleString('cloudflare'),
+      ..._scaleString('1.2.3'),
+      ...List<int>.generate(20, (index) => index + 1),
+      ...List<int>.generate(32, (index) => index + 21),
+      ..._scaleString('deployment-stable-1'),
+      ..._u64Le(expiresAt),
+      ...List<int>.filled(32, 0x66),
+    ];
+
 void main() {
   group('OfflineSignService', () {
     late _FakeWalletManager walletManager;
@@ -247,6 +258,60 @@ void main() {
         service.verifyPayload(mismatchedExpiry).status,
         SignDecisionStatus.reject,
       );
+    });
+
+    test('发布授权严格绑定外层期限、使用 0x24 域且同一请求只能签一次', () async {
+      final expiresAt = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 90;
+      final payload = _publishAuthorizationPayload(expiresAt: expiresAt);
+      final request = _buildTestRequest(
+        requestId: 'offline-publish-authorization',
+        signerPublicKey: signingAccount.accountId,
+        payloadHex: '0x${_toHex(payload)}',
+        action: QrActions.publish,
+        expiresAt: expiresAt,
+      );
+
+      final verification = service.verifyPayload(request);
+      expect(verification.status, SignDecisionStatus.normal);
+      expect(verification.actionLabel, '生产发布授权');
+      expect(verification.decoded?.fields['product_id'], 'citizenweb');
+      expect(verification.decoded?.fields['platform'], 'cloudflare');
+
+      final response = await service.signParsedRequest(
+        accountId: signingAccount.accountId,
+        request: request,
+      );
+      expect(
+        _verifySr25519(
+          signerPublicKeyHex: response.body.signerPublicKeyHex,
+          message: QrSigner.signingBytesFor(request.body),
+          signatureHex: response.body.signatureHex,
+        ),
+        isTrue,
+      );
+      await expectLater(
+        service.signParsedRequest(
+          accountId: signingAccount.accountId,
+          request: request,
+        ),
+        throwsA(
+          isA<OfflineSignException>().having(
+            (error) => error.code,
+            'code',
+            OfflineSignErrorCode.replayed,
+          ),
+        ),
+      );
+
+      final mismatch = _buildTestRequest(
+        requestId: 'offline-publish-expiry-mismatch',
+        signerPublicKey: signingAccount.accountId,
+        payloadHex: '0x${_toHex(payload)}',
+        action: QrActions.publish,
+        expiresAt: expiresAt + 1,
+      );
+      expect(service.verifyPayload(mismatch).status, SignDecisionStatus.reject);
+      expect(service.verifyPayload(mismatch).rejectReason, contains('过期时间'));
     });
 
     test('设备子钥绑定复用 0x1C，且只接受载荷账户和签发时间一致的请求', () async {
@@ -749,7 +814,9 @@ class _FakeWalletManager extends WalletManager {
     final miniSecret = await WalletMiniSecret.fromMnemonic(_mnemonic);
     final pair = Keyring.sr25519.fromSeed(Uint8List.fromList(miniSecret));
     pair.ss58Format = _ss58;
-    final accountId = '0x${_toHex(pair.bytes().toList(growable: false))}';
+    // 中文注释：测试账户公钥与签名必须走生产唯一的原生 schnorrkel 实现；
+    // 禁止用第三方纯 Dart keyring 出签、再拿原生实现验签形成双口径夹具。
+    final accountId = '0x${_toHex(NativeSr25519.publicKeyOf(miniSecret))}';
     _miniSecretHex = _toHex(miniSecret);
     _account = Account(
       masterId: accountId,
@@ -775,10 +842,6 @@ class _FakeWalletManager extends WalletManager {
     if (accountId != account.accountId) {
       throw const WalletAuthException('未找到指定账户');
     }
-    final pair = Keyring.sr25519.fromSeed(
-      Uint8List.fromList(_hexToBytes(_miniSecretHex!)),
-    );
-    pair.ss58Format = _ss58;
-    return Uint8List.fromList(pair.sign(payload));
+    return NativeSr25519.sign(_hexToBytes(_miniSecretHex!), payload);
   }
 }

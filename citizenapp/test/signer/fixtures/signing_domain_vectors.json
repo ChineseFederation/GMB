@@ -109,6 +109,12 @@
       "name": "OP_SIGN_WALLET_MODE",
       "op_tag": "0x23",
       "scale_payload_hex": "77616c6c65742d6d6f6465"
+    },
+    {
+      "message_hex": "c698c3288feaabf27dc27ff237173dea1799e6b15927e25579f636e2de2c2d2c",
+      "name": "OP_SIGN_PUBLISH",
+      "op_tag": "0x24",
+      "scale_payload_hex": "7075626c697368"
     }
   ]
 }
