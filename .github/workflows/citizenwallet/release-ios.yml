@@ -266,5 +266,5 @@ jobs:
           node release-tool/.github/scripts/citizenwallet/release-ios.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民钱包 · Release · iOS' \
-            --notes "公民钱包 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \
+            --notes "公民钱包 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenwallet/build/release/*

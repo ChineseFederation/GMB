@@ -1677,6 +1677,7 @@ test5("11 个独立 Release 动作锚定成功 CI 源码且首次版本不递增
   }
 });
 
+// 中文注释：产品分组真源和 GitHub 唯一登记入口必须同时满足同一 Release 工具合同，防止只修一侧。
 test5("节点 Release 前置验证与正式构建统一使用隔离工具", () => {
   const workflows = [
     ["release-node-linux-arm.yml", "release-node-linux-arm.mjs"],
@@ -1684,11 +1685,39 @@ test5("节点 Release 前置验证与正式构建统一使用隔离工具", () =
     ["release-node-macos.yml", "release-node-macos.mjs"],
     ["release-node-windows.yml", "release-node-windows.mjs"],
   ];
+  const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
   for (const [workflow, action] of workflows) {
     const source = readFileSync7(new URL(`../../workflows/citizenchain/${workflow}`, import.meta.url), "utf8");
     const verifier = `node release-tool/.github/scripts/citizenchain/${action} version-tag verify-release-source`;
-    assert5.ok(source.includes(verifier), `${workflow} 前置验证未使用隔离 Release 工具`);
-    assert5.doesNotMatch(source, new RegExp(`node \.github/scripts/citizenchain/${action} version-tag verify-release-source`));
-    assert5.ok(source.indexOf("拉取前置 Release 工具") < source.indexOf(verifier));
+    for (const [entry, contract] of [[workflow, source], ["gmb-repository.yml", registered]]) {
+      assert5.ok(contract.includes(verifier), `${entry} 前置验证未使用隔离 Release 工具`);
+      assert5.doesNotMatch(contract, new RegExp(`node \\.github/scripts/citizenchain/${action} version-tag verify-release-source`));
+      assert5.ok(contract.indexOf("拉取前置 Release 工具") < contract.indexOf(verifier));
+    }
   }
+});
+
+// 中文注释：仓库级 Latest 不能表达产品、端、动作的独立最新版本，11 个 Release 必须统一禁用该标记。
+test5("11 个 Release 分组真源与登记入口统一禁用仓库级 Latest", () => {
+  const workflows = [
+    "citizenapp/release-ios.yml",
+    "citizenapp/release-android.yml",
+    "citizenwallet/release-ios.yml",
+    "citizenwallet/release-android.yml",
+    "citizenchain/release-node-linux-arm.yml",
+    "citizenchain/release-node-linux-amd.yml",
+    "citizenchain/release-node-macos.yml",
+    "citizenchain/release-node-windows.yml",
+    "citizenchain/release-runtime-wasm.yml",
+    "citizenserve/release-cloudflare.yml",
+    "citizenweb/release-web.yml",
+  ];
+  for (const workflow of workflows) {
+    const source = readFileSync7(new URL(`../../workflows/${workflow}`, import.meta.url), "utf8");
+    assert5.match(source, /--latest false/);
+    assert5.doesNotMatch(source, /--latest true/);
+  }
+  const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
+  assert5.equal((registered.match(/--latest false/g) ?? []).length, 11);
+  assert5.doesNotMatch(registered, /--latest true/);
 });

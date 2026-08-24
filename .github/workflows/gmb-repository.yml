@@ -896,7 +896,7 @@ jobs:
           node release-tool/.github/scripts/citizenapp/release-android.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民 · Release · Android' \
-            --notes "公民 Android 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \
+            --notes "公民 Android 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenapp/build/release/*
 
   # ── .github/workflows/citizenapp/release-ios.yml ──
@@ -1136,7 +1136,7 @@ jobs:
           node release-tool/.github/scripts/citizenapp/release-ios.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民 · Release · iOS' \
-            --notes "公民 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \
+            --notes "公民 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenapp/build/release/*
 
   # ── .github/workflows/citizenchain/ci-node-linux-amd.yml ──
@@ -2576,11 +2576,23 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
+      # 中文注释：统一入口必须与产品分组真源同步；源码固定在成功 CI，前置版本
+      # 验证只读取本次 workflow 的隔离工具，禁止再次执行旧 CI 中的版本算法。
+      - name: 拉取前置 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/citizenchain/release-node-linux-amd.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 验证公民链 LinuxAMD Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/citizenchain/release-node-linux-amd.mjs version-tag verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-node-linux-amd.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-node-linux-amd-v --product-id citizenchain-node
@@ -2843,11 +2855,23 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
+      # 中文注释：统一入口必须与产品分组真源同步；源码固定在成功 CI，前置版本
+      # 验证只读取本次 workflow 的隔离工具，禁止再次执行旧 CI 中的版本算法。
+      - name: 拉取前置 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/citizenchain/release-node-linux-arm.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 验证公民链 LinuxARM Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/citizenchain/release-node-linux-arm.mjs version-tag verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-node-linux-arm.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-node-linux-arm-v --product-id citizenchain-node
@@ -3109,11 +3133,23 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
+      # 中文注释：统一入口必须与产品分组真源同步；源码固定在成功 CI，前置版本
+      # 验证只读取本次 workflow 的隔离工具，禁止再次执行旧 CI 中的版本算法。
+      - name: 拉取前置 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/citizenchain/release-node-macos.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 验证公民链 macOS Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/citizenchain/release-node-macos.mjs version-tag verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-node-macos.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-node-macos-v --product-id citizenchain-node
@@ -3419,11 +3455,23 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           fetch-depth: 0
 
+      # 中文注释：统一入口必须与产品分组真源同步；源码固定在成功 CI，前置版本
+      # 验证只读取本次 workflow 的隔离工具，禁止再次执行旧 CI 中的版本算法。
+      - name: 拉取前置 Release 工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/citizenchain/release-node-windows.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - name: 验证公民链 Windows Release 的正式版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
-          node .github/scripts/citizenchain/release-node-windows.mjs version-tag verify-release-source
+          node release-tool/.github/scripts/citizenchain/release-node-windows.mjs version-tag verify-release-source
           --ci-run-id "$GMB_CI_RUN_ID"
           --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
           --prefix citizenchain-node-windows-v --product-id citizenchain-node
@@ -4723,7 +4771,7 @@ jobs:
           node release-tool/.github/scripts/citizenwallet/release-android.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民钱包 · Release · Android' \
-            --notes "公民钱包 Android 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \
+            --notes "公民钱包 Android 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenwallet/build/release/*
 
   # ── .github/workflows/citizenwallet/release-ios.yml ──
@@ -4960,7 +5008,7 @@ jobs:
           node release-tool/.github/scripts/citizenwallet/release-ios.mjs github-release \
             --tag "$GMB_VERSION_TAG" \
             --source-sha "$GMB_SOURCE_SHA" --title '公民钱包 · Release · iOS' \
-            --notes "公民钱包 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest true \
+            --notes "公民钱包 iOS 正式版 v${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets citizenwallet/build/release/*
 
   # ── .github/workflows/citizenweb/ci-web.yml ──
