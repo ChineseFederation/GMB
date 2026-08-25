@@ -41,7 +41,6 @@ const _peerProfile = CitizenProfile(
   identityLevel: 'voting',
   membershipLevel: 'democracy',
   membershipActive: true,
-  membershipConfirmed: true,
   following: 0,
   followers: 0,
   mutualFollowing: 0,

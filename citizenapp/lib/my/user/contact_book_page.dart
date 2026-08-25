@@ -260,7 +260,7 @@ class _ContactBookPageState extends State<ContactBookPage> {
     );
   }
 
-  /// 以四个一组有界刷新公开资料和真实媒体；会员投影未知时保留上一份确认有效展示。
+  /// 以四个一组有界刷新公开资料和真实媒体；D1 无会员行时直接不展示会员信息。
   Future<void> _refreshProfiles(List<UserContact> contacts) async {
     try {
       _session ??= await _sessionProvider.ensureSession();
@@ -274,15 +274,10 @@ class _ContactBookPageState extends State<ContactBookPage> {
         batch.map((contact) async {
           final cidNumber = contact.cidNumber;
           try {
-            final profile = await _profileApi
-                .fetchProfile(
-                  cidNumber,
-                  session: _session,
-                )
-                .then(
-                  (fresh) =>
-                      fresh.preserveConfirmedMembership(_profiles[cidNumber]),
-                );
+            final profile = await _profileApi.fetchProfile(
+              cidNumber,
+              session: _session,
+            );
             _profiles[cidNumber] = profile;
             _resolvedProfileCidNumbers.add(cidNumber);
             _profileMedia[cidNumber] = await _profileMediaCache.read(profile);

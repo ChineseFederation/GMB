@@ -37,7 +37,6 @@ class MembershipDisplaySnapshot {
     required this.prices,
     required this.subscriptionFetchedAtMs,
     required this.pricesFetchedAtMs,
-    this.membershipConfirmed = true,
   });
 
   final SquareMembershipState state;
@@ -45,12 +44,7 @@ class MembershipDisplaySnapshot {
   final int subscriptionFetchedAtMs;
   final int pricesFetchedAtMs;
 
-  /// true 表示有效/无效已经由 finalized 链读取或 verify_on_deny 收敛；旧缓存没有
-  /// 本字段时按 unknown 处理，普通 D1 否定不得伪装成“确认无会员”。
-  final bool membershipConfirmed;
-
   MembershipDisplayDecision get decision {
-    if (!membershipConfirmed) return MembershipDisplayDecision.unknown;
     return state.active
         ? MembershipDisplayDecision.activeConfirmed
         : MembershipDisplayDecision.inactiveConfirmed;
@@ -85,6 +79,9 @@ class SubscriptionService {
         _session = sessionProvider ?? SquareSessionProvider.instance,
         _api = api ?? SquareApiClient() {
     _walletAccountSigner = WalletAccountSigner(walletManager: _wallet);
+    // App/会员服务重新建立时主动恢复 finalized 待同步交易；失败仍留在原 tx_hash 队列，
+    // 后续状态刷新再次重试，不把恢复职责塞进广场发布流程。
+    unawaited(_retryPendingMirrorsForCurrentSession());
   }
 
   final SubscriptionRpc _rpc;
@@ -151,7 +148,6 @@ class SubscriptionService {
         pricesFetchedAtMs: decoded['prices_fetched_at_ms'] is int
             ? decoded['prices_fetched_at_ms'] as int
             : 0,
-        membershipConfirmed: decoded['membership_confirmed'] == true,
       );
     } on FormatException {
       // 损坏展示快照不参与授权；读取路径保留事实供显式诊断。
@@ -176,7 +172,6 @@ class SubscriptionService {
         'prices': snapshot.prices,
         'subscription_fetched_at_ms': snapshot.subscriptionFetchedAtMs,
         'prices_fetched_at_ms': snapshot.pricesFetchedAtMs,
-        'membership_confirmed': snapshot.membershipConfirmed,
       }),
     );
   }
@@ -212,12 +207,8 @@ class SubscriptionService {
       );
       await _confirm(
         subscriberCidNumber: cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'subscribe',
-        membershipLevel: level,
       );
     } on SecureSeedException catch (e) {
       throw SubscriptionException(seedSignErrorMessage(e));
@@ -255,11 +246,8 @@ class SubscriptionService {
       );
       await _confirm(
         subscriberCidNumber: cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'cancel',
       );
     } on SecureSeedException catch (e) {
       throw SubscriptionException(seedSignErrorMessage(e));
@@ -301,12 +289,8 @@ class SubscriptionService {
       );
       await _confirm(
         subscriberCidNumber: cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'change',
-        membershipLevel: level,
       );
     } on SecureSeedException catch (e) {
       throw SubscriptionException(seedSignErrorMessage(e));
@@ -326,7 +310,6 @@ class SubscriptionService {
   }
 
   /// 当前默认账户经 finalized 闭环验证后，才可成为链上订阅交易签名者。
-  /// 本地待提交证明归属永久 CID；账户只记录当时的签名与付款事实。
   Future<FinalizedIdentity> _requireIdentity() async {
     final identity = await FinalizedIdentityResolver.instance.resolve();
     if (identity == null || !identity.isRegistered) {
@@ -338,24 +321,16 @@ class SubscriptionService {
   String _pendingKey(String subscriberCidNumber) =>
       'platform_subscription_mirror_pending_by_cid:$subscriberCidNumber';
 
-  /// finalized 回执按永久 CID 落本地，再提交 Cloudflare；当时的签名账户只作为
-  /// 交易事实写入证明。HTTP 失败只重试证明，不再签名。
+  /// finalized 定位按永久 CID 落本地，只保存 tx_hash 与 block_hash。HTTP 失败只重试
+  /// 同一链上交易确认，不再签名，也不根据旧 D1 状态猜测同步成功。
   Future<void> _confirm({
     required String subscriberCidNumber,
-    required String signerAccountId,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    String? membershipLevel,
   }) async {
     final proof = <String, dynamic>{
       'tx_hash': txHash,
       'block_hash': blockHashHex,
-      'signed_extrinsic_hex': signedExtrinsicHex,
-      'action': action,
-      'signer_account_id': signerAccountId,
-      if (membershipLevel != null) 'membership_level': membershipLevel,
     };
     try {
       await _storeLocalProof(subscriberCidNumber, proof);
@@ -387,22 +362,16 @@ class SubscriptionService {
     }
   }
 
-  /// 用已 finalized 的交易证明推进 Worker 镜像。确认接口失败时只追加一次授权点查：
-  /// Worker 可按当前 Session CID 从 finalized 链重建漏写镜像，不产生第二次签名。
+  /// 用已 finalized 的交易证明推进 Worker 会员记录；失败只保留本地证明并重试，
+  /// 发布与资料读取不承担链上重建职责，也不产生第二次签名。
   Future<bool> _syncProof({
     required String subscriberCidNumber,
     required Map<String, dynamic> proof,
   }) async {
     final txHash = proof['tx_hash'];
     final blockHashHex = proof['block_hash'];
-    final signedExtrinsicHex = proof['signed_extrinsic_hex'];
-    final action = proof['action'];
-    final membershipLevel = proof['membership_level'];
     if (txHash is! String ||
-        blockHashHex is! String ||
-        signedExtrinsicHex is! String ||
-        action is! String ||
-        (membershipLevel != null && membershipLevel is! String)) {
+        blockHashHex is! String) {
       return false;
     }
 
@@ -417,33 +386,15 @@ class SubscriptionService {
       return false;
     }
 
-    var confirmed = false;
     try {
       await _api.confirmPlatformSubscription(
         session: session,
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
-        action: action,
-        membershipLevel: membershipLevel as String?,
       );
-      confirmed = true;
     } on Exception {
-      try {
-        final state = await _api.fetchMembership(
-          session,
-          verifyOnDeny: true,
-        );
-        confirmed = _proofMatchesMembership(
-          action: action,
-          membershipLevel: membershipLevel as String?,
-          state: state,
-        );
-      } on Exception {
-        confirmed = false;
-      }
+      return false;
     }
-    if (!confirmed) return false;
 
     try {
       await _removePendingProof(subscriberCidNumber, txHash);
@@ -452,17 +403,6 @@ class SubscriptionService {
     }
     MembershipRevision.instance.notifyConfirmed(subscriberCidNumber);
     return true;
-  }
-
-  bool _proofMatchesMembership({
-    required String action,
-    required String? membershipLevel,
-    required SquareMembershipState state,
-  }) {
-    if (action == 'cancel') return state.subscriptionStatus == 'cancelled';
-    return state.active &&
-        membershipLevel != null &&
-        state.membershipLevel == membershipLevel;
   }
 
   Future<void> _storeLocalProof(
@@ -531,5 +471,4 @@ class SubscriptionService {
 enum MembershipDisplayDecision {
   activeConfirmed,
   inactiveConfirmed,
-  unknown,
 }

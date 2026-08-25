@@ -3,8 +3,8 @@ import { deletePostCloudflareDataByCid } from '../posts/confirm';
 import { usageLimits } from '../limits/catalog';
 import { sendStorageCleanupAlert } from '../chat/push';
 
-// 权益到期清理只接受同一轮订阅对账读取的 finalized 区块时间戳。
-// 禁止使用 Worker/设备墙钟，也不保留“退订满 N 天”之类的第二触发时钟。
+// 权益到期清理使用 Cloudflare 定时事件时间；会员状态只由手机 finalized 交易同步，
+// Worker 不再为清理任务扫描链状态，也不保留第二套会员时钟。
 // 最坏情况：两名用户各 8 台设备通知 + 一名用户清理 4 篇、每篇最多 5 个外部请求；
 // 连同同轮订阅 batch 仍低于 Free 的 50 subrequest。
 const MAX_IDENTITIES_PER_SWEEP = 3;
@@ -35,15 +35,15 @@ export interface ExpiredMembershipCleanupResult {
  */
 export async function runExpiredMembershipContentCleanup(
   env: Env,
-  finalizedChainTimestamp: number,
+  scheduledAt: number,
 ): Promise<ExpiredMembershipCleanupResult> {
-  if (!Number.isSafeInteger(finalizedChainTimestamp) || finalizedChainTimestamp < 0) {
-    throw new Error('finalized chain timestamp is invalid');
+  if (!Number.isSafeInteger(scheduledAt) || scheduledAt < 0) {
+    throw new Error('scheduled timestamp is invalid');
   }
 
   const identities = await selectExpiredIdentities(
     env,
-    finalizedChainTimestamp - MEMBERSHIP_STORAGE_GRACE_MS,
+    scheduledAt - MEMBERSHIP_STORAGE_GRACE_MS,
     usageLimits.freedom.storage_bytes,
     MAX_IDENTITIES_PER_SWEEP,
   );
@@ -56,7 +56,7 @@ export async function runExpiredMembershipContentCleanup(
     let storageBytes = await readStorageBytes(env, identity.cid_number);
     if (storageBytes <= usageLimits.freedom.storage_bytes) continue;
     if (identity.storage_cleanup_notified_at === null) {
-      const cleanupAfter = finalizedChainTimestamp + STORAGE_CLEANUP_NOTICE_MS;
+      const cleanupAfter = scheduledAt + STORAGE_CLEANUP_NOTICE_MS;
       await sendStorageCleanupAlert(
         env,
         identity.cid_number,
@@ -67,10 +67,10 @@ export async function runExpiredMembershipContentCleanup(
         `UPDATE square_memberships
             SET storage_cleanup_notified_at = ?
           WHERE cid_number = ? AND storage_cleanup_notified_at IS NULL`,
-      ).bind(finalizedChainTimestamp, identity.cid_number).run();
+      ).bind(scheduledAt, identity.cid_number).run();
       continue;
     }
-    if (identity.storage_cleanup_notified_at + STORAGE_CLEANUP_NOTICE_MS > finalizedChainTimestamp) {
+    if (identity.storage_cleanup_notified_at + STORAGE_CLEANUP_NOTICE_MS > scheduledAt) {
       continue;
     }
     const items = await selectContentItems(env, identity.cid_number, remaining);
@@ -82,7 +82,7 @@ export async function runExpiredMembershipContentCleanup(
           env,
           identity.cid_number,
           item.post_id,
-          finalizedChainTimestamp,
+          scheduledAt,
         );
         deleted += 1;
         storageBytes = await readStorageBytes(env, identity.cid_number);
@@ -114,8 +114,7 @@ async function selectExpiredIdentities(
   const rows = await env.DB.prepare(
     `SELECT m.cid_number, m.storage_cleanup_notified_at
        FROM square_memberships m
-      WHERE m.subscription_status IN ('cancelled', 'terminated')
-        AND m.paid_until <= ?
+      WHERE m.paid_until <= ?
         AND COALESCE((SELECT byte_size FROM resource_totals
           WHERE cid_number = m.cid_number AND resource_key = 'square_storage'), 0) > ?
         AND (

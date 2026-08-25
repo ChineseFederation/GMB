@@ -6,23 +6,22 @@ import {
   bindFinalizedTransactionConfirmation,
   readCreatorPlansAtBlock,
   readSubscriptionAtBlock,
-  updateChainClock,
   verifyFinalizedSubscriptionTransaction,
   type BillingPeriod,
   type ChainCreatorTier,
   type ChainSubscriptionState,
   type FinalizedTransactionProofInput,
-  type SubscriptionBusinessAction,
   type VerifiedFinalizedTransaction,
 } from "../chain/subscription";
 import {
-  CHAIN_CLOCK_MAX_STALENESS_MS,
   getMembership,
   isSubscriptionProjectionEffective,
   requireActiveMembership,
   subscriptionIsActive,
 } from "./service";
 import { fetchChainIdentityStateByCid } from "../chain/identity";
+
+// 创作者统计与门禁只读取 CitizenServe D1；用户主动交易由手机同步，禁止在读取路径扫链。
 
 /**
  * 创作者会员 BFF：身份主键 `cid_number` 是链上及边缘投影的唯一业务归属；
@@ -65,18 +64,11 @@ interface CreatorPlanRow {
 interface CreatorConfirmBody {
   tx_hash?: unknown;
   block_hash?: unknown;
-  signed_extrinsic_hex?: unknown;
-  action?: unknown;
-  creator_cid_number?: unknown;
-  tier_id?: unknown;
-  billing_period?: unknown;
 }
 
 interface CreatorPlanBody {
   tx_hash?: unknown;
   block_hash?: unknown;
-  signed_extrinsic_hex?: unknown;
-  tiers?: unknown;
 }
 
 export interface CreatorSubscriptionConfirmDeps {
@@ -258,7 +250,7 @@ export async function creatorPlanOfRoute(
   return jsonResponse({ plan: await readPlan(env, creatorCidNumber) });
 }
 
-/** GET /square/creator/overview —— 仅统计链时钟下仍有效的订阅关系。 */
+/** GET /square/creator/overview —— 只统计 D1 中当前仍有效的订阅关系。 */
 export async function creatorOverviewRoute(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
   await requireActiveMembership(env, session.cid_number, session.account_id);
@@ -267,17 +259,15 @@ export async function creatorOverviewRoute(request: Request, env: Env): Promise<
   const countRow = await env.DB.prepare(
     `SELECT COUNT(*) AS cnt
       FROM square_creator_subscriptions s
-      JOIN chain_clock c ON c.clock_id = 1
       WHERE s.creator_cid_number = ?
         AND s.subscription_status IN ('active', 'cancelled')
-        AND c.chain_timestamp < s.paid_until
-        AND c.observed_at <= ? AND c.observed_at >= ?`,
+        AND ? < s.paid_until`,
   )
-    .bind(creatorCidNumber, observedAt, observedAt - CHAIN_CLOCK_MAX_STALENESS_MS)
+    .bind(creatorCidNumber, observedAt)
     .first<{ cnt: number }>();
   const incomeRow = await env.DB.prepare(
     `SELECT COALESCE(SUM(last_charged_price_fen), 0) AS total
-      FROM square_creator_subscriptions
+      FROM square_creator_subscriptions s
       WHERE creator_cid_number = ? AND last_charged_at >= ?`,
   )
     .bind(creatorCidNumber, monthStartMs())
@@ -300,18 +290,17 @@ export async function creatorPlanSaveRoute(
 ): Promise<Response> {
   const session = await requireSession(request, env);
   const body = await readJson<CreatorPlanBody>(request);
-  const requested = validateTiers(body.tiers);
   const proof = transactionProof(body);
   const transaction = await deps.verifyTransaction(
     env,
     session.account_id,
-    { kind: "creator_plans_set", tiers: chainTiersFromInput(requested) },
     proof,
   );
   const [chainTiers, platformState] = await Promise.all([
     deps.readCreatorPlansAtBlock(env, session.cid_number, transaction.blockHash),
     deps.readPlatformSubscriptionAtBlock(env, session.cid_number, transaction.blockHash),
   ]);
+  const requested = creatorPlanTiers(transaction.action, chainTiers);
   const tiers = verifiedProjectionTiers(requested, chainTiers);
   if (!subscriptionStateEffective(platformState, transaction.chainTimestamp)) {
     throw new HttpError(402, "membership_required", "需要有效平台订阅才能开通创作者会员");
@@ -326,12 +315,6 @@ export async function creatorPlanSaveRoute(
     requestHash,
     verifiedAt,
   );
-  await updateChainClock(env, {
-    chainTimestamp: transaction.chainTimestamp,
-    blockNumber: transaction.blockNumber,
-    blockHash: transaction.blockHash,
-    observedAt: verifiedAt,
-  });
   await replaceCreatorTierProjection(
     env,
     session.cid_number,
@@ -361,18 +344,14 @@ export async function creatorSubscriptionConfirmRoute(
 ): Promise<Response> {
   const session = await requireSession(request, env);
   const body = await readJson<CreatorConfirmBody>(request);
-  const action = creatorAction(body.action);
-  const creatorCidNumber = requireString(body.creator_cid_number, "创作者 CID 号缺失");
-  const tierId = action === "cancel" ? null : requireString(body.tier_id, "创作者档位缺失");
-  const billingPeriod = action === "cancel" ? null : billingPeriodValue(body.billing_period);
-  const expectedAction = expectedCreatorAction(action, creatorCidNumber, tierId, billingPeriod);
   const proof = transactionProof(body);
   const transaction = await deps.verifyTransaction(
     env,
     session.account_id,
-    expectedAction,
     proof,
   );
+  const { action, creatorCidNumber, tierId, billingPeriod } =
+    creatorSubscriptionAction(transaction.action);
   const state = await deps.readSubscriptionAtBlock(
     env,
     session.cid_number,
@@ -392,12 +371,6 @@ export async function creatorSubscriptionConfirmRoute(
     requestHash,
     verifiedAt,
   );
-  await updateChainClock(env, {
-    chainTimestamp: transaction.chainTimestamp,
-    blockNumber: transaction.blockNumber,
-    blockHash: transaction.blockHash,
-    observedAt: verifiedAt,
-  });
   const creatorAccountId =
     await deps.currentCreatorAccountId(env, creatorCidNumber);
   await projectCreatorSubscription(
@@ -428,18 +401,14 @@ export async function requireCreatorSubscription(
   creatorCidNumber: string,
 ): Promise<void> {
   const row = await env.DB.prepare(
-    `SELECT s.subscription_status, s.paid_until, c.chain_timestamp,
-        c.observed_at AS chain_observed_at
-      FROM square_creator_subscriptions s
-      LEFT JOIN chain_clock c ON c.clock_id = 1
+    `SELECT subscription_status, paid_until
+      FROM square_creator_subscriptions
       WHERE s.subscriber_cid_number = ? AND s.creator_cid_number = ?`,
   )
     .bind(subscriberCidNumber, creatorCidNumber)
     .first<{
       subscription_status: string;
       paid_until: number;
-      chain_timestamp: number | null;
-      chain_observed_at: number | null;
     }>();
   if (!row || !isSubscriptionProjectionEffective(row)) {
     throw new HttpError(402, "creator_subscription_required", "需订阅该创作者会员");
@@ -459,9 +428,7 @@ export async function replaceCreatorTierProjection(
   },
 ): Promise<void> {
   // 归属主键 = 创作者身份主键 creator_cid_number;creator_account_id 记当前签名账户(链上事实)。
-  const statements: D1PreparedStatement[] = [
-    env.DB.prepare("DELETE FROM square_creator_tiers WHERE creator_cid_number = ?").bind(creatorCidNumber),
-  ];
+  const statements: D1PreparedStatement[] = [];
   tiers.forEach((tier, index) => {
     statements.push(
       env.DB.prepare(
@@ -469,7 +436,19 @@ export async function replaceCreatorTierProjection(
           (creator_cid_number, creator_account_id, tier_id, tier_name, tier_order, monthly_price_fen,
            quarterly_price_fen, yearly_price_fen, finalized_block_number,
            finalized_block_hash, verified_at, last_tx_hash)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(creator_cid_number, tier_id) DO UPDATE SET
+            creator_account_id = excluded.creator_account_id,
+            tier_name = excluded.tier_name,
+            tier_order = excluded.tier_order,
+            monthly_price_fen = excluded.monthly_price_fen,
+            quarterly_price_fen = excluded.quarterly_price_fen,
+            yearly_price_fen = excluded.yearly_price_fen,
+            finalized_block_number = excluded.finalized_block_number,
+            finalized_block_hash = excluded.finalized_block_hash,
+            verified_at = excluded.verified_at,
+            last_tx_hash = COALESCE(excluded.last_tx_hash, square_creator_tiers.last_tx_hash)
+          WHERE excluded.finalized_block_number >= square_creator_tiers.finalized_block_number`,
       ).bind(
         creatorCidNumber,
         creatorAccountId,
@@ -486,6 +465,16 @@ export async function replaceCreatorTierProjection(
       ),
     );
   });
+  const tierIds = tiers.map((tier) => tier.tier_id);
+  const staleTierSql = tierIds.length === 0
+    ? `DELETE FROM square_creator_tiers
+        WHERE creator_cid_number = ? AND finalized_block_number <= ?`
+    : `DELETE FROM square_creator_tiers
+        WHERE creator_cid_number = ? AND finalized_block_number <= ?
+          AND tier_id NOT IN (${tierIds.map(() => '?').join(', ')})`;
+  statements.push(
+    env.DB.prepare(staleTierSql).bind(creatorCidNumber, point.blockNumber, ...tierIds),
+  );
   await env.DB.batch(statements);
 }
 
@@ -527,7 +516,7 @@ export async function projectCreatorSubscription(
         finalized_block_number = excluded.finalized_block_number,
         finalized_block_hash = excluded.finalized_block_hash,
         verified_at = excluded.verified_at,
-        last_tx_hash = excluded.last_tx_hash
+        last_tx_hash = COALESCE(excluded.last_tx_hash, square_creator_subscriptions.last_tx_hash)
       WHERE excluded.finalized_block_number >= square_creator_subscriptions.finalized_block_number`,
   )
     .bind(
@@ -572,42 +561,60 @@ function assertCreatorStateMatches(
   }
 }
 
-function expectedCreatorAction(
-  action: CreatorAction,
-  creatorCidNumber: string,
-  tierId: string | null,
-  billingPeriod: BillingPeriod | null,
-): SubscriptionBusinessAction {
-  if (action === "cancel") return { kind: "creator_cancel", creatorCidNumber };
-  if (!tierId || !billingPeriod) throw new HttpError(400, "invalid_request", "创作者订阅计划缺失");
-  return action === "subscribe"
-    ? { kind: "creator_subscribe", creatorCidNumber, tierId, billingPeriod }
-    : { kind: "creator_change", creatorCidNumber, tierId, billingPeriod };
-}
-
 function transactionProof(body: CreatorConfirmBody | CreatorPlanBody): FinalizedTransactionProofInput {
   if (
     typeof body.tx_hash !== "string" ||
-    typeof body.block_hash !== "string" ||
-    typeof body.signed_extrinsic_hex !== "string"
+    typeof body.block_hash !== "string"
   ) {
     throw new HttpError(400, "invalid_transaction_proof", "finalized 交易证明不完整");
   }
   return {
     txHash: body.tx_hash,
     blockHash: body.block_hash,
-    signedExtrinsicHex: body.signed_extrinsic_hex,
   };
 }
 
-function creatorAction(value: unknown): CreatorAction {
-  if (value === "subscribe" || value === "cancel" || value === "change") return value;
-  throw new HttpError(400, "invalid_subscription_action", "创作者订阅操作不合法");
+function creatorPlanTiers(
+  action: VerifiedFinalizedTransaction["action"],
+  chainTiers: ChainCreatorTier[],
+): CreatorTierInput[] {
+  if (action.kind !== "creator_plans_set" && action.kind !== "creator_tier_name_update") {
+    throw new HttpError(400, "invalid_subscription_action", "交易不是创作者档位变更");
+  }
+  return validateTiers(
+    chainTiers.map((tier) => ({
+      tier_id: tier.tierId,
+      tier_name: tier.tierName,
+      prices_fen: Object.fromEntries(
+        Object.entries(tier.pricesFen).map(([period, price]) => [period, Number(price)]),
+      ),
+    })),
+  );
 }
 
-function billingPeriodValue(value: unknown): BillingPeriod {
-  if (value === "monthly" || value === "quarterly" || value === "yearly") return value;
-  throw new HttpError(400, "invalid_billing_period", "创作者订阅周期不合法");
+function creatorSubscriptionAction(action: VerifiedFinalizedTransaction["action"]): {
+  action: CreatorAction;
+  creatorCidNumber: string;
+  tierId: string | null;
+  billingPeriod: "monthly" | "quarterly" | "yearly" | null;
+} {
+  if (action.kind === "creator_cancel") {
+    return {
+      action: "cancel",
+      creatorCidNumber: action.creatorCidNumber,
+      tierId: null,
+      billingPeriod: null,
+    };
+  }
+  if (action.kind === "creator_subscribe" || action.kind === "creator_change") {
+    return {
+      action: action.kind === "creator_subscribe" ? "subscribe" : "change",
+      creatorCidNumber: action.creatorCidNumber,
+      tierId: action.tierId,
+      billingPeriod: action.billingPeriod,
+    };
+  }
+  throw new HttpError(400, "invalid_subscription_action", "交易不是创作者订阅操作");
 }
 
 function requireString(value: unknown, message: string): string {

@@ -108,7 +108,6 @@ describe('GET /square/users/:account', () => {
       identity_level: 'voting',
       membership_level: 'democracy',
       membership_active: true,
-      membership_confirmed: true,
       cid_number: targetCid,
       is_following: true,
       is_followed_by: true
@@ -139,8 +138,7 @@ describe('GET /square/users/:account', () => {
     expect(body.profile).toMatchObject({
       identity_level: 'candidate',
       membership_level: 'freedom',
-      membership_active: true,
-      membership_confirmed: true
+      membership_active: true
     });
   });
 
@@ -158,12 +156,11 @@ describe('GET /square/users/:account', () => {
     expect(body.profile).toMatchObject({
       identity_level: 'voting',
       membership_level: 'democracy',
-      membership_active: true,
-      membership_confirmed: true
+      membership_active: true
     });
   });
 
-  it('marks membership unknown when the finalized chain clock is stale', async () => {
+  it('keeps a finalized D1 membership confirmed when the old chain clock is stale', async () => {
     const env = fakeEnv({
       identity: { identity_level: 'voting', cid_number: targetCid },
       membership: {
@@ -180,8 +177,7 @@ describe('GET /square/users/:account', () => {
 
     expect(body.profile).toMatchObject({
       membership_level: 'democracy',
-      membership_active: false,
-      membership_confirmed: false
+      membership_active: true
     });
   });
 
@@ -219,8 +215,7 @@ describe('GET /square/users/:account', () => {
       cid_number: targetCid,
       is_following: false,
       display_name: '',
-      membership_active: false,
-      membership_confirmed: true
+      membership_active: false
     });
   });
 });

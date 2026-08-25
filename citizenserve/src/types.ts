@@ -40,8 +40,8 @@ export interface UserProjectionCursorRow {
   updated_at: number;
 }
 
-/// D1 finalized SquarePost 投影游标；用户投影必须先于它推进。
-export interface MembershipProjectionCursorRow {
+/// D1 finalized 订阅统一游标；平台会员、创作者订阅和创作者档位共用这一条进度。
+export interface SubscriptionProjectionCursorRow {
   cursor_id: 1;
   finalized_block_number: number;
   finalized_block_hash: string;
@@ -190,9 +190,6 @@ export interface MembershipRow {
   verified_at: number;
   entitlement_lapsed_at: number | null;
   last_tx_hash: string | null;
-  // 由查询与 chain_clock 单例联结；缺失或过期时所有边缘权益 fail-closed。
-  chain_timestamp: number | null;
-  chain_observed_at: number | null;
 }
 
 export interface UploadItemInput {
@@ -372,8 +369,6 @@ export interface UserProfileResponse {
   membership_level: 'freedom' | 'democracy' | 'spark' | null;
   /// 会员是否当前有效（订阅生效且未过期）。
   membership_active: boolean;
-  /// 会员投影是否足够新，可作明确展示结论；false 表示未知，不代表确认无会员。
-  membership_confirmed: boolean;
   counts: UserProfileCounts;
   is_following: boolean;
   /// 目标身份是否关注当前登录者；用于关注/取关时准确就地更新互关数量。

@@ -473,8 +473,8 @@ class _ChatTabState extends State<ChatTab> {
     }
   }
 
-  /// 对端公开资料按四个 CID 一组刷新，防止大聊天列表产生无界请求；未知会员投影保留
-  /// 上一次确认有效展示，所有授权仍由会员业务自己的 finalized 门禁处理。
+  /// 对端公开资料按四个 CID 一组刷新，防止大聊天列表产生无界请求；会员展示只采用
+  /// CitizenServe 当前 D1 结果，所有授权仍由会员业务自己的 finalized 门禁处理。
   Future<void> _refreshPeerProfiles(
     List<ChatConversationPreview> conversations,
   ) async {
@@ -492,11 +492,10 @@ class _ChatTabState extends State<ChatTab> {
       await Future.wait(
         batch.map((cidNumber) async {
           try {
-            final profile = (await _profileApi.fetchProfile(
+            final profile = await _profileApi.fetchProfile(
               cidNumber,
               session: _profileSession,
-            ))
-                .preserveConfirmedMembership(_peerProfiles[cidNumber]);
+            );
             _peerProfiles[cidNumber] = profile;
             _resolvedPeerCidNumbers.add(cidNumber);
             _peerProfileMedia[cidNumber] =

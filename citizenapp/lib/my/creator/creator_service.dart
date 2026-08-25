@@ -368,7 +368,6 @@ class CreatorService {
         creatorCidNumber: session.cidNumber,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
         tiers: tiers,
       );
     } on SecureSeedException catch (e) {
@@ -423,10 +422,28 @@ class CreatorService {
           action: 'update_creator_tier_name',
           txHash: result.txHash,
           blockHashHex: result.blockHashHex,
-          signedExtrinsicHex: result.signedExtrinsicHex,
         );
       } on Exception {
         // 链上已经 finalized；本地审计缓存失败不得诱导用户再次签名。
+      }
+      try {
+        await _writePendingProjection(
+          creatorCidNumber: session.cidNumber,
+          txHash: result.txHash,
+          blockHashHex: result.blockHashHex,
+        );
+      } on Exception {
+        // 链上已经 finalized；本地待同步缓存失败不改变交易结果。
+      }
+      try {
+        await _api.saveMyPlan(
+          session: session,
+          txHash: result.txHash,
+          blockHashHex: result.blockHashHex,
+        );
+        await _clearPendingProjection(session.cidNumber);
+      } on Exception {
+        // 保留同一 finalized 交易，下次进入创作者页只重试投影确认。
       }
       final localTiers = List<CreatorTier>.from(currentTiers);
       localTiers[index] = localTiers[index].copyWith(tierName: tierName);
@@ -478,20 +495,14 @@ class CreatorService {
 
   Future<void> _writePendingProjection({
     required String creatorCidNumber,
-    required String signerAccountId,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required List<CreatorTier> tiers,
   }) async {
     await _writeCreatorState(
       _pendingProjectionKey(creatorCidNumber),
       jsonEncode({
         'tx_hash': txHash,
         'block_hash': blockHashHex,
-        'signed_extrinsic_hex': signedExtrinsicHex,
-        'signer_account_id': signerAccountId,
-        'tiers': tiers.map((tier) => tier.toJson()).toList(growable: false),
       }),
     );
   }
@@ -509,24 +520,13 @@ class CreatorService {
       if (decoded is! Map<String, dynamic>) return;
       final txHash = decoded['tx_hash'];
       final blockHashHex = decoded['block_hash'];
-      final signedExtrinsicHex = decoded['signed_extrinsic_hex'];
-      final rawTiers = decoded['tiers'];
-      if (txHash is! String ||
-          blockHashHex is! String ||
-          signedExtrinsicHex is! String ||
-          rawTiers is! List) {
+      if (txHash is! String || blockHashHex is! String) {
         return;
       }
-      final tiers = rawTiers
-          .whereType<Map<String, dynamic>>()
-          .map(CreatorTier.fromJson)
-          .toList(growable: false);
       await _api.saveMyPlan(
         session: session,
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
-        tiers: tiers,
       );
       await _deleteCreatorState(_pendingProjectionKey(session.cidNumber));
     } on Exception {
@@ -541,7 +541,6 @@ class CreatorService {
     required String creatorCidNumber,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
     required List<CreatorTier> tiers,
   }) async {
     final localPlan = CreatorPlan(
@@ -556,15 +555,11 @@ class CreatorService {
         action: 'set_creator_plans',
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
       );
       await _writePendingProjection(
         creatorCidNumber: creatorCidNumber,
-        signerAccountId: accountId,
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
-        tiers: tiers,
       );
     } on Exception {
       // 继续立即提交 Cloudflare；链上已成功，禁止把本地缓存异常变成第二次签名。
@@ -576,8 +571,6 @@ class CreatorService {
         session: session,
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
-        tiers: tiers,
       );
       await _clearPendingProjection(creatorCidNumber);
     } on Exception {
@@ -606,7 +599,6 @@ class CreatorService {
     required String action,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
   }) async {
     final key = 'subscription_tx_history_by_cid:$creatorCidNumber';
     final raw = await _readMembershipState(key);
@@ -622,7 +614,6 @@ class CreatorService {
       'action': action,
       'tx_hash': txHash,
       'block_hash': blockHashHex,
-      'signed_extrinsic_hex': signedExtrinsicHex,
       'signer_account_id': accountId,
     });
     if (history.length > 50) history.removeRange(0, history.length - 50);

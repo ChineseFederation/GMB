@@ -83,7 +83,7 @@ CREATE TABLE user_projection_cursor (
   updated_at INTEGER NOT NULL CHECK(updated_at >= 0)
 );
 
--- SquarePost finalized 投影独立游标；整块的会员、创作者档位和订阅全部成功后才推进。
+-- finalized 订阅统一投影只使用一个游标；平台会员、创作者订阅和档位整块成功后才推进。
 CREATE TABLE membership_projection_cursor (
   cursor_id INTEGER PRIMARY KEY CHECK(cursor_id = 1),
   finalized_block_number INTEGER NOT NULL CHECK(finalized_block_number >= 0),
@@ -198,15 +198,6 @@ CREATE TABLE rate_windows (
 );
 CREATE INDEX idx_rate_windows_expires
   ON rate_windows(expires_at);
-
--- finalized 链时间单例。Worker 只用它判断订阅权益和镜像新鲜度，不计算公历日期。
-CREATE TABLE chain_clock (
-  clock_id INTEGER PRIMARY KEY CHECK(clock_id = 1),
-  chain_timestamp INTEGER NOT NULL,
-  finalized_block_number INTEGER NOT NULL,
-  finalized_block_hash TEXT NOT NULL,
-  observed_at INTEGER NOT NULL
-);
 
 -- 平台订阅 finalized 镜像。身份主键 cid_number 是唯一业务主键;account_id 为当前绑定的
 -- 付款/签名钱包账户(链上事实保留);价格、状态和时间只来自链上。

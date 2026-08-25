@@ -132,7 +132,7 @@ describe('会员权益到期云端内容清理', () => {
     sendStorageCleanupAlert.mockResolvedValue(1);
   });
 
-  it('只用传入的 finalized 链时间判断 paid_until，不使用设备时间', async () => {
+  it('只用传入的 Cloudflare 定时事件时间判断 paid_until，不使用设备时间', async () => {
     const db = new FakeDb();
     db.memberships.push(
       {
@@ -247,10 +247,10 @@ describe('会员权益到期云端内容清理', () => {
     expect(deletePostCloudflareDataByCid).toHaveBeenCalledTimes(4);
   });
 
-  it('拒绝非法 finalized 链时间戳', async () => {
+  it('拒绝非法定时事件时间戳', async () => {
     await expect(
       runExpiredMembershipContentCleanup(env(new FakeDb()), -1),
-    ).rejects.toThrow('finalized chain timestamp is invalid');
+    ).rejects.toThrow('scheduled timestamp is invalid');
   });
 
   it('宽限期结束后先通知并再等待 24 小时，禁止同一轮直接删除', async () => {

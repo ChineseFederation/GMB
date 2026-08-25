@@ -90,7 +90,7 @@ class _ProfilePageState extends State<MyTab> {
   late final SubscriptionService _subscriptionService;
   SquareMembershipState? _membership;
   MembershipDisplayDecision _membershipDecision =
-      MembershipDisplayDecision.unknown;
+      MembershipDisplayDecision.inactiveConfirmed;
 
   /// 同一加载代次内 Worker 已回写后，本地旧展示快照不得逆序覆盖。
   int _membershipRemoteGeneration = -1;
@@ -244,7 +244,7 @@ class _ProfilePageState extends State<MyTab> {
         _publicProfileMedia = const CitizenProfileMediaSnapshot();
         _profileSession = null;
         _membership = null;
-        _membershipDecision = MembershipDisplayDecision.unknown;
+        _membershipDecision = MembershipDisplayDecision.inactiveConfirmed;
         _profileRefreshCid = null;
       }
     });
@@ -265,7 +265,6 @@ class _ProfilePageState extends State<MyTab> {
       final snapshot =
           await _subscriptionService.readDisplaySnapshot(cidNumber);
       if (snapshot == null ||
-          !snapshot.membershipConfirmed ||
           !mounted ||
           generation != _loadGeneration ||
           cidNumber != _identityCidNumber ||
@@ -300,12 +299,8 @@ class _ProfilePageState extends State<MyTab> {
     await _loadPublicProfile(session, generation);
 
     try {
-      // 普通 D1 投影的 false 可能只是链时钟陈旧；首帧先保留已确认快照，后台否定
-      // 必须经 Worker 的 finalized 拒绝复核后才能覆盖为“确认无会员”。
-      final membership = await _squareApi.fetchMembership(
-        session,
-        verifyOnDeny: true,
-      );
+      // 资料读取只使用 CitizenServe 已同步的会员记录，不在页面或发布路径点查链。
+      final membership = await _squareApi.fetchMembership(session);
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _membership = membership;
@@ -320,7 +315,6 @@ class _ProfilePageState extends State<MyTab> {
         session.cidNumber,
         MembershipDisplaySnapshot(
           state: membership,
-          membershipConfirmed: true,
           prices: previous?.prices ?? const <String, int>{},
           subscriptionFetchedAtMs: DateTime.now().millisecondsSinceEpoch,
           pricesFetchedAtMs: previous?.pricesFetchedAtMs ?? 0,

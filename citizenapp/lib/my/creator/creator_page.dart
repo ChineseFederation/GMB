@@ -28,7 +28,7 @@ class CreatorPage extends StatefulWidget {
     super.key,
     CreatorService? service,
     this.initialCidNumber = '',
-    this.initialMembershipDecision = MembershipDisplayDecision.unknown,
+    this.initialMembershipDecision = MembershipDisplayDecision.inactiveConfirmed,
   }) : _service = service;
 
   final CreatorService? _service;
@@ -36,7 +36,7 @@ class CreatorPage extends StatefulWidget {
   /// 「我的」页已经持有的永久 CID，用于跳过页面入口的重复身份读取。
   final String initialCidNumber;
 
-  /// 仅作为首帧展示提示；unknown 只能显示稳定的创作者结构，不能当成无会员。
+  /// 仅作为首帧展示提示；只允许有效或无效二元态。
   /// 创建、编辑等动作仍重新读取 finalized 会员真态。
   final MembershipDisplayDecision initialMembershipDecision;
 
@@ -64,7 +64,6 @@ class _CreatorPageState extends State<CreatorPage> {
           plan: CreatorPlan.empty(initialCidNumber),
           overview: CreatorOverview.zero,
         ),
-      MembershipDisplayDecision.unknown => null,
     };
     WalletManager.walletsRevision.addListener(_onIdentityChanged);
     MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
@@ -125,8 +124,8 @@ class _CreatorPageState extends State<CreatorPage> {
 
       final snapshot = await _service.readDisplaySnapshot(cidNumber);
       if (!mounted || generation != _loadGeneration) return;
-      // Creator 展示快照只由 finalized 会员与创作者读取写入，可信度高于入口提示；
-      // 入口 unknown 或旧否定都不得拒绝一份已确认有效的本地快照。
+      // Creator 展示快照只由 finalized 会员与创作者读取写入，可信度高于入口二元提示；
+      // 已确认有效的本地快照可以覆盖旧的无会员入口状态。
       if (snapshot != null) {
         setState(() {
           _data = snapshot.data;

@@ -62,7 +62,6 @@ const _profile = CitizenProfile(
   identityLevel: 'voting',
   membershipLevel: 'democracy',
   membershipActive: true,
-  membershipConfirmed: true,
   following: 1,
   followers: 2,
   mutualFollowing: 1,

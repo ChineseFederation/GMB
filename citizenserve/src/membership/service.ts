@@ -1,7 +1,6 @@
 import type { Env, MembershipRow } from '../types';
 import { HttpError, jsonResponse, requireSession } from '../shared/http';
 import { membershipPlanList } from './plans';
-import { reconcileMembershipForCid } from './reconcile';
 import { nowMs } from '../shared/time';
 import { readMembershipUsageState } from '../limits/usage';
 
@@ -15,18 +14,13 @@ const MEMBERSHIP_COLUMNS =
   `m.cid_number, m.account_id, m.membership_level, m.started_at,
     m.last_charged_at, m.last_charged_price_fen, m.paid_until,
     m.subscription_status, m.finalized_block_number, m.finalized_block_hash,
-    m.verified_at, m.entitlement_lapsed_at, m.last_tx_hash,
-    c.chain_timestamp, c.observed_at AS chain_observed_at`;
-
-/// 链时钟超过三个计划 Cron 周期仍未刷新即拒绝，防止停更投影无限放行已过期权益。
-export const CHAIN_CLOCK_MAX_STALENESS_MS = 15 * 60 * 1000;
+    m.verified_at, m.entitlement_lapsed_at, m.last_tx_hash`;
 
 /// 会员投影按身份主键 cid_number 读取(account_id 仅为当前付款账户,不作归属键)。
 export async function getMembership(env: Env, cidNumber: string): Promise<MembershipRow | null> {
   return env.DB.prepare(
     `SELECT ${MEMBERSHIP_COLUMNS}
       FROM square_memberships m
-      LEFT JOIN chain_clock c ON c.clock_id = 1
       WHERE m.cid_number = ?`
   )
     .bind(cidNumber)
@@ -47,7 +41,6 @@ export async function batchMemberships(
   const result = await env.DB.prepare(
     `SELECT ${MEMBERSHIP_COLUMNS}
       FROM square_memberships m
-      LEFT JOIN chain_clock c ON c.clock_id = 1
       WHERE m.cid_number IN (${placeholders})`
   )
     .bind(...distinct)
@@ -58,79 +51,15 @@ export async function batchMemberships(
   return map;
 }
 
-export interface MembershipAuthorizationDeps {
-  reconcileMembershipForCid: typeof reconcileMembershipForCid;
-}
-
-const defaultAuthorizationDeps: MembershipAuthorizationDeps = {
-  reconcileMembershipForCid,
-};
-
-/**
- * 授权读取先走 D1 快路径；只有当前结果即将拒绝时，才按会话绑定的 CID 在 finalized 链上
- * 点查并重建投影。App 会员自报绝不进入本函数，链服务异常也不得伪装成“没有会员”。
- */
-export async function getMembershipForAuthorization(
-  env: Env,
-  cidNumber: string,
-  accountId: string,
-  deps: MembershipAuthorizationDeps = defaultAuthorizationDeps,
-): Promise<MembershipRow | null> {
-  const current = await getMembership(env, cidNumber);
-  if (current && subscriptionIsActive(current)) {
-    return current;
-  }
-  let chainConfirmedPotentiallyActive = false;
-  try {
-    const state = await deps.reconcileMembershipForCid(env, {
-      cidNumber,
-      accountId,
-    });
-    chainConfirmedPotentiallyActive =
-      state?.plan.kind === 'platform' &&
-      (state.status === 'active' || state.status === 'cancelled');
-  } catch (error) {
-    throw membershipVerificationUnavailable(error);
-  }
-  const refreshed = await getMembership(env, cidNumber);
-  // finalized 链确认仍可能有效，但较新并发写或未前进的链时钟使 D1 仍无法放行时，属于
-  // “暂时无法验证”而不是“没有会员”，继续 fail-closed 并允许客户端重试。
-  if (
-    chainConfirmedPotentiallyActive &&
-    (!refreshed || !subscriptionIsActive(refreshed))
-  ) {
-    throw membershipVerificationUnavailable(
-      new Error('finalized membership projection remains unavailable'),
-    );
-  }
-  return refreshed;
-}
-
-function membershipVerificationUnavailable(error: unknown): HttpError {
-  console.error(JSON.stringify({
-    event: 'membership_authorization_reconcile_failed',
-    error: error instanceof Error ? error.message : String(error),
-  }));
-  return new HttpError(
-    503,
-    'membership_verification_unavailable',
-    '暂时无法验证会员状态，请稍后重试',
-  );
-}
-
 /// 发布闸门（门禁2）：只要求订阅当前有效；解耦后不再校验身份、不再冻结。
 export async function requireActiveMembership(
   env: Env,
   cidNumber: string,
-  accountId: string,
-  deps: MembershipAuthorizationDeps = defaultAuthorizationDeps,
+  _accountId: string,
 ): Promise<MembershipRow> {
-  const membership = await getMembershipForAuthorization(
-    env,
-    cidNumber,
-    accountId,
-    deps,
-  );
+  // 发布门禁只读取 CitizenServe 已由 finalized 交易确认写入的 D1 会员记录。
+  // 订阅状态变更由手机端独立同步；发布路径禁止点查链、修复投影或等待链时钟。
+  const membership = await getMembership(env, cidNumber);
   if (!membership) {
     throw new HttpError(402, 'membership_required', '需要有效会员才能发布广场内容');
   }
@@ -143,17 +72,8 @@ export async function requireActiveMembership(
 
 export async function membershipRoute(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
-  // 普通头像/资料读取只查投影；发布前显式要求 verify_on_deny 时才在拒绝路径点查链，
-  // 避免无会员用户每次打开页面都产生链 RPC。
-  const verifyOnDeny =
-    new URL(request.url).searchParams.get('verify_on_deny') === '1';
-  const membership = verifyOnDeny
-    ? await getMembershipForAuthorization(
-        env,
-        session.cid_number,
-        session.account_id,
-      )
-    : await getMembership(env, session.cid_number);
+  // 所有读取统一使用 D1；会员变更同步与资料/发布读取彻底分离。
+  const membership = await getMembership(env, session.cid_number);
   const active = membership ? subscriptionIsActive(membership) : false;
   const usageState = active && membership
     ? await readMembershipUsageState(env, session.cid_number, membership)
@@ -169,7 +89,7 @@ export async function membershipRoute(request: Request, env: Env): Promise<Respo
   });
 }
 
-/// Active 或已签名取消但尚在已付周期内的 Cancelled 都有效；终止、过期、无链时钟或时钟陈旧拒绝。
+/// Active 或已签名取消但尚在已付周期内的 Cancelled 都有效；其余状态或过期拒绝。
 export function subscriptionIsActive(
   membership: MembershipRow,
   observedNow: number = nowMs(),
@@ -177,64 +97,28 @@ export function subscriptionIsActive(
   return isSubscriptionProjectionEffective({
     subscription_status: membership.subscription_status,
     paid_until: membership.paid_until,
-    chain_timestamp: membership.chain_timestamp,
-    chain_observed_at: membership.chain_observed_at,
   }, observedNow);
 }
 
-/// 公开展示投影是否足够新。授权仍必须调用 subscriptionIsActive 或 verify_on_deny；
-/// 本函数只防止资料页把缺失/陈旧链时钟误显示成确认无会员。
+/// D1 行已经由 finalized 会员变更确认写入；读取和发布不再以全局链时钟二次降级。
 export function membershipProjectionIsCurrent(
-  membership: Pick<MembershipRow, 'chain_timestamp' | 'chain_observed_at'>,
+  membership: MembershipRow,
   observedNow: number = nowMs(),
 ): boolean {
-  return membership.chain_timestamp !== null &&
-    membership.chain_observed_at !== null &&
-    observedNow >= membership.chain_observed_at &&
-    observedNow - membership.chain_observed_at <= CHAIN_CLOCK_MAX_STALENESS_MS;
-}
-
-/// 公开徽章是否已有确定结论。已终止或投影链时间已越过 paid_until 时，无需等待新链
-/// 时钟也能确认失效；只有仍可能有效的 active/cancelled 才要求链时钟足够新。
-export function membershipDisplayIsConfirmed(
-  membership: Pick<
-    MembershipRow,
-    'subscription_status' | 'paid_until' | 'chain_timestamp' | 'chain_observed_at'
-  >,
-  observedNow: number = nowMs(),
-): boolean {
-  if (
-    membership.subscription_status !== 'active' &&
-    membership.subscription_status !== 'cancelled'
-  ) {
-    return true;
-  }
-  if (
-    membership.chain_timestamp !== null &&
-    membership.chain_timestamp >= membership.paid_until
-  ) {
-    return true;
-  }
-  return membershipProjectionIsCurrent(membership, observedNow);
+  void membership;
+  void observedNow;
+  return true;
 }
 
 export function isSubscriptionProjectionEffective(
   projection: {
     subscription_status: string;
     paid_until: number;
-    chain_timestamp: number | null;
-    chain_observed_at: number | null;
   },
   observedNow: number = nowMs(),
 ): boolean {
   if (projection.subscription_status !== 'active' && projection.subscription_status !== 'cancelled') {
     return false;
   }
-  if (
-    projection.chain_timestamp === null ||
-    !membershipProjectionIsCurrent(projection, observedNow)
-  ) {
-    return false;
-  }
-  return projection.chain_timestamp < projection.paid_until;
+  return observedNow < projection.paid_until;
 }

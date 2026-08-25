@@ -207,9 +207,10 @@ describe("Cloudflare Workers Paid 成本硬边界", () => {
     }
     for (const task of [
       "reconcileFinalizedUserProjection(env)",
-      "reconcileFinalizedMembershipProjection(env)",
-      "reconcileSubscriptions(env)",
+      "reconcileFinalizedSubscriptionProjection(env)",
     ]) expect(worker).toContain(task);
+    expect(worker).not.toContain("reconcileFinalizedMembershipProjection(env)");
+    expect(worker).not.toContain("reconcileSubscriptions(env)");
   });
 
   it("R2、Cache Purge 与每日内容清理均有官方批次硬顶", () => {

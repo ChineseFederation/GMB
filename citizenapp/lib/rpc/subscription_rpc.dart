@@ -111,12 +111,11 @@ class ChainCreatorTier {
   final Map<String, BigInt> pricesFen;
 }
 
-/// 一次账户签名交易 finalized 后的完整本地证明；Cloudflare 重试只复用这些字节，不再签名。
+/// 一次账户签名交易 finalized 后的最小定位；Cloudflare 按哈希从该区块取得交易。
 typedef FinalizedSubscriptionTransaction = ({
   String txHash,
   int usedNonce,
   String blockHashHex,
-  String signedExtrinsicHex,
 });
 
 /// SquarePost 订阅 SCALE 与标准热钱包 extrinsic 入口。
@@ -377,7 +376,6 @@ class SubscriptionRpc {
     required Future<Uint8List> Function(Uint8List payload) sign,
     TxPoolWatchCallback? onWatchEvent,
   }) async {
-    SignedExtrinsicTrace? signedTrace;
     final result = await SignedExtrinsicBuilder(
       chainRpc: _rpc,
       logLabel: 'SubscriptionRpc',
@@ -386,19 +384,13 @@ class SubscriptionRpc {
       fromSs58Address: fromSs58Address,
       signerPublicKey: signerPublicKey,
       sign: sign,
-      onTrace: (trace) => signedTrace = trace,
       onWatchEvent: onWatchEvent,
       waitForFinalized: true,
     );
-    final encoded = signedTrace?.encoded;
-    if (encoded == null) {
-      throw StateError('订阅交易已 finalized，但本地签名交易证明缺失');
-    }
     return (
       txHash: result.txHash,
       usedNonce: result.usedNonce,
       blockHashHex: result.blockHashHex,
-      signedExtrinsicHex: '0x${SignedExtrinsicBuilder.hexEncode(encoded)}',
     );
   }
 

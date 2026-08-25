@@ -184,8 +184,7 @@ describe("finalized 订阅交易证明", () => {
       await expect(verifyFinalizedSubscriptionTransaction(
         rpcEnv(),
         signerAccountId,
-        { kind: "platform_subscribe", membershipLevel: "spark" },
-        { txHash, blockHash, signedExtrinsicHex: signedHex },
+        { txHash, blockHash },
       )).resolves.toMatchObject({
         txHash,
         blockHash,
@@ -198,22 +197,30 @@ describe("finalized 订阅交易证明", () => {
     }
   });
 
-  it("同一 signed extrinsic 不能冒充另一档位操作", async () => {
+  it("动作直接由链上交易解析，客户端没有声明另一档位的入口", async () => {
     const signer = new Uint8Array(32).fill(7);
     const signed = signedExtrinsic(
       signer,
       Uint8Array.from([34, 1, 0, 0, 2, ...new Uint8Array(16).fill(1)]),
     );
-    await expect(verifyFinalizedSubscriptionTransaction(
-      rpcEnv(),
-      accountId(signer),
-      { kind: "platform_subscribe", membershipLevel: "freedom" },
-      {
-        txHash: `0x${bytesToHex(blake2AsU8a(signed, 256))}`,
-        blockHash: `0x${"a".repeat(64)}`,
-        signedExtrinsicHex: `0x${bytesToHex(signed)}`,
-      },
-    )).rejects.toMatchObject({ code: "subscription_tx_action_mismatch" });
+    const signedHex = `0x${bytesToHex(signed)}`;
+    const blockHash = `0x${"a".repeat(64)}`;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = rpcFetch({ blockHash, signedHex });
+    try {
+      await expect(verifyFinalizedSubscriptionTransaction(
+        rpcEnv(),
+        accountId(signer),
+        {
+          txHash: `0x${bytesToHex(blake2AsU8a(signed, 256))}`,
+          blockHash,
+        },
+      )).resolves.toMatchObject({
+        action: { kind: "platform_subscribe", membershipLevel: "spark" },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("创作者交易按 CID 解码并校验，不接受账户键语义", async () => {
@@ -244,16 +251,38 @@ describe("finalized 订阅交易证明", () => {
         verifyFinalizedSubscriptionTransaction(
           rpcEnv(),
           accountId(signer),
-          {
-            kind: "creator_subscribe",
-            creatorCidNumber,
-            tierId: "supporter",
-            billingPeriod: "monthly",
-          },
-          { txHash, blockHash, signedExtrinsicHex: signedHex },
+          { txHash, blockHash },
         ),
       ).resolves.toMatchObject({
         action: { kind: "creator_subscribe", creatorCidNumber },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("创作者档位改名从 finalized 交易解析，不接收客户端档位声明", async () => {
+    const signer = new Uint8Array(32).fill(7);
+    const tierId = new TextEncoder().encode("supporter");
+    const tierName = new TextEncoder().encode("core");
+    const signed = signedExtrinsic(
+      signer,
+      Uint8Array.from([34, 6, tierId.length << 2, ...tierId, tierName.length << 2, ...tierName]),
+    );
+    const signedHex = `0x${bytesToHex(signed)}`;
+    const txHash = `0x${bytesToHex(blake2AsU8a(signed, 256))}`;
+    const blockHash = `0x${"a".repeat(64)}`;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = rpcFetch({ blockHash, signedHex });
+    try {
+      await expect(
+        verifyFinalizedSubscriptionTransaction(
+          rpcEnv(),
+          accountId(signer),
+          { txHash, blockHash },
+        ),
+      ).resolves.toMatchObject({
+        action: { kind: "creator_tier_name_update", tierId: "supporter", tierName: "core" },
       });
     } finally {
       globalThis.fetch = originalFetch;

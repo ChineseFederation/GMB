@@ -33,5 +33,17 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish 只由本机
 CitizenConsole 执行，不属于 GitHub Workflow。
 
+会员状态采用“手机即时确认 + 服务端唯一 finalized 投影”两条互补写入路径。CitizenApp 在
+订阅、取消、换档或档位变更交易 finalized 后，只用链上 `tx_hash + block_hash` 立即确认；
+禁止另造操作编号，HTTP 重试只复用同一交易，不得重新签名或重新发送链上交易。
+CitizenServe 每五分钟通过既有 Cloudflare Access + Tunnel 连接国储会权威 RPC，以
+System.Events 发现受影响关系，再从同一 finalized 区块批量读取订阅和创作者档位 storage。
+平台会员、创作者订阅和创作者档位共用一个游标，整块处理成功后才推进；自动续费、自动
+恢复、挂起、终止以及手机同步失败都由这一任务补齐，不增加节点回调、密钥、操作编号或
+链时钟。旧 `chain_clock` 表由 CitizenConsole 在 CitizenServe 正式发布的只读门禁和回滚锚点
+验收通过后，使用同一次 `SERVER_DEPLOY` 授权通过 Cloudflare 官方 D1 Query API 幂等删除；
+该步骤不是 D1 预检，不读取业务数据。广场发布与资料读取仍只读 CitizenServe D1，禁止在请求路径点查链或追赶投影。
+D1 没有会员行就不向其他用户展示会员信息，不输出“未知”“尚未同步”等第三状态。
+
 产品目录只保留代码实现、公开配置、测试、脚本与资源文件；私人运维源码、长期记忆、任务卡、
 证书和机密不属于本仓库。

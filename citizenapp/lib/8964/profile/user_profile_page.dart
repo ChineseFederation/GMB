@@ -55,7 +55,7 @@ class UserProfilePage extends StatefulWidget {
     this.mediaCache,
     this.sessionProvider,
     this.subscriptionService,
-    this.initialMembershipDecision = MembershipDisplayDecision.unknown,
+    this.initialMembershipDecision = MembershipDisplayDecision.inactiveConfirmed,
     this.initialMembershipState,
     this.onOpenDirectChat,
     this.viewerAccountLoader,
@@ -82,7 +82,7 @@ class UserProfilePage extends StatefulWidget {
   final SquareSessionProvider? sessionProvider;
   final SubscriptionService? subscriptionService;
 
-  /// “我的”页已经持有的已确认会员首帧；unknown 不得被解释为无会员。
+  /// “我的”页已经持有的会员二元首帧；他人主页不使用该覆盖值。
   final MembershipDisplayDecision initialMembershipDecision;
   final SquareMembershipState? initialMembershipState;
 
@@ -159,13 +159,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
     unawaited(_load());
   }
 
-  /// 本人徽章只接受已确认展示快照。旧缓存或普通 D1 否定态保持 unknown，不能把
-  /// 已确认会员短暂降级成“无会员”；他人主页仍使用公开资料的服务端镜像。
+  /// 本人徽章读取本地 finalized 展示快照；没有快照时保持无会员展示。
+  /// 他人主页使用 CitizenServe 当前 D1 公开资料，不存在第三种未知展示态。
   Future<void> _loadConfirmedMembership() async {
     try {
       final snapshot =
           await _subscriptionService.readDisplaySnapshot(widget.cidNumber);
-      if (!mounted || snapshot == null || !snapshot.membershipConfirmed) return;
+      if (!mounted || snapshot == null) return;
       setState(() {
         _membershipDecision = snapshot.decision;
         _membershipState = snapshot.state;
@@ -175,11 +175,14 @@ class _UserProfilePageState extends State<UserProfilePage> {
     }
   }
 
-  bool? get _confirmedMembershipActive => switch (_membershipDecision) {
-        MembershipDisplayDecision.activeConfirmed => true,
-        MembershipDisplayDecision.inactiveConfirmed => false,
-        MembershipDisplayDecision.unknown => null,
-      };
+  bool? get _confirmedMembershipActive {
+    // null 只表示“不覆盖公开资料”，不是会员第三态；他人展示严格采用 CitizenServe D1。
+    if (!widget.isSelf) return null;
+    return switch (_membershipDecision) {
+      MembershipDisplayDecision.activeConfirmed => true,
+      MembershipDisplayDecision.inactiveConfirmed => false,
+    };
+  }
 
   /// 判定「他人视角看的其实是自己账户」：浏览者身份账户 == 目标当前绑定钱包账户
   /// （[targetAccountId] = profile.account_id）。身份主键是 cid，但浏览者手上只有
@@ -216,11 +219,10 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final session = await _ensureSession();
     try {
       // 带 session 拉取 → is_following 反映当前登录者视角。
-      final fresh = (await _api.fetchProfile(
+      final fresh = await _api.fetchProfile(
         widget.cidNumber,
         session: session,
-      ))
-          .preserveConfirmedMembership(_profile);
+      );
       if (!mounted) return;
       setState(() => _profile = fresh);
       unawaited(_resolveOwnAccount(fresh.accountId));

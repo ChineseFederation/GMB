@@ -335,7 +335,7 @@ void main() {
     expect(find.text('不得公开的钱包名'), findsNothing);
     expect(profileApi.calls, 1);
     expect(squareApi.membershipCalls, 1);
-    expect(squareApi.lastVerifyOnDeny, isTrue);
+    expect(squareApi.lastVerifyOnDeny, isFalse);
 
     // 钱包名变更也会产生 revision 广播，但身份账户不变时不得重拉公开资料。
     WalletManager.walletsRevision.value += 1;
@@ -429,7 +429,7 @@ void main() {
     await tester.pumpWidget(const SizedBox.shrink());
   });
 
-  testWidgets('MyTab 已确认有效快照在远端复核等待时保持会员徽章和创作者首帧', (tester) async {
+  testWidgets('MyTab 已确认有效快照在普通D1读取等待时保持会员徽章和创作者首帧', (tester) async {
     const wallet = WalletProfile(
       walletIndex: 1,
       walletName: '测试钱包',
@@ -463,7 +463,7 @@ void main() {
     );
     await tester.pump();
 
-    // finalized 有效展示快照先落地；后台 verify_on_deny 永久等待也不能把会员降级。
+    // finalized 有效展示快照先落地；后台读取失败也不能把已同步会员降级。
     membershipSnapshots.snapshot.complete(
       const MembershipDisplaySnapshot(
         state: SquareMembershipState(
@@ -478,7 +478,7 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(squareApi.lastVerifyOnDeny, isTrue);
+    expect(squareApi.lastVerifyOnDeny, isFalse);
     final badge = tester.widget<IdentityBadge>(find.byType(IdentityBadge));
     expect(badge.style.checked, isTrue);
     await tester.tap(find.text('创作者'));

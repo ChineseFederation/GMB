@@ -32,7 +32,6 @@ Map<String, dynamic> _profileJson({
   String identityLevel = 'voting',
   String? membershipLevel = 'democracy',
   bool membershipActive = true,
-  bool membershipConfirmed = true,
 }) {
   return <String, dynamic>{
     'account_id': _owner,
@@ -45,7 +44,6 @@ Map<String, dynamic> _profileJson({
     'identity_level': identityLevel,
     'membership_level': membershipLevel,
     'membership_active': membershipActive,
-    'membership_confirmed': membershipConfirmed,
     'counts': {
       'following': following,
       'followers': followers,
@@ -102,7 +100,6 @@ void main() {
       expect(profile.campaigns, 6);
       expect(profile.videos, 4);
       expect(profile.articles, 12);
-      expect(profile.membershipConfirmed, isTrue);
     });
 
     test('resolvedDisplayName uses public truth then stable local name', () {
@@ -168,41 +165,8 @@ void main() {
       expect(restored.videos, original.videos);
       expect(restored.articles, original.articles);
       expect(restored.avatarObjectKey, original.avatarObjectKey);
-      expect(restored.membershipConfirmed, isTrue);
     });
 
-    test('公开会员投影未知时保留上一份已确认有效展示', () {
-      final previous = CitizenProfile.fromJson(_profileJson());
-      final unknown = CitizenProfile.fromJson(
-        _profileJson(
-          membershipLevel: null,
-          membershipActive: false,
-          membershipConfirmed: false,
-        ),
-      );
-
-      final preserved = unknown.preserveConfirmedMembership(previous);
-
-      expect(preserved.membershipLevel, 'democracy');
-      expect(preserved.membershipActive, isTrue);
-      expect(preserved.membershipConfirmed, isTrue);
-    });
-
-    test('公开会员投影确认失效时立即使用新状态', () {
-      final previous = CitizenProfile.fromJson(_profileJson());
-      final inactive = CitizenProfile.fromJson(
-        _profileJson(
-          membershipLevel: 'democracy',
-          membershipActive: false,
-          membershipConfirmed: true,
-        ),
-      );
-
-      final resolved = inactive.preserveConfirmedMembership(previous);
-
-      expect(resolved.membershipActive, isFalse);
-      expect(resolved.membershipConfirmed, isTrue);
-    });
   });
 
   group('CitizenProfileCache', () {

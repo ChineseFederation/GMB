@@ -18,7 +18,6 @@ import { nowMs } from '../shared/time';
 import { readUserByCidNumber } from '../account/user_repository';
 import {
   getMembership,
-  membershipDisplayIsConfirmed,
   subscriptionIsActive
 } from '../membership/service';
 import type { MembershipLevel } from '../membership/plans';
@@ -97,9 +96,6 @@ async function buildProfileResponse(
     identity_level: identity.identity_level,
     membership_level: membershipLevel,
     membership_active: membership ? subscriptionIsActive(membership) : false,
-    membership_confirmed: membership
-      ? membershipDisplayIsConfirmed(membership)
-      : true,
     counts,
     is_following: following,
     is_followed_by: followedBy,

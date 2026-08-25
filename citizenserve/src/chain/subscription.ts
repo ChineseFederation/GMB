@@ -88,12 +88,12 @@ export type SubscriptionBusinessAction =
       tierId: string;
       billingPeriod: BillingPeriod;
     }
-  | { kind: "creator_plans_set"; tiers: ChainCreatorTier[] };
+  | { kind: "creator_plans_set"; tiers: ChainCreatorTier[] }
+  | { kind: "creator_tier_name_update"; tierId: string; tierName: string };
 
 export interface FinalizedTransactionProofInput {
   txHash: string;
   blockHash: string;
-  signedExtrinsicHex: string;
 }
 
 export interface VerifiedFinalizedTransaction {
@@ -498,36 +498,16 @@ export async function readChainTimestampAtBlock(
 }
 
 /**
- * 证明 App 提交的完整 signed extrinsic 确实位于指定 finalized 主链区块，并且签名账户与
- * Bearer 会话账户一致、SquarePost 调用及参数与本次投影动作一致。链已验证交易签名；Worker
- * 不重复验签，也不保存完整交易字节，只保存不可变哈希与 finalized 定位，降低 D1 占用。
+ * 按 App 提交的 tx_hash 在指定 finalized 主链区块中取得唯一 signed extrinsic，并校验签名
+ * 账户、SquarePost 调用及参数。客户端不再重复上传完整交易字节；Worker 也不保存交易字节。
  */
 export async function verifyFinalizedSubscriptionTransaction(
   env: Env,
   accountId: string,
-  expectedAction: SubscriptionBusinessAction,
   proof: FinalizedTransactionProofInput,
 ): Promise<VerifiedFinalizedTransaction> {
   const txHash = normalizeHash(proof.txHash, "交易哈希");
   const blockHash = normalizeHash(proof.blockHash, "区块哈希");
-  const signedExtrinsicHex = normalizeExtrinsicHex(proof.signedExtrinsicHex);
-  const encoded = hexToBytes(signedExtrinsicHex);
-  if (encoded.length > resourceLimit("chain_extrinsic").max_bytes) {
-    throw new HttpError(413, "signed_extrinsic_too_large", "订阅交易超过大小限制");
-  }
-  const calculatedTxHash = `0x${bytesToHex(blake2AsU8a(encoded, 256))}`;
-  if (calculatedTxHash !== txHash) {
-    throw new HttpError(409, "subscription_tx_hash_mismatch", "交易哈希与签名交易不一致");
-  }
-
-  const decoded = decodeSignedSubscriptionExtrinsic(encoded);
-  if (!equalBytes(decoded.signerAccountId, decodeAccountId(accountId))) {
-    throw new HttpError(403, "subscription_tx_account_mismatch", "交易签名账户与登录钱包不一致");
-  }
-  if (!businessActionsEqual(decoded.action, expectedAction)) {
-    throw new HttpError(409, "subscription_tx_action_mismatch", "链上交易与投影业务操作不一致");
-  }
-
   const [finalizedHead, signedBlock] = await Promise.all([
     fetchFinalizedHead(env),
     fetchSignedBlock(env, blockHash),
@@ -544,9 +524,20 @@ export async function verifyFinalizedSubscriptionTransaction(
   const normalizedExtrinsics = signedBlock.block.extrinsics.map((value) =>
     normalizeExtrinsicHex(value),
   );
-  const extrinsicIndex = normalizedExtrinsics.indexOf(signedExtrinsicHex);
+  const extrinsicIndex = normalizedExtrinsics.findIndex((value) => {
+    const encoded = hexToBytes(value);
+    return `0x${bytesToHex(blake2AsU8a(encoded, 256))}` === txHash;
+  });
   if (extrinsicIndex < 0) {
     throw new HttpError(409, "subscription_tx_not_in_block", "指定区块不包含该订阅交易");
+  }
+  const encoded = hexToBytes(normalizedExtrinsics[extrinsicIndex]);
+  if (encoded.length > resourceLimit("chain_extrinsic").max_bytes) {
+    throw new HttpError(413, "signed_extrinsic_too_large", "订阅交易超过大小限制");
+  }
+  const decoded = decodeSignedSubscriptionExtrinsic(encoded);
+  if (!equalBytes(decoded.signerAccountId, decodeAccountId(accountId))) {
+    throw new HttpError(403, "subscription_tx_account_mismatch", "交易签名账户与登录钱包不一致");
   }
   const chainTimestamp = await readChainTimestampAtBlock(env, blockHash);
   return {
@@ -615,43 +606,6 @@ export async function bindFinalizedTransactionConfirmation(
   }
 }
 
-/** 更新全局 finalized 链时间；旧交易的延迟投影不得把时钟回退。 */
-export function updateChainClockStatement(
-  env: Env,
-  input: {
-    chainTimestamp: number;
-    blockNumber: number;
-    blockHash: string;
-    observedAt: number;
-  },
-): D1PreparedStatement {
-  return env.DB.prepare(
-    `INSERT INTO chain_clock
-      (clock_id, chain_timestamp, finalized_block_number, finalized_block_hash, observed_at)
-      VALUES (1, ?, ?, ?, ?)
-      ON CONFLICT(clock_id) DO UPDATE SET
-        chain_timestamp = excluded.chain_timestamp,
-        finalized_block_number = excluded.finalized_block_number,
-        finalized_block_hash = excluded.finalized_block_hash,
-        observed_at = excluded.observed_at
-      WHERE excluded.finalized_block_number > chain_clock.finalized_block_number`,
-  )
-    .bind(input.chainTimestamp, input.blockNumber, input.blockHash, input.observedAt);
-}
-
-/** 单独刷新链时钟时直接执行；需要与业务投影原子提交时复用 prepared statement。 */
-export async function updateChainClock(
-  env: Env,
-  input: {
-    chainTimestamp: number;
-    blockNumber: number;
-    blockHash: string;
-    observedAt: number;
-  },
-): Promise<void> {
-  await updateChainClockStatement(env, input).run();
-}
-
 function decodeSignedSubscriptionExtrinsic(encoded: Uint8Array): {
   signerAccountId: Uint8Array;
   action: SubscriptionBusinessAction;
@@ -698,6 +652,18 @@ function decodeSubscriptionCall(
   if (callIndex === 3) {
     const decoded = decodeCreatorTierVector(data, offset);
     return { action: { kind: "creator_plans_set", tiers: decoded.tiers }, offset: decoded.offset };
+  }
+  if (callIndex === 6) {
+    const tierIdBytes = readScaleBytes(data, offset);
+    const tierNameBytes = readScaleBytes(data, tierIdBytes.offset, 80);
+    return {
+      action: {
+        kind: "creator_tier_name_update",
+        tierId: strictUtf8(tierIdBytes.value),
+        tierName: strictTierName(tierNameBytes.value, "signed_call"),
+      },
+      offset: tierNameBytes.offset,
+    };
   }
   if (callIndex !== 1 && callIndex !== 2 && callIndex !== 4) {
     throw new HttpError(400, "invalid_subscription_call", "交易不是允许的订阅业务操作");
@@ -893,48 +859,6 @@ function parseBlockNumber(value: string): number {
     throw new HttpError(502, "chain_rpc_invalid_response", "链服务节点区块高度超出范围");
   }
   return parsed;
-}
-
-function businessActionsEqual(
-  actual: SubscriptionBusinessAction,
-  expected: SubscriptionBusinessAction,
-): boolean {
-  if (actual.kind !== expected.kind) return false;
-  if (actual.kind === "platform_cancel" && expected.kind === "platform_cancel") return true;
-  if (
-    (actual.kind === "platform_subscribe" || actual.kind === "platform_change") &&
-    (expected.kind === "platform_subscribe" || expected.kind === "platform_change")
-  ) {
-    return actual.membershipLevel === expected.membershipLevel;
-  }
-  if (actual.kind === "creator_cancel" && expected.kind === "creator_cancel") {
-    return expected.creatorCidNumber === actual.creatorCidNumber;
-  }
-  if (
-    (actual.kind === "creator_subscribe" || actual.kind === "creator_change") &&
-    (expected.kind === "creator_subscribe" || expected.kind === "creator_change")
-  ) {
-    return (
-      expected.creatorCidNumber === actual.creatorCidNumber &&
-      actual.tierId === expected.tierId &&
-      actual.billingPeriod === expected.billingPeriod
-    );
-  }
-  if (actual.kind === "creator_plans_set" && expected.kind === "creator_plans_set") {
-    return creatorTiersEqual(actual.tiers, expected.tiers);
-  }
-  return false;
-}
-
-function creatorTiersEqual(actual: ChainCreatorTier[], expected: ChainCreatorTier[]): boolean {
-  if (actual.length !== expected.length) return false;
-  return actual.every((tier, index) => {
-    const other = expected[index];
-    if (!other || tier.tierId !== other.tierId || tier.tierName !== other.tierName) return false;
-    return (["monthly", "quarterly", "yearly"] as BillingPeriod[]).every(
-      (period) => tier.pricesFen[period] === other.pricesFen[period],
-    );
-  });
 }
 
 function readCompactByteVector(

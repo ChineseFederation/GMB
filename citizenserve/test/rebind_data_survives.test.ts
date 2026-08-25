@@ -375,8 +375,6 @@ describe('换绑不丢:同一 cid_number 的社交数据跨账户存续', () => 
       verified_at: 1,
       entitlement_lapsed_at: null,
       last_tx_hash: null,
-      chain_timestamp: 2,
-      chain_observed_at: 2
     };
     // getMembership 现按 cid_number 查(R3);换绑后新账户会话仍持有同一 cid,取回同一会员镜像。
     const membershipDb = {

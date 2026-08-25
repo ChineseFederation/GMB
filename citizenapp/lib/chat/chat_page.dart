@@ -279,11 +279,10 @@ class _ChatPageState extends State<ChatPage> {
     SquareSession? session;
     try {
       session = await _sessionProvider.ensureSession();
-      final profile = (await _profileApi.fetchProfile(
+      final profile = await _profileApi.fetchProfile(
         widget.peerUserId,
         session: session,
-      ))
-          .preserveConfirmedMembership(_peerProfile);
+      );
       final localMedia = await _profileMediaCache.read(profile);
       if (!mounted) return;
       setState(() {

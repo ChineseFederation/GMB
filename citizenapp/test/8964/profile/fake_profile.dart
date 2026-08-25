@@ -69,7 +69,6 @@ CitizenProfile sampleProfile({
   String? identityLevel,
   String? membershipLevel,
   bool? membershipActive,
-  bool membershipConfirmed = true,
 }) {
   return CitizenProfile(
     accountId: accountId,
@@ -84,7 +83,6 @@ CitizenProfile sampleProfile({
     // 会员默认未购买；传合法 membershipLevel 才显示对应档位色与对勾。
     membershipLevel: membershipLevel,
     membershipActive: membershipActive ?? (membershipLevel != null),
-    membershipConfirmed: membershipConfirmed,
     following: 2,
     followers: 128,
     mutualFollowing: mutualFollowing,

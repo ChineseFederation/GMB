@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -47,6 +48,7 @@ class CreatorSubscribeService {
         _api = api ?? CreatorApiHttp(),
         _preferences = preferences {
     _walletAccountSigner = WalletAccountSigner(walletManager: _wallet);
+    unawaited(_retryPendingMirrors());
   }
 
   final SubscriptionRpc _rpc;
@@ -115,14 +117,8 @@ class CreatorSubscribeService {
       );
       await _confirm(
         subscriberCidNumber: session.cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'subscribe',
-        creatorCidNumber: creatorCidNumber,
-        tierId: tierId,
-        billingPeriod: period,
       );
     } on SecureSeedException catch (e) {
       throw CreatorSubscribeException(seedSignErrorMessage(e));
@@ -162,12 +158,8 @@ class CreatorSubscribeService {
       );
       await _confirm(
         subscriberCidNumber: session.cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'cancel',
-        creatorCidNumber: creatorCidNumber,
       );
     } on SecureSeedException catch (e) {
       throw CreatorSubscribeException(seedSignErrorMessage(e));
@@ -216,14 +208,8 @@ class CreatorSubscribeService {
       );
       await _confirm(
         subscriberCidNumber: session.cidNumber,
-        signerAccountId: identity.accountId,
         txHash: result.txHash,
         blockHashHex: result.blockHashHex,
-        signedExtrinsicHex: result.signedExtrinsicHex,
-        action: 'change',
-        creatorCidNumber: creatorCidNumber,
-        tierId: tierId,
-        billingPeriod: period,
       );
     } on SecureSeedException catch (e) {
       throw CreatorSubscribeException(seedSignErrorMessage(e));
@@ -274,24 +260,12 @@ class CreatorSubscribeService {
   /// HTTP 失败只重放同一交易证明，不要求第二次签名。
   Future<void> _confirm({
     required String subscriberCidNumber,
-    required String signerAccountId,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    required String creatorCidNumber,
-    String? tierId,
-    String? billingPeriod,
   }) async {
     final proof = <String, dynamic>{
       'tx_hash': txHash,
       'block_hash': blockHashHex,
-      'signed_extrinsic_hex': signedExtrinsicHex,
-      'action': action,
-      'creator_cid_number': creatorCidNumber,
-      'signer_account_id': signerAccountId,
-      if (tierId != null) 'tier_id': tierId,
-      if (billingPeriod != null) 'billing_period': billingPeriod,
     };
     try {
       await _storeLocalProof(subscriberCidNumber, proof);
@@ -305,11 +279,6 @@ class CreatorSubscribeService {
         session: session,
         txHash: txHash,
         blockHashHex: blockHashHex,
-        signedExtrinsicHex: signedExtrinsicHex,
-        action: action,
-        creatorCidNumber: creatorCidNumber,
-        tierId: tierId,
-        billingPeriod: billingPeriod,
       );
       await _removePendingProof(subscriberCidNumber, txHash);
     } on Exception {
@@ -326,25 +295,13 @@ class CreatorSubscribeService {
       for (final proof in List<Map<String, dynamic>>.from(pending)) {
         final txHash = proof['tx_hash'];
         final blockHashHex = proof['block_hash'];
-        final signedExtrinsicHex = proof['signed_extrinsic_hex'];
-        final action = proof['action'];
-        final creatorCidNumber = proof['creator_cid_number'];
-        if (txHash is! String ||
-            blockHashHex is! String ||
-            signedExtrinsicHex is! String ||
-            action is! String ||
-            creatorCidNumber is! String) {
+        if (txHash is! String || blockHashHex is! String) {
           continue;
         }
         await _api.confirmCreatorSubscription(
           session: session,
           txHash: txHash,
           blockHashHex: blockHashHex,
-          signedExtrinsicHex: signedExtrinsicHex,
-          action: action,
-          creatorCidNumber: creatorCidNumber,
-          tierId: proof['tier_id'] as String?,
-          billingPeriod: proof['billing_period'] as String?,
         );
         await _removePendingProof(subscriberCidNumber, txHash);
       }

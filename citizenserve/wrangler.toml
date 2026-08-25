@@ -88,16 +88,13 @@ max_batch_size = 1
 max_retries = 3
 
 [triggers]
-# Workers Paid 由同一次五分钟事件顺序执行四组有界任务；每日 R2 巡检保持独立。
+# 五分钟事件执行通用清理、身份投影和唯一订阅投影；订阅投影只走既有国储会节点隧道。
 # CitizenConsole 发布器必须把这两条准确同步到生产，禁止保留旧五触发器残留。
 crons = ["*/5 * * * *", "4 3 * * *"]
 
 [vars]
 SESSION_TTL_SECONDS = "86400"
 UPLOAD_TTL_SECONDS = "900"
-MEMBERSHIP_RECONCILE_ENABLED = "1"
-CREATOR_RECONCILE_ENABLED = "1"
-MEMBERSHIP_RECONCILE_BATCH = "50"
 SQUARE_PUBLIC_MEDIA_BUCKET_NAME = "citizenapp-media"
 SQUARE_PUBLIC_MEDIA_BASE_URL = "https://media.crcfrcn.com"
 MEDIA_TTL_SECONDS = "300"

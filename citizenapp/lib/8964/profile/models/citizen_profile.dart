@@ -16,7 +16,6 @@ class CitizenProfile {
     required this.identityLevel,
     required this.membershipLevel,
     required this.membershipActive,
-    required this.membershipConfirmed,
     required this.following,
     required this.followers,
     required this.mutualFollowing,
@@ -49,9 +48,6 @@ class CitizenProfile {
   /// 会员是否当前有效。
   final bool membershipActive;
 
-  /// 公开会员投影是否足够新、可作明确展示结论。false 表示未知，不能用它把已确认
-  /// 有效的本机展示降级成非会员；本字段只控制视觉缓存，不参与授权。
-  final bool membershipConfirmed;
   final int following;
   final int followers;
   final int mutualFollowing;
@@ -86,10 +82,9 @@ class CitizenProfile {
         !counts.containsKey('campaigns') ||
         !counts.containsKey('videos') ||
         !counts.containsKey('articles') ||
-        json['is_followed_by'] is! bool ||
-        json['membership_confirmed'] is! bool) {
+        json['is_followed_by'] is! bool) {
       throw const FormatException(
-        '用户主页响应缺少关系、内容分类统计、互关状态或会员确认态',
+        '用户主页响应缺少关系、内容分类统计或互关状态',
       );
     }
     final countsMap = counts;
@@ -104,7 +99,6 @@ class CitizenProfile {
       identityLevel: _asIdentityLevel(json['identity_level']),
       membershipLevel: _asMembershipLevel(json['membership_level']),
       membershipActive: json['membership_active'] == true,
-      membershipConfirmed: json['membership_confirmed'] == true,
       following: _asInt(countsMap['following']),
       followers: _asInt(countsMap['followers']),
       mutualFollowing: _asInt(countsMap['mutual_following']),
@@ -130,7 +124,6 @@ class CitizenProfile {
         'identity_level': identityLevel,
         'membership_level': membershipLevel,
         'membership_active': membershipActive,
-        'membership_confirmed': membershipConfirmed,
         'counts': <String, dynamic>{
           'following': following,
           'followers': followers,
@@ -153,7 +146,6 @@ class CitizenProfile {
     Object? bannerObjectKey = _sentinel,
     Object? membershipLevel = _sentinel,
     bool? membershipActive,
-    bool? membershipConfirmed,
     bool? isFollowing,
     bool? isFollowedBy,
     bool? isNotifying,
@@ -178,7 +170,6 @@ class CitizenProfile {
           ? this.membershipLevel
           : membershipLevel as String?,
       membershipActive: membershipActive ?? this.membershipActive,
-      membershipConfirmed: membershipConfirmed ?? this.membershipConfirmed,
       following: following,
       followers: followers ?? this.followers,
       mutualFollowing: mutualFollowing ?? this.mutualFollowing,
@@ -193,21 +184,6 @@ class CitizenProfile {
     );
   }
 
-  /// 服务端返回会员未知态时保留上一份已确认有效展示；一旦服务端给出确认有效或确认
-  /// 无效结论，立即使用新值。授权流程不得调用本方法。
-  CitizenProfile preserveConfirmedMembership(CitizenProfile? previous) {
-    if (membershipConfirmed ||
-        previous == null ||
-        !previous.membershipConfirmed ||
-        !previous.membershipActive) {
-      return this;
-    }
-    return copyWith(
-      membershipLevel: previous.membershipLevel,
-      membershipActive: true,
-      membershipConfirmed: true,
-    );
-  }
 }
 
 /// 关注、关注者或互关列表的一行（对应 Worker follows 列表项 `entries`，项 = 身份主键

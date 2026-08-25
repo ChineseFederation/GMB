@@ -3,13 +3,12 @@ import { errorResponse } from './shared/http';
 import { routeRequest } from './routes';
 import { fanOutPage } from './feeds/notify_fanout';
 import { runExpiredMembershipContentCleanup } from './membership/expiration_cleanup';
-import { reconcileSubscriptions } from './membership/reconcile';
 import { applyCors, cleanupSecurityState } from './security/request_guard';
 import { cleanupExpiredUploads } from './uploads/service';
 import { cleanupExpiredReservations } from './limits/usage';
 import { cleanupExpiredSessionIndexes } from './auth/session_index';
 import { reconcileFinalizedUserProjection } from './account/user_projection';
-import { reconcileFinalizedMembershipProjection } from './membership/projection';
+import { reconcileFinalizedSubscriptionProjection } from './membership/subscription_projection';
 import { auditSquareR2Consistency } from './media/service';
 import { cleanupExpiredChatPushEndpoints } from './chat/service';
 
@@ -24,8 +23,8 @@ export default {
     }
   },
 
-  // Workers Paid 的五分钟事件顺序执行四组各自有硬批次上限的任务；顺序执行避免并发峰值，
-  // 任一组失败会终止本轮并由下一次 Cron 从各自游标续跑。每日 R2 巡检保持独立。
+  // 五分钟事件先推进 finalized 身份投影，再通过既有国储会节点隧道推进唯一订阅投影。
+  // 手机交易确认仍是即时路径；Cron 统一补齐自动续费、被动状态变化与失败重试。
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     let label = 'unknown';
     let job: Promise<unknown>;
@@ -40,18 +39,13 @@ export default {
           cleanupExpiredChatPushEndpoints(env),
         ]);
         await reconcileFinalizedUserProjection(env);
-        await reconcileFinalizedMembershipProjection(env);
-        const result = await reconcileSubscriptions(env);
-        if (
-          isDailyCleanupTime(_controller.scheduledTime) &&
-          result.finalized_chain_timestamp !== null
-        ) {
+        await reconcileFinalizedSubscriptionProjection(env);
+        if (isDailyCleanupTime(_controller.scheduledTime)) {
           await runExpiredMembershipContentCleanup(
             env,
-            result.finalized_chain_timestamp,
+            _controller.scheduledTime,
           );
         }
-        return result;
       })();
     } else if (_controller.cron === '4 3 * * *') {
       label = 'r2-audit';
@@ -87,5 +81,5 @@ export default {
 
 function isDailyCleanupTime(scheduledTime: number): boolean {
   const scheduled = new Date(scheduledTime);
-  return scheduled.getUTCHours() === 3 && scheduled.getUTCMinutes() === 3;
+  return scheduled.getUTCHours() === 3 && scheduled.getUTCMinutes() === 0;
 }

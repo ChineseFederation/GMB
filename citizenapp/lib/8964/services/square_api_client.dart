@@ -828,14 +828,10 @@ class SquareApiClient
   /// 读取平台会员镜像。[verifyOnDeny] 只供发布等授权前检查使用：Worker 在镜像即将拒绝时
   /// 按当前 Session CID 点查 finalized 链；普通头像和资料展示保持 D1 快路径。
   Future<SquareMembershipState> fetchMembership(
-    SquareSession session, {
-    bool verifyOnDeny = false,
-  }) async {
+    SquareSession session,
+  ) async {
     const membershipPath = '/square/membership';
-    final data = await _getJson(
-      '$membershipPath${verifyOnDeny ? '?verify_on_deny=1' : ''}',
-      session: session,
-    );
+    final data = await _getJson(membershipPath, session: session);
     final membership = data['membership'];
     final active = data['active'] == true;
     final subscriptionActive = data['subscription_active'] == true;
@@ -867,25 +863,18 @@ class SquareApiClient
     );
   }
 
-  /// 平台会员订阅/取消上链后回执镜像（best-effort，链上已是真源，失败不阻塞）。
-  /// 带 [level]=订阅确认（镜像 active）；缺 [level]=取消确认（镜像 cancelled）。
-  /// accountId 由 Worker 从 session 派生，客户端不上传。
+  /// 平台会员变更 finalized 后按 tx_hash + block_hash 同步；动作、档位、CID 与账户均由
+  /// Worker 从指定链上交易和当前 Session 验证，客户端不重复声明。
   Future<void> confirmPlatformSubscription({
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    String? membershipLevel,
   }) async {
     await _postJson(
       '/square/membership/confirm',
       {
         'tx_hash': txHash,
         'block_hash': blockHashHex,
-        'signed_extrinsic_hex': signedExtrinsicHex,
-        'action': action,
-        if (membershipLevel != null) 'membership_level': membershipLevel,
       },
       session: session,
       finalizedMirror: true,

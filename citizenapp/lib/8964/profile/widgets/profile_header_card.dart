@@ -40,7 +40,7 @@ class ProfileHeaderCard extends StatelessWidget {
   final String? avatarUrl;
   final Map<String, String>? avatarHeaders;
 
-  /// 本人页面可传入已由 finalized 链或 verify_on_deny 确认的会员展示态。
+  /// 本人页面可传入已由 finalized 会员变更同步到 CitizenServe 的会员展示态。
   /// null 表示尚未确认，继续使用公开资料镜像；false 表示已确认无有效会员。
   final String? confirmedMembershipLevel;
   final bool? confirmedMembershipActive;

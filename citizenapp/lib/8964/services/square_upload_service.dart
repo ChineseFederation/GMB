@@ -105,10 +105,8 @@ class SquareUploadService
       accountId: accountId,
       signLoginPayload: signLoginPayload,
     );
-    final membership = await _api.fetchMembership(
-      session,
-      verifyOnDeny: true,
-    );
+    // 发布只读取 CitizenServe 已同步的会员状态，禁止在发布路径读取链或触发状态修复。
+    final membership = await _api.fetchMembership(session);
     final plan = membership.activePlan;
     final usageState = membership.usageState;
     if (plan == null || usageState == null) {

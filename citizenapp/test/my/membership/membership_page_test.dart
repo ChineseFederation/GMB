@@ -318,6 +318,11 @@ void main() {
         expect(request.url.path, '/square/membership/confirm');
         expect(request.headers['authorization'], 'Bearer tok');
         expect(request.headers, isNot(contains('x-device-signature')));
+        expect(request.body, contains('"tx_hash"'));
+        expect(request.body, contains('"block_hash"'));
+        expect(request.body, isNot(contains('signed_extrinsic_hex')));
+        expect(request.body, isNot(contains('membership_level')));
+        expect(request.body, isNot(contains('"action"')));
         return http.Response('{}', 200);
       }),
     );
@@ -337,9 +342,6 @@ void main() {
       session: session,
       txHash: '0x${List.filled(64, 'a').join()}',
       blockHashHex: '0x${List.filled(64, 'b').join()}',
-      signedExtrinsicHex: '0x0102',
-      action: 'subscribe',
-      membershipLevel: 'freedom',
     );
 
     expect(deviceSignCount, 0);
@@ -587,7 +589,7 @@ void main() {
       _state(
         active: true,
         subscriptionActive: true,
-        membershipLevel: 'democracy',
+        membershipLevel: 'freedom',
       ),
       prices: const {'freedom': 1, 'democracy': 2, 'spark': 3},
     );
@@ -773,7 +775,7 @@ void main() {
       _state(
         active: true,
         subscriptionActive: true,
-        membershipLevel: 'democracy',
+        membershipLevel: 'freedom',
       ),
       service: service,
     );
@@ -794,7 +796,7 @@ void main() {
       _state(
         active: true,
         subscriptionActive: true,
-        membershipLevel: 'democracy',
+        membershipLevel: 'freedom',
         subscriptionStatus: 'active',
         lastChargedAt: DateTime.now().millisecondsSinceEpoch,
       ),
@@ -828,7 +830,7 @@ void main() {
       _state(
         active: true,
         subscriptionActive: true,
-        membershipLevel: 'democracy',
+        membershipLevel: 'freedom',
         subscriptionStatus: 'cancelled',
         lastChargedAt: DateTime.now().millisecondsSinceEpoch,
       ),
@@ -879,22 +881,10 @@ void main() {
     expect(restored, isNotNull);
     expect(restored!.state.membershipLevel, 'democracy');
     expect(restored.state.plans, isEmpty);
-    expect(restored.membershipConfirmed, isTrue);
     expect(restored.decision, MembershipDisplayDecision.activeConfirmed);
     expect(restored.prices['spark'], 199900);
     expect(restored.subscriptionFetchedAtMs, 3000);
     expect(restored.pricesFetchedAtMs, 4000);
-  });
-
-  test('未确认会员快照保持 unknown，不能被解释成确认无会员', () {
-    const snapshot = MembershipDisplaySnapshot(
-      state: SquareMembershipState(active: false, paidUntil: 0),
-      prices: <String, int>{},
-      subscriptionFetchedAtMs: 0,
-      pricesFetchedAtMs: 0,
-      membershipConfirmed: false,
-    );
-    expect(snapshot.decision, MembershipDisplayDecision.unknown);
   });
 
   // 中文注释：同一状态在会员卡和详情页都必须保真，且按钮不得再与价格拼接。

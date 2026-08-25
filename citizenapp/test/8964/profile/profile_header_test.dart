@@ -46,7 +46,7 @@ Widget _wrap({
   TextScaler textScaler = TextScaler.noScaling,
   EdgeInsets padding = EdgeInsets.zero,
   MembershipDisplayDecision initialMembershipDecision =
-      MembershipDisplayDecision.unknown,
+      MembershipDisplayDecision.inactiveConfirmed,
   SquareMembershipState? initialMembershipState,
   SubscriptionService? subscriptionService,
 }) {

@@ -53,13 +53,11 @@ void main() {
       session: session,
       txHash: '0x${List.filled(64, 'a').join()}',
       blockHashHex: '0x${List.filled(64, 'b').join()}',
-      signedExtrinsicHex: '0x0102',
-      tiers: const [tier],
     );
 
     expect(api.lastSaveTxHash, '0x${List.filled(64, 'a').join()}');
     expect(plan.creatorCidNumber, session.cidNumber);
-    expect(plan.tiers, hasLength(1));
+    expect(plan.tiers, isEmpty);
     expect(await api.fetchMyPlan(session), isNotNull);
   });
 
@@ -75,7 +73,8 @@ void main() {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
         expect(body['tx_hash'], txHash);
         expect(body['block_hash'], blockHash);
-        expect(body['signed_extrinsic_hex'], '0x0102');
+        expect(body, isNot(contains('signed_extrinsic_hex')));
+        expect(body, isNot(contains('tiers')));
         expect(body, isNot(contains('challenge_id')));
         expect(body, isNot(contains('signature')));
         expect(request.headers['authorization'], 'Bearer t');
@@ -110,21 +109,21 @@ void main() {
       session: signedSession,
       txHash: txHash,
       blockHashHex: blockHash,
-      signedExtrinsicHex: '0x0102',
-      tiers: const [tier],
     );
 
     expect(paths, ['/square/creator/plan']);
     expect(deviceSignCount, 0, reason: 'finalized 后的 Cloudflare 投影不得产生第二次签名');
   });
 
-  test('创作者订阅投影确认只传 creator_cid_number', () async {
+  test('创作者订阅投影确认只传 finalized 交易定位', () async {
     final api = CreatorApiHttp(
       baseUrl: 'https://creator.test',
       httpClient: MockClient((request) async {
         final body = jsonDecode(request.body) as Map<String, dynamic>;
-        expect(body['creator_cid_number'], 'CN001-CTZN-000000001-2026');
-        expect(body, isNot(contains('creator_account_id')));
+        expect(body.keys, unorderedEquals(['tx_hash', 'block_hash']));
+        expect(body, isNot(contains('creator_cid_number')));
+        expect(body, isNot(contains('action')));
+        expect(body, isNot(contains('tier_id')));
         return http.Response(
           jsonEncode({'ok': true}),
           200,
@@ -136,11 +135,6 @@ void main() {
       session: session,
       txHash: '0x${List.filled(64, 'a').join()}',
       blockHashHex: '0x${List.filled(64, 'b').join()}',
-      signedExtrinsicHex: '0x0102',
-      action: 'subscribe',
-      creatorCidNumber: 'CN001-CTZN-000000001-2026',
-      tierId: 't1',
-      billingPeriod: 'monthly',
     );
   });
 
@@ -241,8 +235,9 @@ void main() {
 
   test('仅改档位名只提交 call_index 6，不重写价格计划', () async {
     final rpc = _FakeSubscriptionRpc();
+    final api = FakeCreatorApi();
     final service = CreatorService(
-      api: FakeCreatorApi(),
+      api: api,
       subscriptionRpc: rpc,
       walletManager: _FakeWalletManager(),
       defaultAccountReader: _FakeDefaultAccountReader(),
@@ -258,6 +253,7 @@ void main() {
     expect(rpc.renameCount, 1);
     expect(rpc.setPlansCount, 0);
     expect(rpc.signCount, 1);
+    expect(api.lastSaveTxHash, '0x${List.filled(64, 'e').join()}');
     expect(plan.tiers.single.tierName, '核心支持者');
     expect(plan.tiers.single.priceFenOf(BillingPeriod.monthly), 990);
   });
@@ -373,7 +369,6 @@ class _FakeSubscriptionRpc extends SubscriptionRpc {
       txHash: '0x${List.filled(64, 'c').join()}',
       usedNonce: 1,
       blockHashHex: '0x${List.filled(64, 'd').join()}',
-      signedExtrinsicHex: '0x0102',
     );
   }
 
@@ -394,7 +389,6 @@ class _FakeSubscriptionRpc extends SubscriptionRpc {
       txHash: '0x${List.filled(64, 'e').join()}',
       usedNonce: 2,
       blockHashHex: '0x${List.filled(64, 'f').join()}',
-      signedExtrinsicHex: '0x0304',
     );
   }
 
@@ -428,8 +422,6 @@ class _FlakyCreatorApi extends FakeCreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required List<CreatorTier> tiers,
   }) async {
     saveCount++;
     if (failSave) throw const CreatorApiException('temporary');
@@ -437,8 +429,6 @@ class _FlakyCreatorApi extends FakeCreatorApi {
       session: session,
       txHash: txHash,
       blockHashHex: blockHashHex,
-      signedExtrinsicHex: signedExtrinsicHex,
-      tiers: tiers,
     );
   }
 }

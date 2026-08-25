@@ -23,8 +23,6 @@ abstract interface class CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required List<CreatorTier> tiers,
   });
 
   /// 读某创作者的档位（订阅者在他人主页选档用）。无档返回 null。
@@ -38,11 +36,6 @@ abstract interface class CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    required String creatorCidNumber,
-    String? tierId,
-    String? billingPeriod,
   });
 }
 
@@ -90,17 +83,12 @@ class CreatorApiHttp implements CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required List<CreatorTier> tiers,
   }) async {
-    final tiersJson = tiers.map((tier) => tier.toJson()).toList();
     final saved = await _postFinalizedProjectionJson(
         '/square/creator/plan',
         {
           'tx_hash': txHash,
           'block_hash': blockHashHex,
-          'signed_extrinsic_hex': signedExtrinsicHex,
-          'tiers': tiersJson,
         },
         session);
     final plan = saved['plan'];
@@ -129,22 +117,12 @@ class CreatorApiHttp implements CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    required String creatorCidNumber,
-    String? tierId,
-    String? billingPeriod,
   }) async {
     await _postFinalizedProjectionJson(
         '/square/creator/subscription/confirm',
         {
           'tx_hash': txHash,
           'block_hash': blockHashHex,
-          'signed_extrinsic_hex': signedExtrinsicHex,
-          'action': action,
-          'creator_cid_number': creatorCidNumber,
-          if (tierId != null) 'tier_id': tierId,
-          if (billingPeriod != null) 'billing_period': billingPeriod,
         },
         session);
   }
@@ -251,15 +229,9 @@ class FakeCreatorApi implements CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required List<CreatorTier> tiers,
   }) async {
     lastSaveTxHash = txHash;
-    _plan = CreatorPlan(
-      creatorCidNumber: session.cidNumber,
-      tiers: tiers,
-      updatedAt: 0,
-    );
+    _plan ??= CreatorPlan.empty(session.cidNumber);
     return _plan!;
   }
 
@@ -275,10 +247,5 @@ class FakeCreatorApi implements CreatorApi {
     required SquareSession session,
     required String txHash,
     required String blockHashHex,
-    required String signedExtrinsicHex,
-    required String action,
-    required String creatorCidNumber,
-    String? tierId,
-    String? billingPeriod,
   }) async {}
 }
