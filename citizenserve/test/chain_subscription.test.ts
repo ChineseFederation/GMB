@@ -169,6 +169,7 @@ describe("buildSubscriptionKey", () => {
   });
 });
 
+// 中文注释：交易确认只接受 canonical finalized 区块中的真实签名 extrinsic；同一交易哈希只能绑定同一规范业务请求，客户端声明不能覆盖链上动作。
 describe("finalized 订阅交易证明", () => {
   it("校验交易哈希、签名账户、调用参数、区块包含关系和 finalized 主链", async () => {
     const signer = new Uint8Array(32).fill(7);

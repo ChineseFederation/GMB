@@ -19,6 +19,7 @@ const SCHEMA_SQL = readFileSync(resolve(process.cwd(), 'schema/citizenserve.sql'
 let miniflare: Miniflare;
 let env: Env;
 
+// 中文注释：订阅投影按 canonical finalized 区块串行推进唯一游标；任何区块的事件或状态读取失败都不得越过该区块。
 describe('SquarePost 官方订阅事件解码', () => {
   it('统一发现平台、创作者关系和创作者档位事件', () => {
     const events = decodeSquarePostSubscriptionEvents(systemEvents([

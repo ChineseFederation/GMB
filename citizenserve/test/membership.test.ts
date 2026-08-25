@@ -63,6 +63,7 @@ describe("手机端发布前用量快照", () => {
   });
 });
 
+// 中文注释：发布授权只消费 finalized 订阅投影写入的 D1 状态；缺少会员行就是无会员，不在请求路径回链补读。
 describe("发布授权只读取 CitizenServe D1", () => {
   it("D1 没有会员记录时直接返回 402，不点查链", async () => {
     await expect(requireActiveMembership(
