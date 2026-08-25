@@ -8,7 +8,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 import 'package:citizenapp/main.dart';
 import 'package:citizenapp/isar/user_isar.dart';
-import 'package:citizenapp/chat/chat_push_service.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/security/app_permission_gate.dart';
 import 'package:citizenapp/wallet/core/sign_mode.dart';
@@ -50,6 +49,29 @@ Future<void> pumpUntilFound(
   }
 }
 
+class _ForegroundWakeChatRuntime extends ChatRuntime {
+  int startCount = 0;
+  int stopCount = 0;
+  int wakeCount = 0;
+
+  @override
+  Future<Future<void> Function()?> startRealtimeSync({
+    required Future<void> Function() onNotice,
+    Future<void> Function()? onDisconnected,
+    bool retryOutgoingOnConnect = true,
+  }) async {
+    startCount += 1;
+    return () async {
+      stopCount += 1;
+    };
+  }
+
+  @override
+  Future<void> handleWakeSender(String senderCidNumber) async {
+    wakeCount += 1;
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   useIsolatedIsar();
@@ -68,9 +90,10 @@ void main() {
     expect(myStyle.systemNavigationBarIconBrightness, Brightness.dark);
   });
 
-  testWidgets('AppShell 启动和广场推送不构造 ChatRuntime，首次进入聊天才创建', (tester) async {
+  testWidgets('AppShell启动轻量信令且切换页面复用同一ChatRuntime', (tester) async {
     final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
     addTearDown(openedPushes.close);
+    final runtime = _ForegroundWakeChatRuntime();
     var chatRuntimeCreations = 0;
     await tester.pumpWidget(
       MaterialApp(
@@ -79,7 +102,7 @@ void main() {
           initialPushDataLoader: () async => null,
           chatRuntimeFactory: () {
             chatRuntimeCreations++;
-            return ChatRuntime();
+            return runtime;
           },
           tabBuilder: (index, runtime) => Center(
             child: Text(
@@ -92,17 +115,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('test-tab-0-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 0);
+    expect(chatRuntimeCreations, 1);
+    expect(runtime.startCount, 1);
 
     await tester.tap(find.text('公民'));
     await tester.pump();
     expect(find.text('test-tab-1-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 0);
+    expect(chatRuntimeCreations, 1);
 
     openedPushes.add(const <String, dynamic>{'kind': 'square_post'});
     await tester.pump();
     expect(find.text('test-tab-0-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 0);
+    expect(chatRuntimeCreations, 1);
 
     await tester.tap(find.text('聊天'));
     await tester.pump();
@@ -209,10 +233,49 @@ void main() {
     expect(find.text('permission-child'), findsOneWidget);
   });
 
-  testWidgets('App 级聊天打开推送只登记 sender，不构造 ChatRuntime', (tester) async {
+  testWidgets('App前台生命周期只保留一条轻量信令连接', (
+    tester,
+  ) async {
     SharedPreferences.setMockInitialValues({});
     final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
     addTearDown(openedPushes.close);
+    final runtime = _ForegroundWakeChatRuntime();
+    var runtimeCreations = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppShell(
+          openedPushData: openedPushes.stream,
+          initialPushDataLoader: () async => null,
+          chatRuntimeFactory: () {
+            runtimeCreations += 1;
+            return runtime;
+          },
+          tabBuilder: (index, chatRuntime) => Text('test-tab-$index'),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    await tester.pump();
+    expect(runtimeCreations, 1);
+    expect(runtime.startCount, 1);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    expect(runtime.stopCount, 1);
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+    expect(runtime.startCount, 2);
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('App级聊天打开推送由同一运行态直接收敛发送方', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
+    addTearDown(openedPushes.close);
+    final runtime = _ForegroundWakeChatRuntime();
     var chatRuntimeCreations = 0;
     await tester.pumpWidget(
       MaterialApp(
@@ -221,7 +284,7 @@ void main() {
           initialPushDataLoader: () async => null,
           chatRuntimeFactory: () {
             chatRuntimeCreations++;
-            return ChatRuntime();
+            return runtime;
           },
           tabBuilder: (index, runtime) => Text('push-tab-$index'),
         ),
@@ -239,9 +302,8 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 10)),
     );
 
-    expect(chatRuntimeCreations, 0);
-    final pending = await ChatPushService().takePendingWakeSenders();
-    expect(pending, <String>[sender]);
+    expect(chatRuntimeCreations, 1);
+    expect(runtime.wakeCount, 1);
   });
 
   const secureStorageChannel =

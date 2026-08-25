@@ -753,7 +753,7 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> {
+class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   final AppUpdateController _updateController = AppUpdateController.instance;
   late final ValueNotifier<int> _selectedTab;
   ChatRuntime? _chatRuntime;
@@ -762,6 +762,9 @@ class _AppShellState extends State<AppShell> {
   int _squareNotifyCount = 0;
   bool _isRooted = false;
   StreamSubscription<Map<String, dynamic>>? _pushOpenSub;
+  Future<void> _foregroundSignalTail = Future<void>.value();
+  Future<void> Function()? _foregroundSignalStop;
+  bool _disposing = false;
 
   /// Chat 运行态只在用户首次打开聊天 Tab 时创建。广场、用户、钱包或公民页启动
   /// 不得因为构造 ChatRuntime 而进入 Chat 的文件、密钥或网络生命周期。
@@ -773,6 +776,7 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     _currentIndex = widget.initialTabIndex;
     _selectedTab = ValueNotifier<int>(_currentIndex);
+    WidgetsBinding.instance.addObserver(this);
     _updateController.addListener(_handleUpdateStateChanged);
     _checkRootStatus();
     // 启动后异步检查 Release 更新，只更新设置页状态，不阻塞主界面进入。
@@ -780,13 +784,14 @@ class _AppShellState extends State<AppShell> {
     // 点击推送属于 App 导航，不得为此提前构造 ChatRuntime。聊天唤醒只保存无内容
     // sender 提示，进入/恢复 Chat 时再由 Chat 域消费；广场推送直接切广场 Tab。
     unawaited(_startPushOpenRouting());
+    _queueForegroundSignals(true);
   }
 
   Future<void> _startPushOpenRouting() async {
     try {
-      final injected = widget.openedPushData;
-      if (injected != null) {
-        _pushOpenSub = injected.listen(
+      final injectedOpened = widget.openedPushData;
+      if (injectedOpened != null) {
+        _pushOpenSub = injectedOpened.listen(
           (data) => unawaited(_handleOpenedPushData(data)),
         );
         final initial = await widget.initialPushDataLoader?.call();
@@ -806,6 +811,36 @@ class _AppShellState extends State<AppShell> {
     }
   }
 
+  /// App前台始终持有一条轻量WSS信令；生命周期动作串行，避免快速切换产生双连接。
+  void _queueForegroundSignals(bool enabled) {
+    _foregroundSignalTail = _foregroundSignalTail.then<void>((_) async {
+      if (enabled) {
+        if (_disposing || _foregroundSignalStop != null) return;
+        _foregroundSignalStop = await _chatRuntimeForTab.startRealtimeSync(
+          onNotice: () async {},
+          retryOutgoingOnConnect: false,
+        );
+        return;
+      }
+      final stop = _foregroundSignalStop;
+      _foregroundSignalStop = null;
+      await stop?.call();
+    }).catchError((Object error, StackTrace stackTrace) {
+      AppLog.d('[ChatSignal] 生命周期同步失败: $error\n$stackTrace');
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _queueForegroundSignals(true);
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _queueForegroundSignals(false);
+    }
+  }
+
   Future<void> _handleOpenedPushData(Map<String, dynamic> data) async {
     if (!mounted) return;
     if (data['kind'] == 'square_post') {
@@ -814,7 +849,12 @@ class _AppShellState extends State<AppShell> {
     }
     final sender = ChatPushService.wakeSenderFromData(data);
     if (sender != null) {
-      await ChatPushService.storeWakeSender(sender);
+      try {
+        await _chatRuntimeForTab.handleWakeSender(sender);
+      } catch (_) {
+        // 点击通知时若会话或网络尚未恢复，持久保存发送方供下一次信令连接消费。
+        await ChatPushService.storeWakeSender(sender);
+      }
     }
   }
 
@@ -826,6 +866,9 @@ class _AppShellState extends State<AppShell> {
 
   @override
   void dispose() {
+    _disposing = true;
+    WidgetsBinding.instance.removeObserver(this);
+    _queueForegroundSignals(false);
     _updateController.removeListener(_handleUpdateStateChanged);
     unawaited(_pushOpenSub?.cancel());
     _selectedTab.dispose();

@@ -1432,6 +1432,19 @@ class _ChatAccountContext {
       );
 }
 
+/// 前台常驻只持有账户、设备标识、会话与WSS传输，不打开ChatIsar、MLS或WebRTC。
+class _ChatSignalContext {
+  const _ChatSignalContext({
+    required this.account,
+    required this.identity,
+    required this.transport,
+  });
+
+  final _ChatAccount account;
+  final ChatDevice identity;
+  final ChatCloudTransport transport;
+}
+
 class _ChatAccount {
   const _ChatAccount({
     required this.walletIndex,
@@ -4785,9 +4798,8 @@ class ChatRuntime {
         hub.retryOutgoingOnConnect || retryOutgoingOnConnect;
     try {
       if (!await _ensureRealtimeHubConnected(hub)) {
-        hub.listeners.remove(listener);
-        if (hub.listeners.isEmpty) await _closeRealtimeHub(hub);
-        return null;
+        // 初次网络失败也保留前台订阅，由同一Hub退避重连；禁止依赖下一次页面进入。
+        _scheduleRealtimeHubReconnect(hub);
       }
     } catch (_) {
       hub.listeners.remove(listener);
@@ -4801,6 +4813,13 @@ class ChatRuntime {
       hub.listeners.remove(listener);
       if (hub.listeners.isEmpty) await _closeRealtimeHub(hub);
     };
+  }
+
+  /// 系统点击通知时直接收敛发送方；失败由AppShell持久保存，等待下一次WSS重连。
+  Future<void> handleWakeSender(String senderCidNumber) async {
+    if (senderCidNumber.isEmpty) return;
+    final context = await _readyContext(await _readAccount());
+    await _convergeWithWakeSender(context, senderCidNumber);
   }
 
   Future<bool> _ensureRealtimeHubConnected(_ChatRealtimeHub hub) {
@@ -4933,8 +4952,10 @@ class ChatRuntime {
     required bool retryOutgoingOnConnect,
   }) async {
     var handedOff = false;
+    ChatCloudTransport? looseSignalTransport;
     try {
-      final context = await _readyContext(account);
+      final signalContext = await _buildSignalContext(account);
+      looseSignalTransport = signalContext.transport;
       _ensureActive();
       session.ensureOpen();
 
@@ -4951,6 +4972,8 @@ class ChatRuntime {
                   signal is! Map<String, dynamic>) {
                 return;
               }
+              // 只有收到真实建连信令后才打开ChatIsar、MLS和WebRTC完整上下文。
+              final context = await _readyContext(account);
               if (signal['kind'] == 'peer_ready') {
                 await retryOutgoing(recipientCidNumber: senderCidNumber);
               } else {
@@ -4978,45 +5001,31 @@ class ChatRuntime {
       session.ensureOpen();
       // 注册长寿命 socket callback 时不能处于 CID Zone；每次 callback 由 session
       // registry 跟踪，并在其内部显式取得 binding lease。
-      await _store.validateBindingFenceToken(context.bindingToken);
-      final stopSocket = await context.transport.connectRealtime(
+      final stopSocket = await signalContext.transport.connectRealtime(
         onMessage: handleMessage,
         onDisconnected: onDisconnected == null ? null : handleDisconnected,
       );
       if (stopSocket == null) return null;
       // disposer 必须在任何可能抛错的后验检查前同步接管新 socket。
-      session.attachSocket(stopSocket);
-      await _store.validateBindingFenceToken(context.bindingToken);
+      final signalTransport = signalContext.transport;
+      session.attachSocket(() async {
+        try {
+          await stopSocket();
+        } finally {
+          signalTransport.dispose();
+        }
+      });
+      looseSignalTransport = null;
       _ensureActive();
       session.ensureOpen();
-
-      Future<void> notifySenderReady(String senderCidNumber) async {
-        if (senderCidNumber.isEmpty) return;
-        await _runBindingFileMutation(
-          context.bindingToken,
-          () => context.transport.sendSignal(
-            recipientCidNumber: senderCidNumber,
-            signal: const {'kind': 'peer_ready'},
-          ),
-        );
-      }
-
-      /// 任一端收到无内容唤醒，都同时完成两件事：先告诉对端“我已可建连”，再检查
-      /// 自己是否也有发往该 CID 的本机待发队列。这样 A→B 的首次唤醒和 B→A 的
-      /// 反向唤醒使用同一收敛入口，不要求两台手机预先同时在线。
-      Future<void> convergeWithWakeSender(String senderCidNumber) async {
-        try {
-          await notifySenderReady(senderCidNumber);
-        } catch (_) {
-          // 信令失败不应跳过本机补发；补发自己的 offer 也可能直接唤醒并连通对端。
-        }
-        await retryOutgoing(recipientCidNumber: senderCidNumber);
-      }
 
       Future<void> notifySenderReadyFromCallback(String sender) async {
         await session.runCallback(() async {
           try {
-            await _runRuntimeOperation(() => convergeWithWakeSender(sender));
+            await _runRuntimeOperation(() async {
+              final context = await _readyContext(account);
+              await _convergeWithWakeSender(context, sender);
+            });
           } catch (_) {
             // 该 sender 仍由本机待发队列/下次推送驱动重试。
           }
@@ -5027,7 +5036,12 @@ class ChatRuntime {
         await session.runCallback(() async {
           try {
             await _runRuntimeOperation(
-              () => _refreshPushRegistration(context),
+              () async => _ensurePushEndpoint(
+                account: signalContext.account,
+                identity: signalContext.identity,
+                prefs: await _prefs,
+                transport: signalContext.transport,
+              ),
             );
           } catch (_) {
             // 终态不得回写 Token，普通失败等下次 token 变化。
@@ -5042,7 +5056,8 @@ class ChatRuntime {
       final pendingSenders = await _pushService.takePendingWakeSenders();
       _ensureActive();
       for (final sender in pendingSenders) {
-        await convergeWithWakeSender(sender);
+        final context = await _readyContext(account);
+        await _convergeWithWakeSender(context, sender);
         _ensureActive();
       }
       final tokenSubscription = _pushService.tokenChanges.listen(
@@ -5059,6 +5074,7 @@ class ChatRuntime {
       handedOff = true;
       return () => _disposeRealtimeSession(session);
     } finally {
+      looseSignalTransport?.dispose();
       session.markInitializationDone();
       if (!handedOff) {
         await _disposeRealtimeSession(session);
@@ -5066,20 +5082,51 @@ class ChatRuntime {
     }
   }
 
-  Future<void> _refreshPushRegistration(_ChatAccountContext context) async {
+  Future<_ChatSignalContext> _buildSignalContext(_ChatAccount account) async {
+    final prefs = await _prefs;
+    final deviceIdKey = deviceIdPreferenceKey(account.cidNumber);
+    var deviceId = prefs.getString(deviceIdKey);
+    if (deviceId == null || deviceId.isEmpty) {
+      deviceId = 'chat-${_newNonce()}';
+      await prefs.setString(deviceIdKey, deviceId);
+    }
+    final identity = ChatDevice(
+      cidNumber: account.cidNumber,
+      deviceId: deviceId,
+      devicePublicKey: prefs.getString(
+              devicePublicKeyCachePreferenceKey(account.cidNumber)) ??
+          '',
+    );
+    final service = await _ensureServiceReady(
+      account: account,
+      identity: identity,
+      prefs: prefs,
+    );
+    return _ChatSignalContext(
+      account: account,
+      identity: identity,
+      transport: service.transport,
+    );
+  }
+
+  /// 任一端收到无内容唤醒，都先发送peer_ready，再检查本机待发队列。
+  Future<void> _convergeWithWakeSender(
+    _ChatAccountContext context,
+    String senderCidNumber,
+  ) async {
+    if (senderCidNumber.isEmpty) return;
     try {
       await _runBindingFileMutation(
         context.bindingToken,
-        () async => _ensurePushEndpoint(
-          account: context.account,
-          identity: context.identity,
-          prefs: await _prefs,
-          transport: context.transport,
+        () => context.transport.sendSignal(
+          recipientCidNumber: senderCidNumber,
+          signal: const {'kind': 'peer_ready'},
         ),
       );
     } catch (_) {
-      // Token 刷新失败不会删除旧登记；下一次平台回调或 Chat 初始化继续重试。
+      // 反向信令失败仍检查本机队列，自己的Offer也可能直接连通对端。
     }
+    await retryOutgoing(recipientCidNumber: senderCidNumber);
   }
 
   Future<_ChatAccountContext> _readyContext(_ChatAccount account) async {

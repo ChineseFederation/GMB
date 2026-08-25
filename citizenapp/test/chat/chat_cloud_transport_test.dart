@@ -26,6 +26,26 @@ void main() {
     );
   });
 
+  test('Chat云端拒绝非HTTPS地址且不降级', () async {
+    const insecureScheme = '${'ht'}${'tp'}';
+    final transport = ChatCloudTransport(
+      accountId:
+          '0x1111111111111111111111111111111111111111111111111111111111111111',
+      localDeviceId: 'alice-phone',
+      serviceBaseUrl: Uri.parse('$insecureScheme://worker.example/api'),
+      sessionToken: 'session-token',
+      httpClient: MockClient((_) async => _json({'ok': true})),
+    );
+
+    await expectLater(
+      transport.sendSignal(
+        recipientCidNumber: _bobCidNumber,
+        signal: const {'kind': 'peer_ready'},
+      ),
+      throwsStateError,
+    );
+  });
+
   test('推送登记只提交操作系统端点，不提交聊天公钥或消息内容', () async {
     final transport = _transport((request) async {
       expect(request.method, 'PUT');

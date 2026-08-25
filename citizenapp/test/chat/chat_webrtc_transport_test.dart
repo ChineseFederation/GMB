@@ -53,10 +53,26 @@ void main() {
         .readAsStringSync();
     expect(source, contains('_setLocalDescriptionAndGatherIce'));
     expect(source, contains('RTCIceGatheringStateComplete'));
-    expect(source, contains('Duration(seconds: 20)'));
+    expect(source, contains('_iceGatheringTimeout = Duration(seconds: 5)'));
+    expect(source, contains('_timeout = Duration(seconds: 8)'));
     expect(source, contains("RegExp(r'^a=candidate:', multiLine: true)"));
     expect(source, isNot(contains('connection.onIceCandidate =')));
     expect(source, isNot(contains("'kind': 'ice'")));
+    expect(
+      source,
+      isNot(contains('Future<void>.delayed(const Duration(seconds: 8))')),
+    );
+  });
+
+  test('重复 Offer 复用已生成 Answer，关闭前解绑原生回调', () {
+    final source = File('lib/chat/transport/chat_webrtc_transport.dart')
+        .readAsStringSync();
+    expect(source, contains('final cachedAnswer = peer.answerSignal'));
+    expect(source, contains('peer.answerSignal = answerSignal'));
+    expect(source, contains('channel.onDataChannelState = null'));
+    expect(source, contains('channel.onMessage = null'));
+    expect(source, contains('_signalTails'));
+    expect(source, contains('_controlIdleTimeout = Duration(seconds: 90)'));
   });
 
   test('控制帧只允许 Envelope、落盘确认和按需 KeyPackage 精确字段', () {

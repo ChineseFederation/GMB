@@ -87,20 +87,20 @@ class ChatCloudTransport {
     required Future<void> Function(Map<String, dynamic> message) onMessage,
     Future<void> Function()? onDisconnected,
   }) async {
-    final uri = _wsUri('/chat/ws');
+    final uri = _signalUri('/chat/signals');
     WebSocket socket;
     try {
       socket = await WebSocket.connect(uri.toString(),
               headers: await _wsHeaders(uri))
           .timeout(requestTimeout);
     } on TimeoutException {
-      lastRealtimeDiagnosticCode = 'chat_ws_connect_timeout';
+      lastRealtimeDiagnosticCode = 'chat_signal_connect_timeout';
       return null;
     } on SocketException {
-      lastRealtimeDiagnosticCode = 'chat_ws_connect_socket_error';
+      lastRealtimeDiagnosticCode = 'chat_signal_connect_socket_error';
       return null;
     } catch (_) {
-      lastRealtimeDiagnosticCode = 'chat_ws_connect_failed';
+      lastRealtimeDiagnosticCode = 'chat_signal_connect_failed';
       return null;
     }
     lastRealtimeDiagnosticCode = null;
@@ -124,15 +124,15 @@ class ChatCloudTransport {
           if (decoded is Map<String, dynamic>) {
             unawaited(onMessage(decoded));
           } else {
-            lastRealtimeDiagnosticCode = 'chat_ws_message_invalid';
+            lastRealtimeDiagnosticCode = 'chat_signal_message_invalid';
           }
         } catch (_) {
           // 畸形帧只记录安全阶段码，不让一条坏帧杀死后续实时收件。
-          lastRealtimeDiagnosticCode = 'chat_ws_message_invalid';
+          lastRealtimeDiagnosticCode = 'chat_signal_message_invalid';
         }
       },
-      onDone: () => notifyDisconnected('chat_ws_closed'),
-      onError: (_) => notifyDisconnected('chat_ws_transport_error'),
+      onDone: () => notifyDisconnected('chat_signal_closed'),
+      onError: (_) => notifyDisconnected('chat_signal_transport_error'),
       cancelOnError: true,
     );
     return () async {
@@ -167,6 +167,9 @@ class ChatCloudTransport {
     if (base == null || (sessionToken ?? '').trim().isEmpty) {
       throw StateError(_chatServiceUnavailable);
     }
+    if (base.scheme.toLowerCase() != 'https' || base.host.isEmpty) {
+      throw StateError('Chat 云端只允许 HTTPS 加密地址');
+    }
     // 正式 API 使用同域 `/api` 前缀，不能用 Uri.resolve 丢掉该前缀。
     final root = base.toString().replaceFirst(RegExp(r'/+$'), '');
     final uri = Uri.parse('$root$path');
@@ -175,9 +178,9 @@ class ChatCloudTransport {
         : uri.replace(queryParameters: queryParameters);
   }
 
-  Uri _wsUri(String path) {
+  Uri _signalUri(String path) {
     final uri = _uri(path);
-    return uri.replace(scheme: uri.scheme == 'https' ? 'wss' : 'ws');
+    return uri.replace(scheme: 'wss');
   }
 
   Future<Map<String, String>> _headers(

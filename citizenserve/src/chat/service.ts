@@ -197,8 +197,8 @@ export async function submitChatSignal(
   });
 }
 
-/** 打开当前合法 CID 的信令 WebSocket；推送端点缺失不得阻断前台直连。 */
-export async function openChatWebSocket(
+/** 打开当前合法 CID 的 WSS 信令连接；推送端点缺失不得阻断前台直连。 */
+export async function openChatSignal(
   request: Request,
   env: Env,
 ): Promise<Response> {

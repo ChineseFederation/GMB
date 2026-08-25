@@ -1271,6 +1271,11 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
     ]) assert5.ok(!source.includes(command), `${file} \u7981\u6B62\u91CD\u590D\u8C03\u7528\u4ED3\u5E93\u95E8\u7981 ${command}`);
   }
 });
+test5("\u516C\u5F00\u4ED3\u5E93\u95E8\u7981\u7981\u6B62\u65B0\u589E\u660E\u6587\u7F51\u7EDC\u534F\u8BAE", () => {
+  const source = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
+  assert5.match(source, /\u660E\u6587\u7F51\u7EDC\u534F\u8BAE/);
+  assert5.match(source, /insecure_transport_hits/);
+});
 test5("\u5168\u90E8\u7B2C\u4E00\u65B9 npm \u9879\u76EE\u4E0E Workflow \u7EDF\u4E00\u7CBE\u786E Node.js \u7248\u672C", () => {
   const repositoryRoot = new URL("../../../", import.meta.url);
   const contract = JSON.parse(readFileSync7(new URL(".github/dependencies.json", repositoryRoot), "utf8"));

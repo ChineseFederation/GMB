@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   assertApnsEnvironment,
-  openChatWebSocket,
+  openChatSignal,
   registerChatPushEndpoint,
   submitChatSignal,
 } from "../src/chat/service";
@@ -279,9 +279,9 @@ describe("device-only Chat control plane", () => {
     expect(await response.json()).toMatchObject({ delivery_state: "queued" });
   });
 
-  it("routes websocket connections from the CID session without a push registration gate", async () => {
-    const response = await openChatWebSocket(
-      new Request("https://worker.test/chat/ws", {
+  it("routes WSS signal connections from the CID session without a push registration gate", async () => {
+    const response = await openChatSignal(
+      new Request("https://worker.test/chat/signals", {
         headers: {
           authorization: "Bearer test-session",
           upgrade: "websocket",

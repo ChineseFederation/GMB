@@ -9,7 +9,7 @@ import { constitutionRoute } from "./chain/constitution";
 import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
 import { deleteContactRoute, listContactsRoute, putContactRoute } from "./contacts/service";
 import {
-  openChatWebSocket,
+  openChatSignal,
   registerChatPushEndpoint,
   submitChatSignal,
 } from "./chat/service";
@@ -205,11 +205,9 @@ export async function routeRequest(
   if (request.method === "PUT" && path === "/chat/push-endpoint") {
     return registerChatPushEndpoint(request, env);
   }
-  if (request.method === "POST" && path === "/chat/signals") {
-    return submitChatSignal(request, env);
-  }
-  if (request.method === "GET" && path === "/chat/ws") {
-    return openChatWebSocket(request, env);
+  if (path === "/chat/signals") {
+    if (request.method === "POST") return submitChatSignal(request, env);
+    if (request.method === "GET") return openChatSignal(request, env);
   }
   throw new HttpError(404, "route_not_found", "广场接口不存在");
 }

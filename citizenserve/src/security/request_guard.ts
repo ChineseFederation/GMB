@@ -200,7 +200,9 @@ function routeRate(path: string, method: string): { binding: RateBinding; key: s
   if (path.startsWith('/square/contacts/')) {
     return { binding: 'RATE_WRITE', key: 'contacts_write' };
   }
-  if (path === '/chat/ws') return { binding: 'RATE_AUTH', key: 'chat_ws' };
+  if (path === '/chat/signals' && method === 'GET') {
+    return { binding: 'RATE_AUTH', key: 'chat_signals' };
+  }
   if (path.startsWith('/chat/')) return { binding: 'RATE_WRITE', key: 'chat' };
   if (method === 'GET') return { binding: 'RATE_READ', key: 'read' };
   return { binding: 'RATE_WRITE', key: 'write' };
