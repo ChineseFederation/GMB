@@ -46,6 +46,12 @@ import { HttpError, jsonResponse, optionsResponse } from "./shared/http";
 import { guardRequest, normalizeApiPath } from "./security/request_guard";
 import { turnstileConfigRoute, turnstilePageRoute } from "./security/turnstile";
 import { assertKnownRoute } from "./limits/request";
+import {
+  citizenchainDownloadRoute,
+  citizenchainPublicationRoute,
+  isCitizenchainDownloadPath,
+  isCitizenchainPublicationPath,
+} from "./downloads/citizenchain";
 
 export async function routeRequest(
   request: Request,
@@ -72,6 +78,14 @@ export async function routeRequest(
       // 发布器据此确认用户投影已追到当前 finalized 头；这里只读现有游标，不迁移数据。
       ...projection,
     });
+  }
+
+  if (isCitizenchainPublicationPath(path)) {
+    return citizenchainPublicationRoute(request, env, path);
+  }
+
+  if (request.method === "GET" && isCitizenchainDownloadPath(path)) {
+    return citizenchainDownloadRoute(env, path);
   }
 
   if (request.method === "GET" && path.startsWith("/download/")) {
@@ -239,27 +253,6 @@ const INSTALLER_DOWNLOAD_TARGETS: Readonly<Record<string, InstallerDownloadTarge
   "/download/citizenwallet/android": {
     releaseTagPrefix: "citizenwallet-release-android-v",
     assetName: "citizenwallet.apk",
-  },
-  "/download/citizenchain/linux-amd64": {
-    releaseTagPrefix: "citizenchain-node-release-linux-amd-v",
-    assetNamePattern: /^citizenchain-node-linux-amd64-v\d+\.\d+\.\d+\.deb$/,
-  },
-  "/download/citizenchain/linux-arm64": {
-    releaseTagPrefix: "citizenchain-node-release-linux-arm-v",
-    assetNamePattern: /^citizenchain-node-linux-arm64-v\d+\.\d+\.\d+\.deb$/,
-  },
-  "/download/citizenchain/macos-arm64": {
-    releaseTagPrefix: "citizenchain-node-release-macos-v",
-    assetNamePattern: /^citizenchain-node-macos-arm64-v\d+\.\d+\.\d+\.dmg$/,
-  },
-  "/download/citizenchain/windows-x86_64": {
-    releaseTagPrefix: "citizenchain-node-release-windows-v",
-    assetNamePattern: /^citizenchain-node-windows-x86_64-v\d+\.\d+\.\d+\.exe$/,
-  },
-  // Tauri updater 也从同一不可变 macOS Release 读取架构清单，禁止恢复滚动 Tag。
-  "/download/citizenchain/macos-arm64-updater": {
-    releaseTagPrefix: "citizenchain-node-release-macos-v",
-    assetNamePattern: /^citizenchain-node-latest-macos-arm64\.json$/,
   },
 };
 

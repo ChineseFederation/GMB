@@ -3828,10 +3828,36 @@ class PayloadDecoder {
       // 只是部署实现；公民服务端的正式端才是 cloudflare。
       'citizenweb': {'web'},
       'citizenserve': {'cloudflare'},
+      'tuyulove': {'ios', 'android'},
+      'tuyuserve': {'cloudflare'},
+      'tuyuweb': {'web'},
+      'tuyubooking': {'macos', 'linux', 'windows'},
     };
     if (!(productPlatforms[product.$1]?.contains(platform.$1) ?? false)) {
       return null;
     }
+
+    // 中文注释：冷钱包审阅必须显示产品唯一中文名；这里只做闭集映射，
+    // 不接受调用端提供展示文案，避免签名内容与用户看到的产品身份分离。
+    const productNamesZh = <String, String>{
+      'citizenapp': '公民',
+      'citizenwallet': '公民钱包',
+      'citizenserve': '公民服务端',
+      'citizenweb': '公民官网',
+      'tuyulove': '途遇',
+      'tuyuserve': '途遇服务端',
+      'tuyuweb': '途遇官网',
+      'tuyubooking': '途遇商家端',
+    };
+    const platformNames = <String, String>{
+      'ios': 'iOS',
+      'android': 'Android',
+      'cloudflare': 'Cloudflare',
+      'web': 'Web',
+      'macos': 'macOS',
+      'linux': 'Linux',
+      'windows': 'Windows',
+    };
     if (offset + 20 + 32 > bytes.length) return null;
     final sourceSha = _bytesToLowerHex(bytes.sublist(offset, offset + 20));
     offset += 20;
@@ -3860,7 +3886,8 @@ class PayloadDecoder {
     };
     return DecodedPayload(
       action: 'publish',
-      summary: '授权发布 ${product.$1} ${version.$1} 到 ${platform.$1}',
+      summary:
+          '授权发布 ${productNamesZh[product.$1]} ${version.$1} 到 ${platformNames[platform.$1]}',
       fields: fields,
       reviewFields: fields,
     );

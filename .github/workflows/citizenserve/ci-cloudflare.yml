@@ -61,18 +61,17 @@ jobs:
         working-directory: citizenserve
         run: npm test
 
-      # CI 必须从空白 D1 验证唯一 schema；运行器临时目录可避免复用开发机或前一次任务的数据。
-      - name: 在全新本地 D1 执行唯一 schema
+      # 两个物理隔离的 D1 分别从自己的唯一完整 schema 建库；禁止恢复 migrations 双轨。
+      - name: 在全新本地 D1 执行两份完整 schema
         working-directory: citizenserve
         run: |
           npm exec -- wrangler d1 execute DB --local \
             --persist-to "$RUNNER_TEMP/citizenserve-cloudflare-d1" \
             --file schema/citizenserve.sql
-          # 当前没有真实结构变化，因此目录不存在；将来只在实际 migration 已受审时按顺序应用。
-          if [ -d migrations ]; then
-            npm exec -- wrangler d1 migrations apply DB --local \
-              --persist-to "$RUNNER_TEMP/citizenserve-cloudflare-d1"
-          fi
+          npm exec -- wrangler d1 execute CITIZENCHAIN_DOWNLOAD_DB --local \
+            --persist-to "$RUNNER_TEMP/citizenserve-cloudflare-d1" \
+            --file schema/download.sql
+          test ! -e migrations
 
       # 中文注释：dry-run 会解析并校验 Worker、D1、R2、KV、Queue、Durable Objects、Cron、
       # Route 和 bindings，但只把无 Secret bundle 写入 runner 临时目录，不调用部署 API。

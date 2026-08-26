@@ -100,6 +100,8 @@ interface WorkerSecretsAndOptionalVars {
   SETTLE_TOKEN?: string;
   // 付款意图 HMAC 密钥，只放 Worker Secret；用于把登录账户、付款钱包和报价绑定为短期令牌。
   TOPUP_INTENT_SECRET?: string;
+  // 控制台更新公民链官网下载指针的独立 HMAC 密钥，不得与部署或结算凭据复用。
+  CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET?: string;
 }
 
 /// Wrangler 会把配置值推导为字面量；Worker 运行期仍需接受测试覆盖值和控制台注入的字符串。
@@ -109,7 +111,11 @@ type GeneratedBindings = {
 };
 
 /// 数据库、广场媒体桶和缓存是基础能力；其余变量与资源延续原契约，缺失时由业务入口 fail-closed。
-type RequiredRuntimeBinding = 'DB' | 'SQUARE_PRIVATE' | 'SQUARE_PUBLIC_MEDIA' | 'SQUARE_CACHE';
+type RequiredRuntimeBinding =
+  | 'DB'
+  | 'SQUARE_PRIVATE'
+  | 'SQUARE_PUBLIC_MEDIA'
+  | 'SQUARE_CACHE';
 type SpecializedRuntimeBinding = 'CHAT' | 'NOTIFY';
 type RuntimeBindings =
   Pick<GeneratedBindings, RequiredRuntimeBinding>

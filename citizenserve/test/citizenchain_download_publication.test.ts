@@ -1,0 +1,225 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Miniflare } from 'miniflare';
+import type { Env } from '../src/types';
+import { routeRequest } from '../src/routes';
+import { citizenchainDownloadRoute } from '../src/downloads/citizenchain';
+
+const secret = 'citizenchain-download-test-secret-32-bytes';
+const basePath = '/operations/citizenchain/download-publications/';
+const downloadSchema = readFileSync(resolve(process.cwd(), 'schema/download.sql'), 'utf8');
+let miniflare: Miniflare;
+let env: Env;
+
+beforeEach(async () => {
+  miniflare = new Miniflare({
+    modules: true,
+    script: 'export default { fetch() { return new Response("test"); } }',
+    compatibilityDate: '2026-07-29',
+    d1Databases: ['DB', 'CITIZENCHAIN_DOWNLOAD_DB'],
+  });
+  env = await miniflare.getBindings<Env>();
+  (env as Env & { CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET: string })
+    .CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET = secret;
+  const database = env.CITIZENCHAIN_DOWNLOAD_DB;
+  if (!database) throw new Error('测试缺少公民链下载数据库 binding');
+  for (const statement of schemaStatements(downloadSchema)) await database.prepare(statement).run();
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await miniflare.dispose();
+});
+
+describe('公民链官网显式发布指针', () => {
+  it('唯一基线只建立四条七字段精简空指针', async () => {
+    const database = env.CITIZENCHAIN_DOWNLOAD_DB;
+    if (!database) throw new Error('测试缺少公民链下载数据库 binding');
+    const rows = await database.prepare(
+      'SELECT * FROM citizenchain_download_publications ORDER BY platform',
+    ).all<Record<string, unknown>>();
+    expect(rows.results.map((row) => row.platform)).toEqual([
+      'linux-amd', 'linux-arm', 'macos', 'windows',
+    ]);
+    expect(Object.keys(rows.results[0]).sort()).toEqual([
+      'asset_name', 'asset_sha256', 'platform', 'published_at',
+      'release_tag', 'revision', 'source_sha',
+    ]);
+    expect(rows.results.every((row) => row.revision === 0 && row.release_tag === null)).toBe(true);
+    const businessTables = await env.DB.prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'citizenchain_download_publications'",
+    ).all();
+    expect(businessTables.results).toEqual([]);
+  });
+
+  it('未显式发布时官网入口返回未发布且不查询 GitHub', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    await expect(citizenchainDownloadRoute(
+      env, '/download/citizenchain/linux-arm64',
+    )).rejects.toMatchObject({ code: 'release_asset_not_found', status: 404 });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('只切换签名请求指定的平台并生成固定 GitHub 资产地址', async () => {
+    const publication = linuxArmPublication('1.0.1');
+    const response = await routeRequest(await signedPut('linux-arm', {
+      expected_revision: 0, publication,
+    }), env);
+    expect(response.status).toBe(200);
+    expect((await response.json() as { publication: { revision: number } }).publication.revision).toBe(1);
+
+    const download = await citizenchainDownloadRoute(
+      env, '/download/citizenchain/linux-arm64',
+    );
+    expect(download.status).toBe(302);
+    expect(download.headers.get('cache-control')).toBe('no-store');
+    expect(download.headers.get('location')).toBe(
+      'https://github.com/ChineseFederation/GMB/releases/download/'
+      + 'citizenchain-node-linux-arm-v1.0.1/citizenchain-node-linux-arm64-v1.0.1.deb',
+    );
+    await expect(citizenchainDownloadRoute(
+      env, '/download/citizenchain/linux-amd64',
+    )).rejects.toMatchObject({ code: 'release_asset_not_found' });
+  });
+
+  it('同一内容重试幂等，旧 revision 不得覆盖新指针', async () => {
+    const publication = linuxArmPublication('1.0.1');
+    await routeRequest(await signedPut('linux-arm', { expected_revision: 0, publication }), env);
+    const repeated = await routeRequest(
+      await signedPut('linux-arm', { expected_revision: 0, publication }), env,
+    );
+    expect((await repeated.json() as { publication: { revision: number } }).publication.revision).toBe(1);
+    await expect(routeRequest(await signedPut('linux-arm', {
+      expected_revision: 0, publication: linuxArmPublication('1.0.2'),
+    }), env)).rejects.toMatchObject({ code: 'publication_revision_conflict', status: 409 });
+  });
+
+  it('平台、Tag、资产名和摘要必须完全一致', async () => {
+    await expect(routeRequest(await signedPut('linux-arm', {
+      expected_revision: 0,
+      publication: {
+        ...linuxArmPublication('1.0.1'),
+        asset_name: 'citizenchain-node-linux-amd64-v1.0.1.deb',
+      },
+    }), env)).rejects.toMatchObject({ code: 'publication_identity_invalid' });
+    await expect(routeRequest(await signedPut('linux-arm', {
+      expected_revision: 0,
+      publication: { ...linuxArmPublication('1.0.1'), asset_sha256: 'bad' },
+    }), env)).rejects.toMatchObject({ code: 'publication_digest_invalid' });
+  });
+
+  it('回滚到空指针仍推进 revision，旧首次发布请求不能重放', async () => {
+    const publication = linuxArmPublication('1.0.1');
+    await routeRequest(await signedPut('linux-arm', { expected_revision: 0, publication }), env);
+    const rollback = await routeRequest(
+      await signedPut('linux-arm', { expected_revision: 1, publication: null }), env,
+    );
+    expect((await rollback.json() as { publication: { revision: number } }).publication.revision).toBe(2);
+    await expect(citizenchainDownloadRoute(
+      env, '/download/citizenchain/linux-arm64',
+    )).rejects.toMatchObject({ code: 'release_asset_not_found' });
+    await expect(routeRequest(
+      await signedPut('linux-arm', { expected_revision: 0, publication }), env,
+    )).rejects.toMatchObject({ code: 'publication_revision_conflict' });
+  });
+
+  it('错误或过期的控制台签名在读取 D1 前拒绝', async () => {
+    const path = `${basePath}macos`;
+    const invalid = new Request(`https://worker.test/api${path}`, {
+      headers: {
+        'x-console-time': String(Date.now()),
+        'x-console-nonce': '11'.repeat(16),
+        'x-console-signature': '00'.repeat(32),
+      },
+    });
+    await expect(routeRequest(invalid, env)).rejects.toMatchObject({
+      code: 'publication_signature_invalid', status: 401,
+    });
+    const expired = await signedRequest('GET', path, '', Date.now() - 6 * 60 * 1000);
+    await expect(routeRequest(expired, env)).rejects.toMatchObject({
+      code: 'publication_signature_invalid', status: 401,
+    });
+  });
+
+  it('macOS updater 与安装包严格共用同一发布指针', async () => {
+    const publication = {
+      release_tag: 'citizenchain-node-macos-v1.2.3',
+      source_sha: 'a'.repeat(40),
+      asset_name: 'citizenchain-node-macos-arm64-v1.2.3.dmg',
+      asset_sha256: 'b'.repeat(64),
+    };
+    await routeRequest(await signedPut('macos', { expected_revision: 0, publication }), env);
+    const updater = await citizenchainDownloadRoute(
+      env, '/download/citizenchain/macos-arm64-updater',
+    );
+    expect(updater.headers.get('location')).toBe(
+      'https://github.com/ChineseFederation/GMB/releases/download/'
+      + 'citizenchain-node-macos-v1.2.3/citizenchain-node-latest-macos-arm64.json',
+    );
+  });
+});
+
+function linuxArmPublication(version: string) {
+  return {
+    release_tag: `citizenchain-node-linux-arm-v${version}`,
+    source_sha: 'a'.repeat(40),
+    asset_name: `citizenchain-node-linux-arm64-v${version}.deb`,
+    asset_sha256: 'b'.repeat(64),
+  };
+}
+
+async function signedPut(platform: string, value: unknown): Promise<Request> {
+  const body = JSON.stringify(value);
+  return signedRequest('PUT', `${basePath}${platform}`, body);
+}
+
+async function signedRequest(
+  method: string,
+  path: string,
+  body: string,
+  timestamp = Date.now(),
+): Promise<Request> {
+  const nonce = '12'.repeat(16);
+  const bodyHash = await sha256Hex(new TextEncoder().encode(body));
+  const canonical = `${method}\n${path}\n${timestamp}\n${nonce}\n${bodyHash}`;
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = bytesHex(new Uint8Array(await crypto.subtle.sign(
+    'HMAC', key, new TextEncoder().encode(canonical),
+  )));
+  const headers: Record<string, string> = {
+    'x-console-time': String(timestamp),
+    'x-console-nonce': nonce,
+    'x-console-signature': signature,
+  };
+  if (body) {
+    headers['content-type'] = 'application/json';
+    headers['content-length'] = String(new TextEncoder().encode(body).byteLength);
+  }
+  return new Request(`https://worker.test/api${path}`, {
+    method,
+    headers,
+    body: body || undefined,
+  });
+}
+
+async function sha256Hex(value: Uint8Array): Promise<string> {
+  return bytesHex(new Uint8Array(await crypto.subtle.digest(
+    'SHA-256', Uint8Array.from(value).buffer,
+  )));
+}
+
+function bytesHex(value: Uint8Array): string {
+  return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function schemaStatements(value: string): string[] {
+  return value.split('\n')
+    .filter((line) => !line.trimStart().startsWith('--'))
+    .join('\n')
+    .split(';')
+    .map((statement) => statement.trim())
+    .filter(Boolean);
+}

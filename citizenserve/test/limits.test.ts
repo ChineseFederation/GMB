@@ -35,6 +35,9 @@ describe('Cloudflare 统一资源限制', () => {
     expect(assertKnownRoute('PUT', `/square/contacts/${'ab'.repeat(32)}`)).toBe('contact_ciphertext');
     expect(assertKnownRoute('GET', '/download/citizenapp/android')).toBe('api_json_small');
     expect(assertKnownRoute('GET', '/download/citizenchain/macos-arm64-updater')).toBe('api_json_small');
+    expect(assertKnownRoute(
+      'PUT', '/operations/citizenchain/download-publications/linux-arm',
+    )).toBe('api_json_small');
     expect(() => assertKnownRoute('GET', '/download/citizenapp/ios')).toThrowError(HttpError);
   });
 
@@ -54,81 +57,6 @@ describe('Cloudflare 统一资源限制', () => {
     expect(nonce).toBeTruthy();
     expect(html).toContain(`<script nonce="${nonce}">`);
     expect(csp).toContain(`'nonce-${nonce}'`);
-  });
-
-  it('只解析固定正式资产并跳转 GitHub，不经 Worker 代理大文件', async () => {
-    // 软件版本属于发布元数据，测试按生产路径动态组合 tag 与资产名。
-    const olderSoftwareVersion = '1.0.0';
-    const newerSoftwareVersion = '1.1.0';
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('api.github.com')) {
-        return Response.json([
-          {
-            tag_name: `citizenchain-node-release-linux-amd-v${olderSoftwareVersion}`,
-            draft: false,
-            prerelease: false,
-            assets: [
-              {
-                name: `citizenchain-node-linux-amd64-v${olderSoftwareVersion}.deb`,
-                browser_download_url: 'https://github.com/ChineseFederation/GMB/releases/download/old/asset',
-              },
-            ],
-          },
-          {
-            tag_name: `citizenchain-node-release-linux-amd-v${newerSoftwareVersion}`,
-            draft: false,
-            prerelease: false,
-            assets: [
-              {
-                name: `citizenchain-node-linux-amd64-v${newerSoftwareVersion}.deb`,
-                browser_download_url: 'https://github.com/ChineseFederation/GMB/releases/download/new/amd',
-              },
-            ],
-          },
-          {
-            tag_name: `citizenchain-node-release-linux-arm-v${newerSoftwareVersion}`,
-            draft: false,
-            prerelease: false,
-            assets: [
-              {
-                name: `citizenchain-node-linux-arm64-v${newerSoftwareVersion}.deb`,
-                browser_download_url: 'https://github.com/ChineseFederation/GMB/releases/download/new/arm',
-              },
-            ],
-          },
-        ]);
-      }
-      throw new Error(`unexpected download proxy fetch: ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-    const rateLimit = { limit: vi.fn(async () => ({ success: true })) };
-    const env = {
-      HASH_KEY: 'test-public-rate-key',
-      RATE_READ: rateLimit,
-    } as never;
-
-    const response = await routeRequest(
-      new Request('https://worker.test/api/download/citizenchain/linux-amd64'),
-      env,
-    );
-
-    expect(response.status).toBe(302);
-    expect(response.headers.get('location')).toBe(
-      'https://github.com/ChineseFederation/GMB/releases/download/new/amd',
-    );
-    expect((await response.arrayBuffer()).byteLength).toBe(0);
-
-    const armResponse = await routeRequest(
-      new Request('https://worker.test/api/download/citizenchain/linux-arm64'),
-      env,
-    );
-    expect(armResponse.status).toBe(302);
-    expect(armResponse.headers.get('location')).toBe(
-      'https://github.com/ChineseFederation/GMB/releases/download/new/arm',
-    );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(rateLimit.limit).toHaveBeenCalledTimes(2);
   });
 
   it('拒绝没有 Content-Length 或声明超限的写请求', () => {

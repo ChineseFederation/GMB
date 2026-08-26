@@ -223,58 +223,97 @@ void main() {
   group('PayloadDecoder', () {
     // 发布授权必须按链端定义完整消费所有 SCALE 字段；同时覆盖 action 绑定与尾字节拒绝，
     // 防止钱包把其它动作或带有未解释附加数据的载荷展示成可签名发布请求。
-    test('生产发布授权严格绑定产品端并拒绝尾字节', () {
+    test('生产发布授权严格绑定十三个产品端并拒绝旧标识与尾字节', () {
       const expiresAt = 1900000000;
-      // 中文注释：发布授权中的 platform 是产品端身份；官网只能是 web，
-      // 公民服务端只能是 cloudflare，交叉组合必须在冷钱包解码阶段拒绝。
+      // 中文注释：发布授权中的 platform 是产品端身份；十三个产品端组合
+      // 必须逐一进入同一解码路径，任何旧标识或交叉组合都在冷钱包拒绝。
       List<int> publishPayload(String product, String platform) {
-        final versionTag = product == 'citizenweb'
-            ? 'citizenweb-v1.2.3'
-            : 'citizenserve-cloudflare-v1.2.3';
+        const versionTag = '1.2.3';
         return <int>[
-            ...compactVec(product),
-            ...compactVec(platform),
-            ...compactVec(versionTag),
-            ...List<int>.filled(20, 0x11),
-            ...List<int>.filled(32, 0x22),
-            ...compactVec('deployment-previous'),
-            ...u64Le(expiresAt),
-            ...List<int>.filled(32, 0x33),
-          ];
+          ...compactVec(product),
+          ...compactVec(platform),
+          ...compactVec(versionTag),
+          ...List<int>.filled(20, 0x11),
+          ...List<int>.filled(32, 0x22),
+          ...compactVec('deployment-previous'),
+          ...u64Le(expiresAt),
+          ...List<int>.filled(32, 0x33),
+        ];
       }
-      final payload = publishPayload('citizenweb', 'web');
 
-      final decoded = PayloadDecoder.decode(
-        hexOf(payload),
-        expectedAction: 'publish',
-      );
-      expect(decoded?.action, 'publish');
-      expect(decoded?.fields['product_id'], 'citizenweb');
-      expect(decoded?.fields['platform'], 'web');
-      expect(decoded?.fields['source_sha'], '0x${'11' * 20}');
-      expect(decoded?.fields['artifact_sha256'], '0x${'22' * 32}');
-      expect(decoded?.fields['expires_at'], '$expiresAt');
-      expect(
-        PayloadDecoder.decode(
-          hexOf(publishPayload('citizenserve', 'cloudflare')),
-          expectedAction: 'publish',
-        )?.fields['platform'],
-        'cloudflare',
-      );
-      expect(
-        PayloadDecoder.decode(
-          hexOf(publishPayload('citizenweb', 'cloudflare')),
-          expectedAction: 'publish',
-        ),
-        isNull,
-      );
-      expect(
-        PayloadDecoder.decode(
-          hexOf(publishPayload('citizenserve', 'web')),
-          expectedAction: 'publish',
-        ),
-        isNull,
-      );
+      const validProductPlatforms = <String, List<String>>{
+        'citizenapp': ['ios', 'android'],
+        'citizenwallet': ['ios', 'android'],
+        'citizenserve': ['cloudflare'],
+        'citizenweb': ['web'],
+        'tuyulove': ['ios', 'android'],
+        'tuyuserve': ['cloudflare'],
+        'tuyuweb': ['web'],
+        'tuyubooking': ['macos', 'linux', 'windows'],
+      };
+      const productNamesZh = <String, String>{
+        'citizenapp': '公民',
+        'citizenwallet': '公民钱包',
+        'citizenserve': '公民服务端',
+        'citizenweb': '公民官网',
+        'tuyulove': '途遇',
+        'tuyuserve': '途遇服务端',
+        'tuyuweb': '途遇官网',
+        'tuyubooking': '途遇商家端',
+      };
+      const platformNames = <String, String>{
+        'ios': 'iOS',
+        'android': 'Android',
+        'cloudflare': 'Cloudflare',
+        'web': 'Web',
+        'macos': 'macOS',
+        'linux': 'Linux',
+        'windows': 'Windows',
+      };
+      for (final productEntry in validProductPlatforms.entries) {
+        for (final platform in productEntry.value) {
+          final payload = publishPayload(productEntry.key, platform);
+          final decoded = PayloadDecoder.decode(
+            hexOf(payload),
+            expectedAction: 'publish',
+          );
+          expect(decoded?.action, 'publish');
+          expect(decoded?.fields['product_id'], productEntry.key);
+          expect(decoded?.fields['platform'], platform);
+          expect(decoded?.fields['source_sha'], '0x${'11' * 20}');
+          expect(decoded?.fields['artifact_sha256'], '0x${'22' * 32}');
+          expect(decoded?.fields['expires_at'], '$expiresAt');
+          expect(
+            decoded?.summary,
+            '授权发布 ${productNamesZh[productEntry.key]} '
+            '1.2.3 到 ${platformNames[platform]}',
+          );
+        }
+      }
+
+      const invalidProductPlatforms = <(String, String)>[
+        ('citizenweb', 'cloudflare'),
+        ('citizenserve', 'web'),
+        ('tuyulove', 'web'),
+        ('tuyuserve', 'web'),
+        ('tuyuweb', 'cloudflare'),
+        ('tuyubooking', 'android'),
+        ('tuyuservice', 'cloudflare'),
+        ('tuyu-mobile', 'ios'),
+        ('tuyu-service', 'cloudflare'),
+        ('tuyu-merchant', 'macos'),
+      ];
+      for (final invalid in invalidProductPlatforms) {
+        expect(
+          PayloadDecoder.decode(
+            hexOf(publishPayload(invalid.$1, invalid.$2)),
+            expectedAction: 'publish',
+          ),
+          isNull,
+        );
+      }
+
+      final payload = publishPayload('citizenweb', 'web');
       expect(PayloadDecoder.decode(hexOf(payload)), isNull);
       expect(
         PayloadDecoder.decode(

@@ -131,9 +131,16 @@ List<int> _switchDefaultAccountPayload({
       ...List<int>.filled(16, 0x66),
     ];
 
-List<int> _publishAuthorizationPayload({required int expiresAt}) => <int>[
-      ..._scaleString('citizenweb'),
-      ..._scaleString('web'),
+/// 中文注释：全部产品端复用同一份 SCALE 发布载荷，参数化只替换闭集身份，
+/// 字段顺序、签名域和防重放字段始终与生产 QR_V1 合同一致。
+List<int> _publishAuthorizationPayload({
+  required String product,
+  required String platform,
+  required int expiresAt,
+}) =>
+    <int>[
+      ..._scaleString(product),
+      ..._scaleString(platform),
       ..._scaleString('1.2.3'),
       ...List<int>.generate(20, (index) => index + 1),
       ...List<int>.generate(32, (index) => index + 21),
@@ -262,7 +269,11 @@ void main() {
 
     test('发布授权严格绑定外层期限、使用 0x24 域且同一请求只能签一次', () async {
       final expiresAt = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 90;
-      final payload = _publishAuthorizationPayload(expiresAt: expiresAt);
+      final payload = _publishAuthorizationPayload(
+        product: 'tuyuweb',
+        platform: 'web',
+        expiresAt: expiresAt,
+      );
       final request = _buildTestRequest(
         requestId: 'offline-publish-authorization',
         signerPublicKey: signingAccount.accountId,
@@ -274,8 +285,12 @@ void main() {
       final verification = service.verifyPayload(request);
       expect(verification.status, SignDecisionStatus.normal);
       expect(verification.actionLabel, '生产发布授权');
-      expect(verification.decoded?.fields['product_id'], 'citizenweb');
+      expect(verification.decoded?.fields['product_id'], 'tuyuweb');
       expect(verification.decoded?.fields['platform'], 'web');
+      expect(
+        verification.decoded?.summary,
+        '授权发布 途遇官网 1.2.3 到 Web',
+      );
 
       final response = await service.signParsedRequest(
         accountId: signingAccount.accountId,

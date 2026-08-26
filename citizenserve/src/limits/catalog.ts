@@ -192,6 +192,8 @@ const route = (method: string, path: RegExp, resource_key: ResourceKey = 'api_js
 const routeLimits: readonly RouteLimit[] = [
   route('GET', /^\/health$/),
   route('GET', /^\/download\/(?:citizenapp\/android|citizenwallet\/android|citizenchain\/(?:linux-amd64|linux-arm64|macos-arm64(?:-updater)?|windows-x86_64))$/),
+  route('GET', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),
+  route('PUT', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),
   route('GET', /^\/chain\/bootstrap$/),
   route('GET', /^\/constitution$/),
   route('GET', /^\/security\/(turnstile|config)$/),

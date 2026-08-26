@@ -64,6 +64,7 @@ function fixtureProject(root: string): string {
     copyFileSync(join(projectPath, path), join(fixture, path));
   }
   copyFileSync(join(projectPath, 'schema/citizenserve.sql'), join(fixture, 'schema/citizenserve.sql'));
+  copyFileSync(join(projectPath, 'schema/download.sql'), join(fixture, 'schema/download.sql'));
   return fixture;
 }
 
@@ -100,6 +101,9 @@ describe('CitizenServe Cloudflare Release 候选', () => {
     expect(readFileSync(join(first.outputPath, 'SHA256SUMS'), 'utf8'))
       .toBe(readFileSync(join(second.outputPath, 'SHA256SUMS'), 'utf8'));
     expect(first.manifest.migrations).toEqual([]);
+    expect(
+      first.manifest.files.find(({ path }: { path: string }) => path === 'schema/download.sql')?.sha256,
+    ).toMatch(/^[0-9a-f]{64}$/);
   });
 
   test('规范 tar.gz 归档可重复生成并安全解包复核', () => {
@@ -160,35 +164,22 @@ describe('CitizenServe Cloudflare Release 候选', () => {
     })).toThrow('候选疑似包含私密材料：worker.mjs');
   });
 
-  test('D1 migration 只接受从 citizenserve_0001.sql 开始的连续编号', () => {
-    const firstRoot = temporaryRoot();
-    const firstProject = fixtureProject(firstRoot);
-    mkdirSync(join(firstProject, 'migrations'));
-    writeFileSync(join(firstProject, 'migrations/citizenserve_0002.sql'), 'ALTER TABLE users ADD COLUMN test_value TEXT;\n');
-    const firstBundle = join(firstRoot, 'worker.mjs');
-    writeFileSync(firstBundle, 'export default {};\n');
+  test('数据库结构只接受两个完整 schema，拒绝 migrations 双轨目录', () => {
+    const root = temporaryRoot();
+    const project = fixtureProject(root);
+    mkdirSync(join(project, 'migrations'));
+    writeFileSync(
+      join(project, 'migrations/citizenserve_0001.sql'),
+      'CREATE INDEX forbidden_index ON users(cid_number);\n',
+    );
+    const bundle = join(root, 'worker.mjs');
+    writeFileSync(bundle, 'export default {};\n');
     expect(() => buildCitizenServeCloudflareRelease({
-      projectPath: firstProject,
-      bundlePath: firstBundle,
-      outputPath: join(firstRoot, 'candidate'),
+      projectPath: project,
+      bundlePath: bundle,
+      outputPath: join(root, 'candidate'),
       gitCommitSha,
-    })).toThrow('D1 migration 编号必须从 0001 连续递增');
-
-    const secondRoot = temporaryRoot();
-    const secondProject = fixtureProject(secondRoot);
-    mkdirSync(join(secondProject, 'migrations'));
-    writeFileSync(join(secondProject, 'migrations/citizenserve_0001.sql'), 'CREATE INDEX first_index ON users(cid_number);\n');
-    writeFileSync(join(secondProject, 'migrations/citizenserve_0002.sql'), 'CREATE INDEX second_index ON users(account_id);\n');
-    const secondBundle = join(secondRoot, 'worker.mjs');
-    writeFileSync(secondBundle, 'export default {};\n');
-    const manifest = buildCitizenServeCloudflareRelease({
-      projectPath: secondProject,
-      bundlePath: secondBundle,
-      outputPath: join(secondRoot, 'candidate'),
-      gitCommitSha,
-    });
-    expect(manifest.migrations.map(({ name }: { name: string }) => name))
-      .toEqual(['citizenserve_0001.sql', 'citizenserve_0002.sql']);
+    })).toThrow('CitizenServe 禁止 migrations 目录');
   });
 
 
