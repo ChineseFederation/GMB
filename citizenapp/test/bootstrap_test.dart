@@ -137,6 +137,7 @@ void main() {
   testWidgets('聊天首页第一帧只构造聊天且广场推送仍切回广场', (tester) async {
     final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
     addTearDown(openedPushes.close);
+    final runtime = _ForegroundWakeChatRuntime();
     var chatRuntimeCreations = 0;
     await tester.pumpWidget(
       MaterialApp(
@@ -146,7 +147,8 @@ void main() {
           initialPushDataLoader: () async => null,
           chatRuntimeFactory: () {
             chatRuntimeCreations++;
-            return ChatRuntime();
+            // 本测试只验证壳层导航；禁止在 Widget fake-async 中启动真实 WSS 和 WalletIsar。
+            return runtime;
           },
           tabBuilder: (index, runtime) => Center(
             child: Text(
@@ -167,6 +169,15 @@ void main() {
     await pumpUntilFound(tester, find.text('home-tab-0-plain'));
     expect(find.text('home-tab-0-plain'), findsOneWidget);
     expect(chatRuntimeCreations, 1);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.runAsync(() async {
+      for (var i = 0; i < 20 && runtime.stopCount == 0; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+    });
+    expect(runtime.startCount, 1);
+    expect(runtime.stopCount, 1);
   });
 
   testWidgets('HomeTabGate 缺省映射广场、打开映射聊天且读取失败可重试', (tester) async {
