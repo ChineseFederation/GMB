@@ -72,6 +72,21 @@ class _ForegroundWakeChatRuntime extends ChatRuntime {
   }
 }
 
+class _InitiallyFailingChatRuntime extends _ForegroundWakeChatRuntime {
+  @override
+  Future<Future<void> Function()?> startRealtimeSync({
+    required Future<void> Function() onNotice,
+    Future<void> Function()? onDisconnected,
+    bool retryOutgoingOnConnect = true,
+  }) async {
+    startCount += 1;
+    if (startCount == 1) throw StateError('transient-connect-failure');
+    return () async {
+      stopCount += 1;
+    };
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   useIsolatedIsar();
@@ -280,6 +295,34 @@ void main() {
     await tester.pump();
     expect(runtime.startCount, 2);
     await tester.pumpWidget(const SizedBox.shrink());
+  });
+
+  testWidgets('App前台首次信令初始化失败后自动恢复且仍只保留一条连接', (tester) async {
+    final runtime = _InitiallyFailingChatRuntime();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: AppShell(
+          openedPushData: const Stream<Map<String, dynamic>>.empty(),
+          initialPushDataLoader: () async => null,
+          chatRuntimeFactory: () => runtime,
+          tabBuilder: (index, chatRuntime) => Text('retry-tab-$index'),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(runtime.startCount, 1);
+
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump();
+    expect(runtime.startCount, 2);
+
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+    expect(runtime.stopCount, 1);
+
+    final source = File('lib/main.dart').readAsStringSync();
+    expect(source, contains('chat_signal_lifecycle_failed'));
+    expect(source, isNot(contains(r'生命周期同步失败: $error')));
   });
 
   testWidgets('App级聊天打开推送由同一运行态直接收敛发送方', (tester) async {

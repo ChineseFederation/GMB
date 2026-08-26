@@ -575,10 +575,13 @@ class ChatWebrtcTransport implements ChatTransport {
     try {
       // 一个 connection_id 只发送一次 Offer。重复发送同一 Offer 会让接收端在
       // have-local-offer 等非法状态再次 createAnswer，并且重复触发系统唤醒。
-      await cloud.sendSignal(
+      final sent = await cloud.sendSignal(
         recipientCidNumber: peerCidNumber,
         signal: offerSignal,
       );
+      if (!sent) {
+        throw TimeoutException('接收设备信令未在线，消息保留在发送设备');
+      }
       await peer.open.future.timeout(_timeout);
       _touchControlPeer(peer);
       return peer;
@@ -993,10 +996,13 @@ class ChatWebrtcTransport implements ChatTransport {
   ) async {
     // 附件与控制连接采用同一协商规则：一个 transfer_id 只发送一次 Offer，
     // 接收端未及时上线时由本机可靠队列在下一轮创建新连接，而不是重放旧 Offer。
-    await cloud.sendSignal(
+    final sent = await cloud.sendSignal(
       recipientCidNumber: peer.peerCidNumber,
       signal: offer,
     );
+    if (!sent) {
+      throw TimeoutException('接收设备信令未在线，附件仍只保留在发送设备');
+    }
     try {
       await peer.open.future.timeout(_timeout);
     } on TimeoutException {

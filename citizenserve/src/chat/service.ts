@@ -191,7 +191,8 @@ export async function submitChatSignal(
       : 0;
   return jsonResponse({
     ok: true,
-    delivery_state: sent > 0 ? "sent" : "queued",
+    // Worker 不保存信令；没有活动 WSS 时必须明确返回 unavailable，禁止伪称已排队。
+    delivery_state: sent > 0 ? "sent" : "unavailable",
     recipient_connections: sent,
     wake_sent: wakeSent,
   });

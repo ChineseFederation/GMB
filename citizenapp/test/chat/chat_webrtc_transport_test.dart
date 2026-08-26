@@ -75,6 +75,15 @@ void main() {
     expect(source, contains('_controlIdleTimeout = Duration(seconds: 90)'));
   });
 
+  test('接收端WSS不可用时立即结束协商并保留手机本地队列', () {
+    final source = File('lib/chat/transport/chat_webrtc_transport.dart')
+        .readAsStringSync();
+    expect(source, contains('final sent = await cloud.sendSignal'));
+    expect(source, contains('if (!sent)'));
+    expect(source, contains('消息保留在发送设备'));
+    expect(source, contains('附件仍只保留在发送设备'));
+  });
+
   test('控制帧只允许 Envelope、落盘确认和按需 KeyPackage 精确字段', () {
     final envelope = ChatWebrtcControlFrame.decode(jsonEncode(
       ChatWebrtcControlFrame.envelope(const [1, 2, 3]),

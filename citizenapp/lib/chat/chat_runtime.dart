@@ -4802,9 +4802,9 @@ class ChatRuntime {
         _scheduleRealtimeHubReconnect(hub);
       }
     } catch (_) {
-      hub.listeners.remove(listener);
-      if (hub.listeners.isEmpty) await _closeRealtimeHub(hub);
-      rethrow;
+      // 会话刷新、设备证明或连接初始化的瞬时失败也必须保留订阅；否则某一平台
+      // 首次启动失败后会在整个前台周期永久失去信令连接。
+      _scheduleRealtimeHubReconnect(hub);
     }
     var active = true;
     return () async {
@@ -4981,7 +4981,9 @@ class ChatRuntime {
               }
             });
           } catch (_) {
-            // socket 回调无上层 await 者；终态拒绝或处理失败由下次同步重试。
+            // socket 回调无上层 await 者；只记录安全阶段码，正文、CID 与 SDP 均不入日志。
+            signalContext.transport.lastRealtimeDiagnosticCode =
+                'chat_signal_handle_failed';
           }
         });
       }

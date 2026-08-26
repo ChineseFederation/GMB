@@ -44,9 +44,9 @@ describe('公民链官网显式发布指针', () => {
     ]);
     expect(Object.keys(rows.results[0]).sort()).toEqual([
       'asset_name', 'asset_sha256', 'platform', 'published_at',
-      'release_tag', 'revision', 'source_sha',
+      'revision', 'source_sha', 'version_tag',
     ]);
-    expect(rows.results.every((row) => row.revision === 0 && row.release_tag === null)).toBe(true);
+    expect(rows.results.every((row) => row.revision === 0 && row.version_tag === null)).toBe(true);
     const businessTables = await env.DB.prepare(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'citizenchain_download_publications'",
     ).all();
@@ -144,7 +144,7 @@ describe('公民链官网显式发布指针', () => {
 
   it('macOS updater 与安装包严格共用同一发布指针', async () => {
     const publication = {
-      release_tag: 'citizenchain-node-macos-v1.2.3',
+      version_tag: 'citizenchain-node-macos-v1.2.3',
       source_sha: 'a'.repeat(40),
       asset_name: 'citizenchain-node-macos-arm64-v1.2.3.dmg',
       asset_sha256: 'b'.repeat(64),
@@ -162,7 +162,7 @@ describe('公民链官网显式发布指针', () => {
 
 function linuxArmPublication(version: string) {
   return {
-    release_tag: `citizenchain-node-linux-arm-v${version}`,
+    version_tag: `citizenchain-node-linux-arm-v${version}`,
     source_sha: 'a'.repeat(40),
     asset_name: `citizenchain-node-linux-arm64-v${version}.deb`,
     asset_sha256: 'b'.repeat(64),

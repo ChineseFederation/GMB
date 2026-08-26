@@ -764,6 +764,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   StreamSubscription<Map<String, dynamic>>? _pushOpenSub;
   Future<void> _foregroundSignalTail = Future<void>.value();
   Future<void> Function()? _foregroundSignalStop;
+  Timer? _foregroundSignalRetry;
+  bool _foregroundSignalsEnabled = false;
   bool _disposing = false;
 
   /// Chat 运行态只在用户首次打开聊天 Tab 时创建。广场、用户、钱包或公民页启动
@@ -813,20 +815,40 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   /// App前台始终持有一条轻量WSS信令；生命周期动作串行，避免快速切换产生双连接。
   void _queueForegroundSignals(bool enabled) {
+    _foregroundSignalsEnabled = enabled;
+    if (!enabled) {
+      _foregroundSignalRetry?.cancel();
+      _foregroundSignalRetry = null;
+    }
     _foregroundSignalTail = _foregroundSignalTail.then<void>((_) async {
       if (enabled) {
-        if (_disposing || _foregroundSignalStop != null) return;
+        if (_disposing ||
+            !_foregroundSignalsEnabled ||
+            _foregroundSignalStop != null) {
+          return;
+        }
         _foregroundSignalStop = await _chatRuntimeForTab.startRealtimeSync(
           onNotice: () async {},
           retryOutgoingOnConnect: false,
         );
+        _foregroundSignalRetry?.cancel();
+        _foregroundSignalRetry = null;
         return;
       }
       final stop = _foregroundSignalStop;
       _foregroundSignalStop = null;
       await stop?.call();
-    }).catchError((Object error, StackTrace stackTrace) {
-      AppLog.d('[ChatSignal] 生命周期同步失败: $error\n$stackTrace');
+    }).catchError((Object _, StackTrace __) {
+      // 生命周期故障只记录稳定阶段码，禁止把异常正文或调用栈写入运行日志。
+      AppLog.d('[ChatSignal] chat_signal_lifecycle_failed');
+      if (_foregroundSignalsEnabled && !_disposing) {
+        _foregroundSignalRetry ??= Timer(const Duration(seconds: 1), () {
+          _foregroundSignalRetry = null;
+          if (_foregroundSignalsEnabled && !_disposing) {
+            _queueForegroundSignals(true);
+          }
+        });
+      }
     });
   }
 
@@ -867,6 +889,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   @override
   void dispose() {
     _disposing = true;
+    _foregroundSignalsEnabled = false;
+    _foregroundSignalRetry?.cancel();
+    _foregroundSignalRetry = null;
     WidgetsBinding.instance.removeObserver(this);
     _queueForegroundSignals(false);
     _updateController.removeListener(_handleUpdateStateChanged);

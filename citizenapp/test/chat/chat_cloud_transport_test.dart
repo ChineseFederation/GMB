@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:citizenapp/chat/transport/chat_cloud_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -105,9 +106,9 @@ void main() {
     expect(sent, isTrue);
   });
 
-  test('对端无实时连接时保留本机 queued 语义', () async {
+  test('对端无实时连接时明确返回 unavailable 且信令不伪装排队', () async {
     final transport = _transport(
-      (_) async => _json({'ok': true, 'delivery_state': 'queued'}),
+      (_) async => _json({'ok': true, 'delivery_state': 'unavailable'}),
     );
 
     final sent = await transport.sendSignal(
@@ -116,6 +117,18 @@ void main() {
     );
 
     expect(sent, isFalse);
+    expect(transport.lastRealtimeDiagnosticCode, 'chat_signal_unavailable');
+  });
+
+  test('WSS必须等待ready并通过有界ping/pong识别半断开连接', () {
+    final source =
+        File('lib/chat/transport/chat_cloud_transport.dart').readAsStringSync();
+    expect(source, contains("'citizen_chat_ws_ready'"));
+    expect(source, contains("'citizen_chat_ws_pong'"));
+    expect(source, contains("socket.add('ping')"));
+    expect(source, contains('chat_signal_ready_timeout'));
+    expect(source, contains('chat_signal_pong_timeout'));
+    expect(source, isNot(contains("'queued'")));
   });
 
   test('服务端结构化错误只暴露稳定错误码', () async {

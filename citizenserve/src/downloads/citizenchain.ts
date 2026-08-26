@@ -6,7 +6,7 @@ export type CitizenchainDownloadPlatform = 'linux-arm' | 'linux-amd' | 'macos' |
 
 interface PublicationRow {
   platform: CitizenchainDownloadPlatform;
-  release_tag: string | null;
+  version_tag: string | null;
   source_sha: string | null;
   asset_name: string | null;
   asset_sha256: string | null;
@@ -15,7 +15,7 @@ interface PublicationRow {
 }
 
 interface PublicationInput {
-  release_tag: string;
+  version_tag: string;
   source_sha: string;
   asset_name: string;
   asset_sha256: string;
@@ -79,7 +79,7 @@ export async function citizenchainDownloadRoute(env: Env, path: string): Promise
   const assetName = path.endsWith('-updater')
     ? 'citizenchain-node-latest-macos-arm64.json'
     : row.asset_name;
-  const location = `${githubDownloadPrefix}${encodeURIComponent(row.release_tag)}/${encodeURIComponent(assetName)}`;
+  const location = `${githubDownloadPrefix}${encodeURIComponent(row.version_tag)}/${encodeURIComponent(assetName)}`;
   return new Response(null, {
     status: 302,
     headers: { location, 'cache-control': 'no-store' },
@@ -108,7 +108,7 @@ export async function citizenchainPublicationRoute(
   if (input.publication !== null) {
     assertExactKeys(
       input.publication,
-      ['release_tag', 'source_sha', 'asset_name', 'asset_sha256'],
+      ['version_tag', 'source_sha', 'asset_name', 'asset_sha256'],
       '发布指针',
     );
     validatePublication(platform, { platform, ...input.publication });
@@ -125,11 +125,11 @@ export async function citizenchainPublicationRoute(
   const value = input.publication;
   const result = await requireDownloadDatabase(env).prepare(
     `UPDATE citizenchain_download_publications
-      SET release_tag = ?, source_sha = ?, asset_name = ?, asset_sha256 = ?,
+      SET version_tag = ?, source_sha = ?, asset_name = ?, asset_sha256 = ?,
           revision = ?, published_at = ?
       WHERE platform = ? AND revision = ?`,
   ).bind(
-    value?.release_tag ?? null,
+    value?.version_tag ?? null,
     value?.source_sha ?? null,
     value?.asset_name ?? null,
     value?.asset_sha256 ?? null,
@@ -145,7 +145,7 @@ export async function citizenchainPublicationRoute(
     ok: true,
     publication: {
       platform,
-      release_tag: value?.release_tag ?? null,
+      version_tag: value?.version_tag ?? null,
       source_sha: value?.source_sha ?? null,
       asset_name: value?.asset_name ?? null,
       asset_sha256: value?.asset_sha256 ?? null,
@@ -160,7 +160,7 @@ async function readPublication(
   platform: CitizenchainDownloadPlatform,
 ): Promise<PublicationRow> {
   const row = await requireDownloadDatabase(env).prepare(
-    `SELECT platform, release_tag, source_sha, asset_name, asset_sha256, revision, published_at
+    `SELECT platform, version_tag, source_sha, asset_name, asset_sha256, revision, published_at
       FROM citizenchain_download_publications WHERE platform = ?`,
   ).bind(platform).first<PublicationRow>();
   if (!row || row.platform !== platform || !Number.isSafeInteger(row.revision) || row.revision < 0) {
@@ -181,7 +181,7 @@ function validatePublication(
   platform: CitizenchainDownloadPlatform,
   publication: Partial<PublicationRow> | PublicationInput,
 ): void {
-  const tag = String(publication.release_tag ?? '');
+  const tag = String(publication.version_tag ?? '');
   const version = platformContracts[platform].tag.exec(tag)?.[1];
   if (!version || publication.asset_name !== platformContracts[platform].asset(version)) {
     throw new HttpError(400, 'publication_identity_invalid', 'Release Tag 或安装包名称与平台不匹配');
@@ -193,19 +193,19 @@ function validatePublication(
 }
 
 function isPublished(row: PublicationRow): row is PublicationRow & {
-  release_tag: string;
+  version_tag: string;
   source_sha: string;
   asset_name: string;
   asset_sha256: string;
   published_at: number;
 } {
-  return row.release_tag !== null && row.source_sha !== null && row.asset_name !== null
+  return row.version_tag !== null && row.source_sha !== null && row.asset_name !== null
     && row.asset_sha256 !== null && row.published_at !== null;
 }
 
 function samePublication(row: PublicationRow, value: PublicationInput | null): boolean {
   if (value === null) return !isPublished(row);
-  return row.release_tag === value.release_tag && row.source_sha === value.source_sha
+  return row.version_tag === value.version_tag && row.source_sha === value.source_sha
     && row.asset_name === value.asset_name && row.asset_sha256 === value.asset_sha256;
 }
 

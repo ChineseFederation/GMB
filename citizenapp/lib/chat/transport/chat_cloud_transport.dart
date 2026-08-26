@@ -6,6 +6,10 @@ import 'package:http/http.dart' as http;
 import 'package:citizenapp/8964/services/square_request_signer.dart';
 
 const _chatServiceUnavailable = 'Chat 无内容建连服务尚未配置';
+const _chatWsReadyType = 'citizen_chat_ws_ready';
+const _chatWsPongType = 'citizen_chat_ws_pong';
+const _chatHeartbeatInterval = Duration(seconds: 25);
+const _chatHeartbeatTimeout = Duration(seconds: 12);
 
 /// Chat Worker 结构化错误；页面只映射错误码，不展示服务端或请求路径原文。
 class ChatCloudException implements Exception {
@@ -80,7 +84,9 @@ class ChatCloudTransport {
       'recipient_device_id': recipientDeviceId ?? '',
       'signal': signal,
     });
-    return json['delivery_state'] == 'sent';
+    final sent = json['delivery_state'] == 'sent';
+    if (!sent) lastRealtimeDiagnosticCode = 'chat_signal_unavailable';
+    return sent;
   }
 
   Future<Future<void> Function()?> connectRealtime({
@@ -103,15 +109,44 @@ class ChatCloudTransport {
       lastRealtimeDiagnosticCode = 'chat_signal_connect_failed';
       return null;
     }
-    lastRealtimeDiagnosticCode = null;
     var closedByClient = false;
     var disconnectedNotified = false;
+    var established = false;
+    final ready = Completer<void>();
+    Timer? heartbeatTimer;
+    Timer? pongTimer;
+
+    void stopHeartbeat() {
+      heartbeatTimer?.cancel();
+      heartbeatTimer = null;
+      pongTimer?.cancel();
+      pongTimer = null;
+    }
 
     void notifyDisconnected(String code) {
-      if (closedByClient || disconnectedNotified) return;
+      stopHeartbeat();
+      if (closedByClient || disconnectedNotified || !established) return;
       disconnectedNotified = true;
       lastRealtimeDiagnosticCode = code;
       unawaited(onDisconnected?.call() ?? Future<void>.value());
+    }
+
+    void startHeartbeat() {
+      heartbeatTimer ??= Timer.periodic(_chatHeartbeatInterval, (_) {
+        if (closedByClient || pongTimer != null) return;
+        try {
+          socket.add('ping');
+          pongTimer = Timer(_chatHeartbeatTimeout, () {
+            pongTimer = null;
+            if (closedByClient) return;
+            lastRealtimeDiagnosticCode = 'chat_signal_pong_timeout';
+            unawaited(socket.close(1011, 'pong_timeout'));
+          });
+        } catch (_) {
+          lastRealtimeDiagnosticCode = 'chat_signal_transport_error';
+          unawaited(socket.close(1011, 'ping_failed'));
+        }
+      });
     }
 
     late final StreamSubscription<dynamic> subscription;
@@ -122,7 +157,18 @@ class ChatCloudTransport {
               event is List<int> ? utf8.decode(event) : event.toString();
           final decoded = jsonDecode(text);
           if (decoded is Map<String, dynamic>) {
-            unawaited(onMessage(decoded));
+            final type = decoded['type'];
+            if (type == _chatWsReadyType) {
+              if (!ready.isCompleted) ready.complete();
+              startHeartbeat();
+            } else if (type == _chatWsPongType) {
+              pongTimer?.cancel();
+              pongTimer = null;
+            } else if (ready.isCompleted) {
+              unawaited(onMessage(decoded));
+            } else {
+              lastRealtimeDiagnosticCode = 'chat_signal_message_invalid';
+            }
           } else {
             lastRealtimeDiagnosticCode = 'chat_signal_message_invalid';
           }
@@ -131,12 +177,45 @@ class ChatCloudTransport {
           lastRealtimeDiagnosticCode = 'chat_signal_message_invalid';
         }
       },
-      onDone: () => notifyDisconnected('chat_signal_closed'),
-      onError: (_) => notifyDisconnected('chat_signal_transport_error'),
+      onDone: () {
+        if (!ready.isCompleted) {
+          ready.completeError(StateError('chat_signal_closed'));
+        }
+        notifyDisconnected('chat_signal_closed');
+      },
+      onError: (_) {
+        if (!ready.isCompleted) {
+          ready.completeError(StateError('chat_signal_transport_error'));
+        }
+        notifyDisconnected('chat_signal_transport_error');
+      },
       cancelOnError: true,
     );
+    try {
+      await ready.future.timeout(requestTimeout);
+      if (socket.readyState != WebSocket.open) {
+        throw StateError('chat_signal_closed');
+      }
+    } on TimeoutException {
+      lastRealtimeDiagnosticCode = 'chat_signal_ready_timeout';
+      closedByClient = true;
+      stopHeartbeat();
+      await subscription.cancel();
+      await socket.close(1011, 'ready_timeout');
+      return null;
+    } catch (_) {
+      lastRealtimeDiagnosticCode = 'chat_signal_connect_failed';
+      closedByClient = true;
+      stopHeartbeat();
+      await subscription.cancel();
+      await socket.close(1011, 'connect_failed');
+      return null;
+    }
+    established = true;
+    lastRealtimeDiagnosticCode = null;
     return () async {
       closedByClient = true;
+      stopHeartbeat();
       await subscription.cancel();
       await socket.close(WebSocketStatus.normalClosure, 'client_close');
     };

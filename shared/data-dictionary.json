@@ -150,6 +150,16 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizenapp",
+      "concept_id": "delivery_state",
+      "field_name": "delivery_state",
+      "field_name_zh": "信令投递状态",
+      "authority": "gmb",
+      "data_type": "enum",
+      "value_set_id": "delivery_state",
+      "forbidden_names": []
+    },
+    {
       "domain": "citizenchain",
       "concept_id": "expected_price_fen",
       "field_name": "expected_price_fen",
@@ -693,6 +703,32 @@
     },
     {
       "domain": "citizenapp",
+      "value_set_id": "delivery_state",
+      "value_set_zh": "信令投递状态",
+      "authority": "gmb",
+      "value_type": "string",
+      "forbidden_values": [
+        "queued"
+      ],
+      "values": [
+        {
+          "value": "sent",
+          "full_name_en": "Signal Sent",
+          "short_name_en": "Sent",
+          "full_name_zh": "信令已写入接收端实时连接",
+          "short_name_zh": "已发送"
+        },
+        {
+          "value": "unavailable",
+          "full_name_en": "Signal Recipient Unavailable",
+          "short_name_en": "Unavailable",
+          "full_name_zh": "接收端实时连接不可用且信令未保存",
+          "short_name_zh": "不可用"
+        }
+      ]
+    },
+    {
+      "domain": "citizenapp",
       "value_set_id": "identity_projection_status",
       "value_set_zh": "用户身份投影状态",
       "authority": "gmb",
@@ -1174,6 +1210,24 @@
         "state_root"
       ],
       "value_sets": []
+    },
+    {
+      "domain": "citizenapp",
+      "contract_id": "citizenapp_chat",
+      "contract_name_zh": "公民聊天",
+      "authority": "gmb",
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ],
+      "fields": [
+        "delivery_state"
+      ],
+      "value_sets": [
+        "delivery_state"
+      ]
     },
     {
       "domain": "citizenapp",

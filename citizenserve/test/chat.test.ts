@@ -271,12 +271,12 @@ describe("device-only Chat control plane", () => {
     ).rejects.toMatchObject({ code: "invalid_chat_signal_kind" });
   });
 
-  it("keeps a signal queued when the peer has no realtime connection", async () => {
+  it("reports unavailable without pretending to queue an undelivered signal", async () => {
     const response = await submitChatSignal(
       signalRequest({ kind: "peer_ready" }),
       fakeEnv(0),
     );
-    expect(await response.json()).toMatchObject({ delivery_state: "queued" });
+    expect(await response.json()).toMatchObject({ delivery_state: "unavailable" });
   });
 
   it("routes WSS signal connections from the CID session without a push registration gate", async () => {

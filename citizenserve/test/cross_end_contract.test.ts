@@ -115,6 +115,10 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
   const chatTransport = readFlutter(
     "lib/chat/transport/chat_cloud_transport.dart",
   );
+  const chatService = readFileSync(
+    join(import.meta.dirname, "../src/chat/service.ts"),
+    "utf8",
+  );
   const workerRoutes = readFileSync(
     join(import.meta.dirname, "../src/routes.ts"),
     "utf8",
@@ -143,6 +147,12 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
     expect(routeCatalog).toContain("^\\/chat\\/signals$");
     expect(`${workerRoutes}\n${routeCatalog}`).not.toMatch(/['"]\/v\d+\//);
+  });
+
+  it("信令未投递时两端统一使用 unavailable 且不存在虚假队列", () => {
+    expect(chatService).toContain('"unavailable"');
+    expect(chatTransport).toContain("'chat_signal_unavailable'");
+    expect(`${chatService}\n${chatTransport}`).not.toContain("queued");
   });
 });
 
