@@ -14,8 +14,9 @@
 # 固定使用 smoldot 轻节点连接区块链（无需 RPC 服务器）。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-APP_ROOT="$SCRIPT_DIR/.."
-REPO_ROOT="$SCRIPT_DIR/../.."
+# 中央快照门禁比较的是唯一真实路径；先消解 scripts/..，避免同一路径因文本形态不同被误拒绝。
+APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 [[ "$PLATFORM" == ios || "$PLATFORM" == android \
   || "$PLATFORM" == verify-ios-localization || "$PLATFORM" == verify-android-localization ]] \
