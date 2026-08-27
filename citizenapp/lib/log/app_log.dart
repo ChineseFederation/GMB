@@ -14,13 +14,23 @@ import 'package:path_provider/path_provider.dart';
 class AppLog {
   const AppLog._();
 
+  // 生产包默认仍为零日志；仅真机诊断构建显式传入 dart-define 时临时启用。
+  // 该开关是编译期常量，不允许运行时远程开启，也不改变正式发布默认值。
+  static const bool _explicitDiagnostics = bool.fromEnvironment(
+    'CITIZENAPP_DIAGNOSTICS',
+    defaultValue: false,
+  );
+
   static File? _diagFile;
   static bool _diagResolved = false;
   static Future<void> _tail = Future<void>.value();
 
+  /// 供网络层决定是否执行只读诊断预检；正式 Release 默认恒为 false。
+  static bool get diagnosticsEnabled => !kReleaseMode || _explicitDiagnostics;
+
   /// 调试日志。签名与 debugPrint 兼容（String? + wrapWidth），既有调用点可原样迁移。
   static void d(String? message, {int? wrapWidth}) {
-    if (kReleaseMode) return;
+    if (!diagnosticsEnabled) return;
     debugPrint(message, wrapWidth: wrapWidth);
     if (message != null) _appendDiag(message);
   }

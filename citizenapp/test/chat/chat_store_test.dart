@@ -82,27 +82,7 @@ void main() {
     );
     expect(outgoing.single.deliveryState, ChatMessageDeliveryState.sent);
     expect(ChatPayloadCodec.decode(outgoing.single.plaintext!).text, 'hi');
-    // Worker 的 sent 只代表写入 WebSocket，应用密文必须保留到接收设备确认落库。
-    expect(await store.outboundQueueCount(_ownerCidNumber), 1);
-    expect(
-      await store.acknowledgeStoredEnvelope(
-        bindingToken: bindingToken,
-        ownerCidNumber: _ownerCidNumber,
-        envelopeId: 'env-store',
-        recipientCidNumber: _carolCidNumber,
-      ),
-      isFalse,
-    );
-    expect(await store.outboundQueueCount(_ownerCidNumber), 1);
-    expect(
-      await store.acknowledgeStoredEnvelope(
-        bindingToken: bindingToken,
-        ownerCidNumber: _ownerCidNumber,
-        envelopeId: 'env-store',
-        recipientCidNumber: _bobCidNumber,
-      ),
-      isTrue,
-    );
+    // sent 表示 CitizenServe 已持久保存密文，本机可靠重试副本立即收口。
     expect(await store.outboundQueueCount(_ownerCidNumber), 0);
 
     await store.savePendingInbound(

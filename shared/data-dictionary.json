@@ -97,6 +97,278 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizenapp",
+      "concept_id": "chat_candidate",
+      "field_name": "candidate",
+      "field_name_zh": "WebRTC ICE 候选",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_connection_id",
+      "field_name": "connection_id",
+      "field_name_zh": "聊天实时连接唯一标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [
+        "call_id",
+        "operation_id",
+        "transfer_id"
+      ],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_created_at_millis",
+      "field_name": "created_at_millis",
+      "field_name_zh": "聊天信封创建毫秒时间",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_envelope",
+      "field_name": "envelope",
+      "field_name_zh": "端到端加密聊天信封",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_envelope_id",
+      "field_name": "envelope_id",
+      "field_name_zh": "聊天信封唯一标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [
+        "message_id",
+        "operation_id"
+      ],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_recipient_cid_number",
+      "field_name": "recipient_cid_number",
+      "field_name_zh": "聊天接收方公民号",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [
+        "recipient_account_id"
+      ],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_recipient_device_id",
+      "field_name": "recipient_device_id",
+      "field_name_zh": "聊天接收设备编号",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sdp",
+      "field_name": "sdp",
+      "field_name_zh": "WebRTC 会话描述",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sdp_mid",
+      "field_name": "sdp_mid",
+      "field_name_zh": "WebRTC 媒体描述标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sdp_mline_index",
+      "field_name": "sdp_mline_index",
+      "field_name_zh": "WebRTC 媒体描述行索引",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sdp_type",
+      "field_name": "sdp_type",
+      "field_name_zh": "WebRTC 会话描述类型",
+      "authority": "gmb",
+      "data_type": "enum",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ],
+      "value_set_id": "sdp_type"
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sender_cid_number",
+      "field_name": "sender_cid_number",
+      "field_name_zh": "聊天发送方公民号",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [
+        "sender_account_id"
+      ],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_sender_device_id",
+      "field_name": "sender_device_id",
+      "field_name_zh": "聊天发送设备编号",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_signal_kind",
+      "field_name": "signal_kind",
+      "field_name_zh": "聊天实时信令类型",
+      "authority": "gmb",
+      "data_type": "enum",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ],
+      "value_set_id": "signal_kind"
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_stun_urls",
+      "field_name": "stun_urls",
+      "field_name_zh": "WebRTC STUN 地址",
+      "authority": "gmb",
+      "data_type": "array",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_ttl_millis",
+      "field_name": "ttl_millis",
+      "field_name_zh": "聊天信封存活毫秒时长",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "citizenapp/lib/chat/**",
+        "citizenapp/test/chat/**",
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_turn_credential",
+      "field_name": "turn_credential",
+      "field_name_zh": "WebRTC TURN 短期凭证",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_turn_urls",
+      "field_name": "turn_urls",
+      "field_name_zh": "WebRTC TURN 地址",
+      "authority": "gmb",
+      "data_type": "array",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "concept_id": "chat_turn_username",
+      "field_name": "turn_username",
+      "field_name_zh": "WebRTC TURN 短期用户名",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizenserve/src/chat/**",
+        "citizenserve/test/chat.test.ts"
+      ]
+    },
+    {
       "domain": "release",
       "concept_id": "ci_run_id",
       "field_name": "ci_run_id",
@@ -965,6 +1237,30 @@
       ]
     },
     {
+      "domain": "citizenapp",
+      "value_set_id": "sdp_type",
+      "value_set_zh": "WebRTC 会话描述类型",
+      "authority": "gmb",
+      "value_type": "string",
+      "forbidden_values": [],
+      "values": [
+        {
+          "value": "answer",
+          "full_name_en": "Session Description Answer",
+          "short_name_en": "Answer",
+          "full_name_zh": "WebRTC 应答会话描述",
+          "short_name_zh": "应答"
+        },
+        {
+          "value": "offer",
+          "full_name_en": "Session Description Offer",
+          "short_name_en": "Offer",
+          "full_name_zh": "WebRTC 发起会话描述",
+          "short_name_zh": "发起"
+        }
+      ]
+    },
+    {
       "domain": "citizenwallet",
       "value_set_id": "sign_mode",
       "value_set_zh": "签名模式",
@@ -988,6 +1284,58 @@
           "short_name_en": "Hot",
           "full_name_zh": "热签名",
           "short_name_zh": "热签"
+        }
+      ]
+    },
+    {
+      "domain": "citizenapp",
+      "value_set_id": "signal_kind",
+      "value_set_zh": "聊天实时信令类型",
+      "authority": "gmb",
+      "value_type": "string",
+      "forbidden_values": [],
+      "values": [
+        {
+          "value": "answer",
+          "full_name_en": "WebRTC Answer Signal",
+          "short_name_en": "Answer",
+          "full_name_zh": "WebRTC 应答信令",
+          "short_name_zh": "应答"
+        },
+        {
+          "value": "hangup",
+          "full_name_en": "WebRTC Hangup Signal",
+          "short_name_en": "Hangup",
+          "full_name_zh": "WebRTC 挂断信令",
+          "short_name_zh": "挂断"
+        },
+        {
+          "value": "ice",
+          "full_name_en": "WebRTC ICE Candidate Signal",
+          "short_name_en": "ICE",
+          "full_name_zh": "WebRTC ICE 候选信令",
+          "short_name_zh": "ICE"
+        },
+        {
+          "value": "ice_restart",
+          "full_name_en": "WebRTC ICE Restart Signal",
+          "short_name_en": "ICE Restart",
+          "full_name_zh": "WebRTC ICE 重启信令",
+          "short_name_zh": "ICE 重启"
+        },
+        {
+          "value": "offer",
+          "full_name_en": "WebRTC Offer Signal",
+          "short_name_en": "Offer",
+          "full_name_zh": "WebRTC 发起信令",
+          "short_name_zh": "发起"
+        },
+        {
+          "value": "peer_ready",
+          "full_name_en": "Peer Ready Signal",
+          "short_name_en": "Peer Ready",
+          "full_name_zh": "接收设备就绪信令",
+          "short_name_zh": "设备就绪"
         }
       ]
     },
@@ -1223,10 +1571,31 @@
         "citizenserve/test/chat.test.ts"
       ],
       "fields": [
+        "chat_candidate",
+        "chat_connection_id",
+        "chat_created_at_millis",
+        "chat_envelope",
+        "chat_envelope_id",
+        "chat_recipient_cid_number",
+        "chat_recipient_device_id",
+        "chat_sdp",
+        "chat_sdp_mid",
+        "chat_sdp_mline_index",
+        "chat_sdp_type",
+        "chat_sender_cid_number",
+        "chat_sender_device_id",
+        "chat_signal_kind",
+        "chat_stun_urls",
+        "chat_ttl_millis",
+        "chat_turn_credential",
+        "chat_turn_urls",
+        "chat_turn_username",
         "delivery_state"
       ],
       "value_sets": [
-        "delivery_state"
+        "delivery_state",
+        "sdp_type",
+        "signal_kind"
       ]
     },
     {

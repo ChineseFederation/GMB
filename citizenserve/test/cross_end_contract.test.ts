@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 // 跨端契约锁。
 //
-// Worker 只承载系统唤醒端点和 WebRTC 建连信令。本文件直接读 Flutter 源码文本，
-// 锁住两端共享的控制字段，并确保 Envelope、KeyPackage 与附件内容没有云端入口。
+// Worker 承载系统唤醒、WebRTC 媒体建连信令和有界端到端密文邮箱。本文件直接读 Flutter
+// 源码文本，锁住两端共享的控制字段，并确保明文、内容密钥与附件字节没有云端消息入口。
 //
 // 只锁**跨端 JSON 键名**,不锁实现细节;新增跨端字段时在此补一条。
 
@@ -17,21 +17,32 @@ function readFlutter(relativePath: string): string {
 
 describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
   const transport = readFlutter("lib/chat/transport/chat_cloud_transport.dart");
+  const webrtc = readFlutter("lib/chat/transport/chat_webrtc_transport.dart");
   const workerChat = readFileSync(
     join(import.meta.dirname, "../src/chat/service.ts"),
     "utf8",
   );
+  const workerSignal = readFileSync(
+    join(import.meta.dirname, "../src/chat/codec.ts"),
+    "utf8",
+  );
+  const workerRealtime = readFileSync(
+    join(import.meta.dirname, "../src/chat/realtime.ts"),
+    "utf8",
+  );
 
-  it("云端边界不含设备聊天公钥、KeyPackage 或 Envelope", () => {
+  it("云端消息边界只增加序列化 Envelope，不增加公钥、KeyPackage 或明文字段", () => {
     for (const forbidden of [
       "device_public_key_hex",
       "key_package",
-      "envelope_id",
-      "'envelope'",
+      "message_body",
+      "plaintext",
     ]) {
       expect(workerChat).not.toContain(forbidden);
       expect(transport).not.toContain(forbidden);
     }
+    expect(workerChat).toContain("envelope_id");
+    expect(workerChat).toContain("assertEncodedChatEnvelope");
   });
 
   it("WebRTC 信令按身份主键 recipient_cid_number 寻址", () => {
@@ -40,13 +51,28 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
     expect(transport).not.toContain("'recipient_account_id':");
   });
 
-  it("信令只允许 peer_ready 与已经收齐 ICE 候选的 SDP", () => {
-    for (const field of ["connection_kind", "connection_id", "sdp"]) {
-      expect(workerChat).toContain(field);
+  it("服务端双向 WSS 使用唯一 connection_id 并接受 Trickle ICE", () => {
+    for (const field of ["signal_kind", "connection_id", "candidate", "sdp"]) {
+      expect(workerSignal).toContain(field);
+      expect(`${transport}\n${webrtc}`).toContain(field);
     }
-    expect(workerChat).not.toContain("kind !== 'ice'");
-    expect(workerChat).not.toContain("['kind', 'transfer_id', 'candidate'");
-    expect(transport).toContain("'signal': signal");
+    expect(workerSignal).not.toContain("connection_kind");
+    expect(workerSignal).not.toContain("transfer_id");
+    expect(`${transport}\n${webrtc}`).not.toContain("connection_kind");
+    expect(`${transport}\n${webrtc}`).not.toContain("transfer_id");
+    expect(workerRealtime).toContain("assertChatSignalFrame(JSON.parse(message))");
+    expect(workerRealtime).toContain("CHAT_WS_SIGNAL_RESULT_TYPE");
+    expect(transport).toContain("socket.add(jsonEncode(frame))");
+    expect(webrtc).toContain("connection.onIceCandidate =");
+    expect(webrtc).toContain("connection.addCandidate(ice)");
+  });
+
+  it("Flutter 密文走邮箱且 WebRTC DataChannel 不再承载 Envelope", () => {
+    expect(transport).toContain("'/chat/messages'");
+    expect(transport).toContain("'/chat/messages/ack'");
+    expect(transport).toContain("ChatTransportType.mailbox");
+    expect(webrtc).not.toContain("ChatWebrtcControlFrame.envelope");
+    expect(webrtc).not.toContain("envelope_stored");
   });
 
   it("推送唤醒发件人按 sender_cid_number", () => {
@@ -119,6 +145,10 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     join(import.meta.dirname, "../src/chat/service.ts"),
     "utf8",
   );
+  const chatRealtime = readFileSync(
+    join(import.meta.dirname, "../src/chat/realtime.ts"),
+    "utf8",
+  );
   const workerRoutes = readFileSync(
     join(import.meta.dirname, "../src/routes.ts"),
     "utf8",
@@ -135,6 +165,7 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     expect(creatorApi).toContain("'/square/creator/plan'");
     expect(chatTransport).toContain("'/chat/push-endpoint'");
     expect(chatTransport).toContain("'/chat/signals'");
+    expect(workerRoutes).toContain('path === "/chat/messages"');
     expect(`${squareApi}\n${creatorApi}\n${chatTransport}`).not.toMatch(
       /['"]\/v\d+\//,
     );
@@ -146,13 +177,16 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     expect(routeCatalog).toContain("^\\/square\\/contacts$");
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
     expect(routeCatalog).toContain("^\\/chat\\/signals$");
+    expect(routeCatalog).toContain("^\\/chat\\/ice$");
+    expect(routeCatalog).toContain("^\\/chat\\/messages$");
+    expect(workerRoutes).not.toContain('request.method === "POST" && path === "/chat/signals"');
     expect(`${workerRoutes}\n${routeCatalog}`).not.toMatch(/['"]\/v\d+\//);
   });
 
   it("信令未投递时两端统一使用 unavailable 且不存在虚假队列", () => {
-    expect(chatService).toContain('"unavailable"');
+    expect(chatRealtime).toContain("'unavailable'");
     expect(chatTransport).toContain("'chat_signal_unavailable'");
-    expect(`${chatService}\n${chatTransport}`).not.toContain("queued");
+    expect(`${chatService}\n${chatRealtime}`).not.toContain("queued");
   });
 });
 

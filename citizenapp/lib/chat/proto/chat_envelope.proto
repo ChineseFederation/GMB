@@ -4,8 +4,9 @@ package gmb.chat;
 
 // 跨端 Chat 信封真源。字段编号承担 wire 演进，不另设版本化协议标识。
 //
-// OpenMLS 标准 wire bytes 放在内层；本文件只定义设备直连使用的外层 Envelope、
-// 路由记录和 KeyPackage。Chat 身份只认 CID；当前钱包账户只在建连服务 Session
+// OpenMLS 标准 wire bytes 放在内层；本文件定义手机端持久化和 CitizenServe 临时密文邮箱
+// 共同使用的外层 Envelope、路由记录和 KeyPackage。CitizenServe 只保存序列化 Envelope，
+// 不解析 MLS 正文或持有密钥。Chat 身份只认 CID；当前钱包账户只在服务 Session
 // 完成签名授权，不进入 MLS 名册、会话 ID 或消息归属。
 
 message ChatRoute {

@@ -1,4 +1,4 @@
-import type { Env } from "../types";
+import type { ChatEnvelopePayload, ChatMailboxItem, Env } from "../types";
 import {
   HttpError,
   jsonResponse,
@@ -8,10 +8,17 @@ import {
 import { nowMs } from "../shared/time";
 import {
   assertChatCidNumber,
+  assertChatEnvelopeId,
   assertDeviceId,
+  assertEncodedChatEnvelope,
   assertPositiveMillis,
 } from "./codec";
-import { relayChatSignal, requireChatRealtimeNamespace } from "./realtime";
+import {
+  acknowledgeChatEnvelopes,
+  readChatMailbox,
+  requireChatRealtimeNamespace,
+  storeChatEnvelope,
+} from "./realtime";
 import { sendChatWake } from "./push";
 import { resourceLimit } from "../limits/catalog";
 import { enforceEdgeRate } from "../security/request_guard";
@@ -25,13 +32,6 @@ interface RegisterPushEndpointRequest {
   push_token?: unknown;
   apns_environment?: unknown;
   expires_at?: unknown;
-}
-
-interface SubmitSignalRequest {
-  sender_device_id?: unknown;
-  recipient_cid_number?: unknown;
-  recipient_device_id?: unknown;
-  signal?: unknown;
 }
 
 /**
@@ -143,61 +143,6 @@ export async function cleanupExpiredChatPushEndpoints(
     .run();
 }
 
-/**
- * WebRTC 建连信令的唯一 HTTP 入口。
- *
- * 只接受严格字段集的 `peer_ready`、offer 和 answer。ICE 候选必须已经收敛在 SDP 中，
- * 禁止逐候选请求触发平台限流。Envelope、KeyPackage、消息 ID、会话 ID、文件信息等字段
- * 没有合法入口，避免“加密后也能发云端”的影子通道。
- */
-export async function submitChatSignal(
-  request: Request,
-  env: Env,
-): Promise<Response> {
-  const session = await requireSession(request, env);
-  const body = await readJson<SubmitSignalRequest>(request);
-  const senderDeviceId = assertDeviceId(body.sender_device_id);
-  const recipientCidNumber = assertChatCidNumber(
-    body.recipient_cid_number,
-    "invalid_recipient_cid_number",
-  );
-  const recipientDeviceId = optionalDeviceId(body.recipient_device_id);
-  const signal = assertConnectionSignal(body.signal);
-  const signalBytes = new TextEncoder().encode(
-    JSON.stringify(signal),
-  ).byteLength;
-  if (signalBytes > resourceLimit("chat_signal").max_bytes) {
-    throw new HttpError(413, "chat_signal_too_large", "Chat 建连信令超过上限");
-  }
-  // 同一发件 CID 对单一收件 CID 的建连尝试独立限流，防止遍历目标触发离线推送。
-  await enforceEdgeRate(
-    env,
-    "RATE_AUTH",
-    `cid_number:${session.cid_number}:chat_signal_recipient:${recipientCidNumber}`,
-  );
-  const sent = await relayChatSignal(env, {
-    type: "citizen_chat_signal",
-    sender_cid_number: session.cid_number,
-    sender_device_id: senderDeviceId,
-    recipient_cid_number: recipientCidNumber,
-    recipient_device_id: recipientDeviceId,
-    signal,
-  });
-  const wakeSent =
-    sent === 0
-      ? await sendChatWake(env, recipientCidNumber, session.cid_number).catch(
-          () => 0,
-        )
-      : 0;
-  return jsonResponse({
-    ok: true,
-    // Worker 不保存信令；没有活动 WSS 时必须明确返回 unavailable，禁止伪称已排队。
-    delivery_state: sent > 0 ? "sent" : "unavailable",
-    recipient_connections: sent,
-    wake_sent: wakeSent,
-  });
-}
-
 /** 打开当前合法 CID 的 WSS 信令连接；推送端点缺失不得阻断前台直连。 */
 export async function openChatSignal(
   request: Request,
@@ -221,91 +166,195 @@ export async function openChatSignal(
     .fetch(internal);
 }
 
-function assertConnectionSignal(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "invalid_chat_signal", "Chat 建连信令格式不合法");
+const TURN_CREDENTIAL_TTL_SECONDS = 60 * 60;
+const TURN_KEY_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
+const STUN_URL_PATTERN = /^stun:stun\.cloudflare\.com:(?:3478|53)$/;
+const TURN_URL_PATTERN = /^(?:turn|turns):turn\.cloudflare\.com:(?:3478|53|80|443|5349)\?transport=(?:udp|tcp)$/;
+
+interface CloudflareIceServer {
+  urls?: unknown;
+  username?: unknown;
+  credential?: unknown;
+}
+
+interface CloudflareIceResponse {
+  iceServers?: unknown;
+}
+
+/** 为当前合法会话签发一小时 Cloudflare TURN 凭证；长期令牌永不返回手机端。 */
+export async function issueChatIce(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJson<Record<string, unknown>>(request);
+  if (!body || Array.isArray(body) || Object.keys(body).length !== 0) {
+    throw new HttpError(400, "invalid_chat_ice_request", "WebRTC ICE 凭证请求不得携带字段");
   }
-  const signal = value as Record<string, unknown>;
-  const kind = signal.kind;
-  if (kind === "peer_ready") {
-    requireExactKeys(signal, ["kind"]);
-    return signal;
+  await enforceEdgeRate(env, "RATE_AUTH", `cid_number:${session.cid_number}:chat_ice`);
+  const keyId = env.TURN_KEY_ID?.trim();
+  const apiToken = env.TURN_KEY_API_TOKEN?.trim();
+  if (!keyId || !TURN_KEY_ID_PATTERN.test(keyId) || !apiToken) {
+    throw new HttpError(503, "chat_ice_unavailable", "WebRTC ICE 服务未配置");
   }
-  if (kind !== "offer" && kind !== "answer") {
-    throw new HttpError(
-      400,
-      "invalid_chat_signal_kind",
-      "Chat 只允许 WebRTC 建连信令",
-    );
+
+  // Cloudflare 官方路径按固定段构造，避免把第三方 API 版本误登记为一方协议版本。
+  const turnPath = ["v1", "turn", "keys", keyId, "credentials", "generate-ice-servers"]
+    .map(encodeURIComponent)
+    .join("/");
+  const response = await fetch(
+    `https://rtc.live.cloudflare.com/${turnPath}`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiToken}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ ttl: TURN_CREDENTIAL_TTL_SECONDS }),
+    },
+  );
+  if (response.status !== 201) {
+    throw new HttpError(503, "chat_ice_unavailable", "WebRTC ICE 服务暂时不可用");
   }
-  const control = signal.connection_kind === "control";
-  if (control) {
-    assertToken(signal.connection_id, "connection_id");
-  } else {
-    assertToken(signal.transfer_id, "transfer_id");
-    if (signal.connection_kind !== undefined) {
-      throw new HttpError(
-        400,
-        "invalid_chat_signal_fields",
-        "附件信令字段不合法",
-      );
+  const text = await response.text();
+  if (new TextEncoder().encode(text).byteLength > resourceLimit("chat_signal").max_bytes) {
+    throw new HttpError(502, "chat_ice_response_invalid", "WebRTC ICE 服务响应不合法");
+  }
+  let payload: CloudflareIceResponse;
+  try {
+    payload = JSON.parse(text) as CloudflareIceResponse;
+  } catch {
+    throw new HttpError(502, "chat_ice_response_invalid", "WebRTC ICE 服务响应不合法");
+  }
+  const iceServers = Array.isArray(payload.iceServers)
+    ? payload.iceServers as CloudflareIceServer[]
+    : [];
+  const stunUrls: string[] = [];
+  const turnUrls: string[] = [];
+  let turnUsername = "";
+  let turnCredential = "";
+  for (const server of iceServers) {
+    const urls = Array.isArray(server?.urls)
+      ? server.urls.filter((url): url is string => typeof url === "string")
+      : [];
+    for (const url of urls) {
+      if (STUN_URL_PATTERN.test(url)) stunUrls.push(url);
+      else if (TURN_URL_PATTERN.test(url)) turnUrls.push(url);
+      else throw new HttpError(502, "chat_ice_response_invalid", "WebRTC ICE 地址不合法");
+    }
+    if (typeof server?.username === "string" && typeof server?.credential === "string") {
+      if (turnUsername || turnCredential) {
+        throw new HttpError(502, "chat_ice_response_invalid", "WebRTC TURN 凭证响应重复");
+      }
+      turnUsername = server.username;
+      turnCredential = server.credential;
     }
   }
-  requireExactKeys(
-    signal,
-    control
-      ? ["kind", "connection_kind", "connection_id", "sdp", "sdp_type"]
-      : ["kind", "transfer_id", "sdp", "sdp_type"],
-  );
-  assertBoundedString(signal.sdp, "sdp", 1, 48_000);
-  assertBoundedString(signal.sdp_type, "sdp_type", 1, 16);
-  return signal;
-}
-
-function requireExactKeys(
-  value: Record<string, unknown>,
-  expected: string[],
-): void {
-  const keys = Object.keys(value).sort();
-  const wanted = [...expected].sort();
   if (
-    keys.length !== wanted.length ||
-    keys.some((key, index) => key !== wanted[index])
+    stunUrls.length === 0
+    || turnUrls.length === 0
+    || turnUsername.length < 8
+    || turnUsername.length > 1024
+    || turnCredential.length < 8
+    || turnCredential.length > 1024
   ) {
-    throw new HttpError(
-      400,
-      "invalid_chat_signal_fields",
-      "Chat 建连信令包含未授权字段",
-    );
+    throw new HttpError(502, "chat_ice_response_invalid", "WebRTC ICE 服务响应不完整");
   }
+  return jsonResponse({
+    stun_urls: [...new Set(stunUrls)],
+    turn_urls: [...new Set(turnUrls)],
+    turn_username: turnUsername,
+    turn_credential: turnCredential,
+  });
 }
 
-function assertToken(value: unknown, field: string): string {
-  const token = assertBoundedString(value, field, 3, 220);
-  if (!/^[A-Za-z0-9_.:-]+$/.test(token)) {
-    throw new HttpError(
-      400,
-      "invalid_chat_signal_fields",
-      `Chat ${field} 格式不合法`,
-    );
+/** 写入一个已序列化的端到端加密 Envelope；HTTP 成功即表示密文已经持久保存。 */
+export async function submitChatEnvelope(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJson<ChatEnvelopePayload>(request);
+  assertExactChatEnvelopeFields(body);
+  const envelopeId = assertChatEnvelopeId(body.envelope_id);
+  const recipientCidNumber = assertChatCidNumber(
+    body.recipient_cid_number,
+    "invalid_recipient_cid_number",
+  );
+  const envelope = assertEncodedChatEnvelope(body.envelope);
+  if (new TextEncoder().encode(envelope).byteLength > resourceLimit("chat_envelope").max_bytes) {
+    throw new HttpError(413, "chat_envelope_too_large", "Chat 端到端加密信封超过上限");
   }
-  return token;
+  const createdAtMillis = assertPositiveMillis(
+    body.created_at_millis,
+    "invalid_chat_created_at",
+    "Chat 信封创建时间不合法",
+  );
+  const ttlMillis = assertPositiveMillis(
+    body.ttl_millis,
+    "invalid_chat_ttl",
+    "Chat 信封存活时间不合法",
+  );
+  const current = nowMs();
+  const maxTtlMillis = (resourceLimit("chat_envelope").ttl_seconds ?? 0) * 1000;
+  if (
+    ttlMillis > maxTtlMillis
+    || !Number.isSafeInteger(createdAtMillis + ttlMillis)
+    || createdAtMillis > current + 5 * 60 * 1000
+    || createdAtMillis + ttlMillis <= current
+  ) {
+    throw new HttpError(400, "chat_envelope_expired", "Chat 信封已过期或存活时间超过上限");
+  }
+  await enforceEdgeRate(
+    env,
+    "RATE_WRITE",
+    `cid_number:${session.cid_number}:chat_message_recipient:${recipientCidNumber}`,
+  );
+  const item: ChatMailboxItem = {
+    envelope_id: envelopeId,
+    sender_cid_number: session.cid_number,
+    recipient_cid_number: recipientCidNumber,
+    envelope,
+    created_at_millis: createdAtMillis,
+    ttl_millis: ttlMillis,
+  };
+  const sent = await storeChatEnvelope(env, item);
+  if (sent === 0) {
+    await sendChatWake(env, recipientCidNumber, session.cid_number).catch(() => 0);
+  }
+  return jsonResponse({ ok: true });
 }
 
-function assertBoundedString(
-  value: unknown,
-  field: string,
-  min: number,
-  max: number,
-): string {
-  if (typeof value !== "string" || value.length < min || value.length > max) {
-    throw new HttpError(
-      400,
-      "invalid_chat_signal_fields",
-      `Chat ${field} 格式不合法`,
-    );
+/** 前台连接或系统唤醒后批量读取当前 CID 的未确认密文；返回值不包含任何明文。 */
+export async function fetchChatEnvelopes(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  await enforceEdgeRate(env, "RATE_READ", `cid_number:${session.cid_number}:chat_mailbox_read`);
+  return jsonResponse(await readChatMailbox(env, session.cid_number));
+}
+
+/** 接收端必须先完成解密和本机持久化，再批量确认既有 envelope_id；确认后云端立即删除。 */
+export async function acknowledgeChatMailbox(request: Request, env: Env): Promise<Response> {
+  const session = await requireSession(request, env);
+  const raw = await readJson<unknown>(request);
+  const maxItems = resourceLimit("chat_ack").max_items ?? 100;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > maxItems) {
+    throw new HttpError(400, "invalid_chat_ack", "Chat 密文确认列表不合法");
   }
-  return value;
+  const envelopeIds = [...new Set(raw.map(assertChatEnvelopeId))];
+  await enforceEdgeRate(env, "RATE_WRITE", `cid_number:${session.cid_number}:chat_mailbox_ack`);
+  await acknowledgeChatEnvelopes(env, session.cid_number, envelopeIds);
+  return jsonResponse({ ok: true });
+}
+
+function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
+  if (!value || typeof value !== "object") {
+    throw new HttpError(400, "invalid_chat_envelope_fields", "Chat 信封字段不合法");
+  }
+  const expected = [
+    "created_at_millis",
+    "envelope",
+    "envelope_id",
+    "recipient_cid_number",
+    "ttl_millis",
+  ];
+  const actual = Object.keys(value).sort();
+  if (actual.length !== expected.length || actual.some((field, index) => field !== expected[index])) {
+    throw new HttpError(400, "invalid_chat_envelope_fields", "Chat 信封字段不合法");
+  }
 }
 
 function assertPushProvider(value: unknown): PushProvider {
@@ -334,10 +383,4 @@ export function assertApnsEnvironment(
     "unexpected_apns_environment",
     "FCM 端点不得携带 APNs 环境",
   );
-}
-
-function optionalDeviceId(value: unknown): string | null {
-  return typeof value === "string" && value.length > 0
-    ? assertDeviceId(value)
-    : null;
 }

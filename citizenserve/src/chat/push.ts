@@ -31,8 +31,8 @@ export function createPushAuth(): PushAuth {
 /**
  * 发送无聊天内容的设备唤醒通知。
  *
- * Cloudflare 不保存待通知任务；未送达消息继续留在发送设备本地队列。推送载荷只
- * 告知“哪个身份(cid_number)有待发送数据”，不得加入消息文字、会话编号、附件或文件名。
+ * Cloudflare 不保存待通知任务；未确认的端到端密文只留在接收 CID 的有界临时邮箱。
+ * 推送载荷只告知“哪个身份(cid_number)有待发送数据”，不得加入消息文字、会话编号、附件或文件名。
  */
 export async function sendChatWake(
   env: Env,

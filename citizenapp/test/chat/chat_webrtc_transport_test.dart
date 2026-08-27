@@ -8,6 +8,8 @@ import 'package:citizenapp/chat/crypto/mls_boundary.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+// 中文注释：本组用例固定验证 WebRTC 只负责临时直连与附件传输，
+// Trickle ICE、重连及挂断均复用账户级 WSS，聊天 Envelope 不进入 DataChannel。
 ChatWebrtcTransport _transport(
   String tempDir,
   ChatAttachmentReceiver onAttachment,
@@ -19,16 +21,13 @@ ChatWebrtcTransport _transport(
       cloud: ChatCloudTransport(
           accountId:
               '0x5555555555555555555555555555555555555555555555555555555555555555',
+          localCidNumber: 'CN220-CTZN2-100000001-2026',
           localDeviceId: 'dev'),
+      sendSignal: ({required recipientCidNumber, required signal}) async =>
+          true,
       tempDirectory: tempDir,
       runBindingMutation: <T>(Future<T> Function() operation) => operation(),
       onAttachment: onAttachment,
-      onEnvelope: ({required senderCidNumber, required envelopeBytes}) async =>
-          const <String>[],
-      onEnvelopeStored: ({
-        required senderCidNumber,
-        required envelopeId,
-      }) async {},
       createKeyPackage: () async => throw StateError('本用例不请求 KeyPackage'),
     );
 
@@ -48,20 +47,17 @@ Map<String, dynamic> _startHeader({
 const _peerCidNumber = 'CN220-CTZN2-100000002-2026';
 
 void main() {
-  test('真机建连先收齐 ICE 候选再随 SDP 单次发送', () {
+  test('真机建连立即发送SDP并经同一WSS执行Trickle ICE', () {
     final source = File('lib/chat/transport/chat_webrtc_transport.dart')
         .readAsStringSync();
-    expect(source, contains('_setLocalDescriptionAndGatherIce'));
-    expect(source, contains('RTCIceGatheringStateComplete'));
-    expect(source, contains('_iceGatheringTimeout = Duration(seconds: 5)'));
+    expect(source, contains('_setLocalDescription'));
+    expect(source, contains('connection.onIceCandidate ='));
+    expect(source, contains("'signal_kind': 'ice'"));
+    expect(source, contains('connection.addCandidate(ice)'));
+    expect(source, contains('pendingIce'));
     expect(source, contains('_timeout = Duration(seconds: 8)'));
-    expect(source, contains("RegExp(r'^a=candidate:', multiLine: true)"));
-    expect(source, isNot(contains('connection.onIceCandidate =')));
-    expect(source, isNot(contains("'kind': 'ice'")));
-    expect(
-      source,
-      isNot(contains('Future<void>.delayed(const Duration(seconds: 8))')),
-    );
+    expect(source, isNot(contains('RTCIceGatheringStateComplete')));
+    expect(source, isNot(contains('_setLocalDescriptionAndGatherIce')));
   });
 
   test('重复 Offer 复用已生成 Answer，关闭前解绑原生回调', () {
@@ -78,23 +74,13 @@ void main() {
   test('接收端WSS不可用时立即结束协商并保留手机本地队列', () {
     final source = File('lib/chat/transport/chat_webrtc_transport.dart')
         .readAsStringSync();
-    expect(source, contains('final sent = await cloud.sendSignal'));
+    expect(source, contains('final sent = await _sendDescription'));
     expect(source, contains('if (!sent)'));
     expect(source, contains('消息保留在发送设备'));
     expect(source, contains('附件仍只保留在发送设备'));
   });
 
-  test('控制帧只允许 Envelope、落盘确认和按需 KeyPackage 精确字段', () {
-    final envelope = ChatWebrtcControlFrame.decode(jsonEncode(
-      ChatWebrtcControlFrame.envelope(const [1, 2, 3]),
-    ));
-    expect(ChatWebrtcControlFrame.envelopeBytes(envelope), const [1, 2, 3]);
-
-    final stored = ChatWebrtcControlFrame.decode(jsonEncode(
-      ChatWebrtcControlFrame.envelopeStored('env-1'),
-    ));
-    expect(stored['envelope_id'], 'env-1');
-
+  test('控制DataChannel只允许按需KeyPackage且拒绝Envelope回流', () {
     expect(
       () => ChatWebrtcControlFrame.decode(jsonEncode({
         'kind': 'envelope',
@@ -105,11 +91,30 @@ void main() {
     );
     expect(
       () => ChatWebrtcControlFrame.decode(jsonEncode({
+        'kind': 'envelope_stored',
+        'envelope_id': 'env-1',
+      })),
+      throwsFormatException,
+    );
+    expect(
+      () => ChatWebrtcControlFrame.decode(jsonEncode({
         'kind': 'message',
         'text': '禁止的明文旁路',
       })),
       throwsFormatException,
     );
+  });
+
+  test('每个PeerConnection读取短期STUN TURN并统一扁平connection_id', () {
+    final source = File('lib/chat/transport/chat_webrtc_transport.dart')
+        .readAsStringSync();
+    expect(source, contains('cloud.fetchIceConfiguration()'));
+    expect(source, contains("'signal_kind': 'offer'"));
+    expect(source, contains("'signal_kind': 'ice_restart'"));
+    expect(source, contains('connection.restartIce()'));
+    expect(source, isNot(contains("'connection_kind'")));
+    expect(source, isNot(contains("'transfer_id'")));
+    expect(source, isNot(contains('stun.cloudflare.com')));
   });
 
   test('KeyPackage 控制帧设备间往返并严格拒绝云端库存字段', () {
@@ -245,14 +250,14 @@ void main() {
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-reject',
+      connectionId: 't-reject',
       message: RTCDataChannelMessage(jsonEncode(_startHeader(byteSize: 100))),
       sendAck: ack,
     );
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-reject',
+      connectionId: 't-reject',
       message: RTCDataChannelMessage(jsonEncode({'kind': 'attachment_end'})),
       sendAck: ack,
     );
@@ -285,14 +290,14 @@ void main() {
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-ok',
+      connectionId: 't-ok',
       message: RTCDataChannelMessage(jsonEncode(_startHeader(byteSize: 5))),
       sendAck: ack,
     );
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-ok',
+      connectionId: 't-ok',
       message: RTCDataChannelMessage.fromBinary(
         Uint8List.fromList(const [104, 101, 108, 108, 111]), // "hello"
       ),
@@ -301,7 +306,7 @@ void main() {
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-ok',
+      connectionId: 't-ok',
       message: RTCDataChannelMessage(jsonEncode({'kind': 'attachment_end'})),
       sendAck: ack,
     );
@@ -357,7 +362,7 @@ void main() {
     await transport.handleIncomingFrame(
       buffer: buffer,
       peerCidNumber: _peerCidNumber,
-      transferId: 't-resume',
+      connectionId: 't-resume',
       message: RTCDataChannelMessage(jsonEncode(_startHeader(byteSize: 10))),
       sendAck: () async {},
       sendResume: (offset) async => reported = offset,

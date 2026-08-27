@@ -43,6 +43,7 @@ typedef ChatLoginSigner = Future<String> Function({
 
 typedef ChatCloudTransportFactory = ChatCloudTransport Function({
   required String accountId,
+  required String localCidNumber,
   required String localDeviceId,
   Uri? serviceBaseUrl,
   String? sessionToken,
@@ -279,10 +280,18 @@ class _ChatRealtimeHub {
   final Set<_ChatRealtimeListener> listeners = <_ChatRealtimeListener>{};
   Future<bool>? connecting;
   Future<void> Function()? stopPhysical;
+  ChatCloudTransport? transport;
   Timer? reconnectTimer;
   int reconnectAttempt = 0;
   bool retryOutgoingOnConnect = false;
   bool closed = false;
+}
+
+class _ChatRealtimePhysical {
+  const _ChatRealtimePhysical({required this.stop, required this.transport});
+
+  final Future<void> Function() stop;
+  final ChatCloudTransport transport;
 }
 
 /// FlutterFire Android 后台消息运行在独立 Dart isolate，静态集合无法跨
@@ -1594,6 +1603,10 @@ class ChatRuntime {
   /// 正在经 WebRTC 传输字节的媒体 attachmentId(初始发送或补发中),用于去重:
   /// peer_ready 触发的补发不得对在途媒体再整块重传。
   final Set<String> _mediaBytesInFlight = {};
+
+  /// WSS 在线帧与连接后补拉可能命中同一密文；进程内先按既有 envelope_id 去重，
+  /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
+  final Set<String> _mailboxEnvelopeReceipts = <String>{};
 
   /// 同一账户/设备只允许一条初始化链。成功上下文复用到 session 临近过期；
   /// 失败只释放命中的 future，不得误删后来创建的新初始化。
@@ -4196,7 +4209,7 @@ class ChatRuntime {
           _scheduleOutboundDelivery(context, conversationId, delivery),
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
-          transport: context.webrtc,
+          transport: context.transport,
           envelope: envelope,
           recipientCidNumber: recipientCidNumber,
         );
@@ -4567,7 +4580,7 @@ class ChatRuntime {
     );
     var sent = 0;
     for (final item in queued) {
-      final result = await context.webrtc.sendEncryptedEnvelope(
+      final result = await context.transport.sendEncryptedEnvelope(
         envelopeId: item.envelopeId,
         envelopeBytes: item.envelopeBytes,
         recipientCidNumber: item.recipientCidNumber,
@@ -4841,7 +4854,7 @@ class ChatRuntime {
       ownerCidNumber: hub.account.cidNumber,
     );
     _realtimeSessions.add(session);
-    final stop = await _startRealtimeSync(
+    final physical = await _startRealtimeSync(
       session: session,
       account: hub.account,
       onNotice: () => _notifyRealtimeHub(hub, disconnected: false),
@@ -4851,13 +4864,16 @@ class ChatRuntime {
         scheduleMicrotask(() => unawaited(_handleRealtimeHubDisconnected(hub)));
       },
       retryOutgoingOnConnect: hub.retryOutgoingOnConnect,
+      onTransportChanged: (transport) => hub.transport = transport,
     );
-    if (stop == null) return false;
+    if (physical == null) return false;
     if (hub.closed || hub.listeners.isEmpty) {
-      await stop();
+      hub.transport = null;
+      await physical.stop();
       return false;
     }
-    hub.stopPhysical = stop;
+    hub.transport = physical.transport;
+    hub.stopPhysical = physical.stop;
     hub.reconnectAttempt = 0;
     return true;
   }
@@ -4893,6 +4909,7 @@ class ChatRuntime {
     }
     final stop = hub.stopPhysical;
     hub.stopPhysical = null;
+    hub.transport = null;
     if (stop != null) {
       try {
         await stop();
@@ -4941,15 +4958,17 @@ class ChatRuntime {
     }
     final stop = hub.stopPhysical;
     hub.stopPhysical = null;
+    hub.transport = null;
     if (stop != null) await stop();
   }
 
-  Future<Future<void> Function()?> _startRealtimeSync({
+  Future<_ChatRealtimePhysical?> _startRealtimeSync({
     required _ChatRealtimeSession session,
     required _ChatAccount account,
     required Future<void> Function() onNotice,
     required Future<void> Function()? onDisconnected,
     required bool retryOutgoingOnConnect,
+    required void Function(ChatCloudTransport? transport) onTransportChanged,
   }) async {
     var handedOff = false;
     ChatCloudTransport? looseSignalTransport;
@@ -4963,21 +4982,28 @@ class ChatRuntime {
         return session.runCallback(() async {
           try {
             await _runRuntimeOperation(() async {
-              if (message['type'] != 'citizen_chat_signal') return;
-              // Worker 只能转发无内容建连信令；Envelope、KeyPackage 和落盘确认
-              // 都在 WebRTC DataChannel 内处理，禁止在此恢复云端消息分支。
-              final senderCidNumber = message['sender_cid_number'];
-              final signal = message['signal'];
-              if (senderCidNumber is! String ||
-                  signal is! Map<String, dynamic>) {
-                return;
-              }
-              // 只有收到真实建连信令后才打开ChatIsar、MLS和WebRTC完整上下文。
-              final context = await _readyContext(account);
-              if (signal['kind'] == 'peer_ready') {
-                await retryOutgoing(recipientCidNumber: senderCidNumber);
-              } else {
-                await context.webrtc.handleSignal(senderCidNumber, signal);
+              final type = message['type'];
+              if (type == 'citizen_chat_signal') {
+                final senderCidNumber = message['sender_cid_number'];
+                if (senderCidNumber is! String || senderCidNumber.isEmpty) {
+                  return;
+                }
+                final context = await _readyContext(account);
+                if (message['signal_kind'] == 'peer_ready') {
+                  await retryOutgoing(recipientCidNumber: senderCidNumber);
+                } else {
+                  await context.webrtc.handleSignal(senderCidNumber, message);
+                }
+              } else if (type == 'citizen_chat_envelope') {
+                await _consumeMailboxEnvelope(
+                  account,
+                  signalContext.transport,
+                  ChatMailboxEnvelope.fromJson(
+                    message,
+                    localCidNumber: account.cidNumber,
+                    realtime: true,
+                  ),
+                );
               }
             });
           } catch (_) {
@@ -5018,8 +5044,15 @@ class ChatRuntime {
         }
       });
       looseSignalTransport = null;
+      onTransportChanged(signalTransport);
       _ensureActive();
       session.ensureOpen();
+
+      // 先建立 WSS 再补拉，避免 GET 与建连之间产生离线窗口；在线帧和补拉重复由
+      // envelope_id 去重，且只有本机 OpenMLS/数据库事务成功后才确认删除云端密文。
+      for (final envelope in await signalTransport.fetchMailbox()) {
+        await _consumeMailboxEnvelope(account, signalTransport, envelope);
+      }
 
       Future<void> notifySenderReadyFromCallback(String sender) async {
         await session.runCallback(() async {
@@ -5074,11 +5107,15 @@ class ChatRuntime {
       _ensureActive();
       session.ensureOpen();
       handedOff = true;
-      return () => _disposeRealtimeSession(session);
+      return _ChatRealtimePhysical(
+        stop: () => _disposeRealtimeSession(session),
+        transport: signalTransport,
+      );
     } finally {
       looseSignalTransport?.dispose();
       session.markInitializationDone();
       if (!handedOff) {
+        onTransportChanged(null);
         await _disposeRealtimeSession(session);
       }
     }
@@ -5111,6 +5148,59 @@ class ChatRuntime {
     );
   }
 
+  Future<bool> _sendRealtimeSignal(
+    _ChatAccount account, {
+    required String recipientCidNumber,
+    required Map<String, Object?> signal,
+  }) async {
+    final hub = _realtimeHubs[account.accountId];
+    if (hub == null ||
+        hub.closed ||
+        hub.account.cidNumber != account.cidNumber ||
+        hub.account.bindingRevision != account.bindingRevision) {
+      throw StateError('Chat 账户级 WSS 尚未启动');
+    }
+    if (hub.transport == null && hub.listeners.isNotEmpty) {
+      await _ensureRealtimeHubConnected(hub);
+    }
+    final transport = hub.transport;
+    if (transport == null) throw StateError('Chat 账户级 WSS 尚未连接');
+    return transport.sendSignal(
+      recipientCidNumber: recipientCidNumber,
+      signal: signal,
+    );
+  }
+
+  Future<void> _consumeMailboxEnvelope(
+    _ChatAccount account,
+    ChatCloudTransport transport,
+    ChatMailboxEnvelope item,
+  ) async {
+    final receiptKey = '${account.accountId}|${item.envelopeId}';
+    if (!_mailboxEnvelopeReceipts.contains(receiptKey)) {
+      try {
+        final context = await _readyContext(account);
+        await _runBindingFileMutation(
+          context.bindingToken,
+          () => _processMailboxEnvelope(
+            context,
+            item.senderCidNumber,
+            item.envelopeBytes,
+          ),
+        );
+        _mailboxEnvelopeReceipts.add(receiptKey);
+        // 单邮箱最多 1000 条；保留四倍窗口足以覆盖 ACK 瞬时失败，同时限制内存。
+        while (_mailboxEnvelopeReceipts.length > 4000) {
+          _mailboxEnvelopeReceipts.remove(_mailboxEnvelopeReceipts.first);
+        }
+      } catch (_) {
+        _mailboxEnvelopeReceipts.remove(receiptKey);
+        rethrow;
+      }
+    }
+    await transport.acknowledgeMailbox(<String>[item.envelopeId]);
+  }
+
   /// 任一端收到无内容唤醒，都先发送peer_ready，再检查本机待发队列。
   Future<void> _convergeWithWakeSender(
     _ChatAccountContext context,
@@ -5120,9 +5210,10 @@ class ChatRuntime {
     try {
       await _runBindingFileMutation(
         context.bindingToken,
-        () => context.transport.sendSignal(
+        () => _sendRealtimeSignal(
+          context.account,
           recipientCidNumber: senderCidNumber,
-          signal: const {'kind': 'peer_ready'},
+          signal: const <String, Object?>{'signal_kind': 'peer_ready'},
         ),
       );
     } catch (_) {
@@ -5275,6 +5366,12 @@ class ChatRuntime {
         accountId: account.accountId,
         localCidNumber: account.cidNumber,
         cloud: transport,
+        sendSignal: ({required recipientCidNumber, required signal}) =>
+            _sendRealtimeSignal(
+          account,
+          recipientCidNumber: recipientCidNumber,
+          signal: signal,
+        ),
         tempDirectory: tempDirectory,
         runBindingMutation: <T>(Future<T> Function() operation) =>
             _runBindingFileMutation(bindingToken, operation),
@@ -5296,24 +5393,6 @@ class ChatRuntime {
           contentType: contentType,
           filePath: filePath,
           byteSize: byteSize,
-        ),
-        onEnvelope: ({
-          required senderCidNumber,
-          required envelopeBytes,
-        }) =>
-            _processDirectEnvelope(
-          context,
-          senderCidNumber,
-          envelopeBytes,
-        ),
-        onEnvelopeStored: ({
-          required senderCidNumber,
-          required envelopeId,
-        }) =>
-            _acknowledgeDirectEnvelope(
-          context,
-          senderCidNumber,
-          envelopeId,
         ),
         createKeyPackage: () => _createDirectKeyPackage(context),
       );
@@ -5368,12 +5447,14 @@ class ChatRuntime {
     }
     final transport = _cloudTransportFactory?.call(
           accountId: account.accountId,
+          localCidNumber: account.cidNumber,
           localDeviceId: identity.deviceId,
           serviceBaseUrl: _squareApiClient.baseUri,
           sessionToken: session.sessionToken,
         ) ??
         ChatCloudTransport(
           accountId: account.accountId,
+          localCidNumber: account.cidNumber,
           localDeviceId: identity.deviceId,
           serviceBaseUrl: _squareApiClient.baseUri,
           sessionToken: session.sessionToken,
@@ -5579,7 +5660,7 @@ class ChatRuntime {
           : (conversationId, delivery) {},
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
-          transport: context.webrtc,
+          transport: context.transport,
           envelope: envelope,
           recipientCidNumber: recipientCidNumber,
         );
@@ -5587,9 +5668,8 @@ class ChatRuntime {
     );
   }
 
-  /// WebRTC 控制通道的唯一入站 Envelope 边界。校验发件/收件 CID 后才进入
-  /// OpenMLS；成功落盘的应用 Envelope ID 返回给传输层，由同一 DataChannel 回确认。
-  Future<List<String>> _processDirectEnvelope(
+  /// CitizenServe 邮箱的唯一入站 Envelope 边界；服务端路由身份与密文内身份必须一致。
+  Future<List<String>> _processMailboxEnvelope(
     _ChatAccountContext context,
     String senderCidNumber,
     List<int> envelopeBytes,
@@ -5597,7 +5677,7 @@ class ChatRuntime {
     final envelope = ChatEnvelope.fromBuffer(envelopeBytes);
     if (envelope.senderCidNumber != senderCidNumber ||
         envelope.recipientCidNumber != context.account.cidNumber) {
-      throw const FormatException('WebRTC 对端 CID 与 Chat Envelope 不一致');
+      throw const FormatException('Chat 邮箱路由与 Envelope 身份不一致');
     }
     final isApplication = envelope.mlsMessageKind ==
         MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION;
@@ -5610,7 +5690,7 @@ class ChatRuntime {
         );
     final accepted = <ChatEnvelope>[];
     if (alreadyStored) {
-      // 网络按至少一次投递；重复 Envelope 不得再次推进 MLS，只重发本机落盘确认。
+      // 邮箱按至少一次投递；重复应用 Envelope 不得再次推进 MLS。
       accepted.add(envelope);
     } else if (envelope.conversationId.startsWith('grp:')) {
       accepted.addAll(
@@ -5631,24 +5711,6 @@ class ChatRuntime {
             MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION)
         .map((item) => item.envelopeId)
         .toList(growable: false);
-  }
-
-  Future<void> _acknowledgeDirectEnvelope(
-    _ChatAccountContext context,
-    String senderCidNumber,
-    String envelopeId,
-  ) async {
-    final acknowledged = await _store.acknowledgeStoredEnvelope(
-      bindingToken: context.bindingToken,
-      ownerCidNumber: context.account.cidNumber,
-      envelopeId: envelopeId,
-      recipientCidNumber: senderCidNumber,
-    );
-    if (!acknowledged) return;
-    final hub = _realtimeHubs[context.account.accountId];
-    if (hub != null && !hub.closed) {
-      await _notifyRealtimeHub(hub, disconnected: false);
-    }
   }
 
   Future<MlsKeyPackage> _createDirectKeyPackage(

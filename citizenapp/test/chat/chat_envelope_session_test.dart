@@ -84,7 +84,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.queued,
       ),
     );
@@ -115,28 +115,7 @@ void main() {
         bindingToken: bindingToken,
       );
     }
-    final awaitingStoredConfirmation = await store.readQueuedEnvelopes(
-      ownerCidNumber: _ownerCidNumber,
-      bindingToken: bindingToken,
-    );
-    expect(awaitingStoredConfirmation, hasLength(1));
-    expect(
-      imMlsWireMessageFromEnvelope(
-        ChatEnvelope.fromBuffer(
-          awaitingStoredConfirmation.single.envelopeBytes,
-        ),
-      ).messageKind,
-      MlsMessageKind.application,
-    );
-    expect(
-      await store.acknowledgeStoredEnvelope(
-        ownerCidNumber: _ownerCidNumber,
-        envelopeId: awaitingStoredConfirmation.single.envelopeId,
-        recipientCidNumber: _bobCidNumber,
-        bindingToken: bindingToken,
-      ),
-      isTrue,
-    );
+    // 邮箱写入成功后全部 Envelope 都已具备云端耐久副本，本机重试队列清零。
     expect(await store.outboundQueueCount(_ownerCidNumber), 0);
   });
 
@@ -159,7 +138,7 @@ void main() {
         deliveryCalls += 1;
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },
@@ -214,7 +193,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.queued,
       ),
     );
@@ -414,7 +393,7 @@ void main() {
         toBob.add(List<int>.from(bytes));
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },
@@ -430,7 +409,7 @@ void main() {
         toAlice.add(List<int>.from(bytes));
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },
@@ -512,7 +491,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
     );
@@ -601,7 +580,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
     );
@@ -683,7 +662,7 @@ void main() {
         await releaseDelivery.future;
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },
@@ -763,7 +742,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
     );
@@ -816,7 +795,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
     );
@@ -870,7 +849,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
     );
@@ -925,7 +904,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.queued,
       ),
     );
@@ -989,7 +968,7 @@ void main() {
       bindingToken: bindingToken,
       deliverer: (envelope, _, __) async => ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.queued,
       ),
     );

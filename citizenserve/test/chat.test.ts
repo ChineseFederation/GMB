@@ -1,13 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  acknowledgeChatMailbox,
   assertApnsEnvironment,
+  fetchChatEnvelopes,
+  issueChatIce,
   openChatSignal,
   registerChatPushEndpoint,
-  submitChatSignal,
+  submitChatEnvelope,
 } from "../src/chat/service";
+import { assertChatSignalFrame, CHAT_SIGNAL_TYPE } from "../src/chat/codec";
 import {
+  CHAT_MAILBOX_FETCH_BATCH,
+  CHAT_MAILBOX_MAX_BYTES,
+  CHAT_MAILBOX_MAX_MESSAGES,
+  CHAT_WS_ENVELOPE_TYPE,
   CHAT_WS_PONG_TYPE,
   CHAT_WS_READY_TYPE,
+  CHAT_WS_SIGNAL_RESULT_TYPE,
+  relayAuthenticatedChatSignal,
   relayChatSignal,
 } from "../src/chat/realtime";
 import { apnsHost, sendStorageCleanupAlert } from "../src/chat/push";
@@ -17,6 +27,8 @@ const ACCOUNT_ID =
   "0x1111111111111111111111111111111111111111111111111111111111111111";
 const SENDER_CID = "CN220-CTZN2-198805200-2026";
 const RECIPIENT_CID = "CN220-CTZN2-199001010-2026";
+
+afterEach(() => vi.unstubAllGlobals());
 
 function projectedUser(cidNumber: string): UserRow {
   return {
@@ -111,12 +123,23 @@ function fakeEnv(
     DB: db as unknown as D1Database,
     SQUARE_CACHE: new SessionKv() as unknown as KVNamespace,
     RATE_AUTH: allowRate(),
+    RATE_WRITE: allowRate(),
+    RATE_READ: allowRate(),
     CHAT: {
       getByName: () => ({
         fetch: async (request: Request) => {
           if (new URL(request.url).pathname === "/__signal") {
             onSignal?.(await request.json());
             return Response.json({ ok: true, sent });
+          }
+          if (new URL(request.url).pathname === "/__message") {
+            return Response.json({ ok: true, sent });
+          }
+          if (new URL(request.url).pathname === "/__messages") {
+            return Response.json([]);
+          }
+          if (new URL(request.url).pathname === "/__ack") {
+            return Response.json({ ok: true });
           }
           return Response.json({ ok: true, routed: true });
         },
@@ -131,17 +154,21 @@ function allowRate(): RateLimit {
   } as RateLimit;
 }
 
-function signalRequest(signal: Record<string, unknown>): Request {
-  return new Request("https://worker.test/chat/signals", {
+// 中文注释：测试请求只承载序列化密文和既有路由字段，禁止夹带正文或另造操作编号。
+function envelopeRequest(extra: Record<string, unknown> = {}): Request {
+  return new Request("https://worker.test/chat/messages", {
     method: "POST",
     headers: {
       authorization: "Bearer test-session",
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      sender_device_id: "alice-phone",
+      envelope_id: "envelope-12345678",
       recipient_cid_number: RECIPIENT_CID,
-      signal,
+      envelope: "AQID",
+      created_at_millis: Date.now(),
+      ttl_millis: 60_000,
+      ...extra,
     }),
   });
 }
@@ -211,72 +238,124 @@ describe("device-only Chat control plane", () => {
     )).rejects.toMatchObject({ code: "push_endpoint_ttl_exceeded" });
   });
 
-  it("relays only a WebRTC control offer and never stores message content", async () => {
-    let relayed: unknown;
-    const response = await submitChatSignal(
-      signalRequest({
-        kind: "offer",
-        connection_kind: "control",
-        connection_id: "control-12345678",
-        sdp: "v=0\r\n",
-        sdp_type: "offer",
-      }),
-      fakeEnv(1, (payload) => {
-        relayed = payload;
-      }),
-    );
-
-    expect(await response.json()).toMatchObject({ delivery_state: "sent" });
-    expect(relayed).toMatchObject({
-      type: "citizen_chat_signal",
-      sender_cid_number: SENDER_CID,
+  it("accepts flat WSS offer and trickle ICE frames with one connection identifier", () => {
+    expect(assertChatSignalFrame({
+      type: CHAT_SIGNAL_TYPE,
       recipient_cid_number: RECIPIENT_CID,
-      signal: {
-        kind: "offer",
-        connection_kind: "control",
-        connection_id: "control-12345678",
-      },
-    });
+      signal_kind: "offer",
+      connection_id: "media-12345678",
+      sdp: "v=0\r\n",
+      sdp_type: "offer",
+    })).toMatchObject({ signal_kind: "offer", connection_id: "media-12345678" });
+    expect(assertChatSignalFrame({
+      type: CHAT_SIGNAL_TYPE,
+      recipient_cid_number: RECIPIENT_CID,
+      signal_kind: "ice",
+      connection_id: "media-12345678",
+      candidate: "candidate:1 1 udp 1 192.0.2.1 1234 typ host",
+      sdp_mid: "0",
+      sdp_mline_index: 0,
+    })).toMatchObject({ signal_kind: "ice", sdp_mline_index: 0 });
   });
 
-  it("rejects message envelopes and content fields on the signaling endpoint", async () => {
+  it("rejects legacy nested signaling and sender identity spoofing", () => {
+    expect(() => assertChatSignalFrame({
+      type: CHAT_SIGNAL_TYPE,
+      recipient_cid_number: RECIPIENT_CID,
+      signal_kind: "offer",
+      connection_id: "media-12345678",
+      sdp: "v=0\r\n",
+      sdp_type: "offer",
+      sender_cid_number: SENDER_CID,
+    })).toThrow("未授权字段");
+    expect(() => assertChatSignalFrame({
+      type: CHAT_SIGNAL_TYPE,
+      recipient_cid_number: RECIPIENT_CID,
+      signal: { kind: "peer_ready" },
+    })).toThrow("信令类型不合法");
+  });
+
+  it("stores one opaque encrypted envelope and treats durable storage as success", async () => {
+    const response = await submitChatEnvelope(envelopeRequest(), fakeEnv(0));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ ok: true });
+  });
+
+  it("rejects plaintext or undeclared fields on the encrypted mailbox endpoint", async () => {
     await expect(
-      submitChatSignal(
-        signalRequest({
-          kind: "offer",
-          connection_kind: "control",
-          connection_id: "control-12345678",
-          sdp: "v=0\r\n",
-          sdp_type: "offer",
-          envelope: "AQID",
-        }),
-        fakeEnv(),
-      ),
-    ).rejects.toMatchObject({ code: "invalid_chat_signal_fields" });
+      submitChatEnvelope(envelopeRequest({ text: "forbidden" }), fakeEnv()),
+    ).rejects.toMatchObject({ code: "invalid_chat_envelope_fields" });
   });
 
-  it("rejects trickle ICE because candidates must be embedded in the SDP", async () => {
-    await expect(
-      submitChatSignal(
-        signalRequest({
-          kind: "ice",
-          connection_kind: "control",
-          connection_id: "control-12345678",
-          candidate: "candidate:1 1 udp 1 192.0.2.1 1234 typ host",
-          sdp_mid: "0",
-          sdp_mline_index: 0,
-        }),
-        fakeEnv(),
-      ),
-    ).rejects.toMatchObject({ code: "invalid_chat_signal_kind" });
-  });
-
-  it("reports unavailable without pretending to queue an undelivered signal", async () => {
-    const response = await submitChatSignal(
-      signalRequest({ kind: "peer_ready" }),
-      fakeEnv(0),
+  it("fetches and acknowledges encrypted envelopes in bounded batches", async () => {
+    const fetched = await fetchChatEnvelopes(
+      new Request("https://worker.test/chat/messages", {
+        headers: { authorization: "Bearer test-session" },
+      }),
+      fakeEnv(),
     );
-    expect(await response.json()).toMatchObject({ delivery_state: "unavailable" });
+    expect(await fetched.json()).toEqual([]);
+    const acknowledged = await acknowledgeChatMailbox(
+      new Request("https://worker.test/chat/messages/ack", {
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-session",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(["envelope-12345678", "envelope-12345678"]),
+      }),
+      fakeEnv(),
+    );
+    expect(await acknowledged.json()).toEqual({ ok: true });
+  });
+
+  it("reports unavailable without storing an undelivered WSS signal", async () => {
+    const state = await relayAuthenticatedChatSignal(
+      fakeEnv(0),
+      { cid_number: SENDER_CID, device_id: "alice-phone" },
+      assertChatSignalFrame({
+        type: CHAT_SIGNAL_TYPE,
+        recipient_cid_number: RECIPIENT_CID,
+        signal_kind: "peer_ready",
+      }),
+    );
+    expect(state).toBe("unavailable");
+  });
+
+  it("returns only normalized short-lived Cloudflare ICE credentials", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      iceServers: [
+        { urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"] },
+        {
+          urls: [
+            "turn:turn.cloudflare.com:3478?transport=udp",
+            "turns:turn.cloudflare.com:443?transport=tcp",
+          ],
+          username: "temporary-username",
+          credential: "temporary-credential",
+        },
+      ],
+    }), { status: 201 })));
+    const env = fakeEnv();
+    env.TURN_KEY_ID = "turn-key-12345678";
+    env.TURN_KEY_API_TOKEN = "server-only-token";
+    const response = await issueChatIce(new Request("https://worker.test/chat/ice", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer test-session",
+        "content-type": "application/json",
+      },
+      body: "{}",
+    }), env);
+    expect(await response.json()).toEqual({
+      stun_urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"],
+      turn_urls: [
+        "turn:turn.cloudflare.com:3478?transport=udp",
+        "turns:turn.cloudflare.com:443?transport=tcp",
+      ],
+      turn_username: "temporary-username",
+      turn_credential: "temporary-credential",
+    });
   });
 
   it("routes WSS signal connections from the CID session without a push registration gate", async () => {
@@ -304,12 +383,12 @@ describe("device-only Chat control plane", () => {
     } as unknown as DurableObjectNamespace;
 
     const sent = await relayChatSignal(env, {
-      type: "citizen_chat_signal",
+      type: CHAT_SIGNAL_TYPE,
       sender_cid_number: SENDER_CID,
       recipient_cid_number: RECIPIENT_CID,
       recipient_device_id: null,
       sender_device_id: "alice-phone",
-      signal: { kind: "peer_ready" },
+      signal_kind: "peer_ready",
     });
     expect(sent).toBe(1);
     expect(routedName).toBe(RECIPIENT_CID);
@@ -318,6 +397,11 @@ describe("device-only Chat control plane", () => {
   it("locks the unversioned WebSocket control message types", () => {
     expect(CHAT_WS_READY_TYPE).toBe("citizen_chat_ws_ready");
     expect(CHAT_WS_PONG_TYPE).toBe("citizen_chat_ws_pong");
+    expect(CHAT_WS_ENVELOPE_TYPE).toBe("citizen_chat_envelope");
+    expect(CHAT_WS_SIGNAL_RESULT_TYPE).toBe("citizen_chat_signal_result");
+    expect(CHAT_MAILBOX_MAX_MESSAGES).toBe(1000);
+    expect(CHAT_MAILBOX_MAX_BYTES).toBe(8 * 1024 * 1024);
+    expect(CHAT_MAILBOX_FETCH_BATCH).toBe(100);
   });
 
   it("storage cleanup alert only targets current CID wake endpoints", async () => {

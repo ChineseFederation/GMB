@@ -9,9 +9,12 @@ import { constitutionRoute } from "./chain/constitution";
 import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
 import { deleteContactRoute, listContactsRoute, putContactRoute } from "./contacts/service";
 import {
+  acknowledgeChatMailbox,
+  fetchChatEnvelopes,
+  issueChatIce,
   openChatSignal,
   registerChatPushEndpoint,
-  submitChatSignal,
+  submitChatEnvelope,
 } from "./chat/service";
 import { feedRoute } from "./feeds/service";
 import { followRoute, setFollowNotifyRoute, unfollowRoute } from "./feeds/follows";
@@ -219,9 +222,19 @@ export async function routeRequest(
   if (request.method === "PUT" && path === "/chat/push-endpoint") {
     return registerChatPushEndpoint(request, env);
   }
-  if (path === "/chat/signals") {
-    if (request.method === "POST") return submitChatSignal(request, env);
-    if (request.method === "GET") return openChatSignal(request, env);
+  if (request.method === "GET" && path === "/chat/signals") {
+    return openChatSignal(request, env);
+  }
+  // WebRTC 短期 ICE 凭证独立于 WSS 信令；长期 TURN Token 只在 Worker Secret 中使用。
+  if (request.method === "POST" && path === "/chat/ice") {
+    return issueChatIce(request, env);
+  }
+  if (path === "/chat/messages") {
+    if (request.method === "POST") return submitChatEnvelope(request, env);
+    if (request.method === "GET") return fetchChatEnvelopes(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/messages/ack") {
+    return acknowledgeChatMailbox(request, env);
   }
   throw new HttpError(404, "route_not_found", "广场接口不存在");
 }

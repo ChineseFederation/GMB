@@ -151,7 +151,7 @@ Future<ChatDeliveryResult> _okDeliverer(
 ) async =>
     ChatDeliveryResult(
       envelopeId: envelope.envelopeId,
-      transportType: ChatTransportType.webrtc,
+      transportType: ChatTransportType.mailbox,
       state: ChatMessageDeliveryState.sent,
     );
 
@@ -186,7 +186,7 @@ void main() {
       deliveredCidNumbers.add(recipientCidNumber);
       return ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       );
     }
@@ -297,7 +297,7 @@ void main() {
     ) async =>
         ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
     final flow = ChatGroupFlow(
@@ -344,7 +344,7 @@ void main() {
       deliverer: (envelope, bytes, recipientCidNumber) async =>
           ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
       cidNumber: _cidA,
@@ -398,7 +398,7 @@ void main() {
       deliverer: (envelope, bytes, recipientCidNumber) async =>
           ChatDeliveryResult(
         envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.webrtc,
+        transportType: ChatTransportType.mailbox,
         state: ChatMessageDeliveryState.sent,
       ),
       cidNumber: _cidB,
@@ -452,7 +452,7 @@ void main() {
         delivered.add(envelope);
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },
@@ -569,7 +569,7 @@ void main() {
           if (!blockMediaDelivery) {
             return ChatDeliveryResult(
               envelopeId: envelope.envelopeId,
-              transportType: ChatTransportType.webrtc,
+              transportType: ChatTransportType.mailbox,
               state: ChatMessageDeliveryState.sent,
             );
           }
@@ -578,7 +578,7 @@ void main() {
           await releaseDelivery.future;
           return ChatDeliveryResult(
             envelopeId: envelope.envelopeId,
-            transportType: ChatTransportType.webrtc,
+            transportType: ChatTransportType.mailbox,
             state: ChatMessageDeliveryState.sent,
           );
         },

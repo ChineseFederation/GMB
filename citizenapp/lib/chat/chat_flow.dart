@@ -12,6 +12,8 @@ import 'storage/chat_store.dart';
 import 'transport/chat_transport.dart';
 
 /// 投递一个密文 Envelope。[recipientCidNumber] 是收件人唯一身份主键和路由键。
+import '../log/app_log.dart';
+
 typedef ChatEnvelopeDeliverer = Future<ChatDeliveryResult> Function(
   ChatEnvelope envelope,
   List<int> envelopeBytes,
@@ -423,6 +425,10 @@ class ChatFlow {
         );
       }
       queued.add((envelope: envelope, envelopeBytes: envelopeBytes));
+      AppLog.d(
+        '[ChatTrace] envelope.queued id=${envelope.envelopeId} '
+        'wire=${wireMessage.messageKind.name} peer=$recipientCidNumber',
+      );
       index += 1;
     }
     if (applicationStored) {
@@ -432,17 +438,31 @@ class ChatFlow {
     Future<List<ChatDeliveryResult>> deliverQueued() async {
       final results = <ChatDeliveryResult>[];
       for (final item in queued) {
-        final result = await _deliverer(
-          item.envelope,
-          item.envelopeBytes,
-          recipientCidNumber,
-        );
+        late final ChatDeliveryResult result;
+        try {
+          result = await _deliverer(
+            item.envelope,
+            item.envelopeBytes,
+            recipientCidNumber,
+          );
+        } on Object catch (error) {
+          AppLog.d(
+            '[ChatTrace] envelope.delivery_failed '
+            'id=${item.envelope.envelopeId} code=${_safeTraceError(error)}',
+          );
+          rethrow;
+        }
         await _store.markOutgoingDelivery(
           bindingToken: _bindingToken,
           ownerCidNumber: _ownerCidNumber,
           envelopeId: item.envelope.envelopeId,
           state: result.state,
           errorMessage: result.errorMessage,
+        );
+        AppLog.d(
+          '[ChatTrace] envelope.delivery id=${item.envelope.envelopeId} '
+          'transport=${result.transportType.name} state=${result.state.name} '
+          'code=${result.errorMessage ?? '-'}',
         );
         results.add(result);
       }
@@ -465,6 +485,10 @@ class ChatFlow {
     List<int> envelopeBytes,
   ) async {
     final envelope = ChatEnvelope.fromBuffer(envelopeBytes);
+    AppLog.d(
+      '[ChatTrace] envelope.incoming id=${envelope.envelopeId} '
+      'sender=${envelope.senderCidNumber}',
+    );
     final wireMessage = imMlsWireMessageFromEnvelope(envelope);
     try {
       final inbound = await _crypto.processIncoming(wireMessage);
@@ -497,6 +521,10 @@ class ChatFlow {
         envelopeBytes: envelopeBytes,
         messageKind: ChatPayloadCodec.decode(plaintext).kind,
         plaintext: plaintext,
+      );
+      AppLog.d(
+        '[ChatTrace] envelope.received id=${envelope.envelopeId} '
+        'kind=${ChatPayloadCodec.decode(plaintext).kind.name}',
       );
       return ChatIncomingProcessResult(
         envelopeId: envelope.envelopeId,
@@ -710,6 +738,14 @@ class ChatFlow {
       filePath: plain.path,
     );
   }
+}
+
+/// 只允许稳定服务端错误码进入诊断日志；其他异常仅记录类型，避免泄漏响应正文。
+String _safeTraceError(Object error) {
+  final value = error.toString();
+  return RegExp(r'^[a-z0-9_]{1,64}$').hasMatch(value)
+      ? value
+      : error.runtimeType.toString();
 }
 
 String _newEnvelopeId(String conversationId, int millis, int index) {

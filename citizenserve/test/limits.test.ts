@@ -60,15 +60,15 @@ describe('Cloudflare 统一资源限制', () => {
   });
 
   it('拒绝没有 Content-Length 或声明超限的写请求', () => {
-    expect(() => assertRequestBodyLimit(new Request('https://worker.test/chat/signals', {
+    expect(() => assertRequestBodyLimit(new Request('https://worker.test/chat/ice', {
       method: 'POST',
       body: '{}',
-    }), '/chat/signals')).toThrow(expect.objectContaining({ code: 'content_length_required' }));
+    }), '/chat/ice')).toThrow(expect.objectContaining({ code: 'content_length_required' }));
 
-    expect(() => assertRequestBodyLimit(new Request('https://worker.test/chat/signals', {
+    expect(() => assertRequestBodyLimit(new Request('https://worker.test/chat/ice', {
       method: 'POST',
-      headers: { 'content-length': String(64 * 1024 + 1) },
-    }), '/chat/signals')).toThrow(expect.objectContaining({ code: 'request_too_large' }));
+      headers: { 'content-length': String(1024 + 1) },
+    }), '/chat/ice')).toThrow(expect.objectContaining({ code: 'request_too_large' }));
   });
 
   it('没有可信声明长度时仍在流读取阶段截断', async () => {

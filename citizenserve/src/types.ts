@@ -95,6 +95,9 @@ interface WorkerSecretsAndOptionalVars {
   // 官网「公民宪法」tab 读链文档的 KV 短缓存 TTL（秒，缺省 300）。修宪后一个 TTL 内自动刷新。
   CONSTITUTION_TTL_SECONDS?: string;
   TURNSTILE_SECRET?: string;
+  // Cloudflare TURN Key ID 是公开资源身份；API Token 是只允许服务端生成短期 ICE 凭证的密钥。
+  TURN_KEY_ID?: string;
+  TURN_KEY_API_TOKEN?: string;
   HASH_KEY?: string;
   // 本地部署控制台↔Worker 结算接口鉴权令牌，只放 Worker Secret。
   SETTLE_TOKEN?: string;
@@ -138,6 +141,21 @@ export interface SessionState {
   device_key_hash: string;
   created_at: number;
   expires_at: number;
+}
+
+/// CitizenServe 只接收序列化后的 OpenMLS ChatEnvelope 密文，不解析正文、附件或密钥。
+/// envelope_id 是协议已有的唯一幂等键；禁止再增加 operation_id 或服务端消息编号。
+export interface ChatEnvelopePayload {
+  envelope_id: string;
+  recipient_cid_number: string;
+  envelope: string;
+  created_at_millis: number;
+  ttl_millis: number;
+}
+
+/// 单个 CID 的临时密文邮箱行；sender_cid_number 由已认证 Session 注入，客户端不得伪造。
+export interface ChatMailboxItem extends ChatEnvelopePayload {
+  sender_cid_number: string;
 }
 
 export interface LoginChallengeRow {

@@ -188,7 +188,7 @@ void main() {
         relayed.add(List<int>.from(bytes));
         return ChatDeliveryResult(
           envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.webrtc,
+          transportType: ChatTransportType.mailbox,
           state: ChatMessageDeliveryState.sent,
         );
       },

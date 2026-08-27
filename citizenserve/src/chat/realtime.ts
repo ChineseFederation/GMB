@@ -1,10 +1,18 @@
 import { HttpError, jsonResponse } from '../shared/http';
 import { nowMs } from '../shared/time';
-import type { Env } from '../types';
+import type { ChatMailboxItem, Env } from '../types';
 import { readUserByCidNumber } from '../account/user_repository';
+import { resourceLimit } from '../limits/catalog';
+import {
+  assertChatSignalFrame,
+  CHAT_SIGNAL_TYPE,
+  type ChatSignalFrame,
+  type ChatSignalKind,
+} from './codec';
+import { sendChatWake } from './push';
 
 export interface ChatSignalPayload {
-  type: 'citizen_chat_signal';
+  type: typeof CHAT_SIGNAL_TYPE;
   sender_cid_number: string;
   sender_device_id: string;
   recipient_cid_number: string;
@@ -12,12 +20,32 @@ export interface ChatSignalPayload {
   /// 仅由 Worker 在投递前按 finalized 注入；客户端不得提供或决定。
   recipient_binding_revision?: number;
   recipient_binding_account_id?: string;
-  signal: Record<string, unknown>;
+  signal_kind: ChatSignalKind;
+  connection_id?: string;
+  sdp?: string;
+  sdp_type?: 'offer' | 'answer';
+  candidate?: string;
+  sdp_mid?: string;
+  sdp_mline_index?: number;
 }
 
 // WebSocket 控制消息类型由 Worker 单源导出，测试锁定精确字面值，禁止另造版本后缀。
 export const CHAT_WS_READY_TYPE = 'citizen_chat_ws_ready' as const;
 export const CHAT_WS_PONG_TYPE = 'citizen_chat_ws_pong' as const;
+export const CHAT_WS_ENVELOPE_TYPE = 'citizen_chat_envelope' as const;
+export const CHAT_WS_SIGNAL_RESULT_TYPE = 'citizen_chat_signal_result' as const;
+
+interface RoutedChatMailboxItem extends ChatMailboxItem {
+  recipient_binding_revision: number;
+  recipient_binding_account_id: string;
+}
+
+type ChatMailboxSqlRow = ChatMailboxItem & Record<string, SqlStorageValue>;
+
+interface ChatMailboxUsage extends Record<string, SqlStorageValue> {
+  message_count: number;
+  envelope_bytes: number;
+}
 
 interface ChatSocketAttachment {
   cid_number: string;
@@ -27,6 +55,8 @@ interface ChatSocketAttachment {
   connected_at: number;
   ping_window_started_at: number;
   ping_count: number;
+  signal_window_started_at: number;
+  signal_count: number;
 }
 
 const deviceTagPrefix = 'device:';
@@ -34,12 +64,18 @@ const CHAT_SOCKET_MAX_COUNT = 8;
 const CHAT_SOCKET_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const CHAT_PING_WINDOW_MS = 60 * 1000;
 const CHAT_PING_MAX_COUNT = 6;
+const CHAT_SIGNAL_WINDOW_MS = 60 * 1000;
+const CHAT_SIGNAL_MAX_COUNT = 120;
+const CHAT_ENVELOPE_LIMIT = resourceLimit('chat_envelope');
+export const CHAT_MAILBOX_MAX_MESSAGES = CHAT_ENVELOPE_LIMIT.max_count ?? 1000;
+export const CHAT_MAILBOX_MAX_BYTES = CHAT_ENVELOPE_LIMIT.max_total_bytes ?? 8 * 1024 * 1024;
+export const CHAT_MAILBOX_FETCH_BATCH = CHAT_ENVELOPE_LIMIT.max_items ?? 100;
 
 /**
- * CID 级瞬时 Chat 转发器；WebSocket 附件额外绑定 finalized 版本与当前授权账户。
+ * CID 级 Chat 实时入口与有界密文邮箱；WebSocket 附件额外绑定 finalized 版本与当前授权账户。
  *
- * Durable Object 只持有休眠 WebSocket 附件，不使用持久化 Storage。只允许 WebRTC
- * SDP/ICE/peer_ready 短暂转发；聊天内容只能经两端 DataChannel 传输。
+ * SQLite 只暂存序列化后的端到端加密 Envelope，收到设备持久化 ACK 后立即删除；
+ * WSS 使用 Cloudflare Hibernation API，空闲期间不靠定时器维持对象常驻。
  */
 export class Chat implements DurableObject {
   constructor(
@@ -47,6 +83,14 @@ export class Chat implements DurableObject {
     private readonly env: Env,
   ) {
     void this.env;
+    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_envelopes (
+      envelope_id TEXT PRIMARY KEY,
+      sender_cid_number TEXT NOT NULL,
+      recipient_cid_number TEXT NOT NULL,
+      envelope TEXT NOT NULL,
+      created_at_millis INTEGER NOT NULL,
+      ttl_millis INTEGER NOT NULL
+    )`);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -55,12 +99,81 @@ export class Chat implements DurableObject {
       const payload = (await request.json()) as ChatSignalPayload;
       return jsonResponse({ ok: true, sent: this.deliver(payload) });
     }
+    if (request.method === 'POST' && path === '/__message') {
+      const payload = (await request.json()) as RoutedChatMailboxItem;
+      this.deleteExpiredEnvelopes();
+      const existing = this.state.storage.sql.exec<ChatMailboxSqlRow>(
+        `SELECT envelope_id, sender_cid_number, recipient_cid_number, envelope,
+                created_at_millis, ttl_millis
+           FROM chat_envelopes WHERE envelope_id = ?`,
+        payload.envelope_id,
+      ).toArray()[0];
+      if (existing && !sameStoredEnvelope(existing, payload)) {
+        return jsonResponse(
+          { ok: false, error_code: 'chat_envelope_id_conflict', message: 'Chat 信封唯一标识冲突' },
+          { status: 409 },
+        );
+      }
+      if (!existing) {
+        const usage = this.state.storage.sql.exec<ChatMailboxUsage>(
+          `SELECT COUNT(*) AS message_count,
+                  COALESCE(SUM(LENGTH(envelope)), 0) AS envelope_bytes
+             FROM chat_envelopes`,
+        ).toArray()[0] ?? { message_count: 0, envelope_bytes: 0 };
+        if (
+          usage.message_count >= CHAT_MAILBOX_MAX_MESSAGES
+          || usage.envelope_bytes + payload.envelope.length > CHAT_MAILBOX_MAX_BYTES
+        ) {
+          return jsonResponse(
+            { ok: false, error_code: 'chat_mailbox_full', message: '接收方临时密文邮箱已满' },
+            { status: 429 },
+          );
+        }
+        this.state.storage.sql.exec(
+          `INSERT INTO chat_envelopes (
+             envelope_id, sender_cid_number, recipient_cid_number, envelope,
+             created_at_millis, ttl_millis
+           ) VALUES (?, ?, ?, ?, ?, ?)`,
+          payload.envelope_id,
+          payload.sender_cid_number,
+          payload.recipient_cid_number,
+          payload.envelope,
+          payload.created_at_millis,
+          payload.ttl_millis,
+        );
+      }
+      return jsonResponse({ ok: true, sent: this.deliverEnvelope(payload) });
+    }
+    if (request.method === 'GET' && path === '/__messages') {
+      this.deleteExpiredEnvelopes();
+      const rows = this.state.storage.sql.exec<ChatMailboxSqlRow>(
+        `SELECT envelope_id, sender_cid_number, recipient_cid_number, envelope,
+                created_at_millis, ttl_millis
+           FROM chat_envelopes
+          ORDER BY created_at_millis, envelope_id
+          LIMIT ?`,
+        CHAT_MAILBOX_FETCH_BATCH,
+      ).toArray();
+      return jsonResponse(rows);
+    }
+    if (request.method === 'POST' && path === '/__ack') {
+      const envelopeIds = (await request.json()) as string[];
+      if (envelopeIds.length > 0) {
+        const placeholders = envelopeIds.map(() => '?').join(', ');
+        this.state.storage.sql.exec(
+          `DELETE FROM chat_envelopes WHERE envelope_id IN (${placeholders})`,
+          ...envelopeIds,
+        );
+      }
+      return jsonResponse({ ok: true });
+    }
     if (request.method === 'POST' && path === '/__close') {
       let closed = 0;
       for (const socket of this.state.getWebSockets()) {
         socket.close(1008, 'account_deleted');
         closed += 1;
       }
+      this.state.storage.sql.exec('DELETE FROM chat_envelopes');
       return jsonResponse({ ok: true, closed });
     }
     if (request.method === 'POST' && path === '/__close_stale') {
@@ -136,6 +249,8 @@ export class Chat implements DurableObject {
       connected_at: connectedAt,
       ping_window_started_at: connectedAt,
       ping_count: 0,
+      signal_window_started_at: connectedAt,
+      signal_count: 0,
     } satisfies ChatSocketAttachment);
     this.state.acceptWebSocket(server, [deviceTag(deviceId)]);
     server.send(JSON.stringify({ type: CHAT_WS_READY_TYPE, server_time: nowMs() }));
@@ -146,7 +261,21 @@ export class Chat implements DurableObject {
     const sockets = payload.recipient_device_id
       ? this.state.getWebSockets(deviceTag(payload.recipient_device_id))
       : this.state.getWebSockets();
-    const text = JSON.stringify(payload);
+    // 路由绑定只在 Worker 内部使用；接收端只能看到发送身份和严格信令字段。
+    const text = JSON.stringify({
+      type: payload.type,
+      sender_cid_number: payload.sender_cid_number,
+      sender_device_id: payload.sender_device_id,
+      signal_kind: payload.signal_kind,
+      ...(payload.connection_id === undefined ? {} : { connection_id: payload.connection_id }),
+      ...(payload.sdp === undefined ? {} : { sdp: payload.sdp }),
+      ...(payload.sdp_type === undefined ? {} : { sdp_type: payload.sdp_type }),
+      ...(payload.candidate === undefined ? {} : { candidate: payload.candidate }),
+      ...(payload.sdp_mid === undefined ? {} : { sdp_mid: payload.sdp_mid }),
+      ...(payload.sdp_mline_index === undefined
+        ? {}
+        : { sdp_mline_index: payload.sdp_mline_index }),
+    });
     let sent = 0;
     for (const socket of sockets) {
       const attachment = readAttachment(socket);
@@ -168,13 +297,46 @@ export class Chat implements DurableObject {
     return sent;
   }
 
+  private deliverEnvelope(payload: RoutedChatMailboxItem): number {
+    const text = JSON.stringify({
+      type: CHAT_WS_ENVELOPE_TYPE,
+      envelope_id: payload.envelope_id,
+      sender_cid_number: payload.sender_cid_number,
+      envelope: payload.envelope,
+      created_at_millis: payload.created_at_millis,
+      ttl_millis: payload.ttl_millis,
+    });
+    let sent = 0;
+    for (const socket of this.state.getWebSockets()) {
+      const attachment = readAttachment(socket);
+      if (
+        attachment?.cid_number !== payload.recipient_cid_number
+        || attachment.binding_revision !== payload.recipient_binding_revision
+        || attachment.account_id !== payload.recipient_binding_account_id
+      ) {
+        socket.close(1008, 'cid_binding_changed');
+        continue;
+      }
+      try {
+        socket.send(text);
+        sent += 1;
+      } catch {
+        socket.close(1011, 'send_failed');
+      }
+    }
+    return sent;
+  }
+
+  private deleteExpiredEnvelopes(): void {
+    this.state.storage.sql.exec(
+      'DELETE FROM chat_envelopes WHERE created_at_millis + ttl_millis <= ?',
+      nowMs(),
+    );
+  }
+
   async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
     if (typeof message !== 'string') {
       socket.close(1003, 'binary_not_supported');
-      return;
-    }
-    if (message !== 'ping') {
-      socket.close(1008, 'message_not_allowed');
       return;
     }
     const attachment = readAttachment(socket);
@@ -187,17 +349,51 @@ export class Chat implements DurableObject {
       socket.close(1000, 'connection_expired');
       return;
     }
-    if (current - attachment.ping_window_started_at >= CHAT_PING_WINDOW_MS) {
-      attachment.ping_window_started_at = current;
-      attachment.ping_count = 0;
+    if (message === 'ping') {
+      if (current - attachment.ping_window_started_at >= CHAT_PING_WINDOW_MS) {
+        attachment.ping_window_started_at = current;
+        attachment.ping_count = 0;
+      }
+      attachment.ping_count += 1;
+      if (attachment.ping_count > CHAT_PING_MAX_COUNT) {
+        socket.close(1008, 'ping_rate_exceeded');
+        return;
+      }
+      socket.serializeAttachment(attachment);
+      socket.send(JSON.stringify({ type: CHAT_WS_PONG_TYPE, server_time: current }));
+      return;
     }
-    attachment.ping_count += 1;
-    if (attachment.ping_count > CHAT_PING_MAX_COUNT) {
-      socket.close(1008, 'ping_rate_exceeded');
+    if (new TextEncoder().encode(message).byteLength > resourceLimit('chat_signal').max_bytes) {
+      socket.close(1009, 'signal_too_large');
+      return;
+    }
+    let frame: ChatSignalFrame;
+    try {
+      frame = assertChatSignalFrame(JSON.parse(message));
+    } catch {
+      socket.close(1008, 'signal_invalid');
+      return;
+    }
+    if (current - attachment.signal_window_started_at >= CHAT_SIGNAL_WINDOW_MS) {
+      attachment.signal_window_started_at = current;
+      attachment.signal_count = 0;
+    }
+    attachment.signal_count += 1;
+    if (attachment.signal_count > CHAT_SIGNAL_MAX_COUNT) {
+      socket.close(1008, 'signal_rate_exceeded');
       return;
     }
     socket.serializeAttachment(attachment);
-    socket.send(JSON.stringify({ type: CHAT_WS_PONG_TYPE, server_time: current }));
+    try {
+      const delivery = await relayAuthenticatedChatSignal(this.env, attachment, frame);
+      socket.send(JSON.stringify({
+        type: CHAT_WS_SIGNAL_RESULT_TYPE,
+        delivery_state: delivery,
+        ...(frame.connection_id === undefined ? {} : { connection_id: frame.connection_id }),
+      }));
+    } catch {
+      socket.close(1011, 'signal_delivery_failed');
+    }
   }
 
   async webSocketClose(socket: WebSocket) {
@@ -238,6 +434,86 @@ export async function relayChatSignal(env: Env, payload: ChatSignalPayload): Pro
   );
   if (!response.ok) return 0;
   return ((await response.json()) as { sent?: number }).sent ?? 0;
+}
+
+/** 使用已认证 socket 身份发送瞬时信令；离线只触发无内容唤醒，不保存 SDP 或 ICE。 */
+export async function relayAuthenticatedChatSignal(
+  env: Env,
+  sender: Pick<ChatSocketAttachment, 'cid_number' | 'device_id'>,
+  frame: ChatSignalFrame,
+): Promise<'sent' | 'unavailable'> {
+  const sent = await relayChatSignal(env, {
+    ...frame,
+    sender_cid_number: sender.cid_number,
+    sender_device_id: sender.device_id,
+  });
+  if (sent === 0) {
+    await sendChatWake(env, frame.recipient_cid_number, sender.cid_number).catch(() => 0);
+  }
+  return sent > 0 ? 'sent' : 'unavailable';
+}
+
+/** 按接收 CID 写入唯一有界密文邮箱，并向该 CID 当前在线设备立即推送同一密文。 */
+export async function storeChatEnvelope(env: Env, item: ChatMailboxItem): Promise<number> {
+  const binding = await readUserByCidNumber(env, item.recipient_cid_number);
+  if (!binding || binding.binding_revision <= 0 || !binding.account_id) {
+    throw new HttpError(404, 'chat_recipient_not_found', '接收方公民身份不存在');
+  }
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(item.recipient_cid_number)
+    .fetch(new Request('https://chat.internal/__message', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        ...item,
+        recipient_binding_revision: binding.binding_revision,
+        recipient_binding_account_id: binding.account_id,
+      } satisfies RoutedChatMailboxItem),
+    }));
+  const body = await response.json() as {
+    sent?: number;
+    error_code?: string;
+    message?: string;
+  };
+  if (!response.ok) {
+    throw new HttpError(
+      response.status,
+      body.error_code ?? 'chat_mailbox_write_failed',
+      body.message ?? 'Chat 临时密文写入失败',
+    );
+  }
+  return body.sent ?? 0;
+}
+
+export async function readChatMailbox(env: Env, cidNumber: string): Promise<ChatMailboxItem[]> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__messages'));
+  if (!response.ok) {
+    throw new HttpError(response.status, 'chat_mailbox_read_failed', 'Chat 临时密文读取失败');
+  }
+  const rows = await response.json();
+  if (!Array.isArray(rows)) {
+    throw new HttpError(502, 'chat_mailbox_response_invalid', 'Chat 临时密文响应不合法');
+  }
+  return rows as ChatMailboxItem[];
+}
+
+export async function acknowledgeChatEnvelopes(
+  env: Env,
+  cidNumber: string,
+  envelopeIds: string[],
+): Promise<void> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__ack', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(envelopeIds),
+    }));
+  if (!response.ok) {
+    throw new HttpError(response.status, 'chat_mailbox_ack_failed', 'Chat 临时密文确认失败');
+  }
 }
 
 /// 只关闭不属于 finalized 当前绑定三元组的连接；新账户同 CID 连接保持在线。
@@ -293,6 +569,15 @@ function deviceTag(deviceId: string): string {
   return `${deviceTagPrefix}${deviceId}`;
 }
 
+function sameStoredEnvelope(left: ChatMailboxItem, right: ChatMailboxItem): boolean {
+  return left.envelope_id === right.envelope_id
+    && left.sender_cid_number === right.sender_cid_number
+    && left.recipient_cid_number === right.recipient_cid_number
+    && left.envelope === right.envelope
+    && left.created_at_millis === right.created_at_millis
+    && left.ttl_millis === right.ttl_millis;
+}
+
 function readAttachment(socket: WebSocket): ChatSocketAttachment | null {
   const value = socket.deserializeAttachment();
   if (
@@ -305,6 +590,8 @@ function readAttachment(socket: WebSocket): ChatSocketAttachment | null {
     && typeof value.connected_at === 'number'
     && typeof value.ping_window_started_at === 'number'
     && typeof value.ping_count === 'number'
+    && typeof value.signal_window_started_at === 'number'
+    && typeof value.signal_count === 'number'
   ) {
     return value as ChatSocketAttachment;
   }

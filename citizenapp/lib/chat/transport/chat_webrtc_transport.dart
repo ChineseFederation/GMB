@@ -6,11 +6,8 @@ import 'dart:typed_data';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../chat_media_limits.dart';
-import '../chat_models.dart';
 import '../crypto/mls_boundary.dart';
-import '../proto/chat_envelope.pb.dart';
 import 'chat_cloud_transport.dart';
-import 'chat_transport.dart';
 
 typedef ChatAttachmentReceiver = Future<void> Function({
   required String senderCidNumber,
@@ -22,21 +19,14 @@ typedef ChatAttachmentReceiver = Future<void> Function({
   required int byteSize,
 });
 
-/// 直连控制通道收到 Envelope 后，由运行态完成 OpenMLS 解密与本机安全落盘。
-/// 返回已经持久化的应用 Envelope ID；传输层随后只在同一 DataChannel 回确认。
-typedef ChatDirectEnvelopeReceiver = Future<List<String>> Function({
-  required String senderCidNumber,
-  required List<int> envelopeBytes,
-});
-
-/// 对端确认 Envelope 已经写入其本机数据库；该确认只驱动本地补发队列，不是已读回执。
-typedef ChatEnvelopeStoredReceiver = Future<void> Function({
-  required String senderCidNumber,
-  required String envelopeId,
-});
-
 /// 对端通过直连请求首次会话 KeyPackage 时，运行态在本机 OpenMLS 中即时生成。
 typedef ChatDirectKeyPackageProvider = Future<MlsKeyPackage> Function();
+
+/// WebRTC 只能把扁平媒体信令交给账户级 WSS；不得自行建立第二条 socket。
+typedef ChatSignalSender = Future<bool> Function({
+  required String recipientCidNumber,
+  required Map<String, Object?> signal,
+});
 
 /// 把 WebRTC 的每个文件/网络动作纳入当前 binding 的持久 CID 临界区。
 typedef ChatWebrtcMutationRunner = Future<T> Function<T>(
@@ -92,22 +82,10 @@ class ChatReceivedAttachment {
 
 /// WebRTC 控制 DataChannel 的严格帧编解码边界。
 ///
-/// 控制帧只允许 Envelope、设备落盘确认和按需 KeyPackage 交换。字段集合必须精确，
-/// 避免把云端对象引用、任意消息元数据或兼容字段偷偷带回聊天协议。
+/// 控制帧只允许按需 KeyPackage 交换。文本、表情、贴纸和 MLS 控制 Envelope
+/// 全部使用 CitizenServe 有界密文邮箱，禁止重新进入 DataChannel。
 class ChatWebrtcControlFrame {
   const ChatWebrtcControlFrame._();
-
-  static Map<String, dynamic> envelope(List<int> envelopeBytes) =>
-      <String, dynamic>{
-        'kind': 'envelope',
-        'envelope': _base64UrlEncode(envelopeBytes),
-      };
-
-  static Map<String, dynamic> envelopeStored(String envelopeId) =>
-      <String, dynamic>{
-        'kind': 'envelope_stored',
-        'envelope_id': envelopeId,
-      };
 
   static Map<String, dynamic> keyPackageRequest(String requestId) =>
       <String, dynamic>{
@@ -131,15 +109,6 @@ class ChatWebrtcControlFrame {
       throw const FormatException('Chat 控制帧必须是对象');
     }
     switch (value['kind']) {
-      case 'envelope':
-        _requireExactFrameKeys(value, const ['kind', 'envelope']);
-        final bytes = envelopeBytes(value);
-        if (bytes.isEmpty || bytes.length > 8 * 1024 * 1024) {
-          throw const FormatException('Chat Envelope 帧大小不合法');
-        }
-      case 'envelope_stored':
-        _requireExactFrameKeys(value, const ['kind', 'envelope_id']);
-        _requireControlToken(value['envelope_id'], 'envelope_id');
       case 'key_package_request':
         _requireExactFrameKeys(value, const ['kind', 'request_id']);
         _requireControlToken(value['request_id'], 'request_id');
@@ -154,18 +123,6 @@ class ChatWebrtcControlFrame {
         throw const FormatException('Chat 控制帧类型不合法');
     }
     return value;
-  }
-
-  static List<int> envelopeBytes(Map<String, dynamic> frame) {
-    final encoded = frame['envelope'];
-    if (encoded is! String || encoded.isEmpty) {
-      throw const FormatException('Chat Envelope 帧缺少密文字节');
-    }
-    try {
-      return _base64UrlDecode(encoded);
-    } on FormatException {
-      throw const FormatException('Chat Envelope 帧编码不合法');
-    }
   }
 
   static MlsKeyPackage keyPackage(Map<String, dynamic> frame) {
@@ -278,7 +235,7 @@ class ChatAttachmentReceiveBuffer {
   int get resumeOffset => _resumeOffset;
   String? get tempPath => _tempPath;
 
-  Future<void> start(Map<String, dynamic> header, String transferId) async {
+  Future<void> start(Map<String, dynamic> header, String connectionId) async {
     await _closeSink(); // 关旧 sink,但保留 partial(可能正是要续传的)
     _header = header;
     _running = 0;
@@ -293,7 +250,7 @@ class ChatAttachmentReceiveBuffer {
       return;
     }
     // 按 attachment_id 命名 partial,同一媒体跨传输尝试可复用以断点续传。
-    final attachmentId = header['attachment_id']?.toString() ?? transferId;
+    final attachmentId = header['attachment_id']?.toString() ?? connectionId;
     final path = '$tempDirectory/${_safeSegment(attachmentId)}.part';
     final file = File(path);
     await file.parent.create(recursive: true);
@@ -422,14 +379,13 @@ class ChatAttachmentReceiveBuffer {
 ///
 /// 控制通道承载 OpenMLS Envelope、KeyPackage 和本机落盘确认；媒体通道承载附件
 /// 分片。Cloudflare 只转发 SDP/ICE 建连信令，绝不接收这些 DataChannel 帧。
-class ChatWebrtcTransport implements ChatTransport {
+class ChatWebrtcTransport {
   ChatWebrtcTransport({
     required this.accountId,
     required this.localCidNumber,
     required this.cloud,
+    required this.sendSignal,
     required this.onAttachment,
-    required this.onEnvelope,
-    required this.onEnvelopeStored,
     required this.createKeyPackage,
     required this.tempDirectory,
     required this.runBindingMutation,
@@ -437,26 +393,16 @@ class ChatWebrtcTransport implements ChatTransport {
 
   static const _chunkSize = 64 * 1024;
   static const _timeout = Duration(seconds: 8);
-  static const _iceGatheringTimeout = Duration(seconds: 5);
   static const _controlIdleTimeout = Duration(seconds: 90);
   // 背压水位:发送缓冲超过高水位则暂停灌注,等其回落到低水位再继续。5GB 文件
   // 因此不会把 SCTP 发送缓冲撑爆。
   static const _highWaterBytes = 1 * 1024 * 1024;
   static const _lowWaterBytes = 256 * 1024;
-  // 只使用 STUN 发现公网候选；不配置中继 URL、用户名或凭证，附件因此绝不会
-  // 经云端中继。直连失败时保留在发送设备，等待接收方网络条件允许后重试。
-  static const _iceServers = <Map<String, Object>>[
-    <String, Object>{
-      'urls': <String>['stun:stun.cloudflare.com:3478'],
-    },
-  ];
-
   final String accountId;
   final String localCidNumber;
   final ChatCloudTransport cloud;
+  final ChatSignalSender sendSignal;
   final ChatAttachmentReceiver onAttachment;
-  final ChatDirectEnvelopeReceiver onEnvelope;
-  final ChatEnvelopeStoredReceiver onEnvelopeStored;
   final ChatDirectKeyPackageProvider createKeyPackage;
   final ChatWebrtcMutationRunner runBindingMutation;
 
@@ -469,44 +415,7 @@ class ChatWebrtcTransport implements ChatTransport {
   final Map<String, Future<_ControlPeer>> _controlFlights = {};
   final Map<String, Completer<MlsKeyPackage>> _keyPackageRequests = {};
   final Map<String, Future<void>> _signalTails = {};
-
-  @override
-  ChatTransportType get type => ChatTransportType.webrtc;
-
-  /// 把 OpenMLS Envelope 直接写入对端控制通道。失败只返回 queued，本地可靠队列
-  /// 保持原字节，后续网络恢复、peer_ready 或推送唤醒会重试同一 Envelope。
-  @override
-  Future<ChatDeliveryResult> sendEncryptedEnvelope({
-    required String envelopeId,
-    required List<int> envelopeBytes,
-    required String recipientCidNumber,
-  }) async {
-    try {
-      final envelope = ChatEnvelope.fromBuffer(envelopeBytes);
-      if (envelope.envelopeId != envelopeId ||
-          envelope.recipientCidNumber != recipientCidNumber ||
-          envelope.senderCidNumber != localCidNumber) {
-        throw const FormatException('Chat Envelope 与直连路由不一致');
-      }
-      final peer = await _controlPeer(recipientCidNumber);
-      await peer.channel!.send(RTCDataChannelMessage(
-        jsonEncode(ChatWebrtcControlFrame.envelope(envelopeBytes)),
-      ));
-      _touchControlPeer(peer);
-      return ChatDeliveryResult(
-        envelopeId: envelopeId,
-        transportType: type,
-        state: ChatMessageDeliveryState.sent,
-      );
-    } catch (error) {
-      return ChatDeliveryResult(
-        envelopeId: envelopeId,
-        transportType: type,
-        state: ChatMessageDeliveryState.queued,
-        errorMessage: error.toString(),
-      );
-    }
-  }
+  final Map<String, _LocalSignalState> _localSignals = {};
 
   /// 首次会话 KeyPackage 只通过已经建立的设备直连请求，不建立云端库存。
   Future<MlsKeyPackage> requestKeyPackage(String recipientCidNumber) async {
@@ -561,13 +470,12 @@ class ChatWebrtcTransport implements ChatTransport {
     peer.channel = channel;
     _bindControlChannel(peer, channel);
     final offer = await peer.connection.createOffer();
-    final localOffer = await _setLocalDescriptionAndGatherIce(
+    final localOffer = await _setLocalDescription(
       peer.connection,
       offer,
     );
-    final offerSignal = <String, dynamic>{
-      'kind': 'offer',
-      'connection_kind': 'control',
+    final offerSignal = <String, Object?>{
+      'signal_kind': 'offer',
       'connection_id': connectionId,
       'sdp': localOffer.sdp,
       'sdp_type': localOffer.type,
@@ -575,10 +483,7 @@ class ChatWebrtcTransport implements ChatTransport {
     try {
       // 一个 connection_id 只发送一次 Offer。重复发送同一 Offer 会让接收端在
       // have-local-offer 等非法状态再次 createAnswer，并且重复触发系统唤醒。
-      final sent = await cloud.sendSignal(
-        recipientCidNumber: peerCidNumber,
-        signal: offerSignal,
-      );
+      final sent = await _sendDescription(connectionId, offerSignal);
       if (!sent) {
         throw TimeoutException('接收设备信令未在线，消息保留在发送设备');
       }
@@ -625,8 +530,8 @@ class ChatWebrtcTransport implements ChatTransport {
     required String sourcePath,
     required int byteSize,
   }) async {
-    final transferId = '$attachmentId-${DateTime.now().microsecondsSinceEpoch}';
-    final peer = await _createPeer(transferId, recipientCidNumber);
+    final connectionId = _newControlId('attachment');
+    final peer = await _createPeer(connectionId, recipientCidNumber);
     // 任一 await(建连/续传偏移/ack 超时,或发送出错)都必须关闭对端连接,否则
     // 泄漏 _peers 表项与原生 RTCPeerConnection。_closePeer 幂等,成功路径也复用。
     try {
@@ -638,15 +543,15 @@ class ChatWebrtcTransport implements ChatTransport {
       peer.channel = channel;
       _bindChannel(peer, channel);
       final offer = await peer.connection.createOffer();
-      final localOffer = await _setLocalDescriptionAndGatherIce(
+      final localOffer = await _setLocalDescription(
         peer.connection,
         offer,
       );
       await _sendOfferUntilOpen(
         peer,
         {
-          'kind': 'offer',
-          'transfer_id': transferId,
+          'signal_kind': 'offer',
+          'connection_id': connectionId,
           'sdp': localOffer.sdp,
           'sdp_type': localOffer.type,
         },
@@ -686,7 +591,7 @@ class ChatWebrtcTransport implements ChatTransport {
           .send(RTCDataChannelMessage(jsonEncode({'kind': 'attachment_end'})));
       await peer.ack.future.timeout(_timeout);
     } finally {
-      await _closePeer(transferId);
+      await _closePeer(connectionId);
     }
   }
 
@@ -699,63 +604,210 @@ class ChatWebrtcTransport implements ChatTransport {
     }
   }
 
-  /// 关闭 trickle ICE：先在设备端收齐候选，再把候选随 SDP 一次性瞬时转发。
-  ///
-  /// 真机在双栈与多个网络接口下会瞬间产生几十个候选；逐候选 HTTP 请求会触发
-  /// Cloudflare 1015，并且让未等待的 Future 逃逸为未捕获异常。完整 SDP 既不包含
-  /// 消息内容，也把每次 offer/answer 收敛为一次协调请求。
-  Future<RTCSessionDescription> _setLocalDescriptionAndGatherIce(
+  /// SDP 立即发送，后续候选经同一 WSS Trickle ICE；不再等待候选收敛。
+  Future<RTCSessionDescription> _setLocalDescription(
     RTCPeerConnection connection,
     RTCSessionDescription description,
   ) async {
-    final gathered = Completer<void>();
-    connection.onIceGatheringState = (state) {
-      if (state == RTCIceGatheringState.RTCIceGatheringStateComplete &&
-          !gathered.isCompleted) {
-        gathered.complete();
+    await connection.setLocalDescription(description);
+    final localDescription = await connection.getLocalDescription();
+    if (localDescription == null ||
+        (localDescription.sdp ?? '').trim().isEmpty ||
+        (localDescription.type ?? '').trim().isEmpty) {
+      throw StateError('WebRTC 本地 SDP 未完成');
+    }
+    return localDescription;
+  }
+
+  void _bindLocalIce(
+    RTCPeerConnection connection,
+    String connectionId,
+    String peerCidNumber,
+  ) {
+    _localSignals[connectionId] = _LocalSignalState(peerCidNumber);
+    connection.onIceCandidate = (candidate) {
+      final value = candidate.candidate?.trim() ?? '';
+      if (value.isEmpty) return;
+      final signal = <String, Object?>{
+        'signal_kind': 'ice',
+        'connection_id': connectionId,
+        'candidate': value,
+        if ((candidate.sdpMid ?? '').isNotEmpty) 'sdp_mid': candidate.sdpMid,
+        if (candidate.sdpMLineIndex != null)
+          'sdp_mline_index': candidate.sdpMLineIndex,
+      };
+      unawaited(_queueLocalIce(connectionId, signal));
+    };
+    connection.onIceConnectionState = (state) {
+      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed) {
+        unawaited(_restartIce(connectionId, notifyPeer: true));
       }
     };
-    try {
-      await connection.setLocalDescription(description);
-      final currentState = await connection.getIceGatheringState();
-      if (currentState == RTCIceGatheringState.RTCIceGatheringStateComplete &&
-          !gathered.isCompleted) {
-        gathered.complete();
+  }
+
+  Future<bool> _sendDescription(
+    String connectionId,
+    Map<String, Object?> signal,
+  ) async {
+    final state = _localSignals[connectionId];
+    if (state == null) return false;
+    final sent = await sendSignal(
+      recipientCidNumber: state.peerCidNumber,
+      signal: signal,
+    );
+    if (!sent) return false;
+    state.descriptionSent = true;
+    final pending = state.pendingIce.toList(growable: false);
+    state.pendingIce.clear();
+    for (final candidate in pending) {
+      if (!await sendSignal(
+        recipientCidNumber: state.peerCidNumber,
+        signal: candidate,
+      )) {
+        await _closeConnection(connectionId);
+        return false;
       }
-      try {
-        await gathered.future.timeout(_iceGatheringTimeout);
-      } on TimeoutException {
-        // 个别真机会很晚才回调 COMPLETE；只要当前 SDP 已包含候选，就直接使用
-        // 已收集结果，避免因平台事件延迟反复销毁、重建同一个直连会话。
-        final partialDescription = await connection.getLocalDescription();
-        final partialSdp = partialDescription?.sdp ?? '';
-        if (partialDescription == null ||
-            !RegExp(r'^a=candidate:', multiLine: true).hasMatch(partialSdp)) {
-          rethrow;
-        }
-      }
-      final localDescription = await connection.getLocalDescription();
-      if (localDescription == null ||
-          (localDescription.sdp ?? '').trim().isEmpty ||
-          (localDescription.type ?? '').trim().isEmpty) {
-        throw StateError('WebRTC 本地 SDP 未完成');
-      }
-      return localDescription;
-    } finally {
-      connection.onIceGatheringState = null;
     }
+    return true;
+  }
+
+  Future<void> _queueLocalIce(
+    String connectionId,
+    Map<String, Object?> signal,
+  ) async {
+    final state = _localSignals[connectionId];
+    if (state == null) return;
+    if (!state.descriptionSent) {
+      state.pendingIce.add(signal);
+      return;
+    }
+    try {
+      if (!await sendSignal(
+        recipientCidNumber: state.peerCidNumber,
+        signal: signal,
+      )) {
+        await _closeConnection(connectionId);
+      }
+    } catch (_) {
+      await _closeConnection(connectionId);
+    }
+  }
+
+  Future<void> _addRemoteIce(
+    String senderCidNumber,
+    String connectionId,
+    Map<String, dynamic> signal,
+  ) async {
+    final control = _controlPeers[connectionId];
+    final attachment = _peers[connectionId];
+    final peerCidNumber = control?.peerCidNumber ?? attachment?.peerCidNumber;
+    final connection = control?.connection ?? attachment?.connection;
+    final remoteDescriptionSet =
+        control?.remoteDescriptionSet ?? attachment?.remoteDescriptionSet;
+    final pending = control?.pendingIce ?? attachment?.pendingIce;
+    if (peerCidNumber != senderCidNumber ||
+        connection == null ||
+        pending == null) {
+      return;
+    }
+    final candidate = signal['candidate'];
+    final sdpMid = signal['sdp_mid'];
+    final sdpMLineIndex = signal['sdp_mline_index'];
+    if (candidate is! String ||
+        candidate.isEmpty ||
+        (sdpMid != null && sdpMid is! String) ||
+        (sdpMLineIndex != null && sdpMLineIndex is! int)) {
+      return;
+    }
+    final ice =
+        RTCIceCandidate(candidate, sdpMid as String?, sdpMLineIndex as int?);
+    if (remoteDescriptionSet == true) {
+      await connection.addCandidate(ice);
+    } else {
+      pending.add(ice);
+    }
+  }
+
+  Future<void> _flushRemoteIce(
+    RTCPeerConnection connection,
+    List<RTCIceCandidate> pending,
+  ) async {
+    final candidates = pending.toList(growable: false);
+    pending.clear();
+    for (final candidate in candidates) {
+      await connection.addCandidate(candidate);
+    }
+  }
+
+  /// ICE 失败时在同一 connection_id 上重启，不创建并行 PeerConnection。
+  Future<void> _restartIce(
+    String connectionId, {
+    required bool notifyPeer,
+  }) async {
+    final state = _localSignals[connectionId];
+    final control = _controlPeers[connectionId];
+    final attachment = _peers[connectionId];
+    final connection = control?.connection ?? attachment?.connection;
+    if (state == null || connection == null || state.restarting) return;
+    state.restarting = true;
+    try {
+      if (notifyPeer &&
+          !await sendSignal(
+            recipientCidNumber: state.peerCidNumber,
+            signal: <String, Object?>{
+              'signal_kind': 'ice_restart',
+              'connection_id': connectionId,
+            },
+          )) {
+        await _closeConnection(connectionId);
+        return;
+      }
+      state
+        ..descriptionSent = false
+        ..pendingIce.clear();
+      control?.answerSignal = null;
+      attachment?.answerSignal = null;
+      await connection.restartIce();
+      if (!notifyPeer) return;
+      if (control != null) {
+        control
+          ..remoteDescriptionSet = false
+          ..remoteSdp = null;
+      } else if (attachment != null) {
+        attachment
+          ..remoteDescriptionSet = false
+          ..remoteSdp = null;
+      }
+      final offer = await connection.createOffer(<String, dynamic>{
+        'iceRestart': true,
+      });
+      final localOffer = await _setLocalDescription(connection, offer);
+      if (!await _sendDescription(connectionId, <String, Object?>{
+        'signal_kind': 'offer',
+        'connection_id': connectionId,
+        'sdp': localOffer.sdp,
+        'sdp_type': localOffer.type,
+      })) {
+        await _closeConnection(connectionId);
+      }
+    } finally {
+      state.restarting = false;
+    }
+  }
+
+  Future<void> _closeConnection(String connectionId) {
+    return _controlPeers.containsKey(connectionId)
+        ? _closeControlPeer(connectionId)
+        : _closePeer(connectionId);
   }
 
   Future<void> handleSignal(
     String senderCidNumber,
     Map<String, dynamic> signal,
   ) {
-    final isControl = signal['connection_kind'] == 'control';
-    final signalId =
-        signal[isControl ? 'connection_id' : 'transfer_id']?.toString();
+    final signalId = signal['connection_id']?.toString();
     if (signalId == null || signalId.isEmpty) return Future<void>.value();
-    final key = '${isControl ? 'control' : 'attachment'}|'
-        '$senderCidNumber|$signalId';
+    final key = '$senderCidNumber|$signalId';
     final previous = _signalTails[key] ?? Future<void>.value();
     late final Future<void> current;
     // 同一连接的 Offer/Answer 必须严格串行，禁止两个 socket 回调同时推进原生
@@ -774,18 +826,32 @@ class ChatWebrtcTransport implements ChatTransport {
     String senderCidNumber,
     Map<String, dynamic> signal,
   ) async {
-    if (signal['connection_kind'] == 'control') {
+    final signalKind = signal['signal_kind']?.toString();
+    final connectionId = signal['connection_id']?.toString() ?? '';
+    if (connectionId.isEmpty) return;
+    if (signalKind == 'ice') {
+      await _addRemoteIce(senderCidNumber, connectionId, signal);
+      return;
+    }
+    if (signalKind == 'hangup') {
+      await _closeConnection(connectionId);
+      return;
+    }
+    if (signalKind == 'ice_restart') {
+      await _restartIce(connectionId, notifyPeer: false);
+      return;
+    }
+    if (connectionId.startsWith('control-')) {
       await _handleControlSignal(senderCidNumber, signal);
       return;
     }
-    final kind = signal['kind']?.toString();
-    final transferId = signal['transfer_id']?.toString() ?? '';
-    if (transferId.isEmpty) return;
-    if (kind == 'offer') {
-      final peer = await _createPeer(transferId, senderCidNumber);
+    if (!connectionId.startsWith('attachment-')) return;
+    if (signalKind == 'offer') {
+      final peer = await _createPeer(connectionId, senderCidNumber);
+      final remoteSdp = signal['sdp']?.toString() ?? '';
       final cachedAnswer = peer.answerSignal;
-      if (cachedAnswer != null) {
-        await cloud.sendSignal(
+      if (cachedAnswer != null && peer.remoteSdp == remoteSdp) {
+        await sendSignal(
           recipientCidNumber: senderCidNumber,
           signal: cachedAnswer,
         );
@@ -795,39 +861,37 @@ class ChatWebrtcTransport implements ChatTransport {
         peer.channel = channel;
         _bindChannel(peer, channel);
       };
-      if (!peer.remoteDescriptionSet) {
-        await peer.connection.setRemoteDescription(
-          RTCSessionDescription(
-              signal['sdp']?.toString(), signal['sdp_type']?.toString()),
-        );
-        peer.remoteDescriptionSet = true;
-      }
+      await peer.connection.setRemoteDescription(
+        RTCSessionDescription(remoteSdp, signal['sdp_type']?.toString()),
+      );
+      peer.remoteDescriptionSet = true;
+      peer.remoteSdp = remoteSdp;
+      await _flushRemoteIce(peer.connection, peer.pendingIce);
       final answer = await peer.connection.createAnswer();
-      final localAnswer = await _setLocalDescriptionAndGatherIce(
+      final localAnswer = await _setLocalDescription(
         peer.connection,
         answer,
       );
-      final answerSignal = <String, dynamic>{
-        'kind': 'answer',
-        'transfer_id': transferId,
+      final answerSignal = <String, Object?>{
+        'signal_kind': 'answer',
+        'connection_id': connectionId,
         'sdp': localAnswer.sdp,
         'sdp_type': localAnswer.type,
       };
       peer.answerSignal = answerSignal;
-      await cloud.sendSignal(
-        recipientCidNumber: senderCidNumber,
-        signal: answerSignal,
-      );
+      await _sendDescription(connectionId, answerSignal);
       return;
     }
-    final peer = _peers[transferId];
+    final peer = _peers[connectionId];
     if (peer == null) return;
-    if (kind == 'answer' && !peer.remoteDescriptionSet) {
+    if (signalKind == 'answer' && !peer.remoteDescriptionSet) {
       await peer.connection.setRemoteDescription(
         RTCSessionDescription(
             signal['sdp']?.toString(), signal['sdp_type']?.toString()),
       );
       peer.remoteDescriptionSet = true;
+      peer.remoteSdp = signal['sdp']?.toString();
+      await _flushRemoteIce(peer.connection, peer.pendingIce);
     }
   }
 
@@ -835,14 +899,15 @@ class ChatWebrtcTransport implements ChatTransport {
     String senderCidNumber,
     Map<String, dynamic> signal,
   ) async {
-    final kind = signal['kind']?.toString();
+    final kind = signal['signal_kind']?.toString();
     final connectionId = signal['connection_id']?.toString() ?? '';
     if (connectionId.isEmpty) return;
     if (kind == 'offer') {
       final peer = await _createControlPeer(connectionId, senderCidNumber);
       final cachedAnswer = peer.answerSignal;
-      if (cachedAnswer != null) {
-        await cloud.sendSignal(
+      final remoteSdp = signal['sdp']?.toString() ?? '';
+      if (cachedAnswer != null && peer.remoteSdp == remoteSdp) {
+        await sendSignal(
           recipientCidNumber: senderCidNumber,
           signal: cachedAnswer,
         );
@@ -852,32 +917,25 @@ class ChatWebrtcTransport implements ChatTransport {
         peer.channel = channel;
         _bindControlChannel(peer, channel);
       };
-      if (!peer.remoteDescriptionSet) {
-        await peer.connection.setRemoteDescription(
-          RTCSessionDescription(
-            signal['sdp']?.toString(),
-            signal['sdp_type']?.toString(),
-          ),
-        );
-        peer.remoteDescriptionSet = true;
-      }
+      await peer.connection.setRemoteDescription(
+        RTCSessionDescription(remoteSdp, signal['sdp_type']?.toString()),
+      );
+      peer.remoteDescriptionSet = true;
+      peer.remoteSdp = remoteSdp;
+      await _flushRemoteIce(peer.connection, peer.pendingIce);
       final answer = await peer.connection.createAnswer();
-      final localAnswer = await _setLocalDescriptionAndGatherIce(
+      final localAnswer = await _setLocalDescription(
         peer.connection,
         answer,
       );
-      final answerSignal = <String, dynamic>{
-        'kind': 'answer',
-        'connection_kind': 'control',
+      final answerSignal = <String, Object?>{
+        'signal_kind': 'answer',
         'connection_id': connectionId,
         'sdp': localAnswer.sdp,
         'sdp_type': localAnswer.type,
       };
       peer.answerSignal = answerSignal;
-      await cloud.sendSignal(
-        recipientCidNumber: senderCidNumber,
-        signal: answerSignal,
-      );
+      await _sendDescription(connectionId, answerSignal);
       return;
     }
     final peer = _controlPeers[connectionId];
@@ -890,6 +948,8 @@ class ChatWebrtcTransport implements ChatTransport {
         ),
       );
       peer.remoteDescriptionSet = true;
+      peer.remoteSdp = signal['sdp']?.toString();
+      await _flushRemoteIce(peer.connection, peer.pendingIce);
     }
   }
 
@@ -904,9 +964,12 @@ class ChatWebrtcTransport implements ChatTransport {
       }
       return existing;
     }
-    final connection = await createPeerConnection({'iceServers': _iceServers});
+    final ice = await cloud.fetchIceConfiguration();
+    final connection =
+        await createPeerConnection({'iceServers': ice.iceServers});
     final peer = _ControlPeer(connectionId, peerCidNumber, connection);
     _controlPeers[connectionId] = peer;
+    _bindLocalIce(connection, connectionId, peerCidNumber);
     return peer;
   }
 
@@ -935,27 +998,6 @@ class ChatWebrtcTransport implements ChatTransport {
     if (message.isBinary || peer.closing) return;
     final decoded = ChatWebrtcControlFrame.decode(message.text);
     switch (decoded['kind']) {
-      case 'envelope':
-        final storedEnvelopeIds = await runBindingMutation(
-          () => onEnvelope(
-            senderCidNumber: peer.peerCidNumber,
-            envelopeBytes: ChatWebrtcControlFrame.envelopeBytes(decoded),
-          ),
-        );
-        for (final envelopeId in storedEnvelopeIds) {
-          await peer.channel?.send(RTCDataChannelMessage(
-            jsonEncode(ChatWebrtcControlFrame.envelopeStored(envelopeId)),
-          ));
-        }
-      case 'envelope_stored':
-        final envelopeId = decoded['envelope_id'];
-        if (envelopeId is! String || envelopeId.isEmpty) return;
-        await runBindingMutation(
-          () => onEnvelopeStored(
-            senderCidNumber: peer.peerCidNumber,
-            envelopeId: envelopeId,
-          ),
-        );
       case 'key_package_request':
         final requestId = decoded['request_id'];
         if (requestId is! String || requestId.isEmpty) return;
@@ -975,17 +1017,20 @@ class ChatWebrtcTransport implements ChatTransport {
   }
 
   Future<_PeerTransfer> _createPeer(
-      String transferId, String peerCidNumber) async {
-    final existing = _peers[transferId];
+      String connectionId, String peerCidNumber) async {
+    final existing = _peers[connectionId];
     if (existing != null) {
       if (existing.peerCidNumber != peerCidNumber) {
         throw StateError('Chat 附件连接 CID 与既有连接不一致');
       }
       return existing;
     }
-    final connection = await createPeerConnection({'iceServers': _iceServers});
-    final peer = _PeerTransfer(transferId, peerCidNumber, connection);
-    _peers[transferId] = peer;
+    final ice = await cloud.fetchIceConfiguration();
+    final connection =
+        await createPeerConnection({'iceServers': ice.iceServers});
+    final peer = _PeerTransfer(connectionId, peerCidNumber, connection);
+    _peers[connectionId] = peer;
+    _bindLocalIce(connection, connectionId, peerCidNumber);
     return peer;
   }
 
@@ -994,12 +1039,9 @@ class ChatWebrtcTransport implements ChatTransport {
     _PeerTransfer peer,
     Map<String, dynamic> offer,
   ) async {
-    // 附件与控制连接采用同一协商规则：一个 transfer_id 只发送一次 Offer，
+    // 附件与控制连接采用同一协商规则：一个 connection_id 只发送一次 Offer，
     // 接收端未及时上线时由本机可靠队列在下一轮创建新连接，而不是重放旧 Offer。
-    final sent = await cloud.sendSignal(
-      recipientCidNumber: peer.peerCidNumber,
-      signal: offer,
-    );
+    final sent = await _sendDescription(peer.id, offer.cast<String, Object?>());
     if (!sent) {
       throw TimeoutException('接收设备信令未在线，附件仍只保留在发送设备');
     }
@@ -1039,7 +1081,7 @@ class ChatWebrtcTransport implements ChatTransport {
           .then((_) => handleIncomingFrame(
                 buffer: buffer,
                 peerCidNumber: peer.peerCidNumber,
-                transferId: peer.id,
+                connectionId: peer.id,
                 message: message,
                 sendAck: () => channel.send(
                   RTCDataChannelMessage(jsonEncode({'kind': 'attachment_ack'})),
@@ -1068,7 +1110,7 @@ class ChatWebrtcTransport implements ChatTransport {
   Future<void> handleIncomingFrame({
     required ChatAttachmentReceiveBuffer buffer,
     required String peerCidNumber,
-    required String transferId,
+    required String connectionId,
     required RTCDataChannelMessage message,
     required Future<void> Function() sendAck,
     Future<void> Function(int resumeOffset)? sendResume,
@@ -1079,7 +1121,7 @@ class ChatWebrtcTransport implements ChatTransport {
       return _handleIncomingFrame(
         buffer: buffer,
         peerCidNumber: peerCidNumber,
-        transferId: transferId,
+        connectionId: connectionId,
         message: message,
         sendAck: sendAck,
         sendResume: sendResume,
@@ -1091,7 +1133,7 @@ class ChatWebrtcTransport implements ChatTransport {
       () => _handleIncomingFrame(
         buffer: buffer,
         peerCidNumber: peerCidNumber,
-        transferId: transferId,
+        connectionId: connectionId,
         message: message,
         sendAck: sendAck,
         sendResume: sendResume,
@@ -1116,7 +1158,7 @@ class ChatWebrtcTransport implements ChatTransport {
   Future<void> _handleIncomingFrame({
     required ChatAttachmentReceiveBuffer buffer,
     required String peerCidNumber,
-    required String transferId,
+    required String connectionId,
     required RTCDataChannelMessage message,
     required Future<void> Function() sendAck,
     Future<void> Function(int resumeOffset)? sendResume,
@@ -1131,7 +1173,7 @@ class ChatWebrtcTransport implements ChatTransport {
     if (decoded is! Map<String, dynamic>) return;
     switch (decoded['kind']) {
       case 'attachment_start':
-        await buffer.start(decoded, transferId);
+        await buffer.start(decoded, connectionId);
         // 拒收(声明超限)则不回续传帧:发送端等待超时后中止,不建 partial。
         if (!buffer.rejected && sendResume != null) {
           await sendResume(buffer.resumeOffset);
@@ -1156,9 +1198,10 @@ class ChatWebrtcTransport implements ChatTransport {
     }
   }
 
-  Future<void> _closePeer(String transferId) async {
-    final peer = _peers.remove(transferId);
+  Future<void> _closePeer(String connectionId) async {
+    final peer = _peers.remove(connectionId);
     if (peer == null) return;
+    _localSignals.remove(connectionId);
     // 先关输入源，禁止新 frame 排到 tail；随后锁外等待每个已经登记到 binding
     // mutation runner 的 frame。不能持 CID lease 等待 tail，否则 tail 自己取锁会自锁。
     final channel = peer.channel;
@@ -1176,12 +1219,15 @@ class ChatWebrtcTransport implements ChatTransport {
     await peer.tail.catchError((Object _) {});
     await peer.buffer?.dispose();
     peer.connection.onDataChannel = null;
+    peer.connection.onIceCandidate = null;
+    peer.connection.onIceConnectionState = null;
     await peer.connection.close();
   }
 
   Future<void> _closeControlPeer(String connectionId) async {
     final peer = _controlPeers.remove(connectionId);
     if (peer == null || peer.closing) return;
+    _localSignals.remove(connectionId);
     peer.closing = true;
     peer.idleTimer?.cancel();
     peer.idleTimer = null;
@@ -1197,6 +1243,8 @@ class ChatWebrtcTransport implements ChatTransport {
     }
     await peer.tail.catchError((Object _) {});
     peer.connection.onDataChannel = null;
+    peer.connection.onIceCandidate = null;
+    peer.connection.onIceConnectionState = null;
     await peer.connection.close();
   }
 
@@ -1250,8 +1298,10 @@ class _ControlPeer {
   RTCDataChannel? channel;
   Future<void> tail = Future<void>.value();
   Map<String, dynamic>? answerSignal;
+  final List<RTCIceCandidate> pendingIce = <RTCIceCandidate>[];
   Timer? idleTimer;
   bool remoteDescriptionSet = false;
+  String? remoteSdp;
   bool closing = false;
 }
 
@@ -1268,8 +1318,19 @@ class _PeerTransfer {
   RTCDataChannel? channel;
   ChatAttachmentReceiveBuffer? buffer;
   Map<String, dynamic>? answerSignal;
+  final List<RTCIceCandidate> pendingIce = <RTCIceCandidate>[];
   bool remoteDescriptionSet = false;
+  String? remoteSdp;
 
   /// 逐帧串行处理链。
   Future<void> tail = Future<void>.value();
+}
+
+class _LocalSignalState {
+  _LocalSignalState(this.peerCidNumber);
+
+  final String peerCidNumber;
+  final List<Map<String, Object?>> pendingIce = <Map<String, Object?>>[];
+  bool descriptionSent = false;
+  bool restarting = false;
 }

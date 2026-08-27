@@ -2646,10 +2646,8 @@ class ChatStore {
       final queue = await isar.chatOutboundQueueEntitys
           .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
       if (queue != null) {
-        final needsStoredConfirmation = _needsStoredConfirmation(queue);
         if (state == ChatMessageDeliveryState.receivedByDevice ||
-            (state == ChatMessageDeliveryState.sent &&
-                !needsStoredConfirmation)) {
+            state == ChatMessageDeliveryState.sent) {
           await isar.chatOutboundQueueEntitys.delete(queue.id);
         } else {
           queue
@@ -2677,48 +2675,6 @@ class ChatStore {
               .putByOwnerCidNumberConversationId(conversation);
         }
       }
-    });
-  }
-
-  /// 接收设备确认应用 envelope 已成功处理后，按“队列收件人 CID = 信令发件人
-  /// CID”复核并删除本机重试副本。该确认只用于可靠投递，不是用户已读回执。
-  Future<bool> acknowledgeStoredEnvelope({
-    required ChatBindingFenceToken bindingToken,
-    required String ownerCidNumber,
-    required String envelopeId,
-    required String recipientCidNumber,
-  }) {
-    _requireWriterContext(
-      bindingToken: bindingToken,
-      ownerCidNumber: ownerCidNumber,
-    );
-    return _chatIsar.writeTxn((isar) async {
-      await _requireBindingTokenInTxn(isar, bindingToken);
-      final queue = await isar.chatOutboundQueueEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
-      if (queue == null || queue.recipientCidNumber != recipientCidNumber) {
-        return false;
-      }
-      await isar.chatOutboundQueueEntitys.delete(queue.id);
-
-      final message = await isar.chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
-      if (message != null) {
-        message.deliveryState = ChatMessageDeliveryState.receivedByDevice.name;
-        await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(message);
-        final conversation = await isar.chatConversationEntitys
-            .getByOwnerCidNumberConversationId(
-          ownerCidNumber,
-          message.conversationId,
-        );
-        if (conversation != null) {
-          conversation.lastDeliveryState =
-              ChatMessageDeliveryState.receivedByDevice.name;
-          await isar.chatConversationEntitys
-              .putByOwnerCidNumberConversationId(conversation);
-        }
-      }
-      return true;
     });
   }
 
@@ -2798,7 +2754,7 @@ class ChatStore {
     });
   }
 
-  /// 读取发送设备上的待重试密文；Cloudflare 不提供远程补拉。
+  /// 读取发送设备上尚未被 CitizenServe 持久接收的待重试密文。
   Future<List<ChatQueuedEnvelope>> readQueuedEnvelopes({
     required ChatBindingFenceToken bindingToken,
     required String ownerCidNumber,
@@ -3518,19 +3474,6 @@ ChatStoredMessage _messageFromEntity(ChatMessageEntity row, String? plaintext) {
     createdAtMillis: row.createdAtMillis,
     plaintext: plaintext,
   );
-}
-
-/// 应用消息必须等接收设备成功处理后才删除队列；Welcome/Commit 继续沿用瞬时
-/// WebSocket 投递结果，避免没有持久握手收据时无限重放 MLS 控制消息。
-bool _needsStoredConfirmation(ChatOutboundQueueEntity row) {
-  try {
-    return ChatEnvelope.fromBuffer(_hexToBytes(row.envelopeBytesHex))
-            .mlsMessageKind ==
-        MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION;
-  } on Exception {
-    // 队列密文损坏时失败关闭：保留记录，交由既有失败状态与诊断处理。
-    return true;
-  }
 }
 
 /// 重试必须沿用 envelope 创建顺序，尤其要保证 Welcome 先于紧随其后的
