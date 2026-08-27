@@ -97,7 +97,7 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
     expect(workerChat).toContain("body.apns_environment");
     expect(transport).toContain("'apns_environment'");
     expect(workerPush).toContain("device.apns_environment");
-    expect(schema).toContain("CREATE TABLE chat_push_endpoints");
+    expect(schema).toContain("CREATE TABLE IF NOT EXISTS chat_push_endpoints");
     expect(schema).toContain("apns_environment TEXT CHECK");
     expect(schema).toContain(
       "push_provider = 'apns' AND apns_environment IS NOT NULL",
@@ -262,5 +262,30 @@ describe("Cloudflare Workers Paid 成本硬边界", () => {
     expect(media).toContain("const CACHE_PURGE_URL_BATCH = 100");
     expect(cleanup).toContain("const MAX_IDENTITIES_PER_SWEEP = 3");
     expect(cleanup).toContain("const MAX_CONTENT_ITEMS_PER_SWEEP = 4");
+  });
+});
+
+describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
+  it("最终结构中的表和索引可安全重复执行", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const schema = await readFile(resolve(process.cwd(), "schema/citizenserve.sql"), "utf8");
+
+    expect(schema.match(/CREATE TABLE IF NOT EXISTS /g)?.length).toBe(28);
+    expect(schema).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS )/);
+    expect(schema).not.toMatch(/CREATE (?:UNIQUE )?INDEX (?!IF NOT EXISTS )/);
+    expect(schema).toContain("CREATE TABLE IF NOT EXISTS chat_attachments");
+    expect(schema).toContain("CREATE TABLE IF NOT EXISTS chat_attachment_recipients");
+  });
+
+  it("清理失败不会阻断身份与会员投影启动", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const source = await readFile(resolve(process.cwd(), "src/index.ts"), "utf8");
+
+    expect(source).toContain("Promise.allSettled");
+    expect(source).toContain("name: 'project-users'");
+    expect(source).toContain("name: 'project-subscriptions'");
+    expect(source).not.toContain("ctx.waitUntil(job.catch");
   });
 });

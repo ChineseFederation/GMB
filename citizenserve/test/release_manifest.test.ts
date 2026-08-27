@@ -100,7 +100,9 @@ describe('CitizenServe Cloudflare Release 候选', () => {
       .toBe(readFileSync(join(second.outputPath, 'release-manifest.json'), 'utf8'));
     expect(readFileSync(join(first.outputPath, 'SHA256SUMS'), 'utf8'))
       .toBe(readFileSync(join(second.outputPath, 'SHA256SUMS'), 'utf8'));
-    expect(first.manifest.migrations).toEqual([]);
+    expect(Object.keys(first.manifest).sort()).toEqual(
+      ["files", "git_commit_sha", "product_id", "resources", "software_version", "tools"].sort(),
+    );
     expect(
       first.manifest.files.find(({ path }: { path: string }) => path === 'schema/download.sql')?.sha256,
     ).toMatch(/^[0-9a-f]{64}$/);
@@ -164,23 +166,6 @@ describe('CitizenServe Cloudflare Release 候选', () => {
     })).toThrow('候选疑似包含私密材料：worker.mjs');
   });
 
-  test('数据库结构只接受两个完整 schema，拒绝 migrations 双轨目录', () => {
-    const root = temporaryRoot();
-    const project = fixtureProject(root);
-    mkdirSync(join(project, 'migrations'));
-    writeFileSync(
-      join(project, 'migrations/citizenserve_0001.sql'),
-      'CREATE INDEX forbidden_index ON users(cid_number);\n',
-    );
-    const bundle = join(root, 'worker.mjs');
-    writeFileSync(bundle, 'export default {};\n');
-    expect(() => buildCitizenServeCloudflareRelease({
-      projectPath: project,
-      bundlePath: bundle,
-      outputPath: join(root, 'candidate'),
-      gitCommitSha,
-    })).toThrow('CitizenServe 禁止 migrations 目录');
-  });
 
 
 });

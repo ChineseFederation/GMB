@@ -1,9 +1,10 @@
+-- CitizenServe 唯一最终数据库结构；正式发布重复执行整份文件后必须得到同一结构。
 -- CitizenServe Cloudflare D1 唯一创世 schema 基线。
 -- 结构变化只收敛到本基线，禁止旧表兼容、双轨字段或影子结构。
 
 -- finalized 用户投影。cid_number 是永久用户主键；account_id 只表示当前链上绑定账户。
 -- 注册与绑定区块锚点只允许由 finalized 投影流程写入，普通客户端请求不得修改。
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   cid_number TEXT PRIMARY KEY CHECK(
     length(cid_number) BETWEEN 1 AND 32
     AND substr(cid_number, 1, 1) GLOB '[A-Za-z0-9]'
@@ -44,7 +45,7 @@ CREATE TABLE users (
 );
 
 -- 目标边界：用户结构化公开资料归属 users；R2 只保存头像、背景等媒体对象。
-CREATE TABLE user_profiles (
+CREATE TABLE IF NOT EXISTS user_profiles (
   cid_number TEXT PRIMARY KEY REFERENCES users(cid_number) ON DELETE CASCADE,
   display_name TEXT NOT NULL DEFAULT '' CHECK(length(display_name) <= 40),
   bio TEXT NOT NULL DEFAULT '' CHECK(length(bio) <= 160),
@@ -72,7 +73,7 @@ CREATE TABLE user_profiles (
 );
 
 -- finalized 用户投影只按该单例游标向前扫描；整块处理成功后才允许推进。
-CREATE TABLE user_projection_cursor (
+CREATE TABLE IF NOT EXISTS user_projection_cursor (
   cursor_id INTEGER PRIMARY KEY CHECK(cursor_id = 1),
   finalized_block_number INTEGER NOT NULL CHECK(finalized_block_number >= 0),
   finalized_block_hash TEXT NOT NULL CHECK(
@@ -84,7 +85,7 @@ CREATE TABLE user_projection_cursor (
 );
 
 -- finalized 订阅统一投影只使用一个游标；平台会员、创作者订阅和档位整块成功后才推进。
-CREATE TABLE membership_projection_cursor (
+CREATE TABLE IF NOT EXISTS membership_projection_cursor (
   cursor_id INTEGER PRIMARY KEY CHECK(cursor_id = 1),
   finalized_block_number INTEGER NOT NULL CHECK(finalized_block_number >= 0),
   finalized_block_hash TEXT NOT NULL CHECK(
@@ -96,7 +97,7 @@ CREATE TABLE membership_projection_cursor (
 );
 
 -- 登录挑战绑定唯一身份主键 CID；account_id 仅记录本次必须签名的当前账户。
-CREATE TABLE square_login_challenges (
+CREATE TABLE IF NOT EXISTS square_login_challenges (
   challenge_id TEXT PRIMARY KEY,
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
@@ -105,16 +106,16 @@ CREATE TABLE square_login_challenges (
   expires_at INTEGER NOT NULL,
   used_at INTEGER
 );
-CREATE INDEX idx_square_login_challenges_account_id
+CREATE INDEX IF NOT EXISTS idx_square_login_challenges_account_id
   ON square_login_challenges(account_id, expires_at);
-CREATE INDEX idx_square_login_challenges_cid_number
+CREATE INDEX IF NOT EXISTS idx_square_login_challenges_cid_number
   ON square_login_challenges(cid_number, expires_at);
-CREATE INDEX idx_square_login_challenges_expires
+CREATE INDEX IF NOT EXISTS idx_square_login_challenges_expires
   ON square_login_challenges(expires_at);
 
 -- 广场会话强一致索引。明文 token 只交给客户端，D1 与 KV 键仅保存其 SHA-256；
 -- cid_number 是注销范围，account_id 只记录签发该凭证时的当前绑定账户，供换绑吊销筛选。
-CREATE TABLE square_sessions (
+CREATE TABLE IF NOT EXISTS square_sessions (
   session_token_hash TEXT PRIMARY KEY CHECK(
     length(session_token_hash) = 64
     AND session_token_hash NOT GLOB '*[^0-9a-f]*'
@@ -125,16 +126,16 @@ CREATE TABLE square_sessions (
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
-CREATE INDEX idx_square_sessions_cid_number
+CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_number
   ON square_sessions(cid_number, expires_at);
-CREATE INDEX idx_square_sessions_cid_account
+CREATE INDEX IF NOT EXISTS idx_square_sessions_cid_account
   ON square_sessions(cid_number, account_id, expires_at);
-CREATE INDEX idx_square_sessions_expires
+CREATE INDEX IF NOT EXISTS idx_square_sessions_expires
   ON square_sessions(expires_at);
 
 -- 设备子钥:身份主键 cid_number(占即绑,挂当前绑定账户下)+ device_id(=P-256 公钥 sha256)。
 -- 子钥由钱包 account_id 生成、属于该账户；换绑后此前账户子钥靠链上绑定校验判失效，不迁移。
-CREATE TABLE square_device_subkeys (
+CREATE TABLE IF NOT EXISTS square_device_subkeys (
   cid_number TEXT NOT NULL,
   device_id TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
@@ -149,22 +150,22 @@ CREATE TABLE square_device_subkeys (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY(cid_number, device_id)
 );
-CREATE INDEX idx_square_device_subkeys_cid_account
+CREATE INDEX IF NOT EXISTS idx_square_device_subkeys_cid_account
   ON square_device_subkeys(cid_number, account_id);
 
-CREATE TABLE square_request_nonces (
+CREATE TABLE IF NOT EXISTS square_request_nonces (
   nonce_hash TEXT PRIMARY KEY,
   cid_number TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX idx_square_request_nonces_expires
+CREATE INDEX IF NOT EXISTS idx_square_request_nonces_expires
   ON square_request_nonces(expires_at);
 
 -- 通讯录只保存端到端密文；联系人账户、名称和关系明文不得进入 Cloudflare。
 -- 属主始终是 cid_number；binding_revision + account_id 只标明密文使用哪一版钱包钥匙，
 -- 让换绑前后版本可并存并在 finalized 后原子切换读取，不构成第二身份主键。
-CREATE TABLE square_contacts (
+CREATE TABLE IF NOT EXISTS square_contacts (
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(
@@ -181,7 +182,7 @@ CREATE TABLE square_contacts (
   updated_at INTEGER NOT NULL CHECK(updated_at > 0),
   PRIMARY KEY(cid_number, binding_revision, account_id, contact_id)
 );
-CREATE INDEX idx_square_contacts_cid_number_updated
+CREATE INDEX IF NOT EXISTS idx_square_contacts_cid_number_updated
   ON square_contacts(
     cid_number,
     binding_revision,
@@ -191,17 +192,17 @@ CREATE INDEX idx_square_contacts_cid_number_updated
   );
 
 -- 只保存必须跨 PoP 精确一致的低频上传与外部 RPC 硬顶；普通请求走原生 RateLimit binding。
-CREATE TABLE rate_windows (
+CREATE TABLE IF NOT EXISTS rate_windows (
   rate_key TEXT PRIMARY KEY,
   request_count INTEGER NOT NULL,
   expires_at INTEGER NOT NULL
 );
-CREATE INDEX idx_rate_windows_expires
+CREATE INDEX IF NOT EXISTS idx_rate_windows_expires
   ON rate_windows(expires_at);
 
 -- 平台订阅 finalized 镜像。身份主键 cid_number 是唯一业务主键;account_id 为当前绑定的
 -- 付款/签名钱包账户(链上事实保留);价格、状态和时间只来自链上。
-CREATE TABLE square_memberships (
+CREATE TABLE IF NOT EXISTS square_memberships (
   cid_number TEXT PRIMARY KEY REFERENCES users(cid_number) ON DELETE CASCADE,
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
   membership_level TEXT NOT NULL,
@@ -217,12 +218,12 @@ CREATE TABLE square_memberships (
   storage_cleanup_notified_at INTEGER,
   last_tx_hash TEXT
 );
-CREATE INDEX idx_square_memberships_state
+CREATE INDEX IF NOT EXISTS idx_square_memberships_state
   ON square_memberships(subscription_status, paid_until);
 
 -- 创作者档位 finalized 投影。每档以 creator_cid_number + tier_id 为关系主键；
 -- creator_account_id 为当前绑定钱包账户(链上事实保留)；名称和价格都只来自链上。
-CREATE TABLE square_creator_tiers (
+CREATE TABLE IF NOT EXISTS square_creator_tiers (
   creator_cid_number TEXT NOT NULL REFERENCES users(cid_number) ON DELETE CASCADE,
   creator_account_id TEXT NOT NULL CHECK(length(creator_account_id) = 66 AND substr(creator_account_id, 1, 2) = '0x' AND substr(creator_account_id, 3) NOT GLOB '*[^0-9a-f]*'),
   tier_id TEXT NOT NULL,
@@ -244,7 +245,7 @@ CREATE TABLE square_creator_tiers (
 
 -- 创作者订阅关系以订阅者身份主键 + 创作者身份主键复合主键，允许同一身份订阅多个创作者。
 -- subscriber_account_id / creator_account_id 为各自当前绑定钱包账户(链上事实保留)。
-CREATE TABLE square_creator_subscriptions (
+CREATE TABLE IF NOT EXISTS square_creator_subscriptions (
   subscriber_cid_number TEXT NOT NULL REFERENCES users(cid_number) ON DELETE CASCADE,
   creator_cid_number TEXT NOT NULL REFERENCES users(cid_number) ON DELETE CASCADE,
   subscriber_account_id TEXT NOT NULL CHECK(length(subscriber_account_id) = 66 AND substr(subscriber_account_id, 1, 2) = '0x' AND substr(subscriber_account_id, 3) NOT GLOB '*[^0-9a-f]*'),
@@ -262,14 +263,14 @@ CREATE TABLE square_creator_subscriptions (
   last_tx_hash TEXT,
   PRIMARY KEY(subscriber_cid_number, creator_cid_number)
 );
-CREATE INDEX idx_square_creator_subscriptions_creator
+CREATE INDEX IF NOT EXISTS idx_square_creator_subscriptions_creator
   ON square_creator_subscriptions(creator_cid_number, subscription_status, paid_until);
-CREATE INDEX idx_square_creator_subscriptions_state
+CREATE INDEX IF NOT EXISTS idx_square_creator_subscriptions_state
   ON square_creator_subscriptions(subscription_status, paid_until);
 
 -- Cloudflare 只保留 finalized 交易的最小证明；cid_number 是身份归属主键，
 -- account_id 仅记录当次链交易签名账户。
-CREATE TABLE chain_transaction_confirmations (
+CREATE TABLE IF NOT EXISTS chain_transaction_confirmations (
   tx_hash TEXT PRIMARY KEY,
   cid_number TEXT NOT NULL,
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
@@ -281,10 +282,10 @@ CREATE TABLE chain_transaction_confirmations (
   chain_timestamp INTEGER NOT NULL,
   confirmed_at INTEGER NOT NULL
 );
-CREATE INDEX idx_chain_transaction_confirmations_cid_number
+CREATE INDEX IF NOT EXISTS idx_chain_transaction_confirmations_cid_number
   ON chain_transaction_confirmations(cid_number, confirmed_at DESC);
 
-CREATE TABLE square_uploads (
+CREATE TABLE IF NOT EXISTS square_uploads (
   upload_id TEXT PRIMARY KEY,
   post_id TEXT NOT NULL UNIQUE,
   -- 身份主键:发起上传的 cid_number(占即绑,来自会话)。归属一律按此列。
@@ -302,14 +303,14 @@ CREATE TABLE square_uploads (
   created_at INTEGER NOT NULL,
   completed_at INTEGER
 );
-CREATE INDEX idx_square_uploads_cid_number
+CREATE INDEX IF NOT EXISTS idx_square_uploads_cid_number
   ON square_uploads(cid_number, status, created_at);
-CREATE INDEX idx_square_uploads_expires
+CREATE INDEX IF NOT EXISTS idx_square_uploads_expires
   ON square_uploads(status, expires_at);
-CREATE INDEX idx_square_uploads_completed
+CREATE INDEX IF NOT EXISTS idx_square_uploads_completed
   ON square_uploads(status, completed_at, upload_id);
 
-CREATE TABLE square_media_assets (
+CREATE TABLE IF NOT EXISTS square_media_assets (
   upload_id TEXT NOT NULL REFERENCES square_uploads(upload_id) ON DELETE CASCADE,
   post_id TEXT NOT NULL,
   -- 身份主键:媒体所属 cid_number(随其 upload 归属)。
@@ -339,14 +340,14 @@ CREATE TABLE square_media_assets (
   ready_at INTEGER,
   PRIMARY KEY(upload_id, media_index)
 );
-CREATE INDEX idx_square_media_post
+CREATE INDEX IF NOT EXISTS idx_square_media_post
   ON square_media_assets(post_id, media_index);
-CREATE INDEX idx_square_media_cid_number
+CREATE INDEX IF NOT EXISTS idx_square_media_cid_number
   ON square_media_assets(cid_number, upload_id, media_index);
-CREATE INDEX idx_square_media_state
+CREATE INDEX IF NOT EXISTS idx_square_media_state
   ON square_media_assets(asset_state, updated_at, upload_id, media_index);
 
-CREATE TABLE square_posts (
+CREATE TABLE IF NOT EXISTS square_posts (
   post_id TEXT PRIMARY KEY,
   -- 身份主键:发布者 cid_number(由链上 SquarePostPublished 事件镜像,占即绑)。归属一律按此列。
   cid_number TEXT NOT NULL REFERENCES users(cid_number) ON DELETE CASCADE,
@@ -364,28 +365,28 @@ CREATE TABLE square_posts (
   created_at INTEGER NOT NULL,
   post_state TEXT NOT NULL
 );
-CREATE INDEX idx_square_posts_feed
+CREATE INDEX IF NOT EXISTS idx_square_posts_feed
   ON square_posts(post_category, post_state, created_at);
-CREATE INDEX idx_square_posts_cid_number
+CREATE INDEX IF NOT EXISTS idx_square_posts_cid_number
   ON square_posts(cid_number, post_state, created_at);
-CREATE INDEX idx_square_posts_cid_number_type
+CREATE INDEX IF NOT EXISTS idx_square_posts_cid_number_type
   ON square_posts(cid_number, post_state, post_type, created_at);
-CREATE INDEX idx_square_posts_state
+CREATE INDEX IF NOT EXISTS idx_square_posts_state
   ON square_posts(post_state, created_at, post_id);
 
 -- 关注关系纯 off-chain,双端均为身份主键 cid_number(关注者→被关注者)。
-CREATE TABLE square_follows (
+CREATE TABLE IF NOT EXISTS square_follows (
   follower_cid_number TEXT NOT NULL,
   followed_cid_number TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   notify_enabled INTEGER NOT NULL DEFAULT 1,  -- 关注即默认开发帖通知；0=对该关注静音（仍在关注流，只是不进红点/推送）
   PRIMARY KEY(follower_cid_number, followed_cid_number)
 );
-CREATE INDEX idx_square_follows_followed
+CREATE INDEX IF NOT EXISTS idx_square_follows_followed
   ON square_follows(followed_cid_number, created_at);
-CREATE INDEX idx_square_follows_follower
+CREATE INDEX IF NOT EXISTS idx_square_follows_follower
   ON square_follows(follower_cid_number, created_at, followed_cid_number);
-CREATE INDEX idx_square_follows_notify
+CREATE INDEX IF NOT EXISTS idx_square_follows_notify
   ON square_follows(
     followed_cid_number,
     notify_enabled,
@@ -396,13 +397,13 @@ CREATE INDEX idx_square_follows_notify
 -- 发帖通知「已读游标」：双游标分别驱动广场底部 tab 与关注子 tab 两个红点。
 -- 红点数 = 我 notify_enabled=1 的关注在对应游标之后发布的新帖数。
 -- 进广场清 last_seen_square_at、进关注子 tab 清 last_seen_following_at；只进广场不进关注→广场清、关注留。
-CREATE TABLE square_notify_reads (
+CREATE TABLE IF NOT EXISTS square_notify_reads (
   cid_number TEXT NOT NULL PRIMARY KEY,
   last_seen_square_at INTEGER NOT NULL DEFAULT 0,
   last_seen_following_at INTEGER NOT NULL DEFAULT 0
 );
 
-CREATE TABLE square_browse_days (
+CREATE TABLE IF NOT EXISTS square_browse_days (
   cid_number TEXT NOT NULL,
   browse_day TEXT NOT NULL,
   browse_count INTEGER NOT NULL,
@@ -410,7 +411,7 @@ CREATE TABLE square_browse_days (
   PRIMARY KEY(cid_number, browse_day)
 );
 
-CREATE TABLE resource_reservations (
+CREATE TABLE IF NOT EXISTS resource_reservations (
   reservation_id TEXT PRIMARY KEY,
   cid_number TEXT NOT NULL,
   resource_key TEXT NOT NULL,
@@ -424,12 +425,12 @@ CREATE TABLE resource_reservations (
   created_at INTEGER NOT NULL,
   used_at INTEGER
 );
-CREATE INDEX idx_resource_reservations_cid_number
+CREATE INDEX IF NOT EXISTS idx_resource_reservations_cid_number
   ON resource_reservations(cid_number, resource_key, reservation_state, expires_at);
-CREATE INDEX idx_resource_reservations_expires
+CREATE INDEX IF NOT EXISTS idx_resource_reservations_expires
   ON resource_reservations(reservation_state, expires_at);
 
-CREATE TABLE resource_usage (
+CREATE TABLE IF NOT EXISTS resource_usage (
   cid_number TEXT NOT NULL,
   resource_key TEXT NOT NULL,
   period_start INTEGER NOT NULL,
@@ -441,7 +442,7 @@ CREATE TABLE resource_usage (
   PRIMARY KEY(cid_number, resource_key, period_start)
 );
 
-CREATE TABLE resource_totals (
+CREATE TABLE IF NOT EXISTS resource_totals (
   cid_number TEXT NOT NULL REFERENCES users(cid_number) ON DELETE CASCADE,
   resource_key TEXT NOT NULL,
   byte_size INTEGER NOT NULL,
@@ -451,7 +452,7 @@ CREATE TABLE resource_totals (
   PRIMARY KEY(cid_number, resource_key)
 );
 
-CREATE TABLE chain_extrinsic_relays (
+CREATE TABLE IF NOT EXISTS chain_extrinsic_relays (
   relay_id TEXT PRIMARY KEY,
   extrinsic_sha256 TEXT NOT NULL,
   tx_hash TEXT,
@@ -462,17 +463,17 @@ CREATE TABLE chain_extrinsic_relays (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-CREATE INDEX idx_chain_extrinsic_relays_extrinsic
+CREATE INDEX IF NOT EXISTS idx_chain_extrinsic_relays_extrinsic
   ON chain_extrinsic_relays(extrinsic_sha256, relay_status, created_at);
-CREATE INDEX idx_chain_extrinsic_relays_request_ip
+CREATE INDEX IF NOT EXISTS idx_chain_extrinsic_relays_request_ip
   ON chain_extrinsic_relays(request_ip_hash, created_at);
-CREATE INDEX idx_chain_extrinsic_relays_tx_hash
+CREATE INDEX IF NOT EXISTS idx_chain_extrinsic_relays_tx_hash
   ON chain_extrinsic_relays(tx_hash)
   WHERE tx_hash IS NOT NULL;
 
 -- Chat 云端保存无内容唤醒端点、Durable Object 小密文邮箱，以及私有 R2 附件密文。
 -- 明文、OpenMLS/附件解密密钥、文件名、MIME 和用户内容均禁止进入服务端存储或日志。
-CREATE TABLE chat_push_endpoints (
+CREATE TABLE IF NOT EXISTS chat_push_endpoints (
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
   account_id TEXT NOT NULL CHECK(length(account_id) = 66 AND substr(account_id, 1, 2) = '0x' AND substr(account_id, 3) NOT GLOB '*[^0-9a-f]*'),
@@ -489,14 +490,14 @@ CREATE TABLE chat_push_endpoints (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY(cid_number, device_id)
 );
-CREATE UNIQUE INDEX idx_chat_push_endpoints_token
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_push_endpoints_token
   ON chat_push_endpoints(push_provider, push_token);
-CREATE INDEX idx_chat_push_endpoints_expires
+CREATE INDEX IF NOT EXISTS idx_chat_push_endpoints_expires
   ON chat_push_endpoints(expires_at);
 
 -- 普通聊天附件只保存一份手机端加密后的不透明密文，固定七天到期；
 -- 收件人映射逐个确认，最后一个收件人落盘后才删除对象，任何重试都不得延长 expires_at。
-CREATE TABLE chat_attachments (
+CREATE TABLE IF NOT EXISTS chat_attachments (
   attachment_id TEXT PRIMARY KEY,
   sender_cid_number TEXT NOT NULL,
   -- 兼容已部署 D1 的旧 NOT NULL 列；仅写首个收件人，授权真源是下方映射表。
@@ -510,24 +511,24 @@ CREATE TABLE chat_attachments (
   created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL CHECK(expires_at > created_at)
 );
-CREATE INDEX idx_chat_attachments_expires
+CREATE INDEX IF NOT EXISTS idx_chat_attachments_expires
   ON chat_attachments(expires_at);
 
-CREATE TABLE chat_attachment_recipients (
+CREATE TABLE IF NOT EXISTS chat_attachment_recipients (
   attachment_id TEXT NOT NULL,
   recipient_cid_number TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (attachment_id, recipient_cid_number),
   FOREIGN KEY (attachment_id) REFERENCES chat_attachments(attachment_id) ON DELETE CASCADE
 );
-CREATE INDEX idx_chat_attachment_recipients_cid
+CREATE INDEX IF NOT EXISTS idx_chat_attachment_recipients_cid
   ON chat_attachment_recipients(recipient_cid_number, created_at);
 
 -- 稳定币到账后的公民币发放台账。一行只代表一笔已确认 EVM 到账；
 -- 目标账户已绑定身份时，cid_number 固化付款意图签发时的 finalized 身份归属，供注销按
 -- CID 完整删除；未绑定 CID 的冷钱包或他人账户充值不属于任何公民身份，允许为空。
 -- CitizenChain 收款账户统一保存规范 AccountId，EVM 地址保持独立地址语义。
-CREATE TABLE topup_orders (
+CREATE TABLE IF NOT EXISTS topup_orders (
   order_id TEXT PRIMARY KEY,
   intent_id TEXT NOT NULL UNIQUE,
   chain_id INTEGER NOT NULL,
@@ -551,10 +552,10 @@ CREATE TABLE topup_orders (
   confirmed_at INTEGER NOT NULL,
   settled_at INTEGER
 );
-CREATE UNIQUE INDEX idx_topup_orders_txhash
+CREATE UNIQUE INDEX IF NOT EXISTS idx_topup_orders_txhash
   ON topup_orders(chain_id, evm_tx_hash);
-CREATE INDEX idx_topup_orders_status
+CREATE INDEX IF NOT EXISTS idx_topup_orders_status
   ON topup_orders(status, confirmed_at, order_id);
-CREATE INDEX idx_topup_orders_cid_number
+CREATE INDEX IF NOT EXISTS idx_topup_orders_cid_number
   ON topup_orders(cid_number, confirmed_at DESC)
   WHERE cid_number IS NOT NULL;
