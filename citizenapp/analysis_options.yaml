@@ -1,16 +1,11 @@
-include: package:flutter_lints/flutter.yaml
+include: ../shared/flutter_analysis.yaml
 
 analyzer:
   exclude:
-    - "**/*.g.dart"
-    # 项目唯一编译产物目录；其中可包含 Xcode SourcePackages 的示例/测试，
-    # 不属于 CitizenApp 源码，禁止全项目 analyze 误扫第三方生成内容。
-    - "build/**"
+    # smoldot是产品内独立上游包和Rust/JavaScript工程，由自身配置与门禁负责。
     - "smoldot/dart/**"
     - "smoldot/pow/**"
 
 linter:
   rules:
     prefer_const_constructors: true
-    # 显式打开:await 后跨异步用 BuildContext 必须先判 mounted，防已卸载 widget 的空引用/错误导航。
-    use_build_context_synchronously: true

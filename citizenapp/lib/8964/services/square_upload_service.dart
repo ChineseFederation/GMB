@@ -7,6 +7,7 @@ import 'package:crypto/crypto.dart';
 import 'package:citizenapp/8964/models/square_models.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/8964/services/square_media_processor.dart';
+import 'package:citizenapp/my/membership/subscription_service.dart';
 
 class SquareUploadedContent {
   const SquareUploadedContent({
@@ -80,11 +81,16 @@ class SquareUploadService
   SquareUploadService({
     SquareApiClient? apiClient,
     SquareMediaProcessor? mediaProcessor,
-  })  : _api = apiClient ?? SquareApiClient(),
-        _mediaProcessor = mediaProcessor ?? SquareMediaProcessor();
+    SubscriptionService? subscriptionService,
+  }) : _api = apiClient ?? SquareApiClient(),
+       _mediaProcessor = mediaProcessor ?? SquareMediaProcessor(),
+       _subscriptionService =
+           subscriptionService ??
+           SubscriptionService(api: apiClient ?? SquareApiClient());
 
   final SquareApiClient _api;
   final SquareMediaProcessor _mediaProcessor;
+  final SubscriptionService _subscriptionService;
 
   @override
   Future<void> cancelMediaProcessing() => _mediaProcessor.cancel();
@@ -106,7 +112,10 @@ class SquareUploadService
       signLoginPayload: signLoginPayload,
     );
     // 发布只读取 CitizenServe 已同步的会员状态，禁止在发布路径读取链或触发状态修复。
-    final membership = await _api.fetchMembership(session);
+    final membership = await _subscriptionService.authorizeMembership(
+      session,
+      forceRefresh: true,
+    );
     final plan = membership.activePlan;
     final usageState = membership.usageState;
     if (plan == null || usageState == null) {
@@ -155,8 +164,9 @@ class SquareUploadService
         });
       }
       for (final derivative in derivatives) {
-        final digest =
-            await sha256.bind(File(derivative.path).openRead()).first;
+        final digest = await sha256
+            .bind(File(derivative.path).openRead())
+            .first;
         derivativeHashes.add(digest.toString());
       }
 
@@ -179,39 +189,42 @@ class SquareUploadService
       final prepared = await _api.prepareUpload(
         session: session,
         postType: postType,
-        titleLength:
-            postType == SquarePostType.article ? trimmedTitle.runes.length : 0,
+        titleLength: postType == SquarePostType.article
+            ? trimmedTitle.runes.length
+            : 0,
         textLength: text.trim().runes.length,
         manifestHash: manifestHash,
         manifestByteSize: manifestBytes.length,
-        mediaItems: finalMediaDrafts.asMap().entries.map(
-          (entry) {
-            final index = entry.key;
-            final draft = entry.value;
-            final derivative = derivatives[index];
-            if (derivative.mediaIndex != index) {
-              throw const SquareApiException('本地媒体衍生图顺序不一致');
-            }
-            final width = draft.width;
-            final height = draft.height;
-            if (width == null || height == null) {
-              throw const SquareApiException('本地媒体尺寸缺失');
-            }
-            return SquareUploadMediaRequest(
-              mediaKind: draft.mediaKind,
-              contentType: draft.contentType,
-              byteSize: draft.byteSize,
-              sha256: mediaHashes[index],
-              width: width,
-              height: height,
-              derivativeKind: derivative.derivativeKind.name,
-              derivativeContentType: derivative.contentType,
-              derivativeByteSize: derivative.byteSize,
-              derivativeSha256: derivativeHashes[index],
-              durationSeconds: draft.durationSeconds,
-            );
-          },
-        ).toList(growable: false),
+        mediaItems: finalMediaDrafts
+            .asMap()
+            .entries
+            .map((entry) {
+              final index = entry.key;
+              final draft = entry.value;
+              final derivative = derivatives[index];
+              if (derivative.mediaIndex != index) {
+                throw const SquareApiException('本地媒体衍生图顺序不一致');
+              }
+              final width = draft.width;
+              final height = draft.height;
+              if (width == null || height == null) {
+                throw const SquareApiException('本地媒体尺寸缺失');
+              }
+              return SquareUploadMediaRequest(
+                mediaKind: draft.mediaKind,
+                contentType: draft.contentType,
+                byteSize: draft.byteSize,
+                sha256: mediaHashes[index],
+                width: width,
+                height: height,
+                derivativeKind: derivative.derivativeKind.name,
+                derivativeContentType: derivative.contentType,
+                derivativeByteSize: derivative.byteSize,
+                derivativeSha256: derivativeHashes[index],
+                durationSeconds: draft.durationSeconds,
+              );
+            })
+            .toList(growable: false),
       );
       if (prepared.mediaItems.length != finalMediaDrafts.length) {
         throw const SquareApiException('上传授权数量与本地媒体数量不一致');
@@ -257,10 +270,7 @@ class SquareUploadService
       for (var i = 0; i < mediaDrafts.length; i++) {
         final draft = mediaDrafts[i];
         final upload = preparedUpload.mediaItems[i];
-        await _api.uploadMediaAsset(
-          upload: upload,
-          filePath: draft.path,
-        );
+        await _api.uploadMediaAsset(upload: upload, filePath: draft.path);
         final derivative = prepared.processedMedia?.derivatives[i];
         if (derivative == null ||
             derivative.mediaIndex != i ||
@@ -411,11 +421,13 @@ String? _validateArticleContentSections(
   if (sections == null || sections.isEmpty) return '文章必须包含规范正文段落';
   final referenced = <int>{};
   for (final section in sections) {
-    if (section.keys.any((key) => !const {
-          'text_delta',
-          'gallery_media_indices',
-          'video_media_index',
-        }.contains(key))) {
+    if (section.keys.any(
+      (key) => !const {
+        'text_delta',
+        'gallery_media_indices',
+        'video_media_index',
+      }.contains(key),
+    )) {
       return '文章段落包含未知字段';
     }
     final delta = section['text_delta'];
@@ -479,27 +491,37 @@ String? validateArticleTextDelta(Object? raw) {
       final value = entry.value;
       final valid = switch (key) {
         'bold' || 'italic' || 'underline' || 'strike' => value == true,
-        'font' => const {'heiti', 'songti', 'kaiti', 'monospace', 'jinglei'}
-            .contains(value),
-        'size' =>
-          const {'small', 'body', 'large', 'subtitle', 'title'}.contains(value),
+        'font' => const {
+          'heiti',
+          'songti',
+          'kaiti',
+          'monospace',
+          'jinglei',
+        }.contains(value),
+        'size' => const {
+          'small',
+          'body',
+          'large',
+          'subtitle',
+          'title',
+        }.contains(value),
         'color' => const {
-            'default',
-            'secondary',
-            'primary',
-            'info',
-            'success',
-            'warning',
-            'danger'
-          }.contains(value),
+          'default',
+          'secondary',
+          'primary',
+          'info',
+          'success',
+          'warning',
+          'danger',
+        }.contains(value),
         'background' => const {
-            'neutral_soft',
-            'primary_soft',
-            'info_soft',
-            'success_soft',
-            'warning_soft',
-            'danger_soft'
-          }.contains(value),
+          'neutral_soft',
+          'primary_soft',
+          'info_soft',
+          'success_soft',
+          'warning_soft',
+          'danger_soft',
+        }.contains(value),
         'align' => insert == '\n' && const {'center', 'right'}.contains(value),
         'list' => insert == '\n' && const {'ordered', 'bullet'}.contains(value),
         _ => false,

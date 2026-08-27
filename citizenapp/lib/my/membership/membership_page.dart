@@ -8,9 +8,9 @@ import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/my/creator/creator_money.dart'
     show fenToYuanMoneyLabel;
 import 'package:citizenapp/my/membership/membership_detail_page.dart';
+import 'package:citizenapp/my/membership/membership_revision.dart';
 import 'package:citizenapp/my/membership/subscription_service.dart';
 import 'package:citizenapp/my/myid/register_identity_flow.dart';
-import 'package:citizenapp/rpc/subscription_rpc.dart';
 import 'package:citizenapp/ui/identity_badge.dart';
 import 'package:citizenapp/ui/app_theme.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
@@ -32,9 +32,9 @@ class MembershipPage extends StatefulWidget {
     SquareChainService? chainService,
     SquareSessionProvider? sessionProvider,
     SubscriptionService? subscriptionService,
-  })  : _chainService = chainService,
-        _sessionProvider = sessionProvider,
-        _subscriptionService = subscriptionService;
+  }) : _chainService = chainService,
+       _sessionProvider = sessionProvider,
+       _subscriptionService = subscriptionService;
 
   final SquareChainService? _chainService;
   final SquareSessionProvider? _sessionProvider;
@@ -55,7 +55,6 @@ class _MembershipPageState extends State<MembershipPage>
   late final AnimationController _snapController;
   Animation<double>? _snapAnim;
 
-  static const _subscriptionCacheTtl = Duration(minutes: 5);
   static const _pricesCacheTtl = Duration(minutes: 30);
 
   /// 首屏永远使用 App 内置三档静态定义立即渲染；联网只在后台替换动态字段。
@@ -90,20 +89,23 @@ class _MembershipPageState extends State<MembershipPage>
   @override
   void initState() {
     super.initState();
-    _snapController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 320),
-    )..addListener(() {
-        final anim = _snapAnim;
-        if (anim != null && mounted) setState(() => _page = anim.value);
-      });
+    _snapController =
+        AnimationController(
+          vsync: this,
+          duration: const Duration(milliseconds: 320),
+        )..addListener(() {
+          final anim = _snapAnim;
+          if (anim != null && mounted) setState(() => _page = anim.value);
+        });
     WalletManager.walletsRevision.addListener(_onIdentityChanged);
+    MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
     unawaited(_load());
   }
 
   @override
   void dispose() {
     WalletManager.walletsRevision.removeListener(_onIdentityChanged);
+    MembershipRevision.instance.listenable.removeListener(_onMembershipChanged);
     _snapController.dispose();
     super.dispose();
   }
@@ -117,6 +119,32 @@ class _MembershipPageState extends State<MembershipPage>
       return;
     }
     unawaited(_load());
+  }
+
+  /// 其它页面或订阅确认推进同一 CID 缓存时只重读本机快照，不重复访问 CitizenServe。
+  void _onMembershipChanged() {
+    final event = MembershipRevision.instance.listenable.value;
+    if (!mounted ||
+        _refreshing ||
+        event == null ||
+        event.cidNumber != _data.cidNumber) {
+      return;
+    }
+    unawaited(() async {
+      final snapshot = await _subscriptionService.readDisplaySnapshot(
+        event.cidNumber,
+      );
+      if (!mounted || snapshot == null) return;
+      _applyViewData(
+        _MembershipViewData(
+          accountId: _data.accountId,
+          cidNumber: event.cidNumber,
+          state: _withStaticPlans(snapshot.state),
+          prices: snapshot.prices,
+          subscriptionReady: snapshot.subscriptionFetchedAtMs > 0,
+        ),
+      );
+    }());
   }
 
   /// 进入「未注册」呈现:置标志 + 独立补一次价格。
@@ -204,32 +232,24 @@ class _MembershipPageState extends State<MembershipPage>
       }
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
-      final refreshSubscription = forceRefresh ||
-          cached == null ||
-          !cached.subscriptionIsFresh(nowMs, _subscriptionCacheTtl);
-      final refreshPrices = forceRefresh ||
+      final refreshPrices =
+          forceRefresh ||
           cached == null ||
           !cached.pricesAreFresh(nowMs, _pricesCacheTtl);
-      if (!refreshSubscription && !refreshPrices) return;
 
       SquareMembershipState? refreshedState;
       Map<String, int>? refreshedPrices;
       final refreshes = <Future<void>>[];
-      if (refreshSubscription) {
-        refreshes.add(() async {
-          try {
-            final snapshot = await _subscriptionService.fetchFinalizedState(
-              cidNumber,
-            );
-            refreshedState = _stateFromFinalized(
-              _staticMembershipState,
-              snapshot,
-            );
-          } on Object catch (error) {
-            refreshError ??= error;
-          }
-        }());
-      }
+      refreshes.add(() async {
+        try {
+          refreshedState = await _subscriptionService.authorizeMembership(
+            session,
+            forceRefresh: forceRefresh,
+          );
+        } on Object catch (error) {
+          refreshError ??= error;
+        }
+      }());
       if (refreshPrices) {
         refreshes.add(() async {
           try {
@@ -243,19 +263,27 @@ class _MembershipPageState extends State<MembershipPage>
       }
       await Future.wait(refreshes);
 
-      final state = refreshedState ??
-          (cached == null ? _staticMembershipState : cached.state);
+      final serverSnapshot = await _subscriptionService.readDisplaySnapshot(
+        cidNumber,
+      );
+      final state =
+          refreshedState ??
+          serverSnapshot?.state ??
+          cached?.state ??
+          _staticMembershipState;
       final prices = refreshedPrices ?? cached?.prices ?? const <String, int>{};
       final updated = MembershipDisplaySnapshot(
         state: state,
         prices: prices,
-        subscriptionFetchedAtMs: refreshedState == null
-            ? cached?.subscriptionFetchedAtMs ?? 0
+        subscriptionFetchedAtMs:
+            serverSnapshot?.subscriptionFetchedAtMs ??
+            cached?.subscriptionFetchedAtMs ??
+            0,
+        pricesFetchedAtMs: refreshedPrices == null
+            ? cached?.pricesFetchedAtMs ?? 0
             : nowMs,
-        pricesFetchedAtMs:
-            refreshedPrices == null ? cached?.pricesFetchedAtMs ?? 0 : nowMs,
       );
-      if (refreshedState != null || refreshedPrices != null) {
+      if (refreshedPrices != null) {
         try {
           await _subscriptionService.writeDisplaySnapshot(cidNumber, updated);
         } on Object {
@@ -321,11 +349,18 @@ class _MembershipPageState extends State<MembershipPage>
     if (!mounted) return;
     setState(() => _busy = true);
     try {
-      // 动权前绕过展示缓存，重新核验 finalized 订阅态和链上价格。
-      final snapshot = await _subscriptionService.fetchFinalizedState(
-        _data.cidNumber,
+      // 订阅动作是鉴权边界：只强制读取一次 CitizenServe，链上交易本身继续最终校验状态。
+      final resolution = await _sessionProvider.resolveSession(refresh: true);
+      final session = resolution.session;
+      if (session == null || session.cidNumber != _data.cidNumber) {
+        throw SubscriptionException(resolution.message);
+      }
+      final state = _withStaticPlans(
+        await _subscriptionService.authorizeMembership(
+          session,
+          forceRefresh: true,
+        ),
       );
-      final state = _stateFromFinalized(_staticMembershipState, snapshot);
       final action = _actionFor(state, level);
       final prices = action == _SubscribeAction.cancel
           ? _data.prices
@@ -351,12 +386,12 @@ class _MembershipPageState extends State<MembershipPage>
         );
       }
       if (!mounted) return;
-      await _load(forceRefresh: true);
+      await _load();
       if (!mounted) return;
       if (_subscriptionService.mirrorSyncPending) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('链上订阅已生效，会员权益正在同步')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('链上订阅已生效，会员权益正在同步')));
       }
     } on SubscriptionException catch (e) {
       if (!mounted) return;
@@ -381,15 +416,16 @@ class _MembershipPageState extends State<MembershipPage>
     final label = _unregistered
         ? '请先注册用户'
         : noWallet
-            ? '请先添加钱包账户'
-            : sessionUnavailable
-                ? _sessionStatus?.message ?? '会员状态同步中'
-                : stateNotReady
-                    ? '会员状态同步中'
-                    : action != _SubscribeAction.cancel && priceFen == null
-                        ? '链上价格未就绪'
-                        : _actionLabel(action);
-    final enabled = _unregistered ||
+        ? '请先添加钱包账户'
+        : sessionUnavailable
+        ? _sessionStatus?.message ?? '会员状态同步中'
+        : stateNotReady
+        ? '会员状态同步中'
+        : action != _SubscribeAction.cancel && priceFen == null
+        ? '链上价格未就绪'
+        : _actionLabel(action);
+    final enabled =
+        _unregistered ||
         (!noWallet &&
             !sessionUnavailable &&
             !stateNotReady &&
@@ -441,7 +477,8 @@ class _MembershipPageState extends State<MembershipPage>
   Widget build(BuildContext context) {
     // 三张套餐卡是本地静态界面，页面查看本身不属于动权操作，不能被身份链读门禁替换成
     // 全屏加载。会员、价格与钱包状态由 [_load] 在卡片已经出现后后台补齐；真正订阅、
-    // 换档或取消时仍由 [SubscriptionService] 重新核验钱包账户、CID 与 finalized 链真值。
+    // 换档或取消时由 [SubscriptionService] 核验钱包、CID 与 CitizenServe 会员真源，
+    // 随后的链上交易继续执行最终状态校验。
     return Scaffold(
       appBar: AppBar(
         title: const Text('会员｜订阅'),
@@ -511,7 +548,8 @@ class _MembershipPageState extends State<MembershipPage>
                         state: state,
                         priceFen: data.prices[plans[index].membershipLevel],
                         // 未注册者按钮永远可点(点了弹注册面板),不受订阅态就绪影响。
-                        canSubscribe: _unregistered ||
+                        canSubscribe:
+                            _unregistered ||
                             (_sessionStatus == SquareSessionStatus.ready &&
                                 data.accountId.isNotEmpty &&
                                 data.subscriptionReady),
@@ -700,10 +738,10 @@ class _MembershipTierCard extends StatelessWidget {
     final actionLabel = registerInsteadOfSubscribe
         ? '注册用户'
         : !canSubscribe
-            ? unavailableLabel
-            : action != _SubscribeAction.cancel && priceFen == null
-                ? '链上价格未就绪'
-                : _actionLabel(action);
+        ? unavailableLabel
+        : action != _SubscribeAction.cancel && priceFen == null
+        ? '链上价格未就绪'
+        : _actionLabel(action);
 
     return Container(
       key: ValueKey('membership-tier-card-$level'),
@@ -839,7 +877,8 @@ class _MembershipTierCard extends StatelessWidget {
                       busy: busy,
                       action: action,
                       // 未注册者按钮必须可点(点了弹注册面板),不受价格就绪限制。
-                      enabled: registerInsteadOfSubscribe ||
+                      enabled:
+                          registerInsteadOfSubscribe ||
                           (canSubscribe &&
                               (action == _SubscribeAction.cancel ||
                                   priceFen != null)),
@@ -863,8 +902,9 @@ class _MembershipTierCard extends StatelessWidget {
     int? priceFen,
   ) {
     // 自由金底使用规范允许的主文字色；民主蓝/薪火红深色底使用纯白标志。
-    final gmbMarkColor =
-        level == 'freedom' ? AppTheme.textPrimary : Colors.white;
+    final gmbMarkColor = level == 'freedom'
+        ? AppTheme.textPrimary
+        : Colors.white;
     final badgeStyle = identityBadgeStyle(
       identityLevel: null,
       membershipLevel: level,
@@ -924,9 +964,7 @@ class _MembershipTierCard extends StatelessWidget {
             ),
             decoration: BoxDecoration(
               color: onTier.withAlpha(38),
-              borderRadius: BorderRadius.circular(
-                AppLayout.scaledValue(999),
-              ),
+              borderRadius: BorderRadius.circular(AppLayout.scaledValue(999)),
             ),
             child: Text(
               '当前会员',
@@ -1105,10 +1143,10 @@ _SubscribeAction _actionFor(SquareMembershipState state, String level) {
 }
 
 String _actionLabel(_SubscribeAction action) => switch (action) {
-      _SubscribeAction.subscribe => '订阅',
-      _SubscribeAction.change => '更换为此档',
-      _SubscribeAction.cancel => '取消订阅',
-    };
+  _SubscribeAction.subscribe => '订阅',
+  _SubscribeAction.change => '更换为此档',
+  _SubscribeAction.cancel => '取消订阅',
+};
 
 class _SubscribeButton extends StatelessWidget {
   const _SubscribeButton({
@@ -1143,13 +1181,11 @@ class _SubscribeButton extends StatelessWidget {
                 color: Colors.white,
               ),
             )
-          : Icon(
-              switch (action) {
-                _SubscribeAction.subscribe => Icons.workspace_premium_outlined,
-                _SubscribeAction.change => Icons.swap_horiz,
-                _SubscribeAction.cancel => Icons.cancel_outlined,
-              },
-              size: AppLayout.scaled(context, 16)),
+          : Icon(switch (action) {
+              _SubscribeAction.subscribe => Icons.workspace_premium_outlined,
+              _SubscribeAction.change => Icons.swap_horiz,
+              _SubscribeAction.cancel => Icons.cancel_outlined,
+            }, size: AppLayout.scaled(context, 16)),
       label: Text(label),
       style: FilledButton.styleFrom(
         backgroundColor: color,
@@ -1162,34 +1198,6 @@ class _SubscribeButton extends StatelessWidget {
       ),
     );
   }
-}
-
-/// 用 finalized 真态覆盖 Cloudflare 镜像状态，只保留 Worker 下发的展示套餐定义。
-SquareMembershipState _stateFromFinalized(
-  SquareMembershipState mirror,
-  FinalizedSubscriptionSnapshot snapshot,
-) {
-  final chain = snapshot.state;
-  if (chain == null) {
-    return SquareMembershipState(
-      active: false,
-      paidUntil: 0,
-      plans: mirror.plans,
-    );
-  }
-  if (chain.plan.kind != 'platform' || chain.plan.membershipLevel == null) {
-    throw const FormatException('平台会员读取到了非平台订阅计划');
-  }
-  final effective = chain.isEffectiveAt(snapshot.chainNowMs);
-  return SquareMembershipState(
-    active: effective,
-    paidUntil: chain.paidUntil,
-    membershipLevel: chain.plan.membershipLevel,
-    subscriptionStatus: chain.status,
-    subscriptionActive: effective,
-    lastChargedAt: chain.lastChargedAt,
-    plans: mirror.plans,
-  );
 }
 
 /// 卡内分区小标题（会员权益）。
@@ -1557,10 +1565,10 @@ List<SquareMembershipPlan> _orderedPlans(List<SquareMembershipPlan> plans) {
 }
 
 Color _tierColor(String level) => switch (level) {
-      'spark' => AppTheme.identityCandidate,
-      'democracy' => AppTheme.identityVoting,
-      _ => AppTheme.identityVisitor,
-    };
+  'spark' => AppTheme.identityCandidate,
+  'democracy' => AppTheme.identityVoting,
+  _ => AppTheme.identityVisitor,
+};
 
 /// 顶带/价格标签前景色：自由金底用深棕保证对比度，民主蓝/薪火红底用白字。
 Color _onTierColor(String level) =>
@@ -1568,11 +1576,11 @@ Color _onTierColor(String level) =>
 
 /// 会员宣传语是稳定的本地 UI 文案，不进入会员套餐 DTO 或订阅契约。
 String _membershipMotto(String level) => switch (level) {
-      'freedom' => '生命诚可贵.爱情价更高.若为自由故.两者皆可抛',
-      'democracy' => '民主不是万能的.没有民主是万万不能的',
-      'spark' => '自由民主.薪火相传',
-      _ => '',
-    };
+  'freedom' => '生命诚可贵.爱情价更高.若为自由故.两者皆可抛',
+  'democracy' => '民主不是万能的.没有民主是万万不能的',
+  'spark' => '自由民主.薪火相传',
+  _ => '',
+};
 
 /// 会员档在固定档序中的下标；未知/无订阅归 0（自由）。
 int _tierIndexOfLevel(String? level) {

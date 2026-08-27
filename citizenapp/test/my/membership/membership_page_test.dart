@@ -10,6 +10,7 @@ import 'package:http/testing.dart';
 import 'package:citizenapp/8964/chain/square_chain_service.dart';
 import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
+import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/my/membership/membership_page.dart';
 import 'package:citizenapp/my/membership/membership_revision.dart';
 import 'package:citizenapp/my/membership/subscription_service.dart';
@@ -17,7 +18,6 @@ import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/my/myid/citizen_identity_chain_reader.dart';
 import 'package:citizenapp/my/myid/finalized_identity_resolver.dart';
 import 'package:citizenapp/rpc/chain_rpc.dart' show TxPoolWatchCallback;
-import 'package:citizenapp/rpc/subscription_rpc.dart';
 import 'package:citizenapp/ui/app_theme.dart';
 import 'package:citizenapp/ui/identity_badge.dart';
 import 'package:citizenapp/security/local_data_key.dart';
@@ -128,7 +128,8 @@ class _RecordingSubscriptionService extends SubscriptionService {
   final List<String> subscribed = [];
   final List<String> changed = [];
   int cancelCount = 0;
-  int finalizedFetchCount = 0;
+  int authorizationCount = 0;
+  final List<bool> forceAuthorizationCalls = <bool>[];
   int cacheReadCount = 0;
   int cacheWriteCount = 0;
   SquareMembershipState? mirror;
@@ -139,34 +140,21 @@ class _RecordingSubscriptionService extends SubscriptionService {
   bool get mirrorSyncPending => mirrorPending;
 
   @override
-  Future<FinalizedSubscriptionSnapshot> fetchFinalizedState(
-    String accountId,
-  ) async {
-    finalizedFetchCount++;
-    final source = mirror!;
-    final status = source.subscriptionStatus ??
-        (source.subscriptionActive ? 'active' : null);
-    final level = source.membershipLevel;
-    final now = DateTime.now().millisecondsSinceEpoch;
-    return FinalizedSubscriptionSnapshot(
-      state: status == null || level == null
-          ? null
-          : ChainSubscriptionState(
-              plan: ChainSubscriptionPlan.platform(level),
-              startedAt:
-                  source.lastChargedAt == 0 ? now - 1000 : source.lastChargedAt,
-              lastChargedAt:
-                  source.lastChargedAt == 0 ? now - 1000 : source.lastChargedAt,
-              lastChargedPriceFen: BigInt.one,
-              paidUntil:
-                  source.paidUntil == 0 ? now + 600000 : source.paidUntil,
-              status: status,
-              authorizedPriceFen: BigInt.one,
-              suspendReason: null,
-            ),
-      chainNowMs: now,
-      blockHashHex: '0x${List.filled(64, '0').join()}',
+  Future<SquareMembershipState> authorizeMembership(
+    SquareSession session, {
+    bool forceRefresh = false,
+  }) async {
+    authorizationCount++;
+    forceAuthorizationCalls.add(forceRefresh);
+    final state = mirror!;
+    final previous = cachedSnapshot;
+    cachedSnapshot = MembershipDisplaySnapshot(
+      state: state,
+      prices: previous?.prices ?? const <String, int>{},
+      subscriptionFetchedAtMs: DateTime.now().millisecondsSinceEpoch,
+      pricesFetchedAtMs: previous?.pricesFetchedAtMs ?? 0,
     );
+    return state;
   }
 
   @override
@@ -228,7 +216,8 @@ SquareMembershipState _state({
     active: active,
     paidUntil: active ? DateTime.now().millisecondsSinceEpoch + 600000 : 0,
     membershipLevel: membershipLevel,
-    subscriptionStatus: subscriptionStatus,
+    subscriptionStatus:
+        subscriptionStatus ?? (subscriptionActive ? 'active' : null),
     subscriptionActive: subscriptionActive,
     lastChargedAt: lastChargedAt,
     plans: const [],
@@ -245,7 +234,7 @@ Future<void> _pump(
 }) async {
   final effectiveService = service ?? _RecordingSubscriptionService();
   if (effectiveService is _RecordingSubscriptionService) {
-    effectiveService.mirror = state;
+    effectiveService.mirror ??= effectiveService.cachedSnapshot?.state ?? state;
   }
   await tester.pumpWidget(
     MaterialApp(
@@ -323,7 +312,10 @@ void main() {
         expect(request.body, isNot(contains('signed_extrinsic_hex')));
         expect(request.body, isNot(contains('membership_level')));
         expect(request.body, isNot(contains('"action"')));
-        return http.Response('{}', 200);
+        return http.Response(
+          '''{"active":true,"subscription_active":true,"membership":{"membership_level":"democracy","paid_until":9999999999999,"subscription_status":"active","last_charged_at":1000},"plans":[],"usage_state":null}''',
+          200,
+        );
       }),
     );
     final session = SquareSession(
@@ -338,13 +330,50 @@ void main() {
       },
     );
 
-    await api.confirmPlatformSubscription(
+    final confirmed = await api.confirmPlatformSubscription(
       session: session,
       txHash: '0x${List.filled(64, 'a').join()}',
       blockHashHex: '0x${List.filled(64, 'b').join()}',
     );
 
     expect(deviceSignCount, 0);
+    expect(confirmed.active, isTrue);
+    expect(confirmed.membershipLevel, 'democracy');
+  });
+
+  test('同一 CitizenServe 身份会话跨页面服务实例只读取一次会员', () async {
+    var membershipCalls = 0;
+    final api = SquareApiClient(
+      baseUrl: 'https://membership.test',
+      httpClient: MockClient((request) async {
+        expect(request.url.path, '/square/membership');
+        membershipCalls += 1;
+        return http.Response(
+          '''{"active":true,"subscription_active":true,"membership":{"membership_level":"freedom","paid_until":9999999999999,"subscription_status":"active","last_charged_at":1000},"plans":[],"usage_state":null}''',
+          200,
+        );
+      }),
+    );
+    final session = SquareSession(
+      sessionToken: 'membership-session-once',
+      cidNumber: 'CN220-CTZN2-198805299-2026',
+      bindingRevision: 9,
+      accountId:
+          '0x9999999999999999999999999999999999999999999999999999999999999999',
+      expiresAt: 9999999999999,
+      signRequest: (_) async => 'test-device-signature',
+    );
+    final first = SubscriptionService(api: api);
+    final second = SubscriptionService(api: api);
+
+    final states = await Future.wait([
+      first.authorizeMembership(session),
+      second.authorizeMembership(session),
+    ]);
+
+    expect(membershipCalls, 1);
+    expect(states.every((state) => state.active), isTrue);
+    expect(ChatMediaLimits.chatEnabledFor(session.cidNumber), isTrue);
   });
 
   testWidgets('renders the three subscription tier cards', (tester) async {
@@ -371,9 +400,7 @@ void main() {
         _ => '薪火会员',
       };
       final titleFinder = find.text(displayName);
-      final badgeFinder = find.byKey(
-        ValueKey('membership-tier-badge-$level'),
-      );
+      final badgeFinder = find.byKey(ValueKey('membership-tier-badge-$level'));
       final badge = tester.widget<IdentityBadge>(badgeFinder);
       final title = tester.widget<Text>(titleFinder);
       expect(badge.size, title.style?.fontSize);
@@ -394,9 +421,7 @@ void main() {
 
       final dotCount = '.'.allMatches(entry.value).length;
       for (var index = 0; index < dotCount; index++) {
-        final slot = find.byKey(
-          ValueKey('membership-motto-dot-$level-$index'),
-        );
+        final slot = find.byKey(ValueKey('membership-motto-dot-$level-$index'));
         final dot = find.byKey(
           ValueKey('membership-motto-dot-shape-$level-$index'),
         );
@@ -405,9 +430,13 @@ void main() {
         // 点在自己的固定盒中上下、左右精确居中；最长宣传语缩放后仍至少 4px，
         // 明显大于原字体基线句点。
         expect(
-            tester.getCenter(dot).dx, closeTo(tester.getCenter(slot).dx, 0.01));
+          tester.getCenter(dot).dx,
+          closeTo(tester.getCenter(slot).dx, 0.01),
+        );
         expect(
-            tester.getCenter(dot).dy, closeTo(tester.getCenter(slot).dy, 0.01));
+          tester.getCenter(dot).dy,
+          closeTo(tester.getCenter(slot).dy, 0.01),
+        );
         expect(tester.getSize(dot).width, greaterThanOrEqualTo(4));
         expect(tester.getSize(dot).height, greaterThanOrEqualTo(4));
       }
@@ -465,7 +494,7 @@ void main() {
     expect(find.text('请先添加钱包账户'), findsNWidgets(4));
   });
 
-  testWidgets('有效缓存直接展示且不重复读取链上订阅和价格', (tester) async {
+  testWidgets('有效缓存直接展示且身份会话只鉴权一次并且不重复读取价格', (tester) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final service = _RecordingSubscriptionService()
       ..cachedSnapshot = MembershipDisplaySnapshot(
@@ -488,11 +517,12 @@ void main() {
 
     expect(find.text('999.00 元'), findsOneWidget);
     expect(find.text('当前会员'), findsOneWidget);
-    expect(service.finalizedFetchCount, 0);
+    expect(service.authorizationCount, 1);
+    expect(service.forceAuthorizationCalls, [isFalse]);
     expect(chain.fetchCount, 0);
   });
 
-  testWidgets('手动刷新绕过有效缓存强制读取 finalized 状态和价格', (tester) async {
+  testWidgets('手动刷新绕过会话结果强制读取 CitizenServe 和链上价格', (tester) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final service = _RecordingSubscriptionService()
       ..cachedSnapshot = MembershipDisplaySnapshot(
@@ -507,7 +537,8 @@ void main() {
     await tester.tap(find.byTooltip('刷新'));
     await tester.pumpAndSettle();
 
-    expect(service.finalizedFetchCount, 1);
+    expect(service.authorizationCount, 2);
+    expect(service.forceAuthorizationCalls, [isFalse, isTrue]);
     expect(chain.fetchCount, 1);
     expect(chain.forceFreshCalls, [isTrue]);
     expect(find.text('399.00 元'), findsOneWidget);
@@ -745,8 +776,8 @@ void main() {
       () => MembershipRevision.instance.listenable.removeListener(listener),
     );
 
-    MembershipRevision.instance.notifyConfirmed('   ');
-    MembershipRevision.instance.notifyConfirmed('CID-1');
+    MembershipRevision.instance.notifyChanged('   ');
+    MembershipRevision.instance.notifyChanged('CID-1');
 
     expect(events, hasLength(1));
     expect(events.single.cidNumber, 'CID-1');
@@ -876,7 +907,7 @@ void main() {
     const snapshot = MembershipDisplaySnapshot(
       state: SquareMembershipState(
         active: true,
-        paidUntil: 2000,
+        paidUntil: 9999999999999,
         membershipLevel: 'democracy',
         subscriptionStatus: 'active',
         subscriptionActive: true,

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Miniflare } from 'miniflare';
 
 import { decodeSquarePostSubscriptionEvents } from '../src/chain/square_post_event';
+import type { ChainSubscriptionState } from '../src/chain/subscription';
 import {
   reconcileFinalizedSubscriptionProjection,
   type SubscriptionProjectionDeps,
@@ -91,6 +92,7 @@ describe('finalized 订阅统一游标', () => {
       },
       readSubscriptionsAtBlock: async () => [],
       readCreatorPlansBatchAtBlock: async () => [],
+      fetchChainAccountIdsByCidAtBlock: async () => new Map(),
     };
     await expect(reconcileFinalizedSubscriptionProjection(env, deps)).rejects.toThrow('events unavailable');
     await expect(cursor()).resolves.toMatchObject({ finalized_block_number: 1 });
@@ -99,6 +101,70 @@ describe('finalized 订阅统一游标', () => {
       processed_block_count: 1,
       cursor_block_number: 2,
     });
+  });
+
+  it('用户投影未就绪时停止游标，补齐后从原区块恢复平台会员', async () => {
+    const genesisHash = `0x${'00'.repeat(32)}`;
+    const blockHash = `0x${'01'.repeat(32)}`;
+    const state: ChainSubscriptionState = {
+      plan: { kind: 'platform', membershipLevel: 'freedom' },
+      startedAt: 100,
+      lastChargedAt: 100,
+      lastChargedPriceFen: 29900n,
+      paidUntil: 9999999999999,
+      status: 'active',
+      authorizedPriceFen: 29900n,
+      suspendReason: null,
+    };
+    const deps: SubscriptionProjectionDeps = {
+      fetchFinalizedHead: async () => blockHash,
+      fetchBlockHeader: async () => ({ number: '0x1' }),
+      fetchCanonicalBlockHash: async (_bindings, number) =>
+        number === 0 ? genesisHash : blockHash,
+      fetchSystemEventsAtBlock: async () => systemEvents([
+        eventRecord(1, concatBytes(
+          cid(SUBSCRIBER_CID),
+          account(ACCOUNT),
+          new Uint8Array([0]),
+          new Uint8Array([0, 1]),
+          new Uint8Array(16),
+          u64Le(100),
+          u64Le(9999999999999),
+        )),
+      ]),
+      readSubscriptionsAtBlock: async () => [state],
+      readCreatorPlansBatchAtBlock: async () => [],
+      fetchChainAccountIdsByCidAtBlock: async (_bindings, cidNumbers) =>
+        new Map(cidNumbers.map((cidNumber) => [cidNumber, ACCOUNT])),
+    };
+
+    await expect(reconcileFinalizedSubscriptionProjection(env, deps)).rejects.toMatchObject({
+      code: 'subscription_identity_projection_pending',
+    });
+    await expect(cursor()).resolves.toMatchObject({ finalized_block_number: 0 });
+
+    // 模拟同一次 Cron 的前置用户 finalized 投影完成；会员任务随后重放同一区块。
+    await env.DB.prepare(
+      `INSERT INTO users
+        (cid_number, account_id, binding_revision, identity_level,
+         registration_finalized_block_number, registration_finalized_block_hash,
+         binding_finalized_block_number, binding_finalized_block_hash,
+         identity_finalized_block_number, identity_finalized_block_hash,
+         registered_at, binding_updated_at, identity_updated_at)
+       VALUES (?, ?, 1, 'visitor', 1, ?, 1, ?, 1, ?, 100, 100, 100)`,
+    ).bind(SUBSCRIBER_CID, ACCOUNT, blockHash, blockHash, blockHash).run();
+
+    await reconcileFinalizedSubscriptionProjection(env, deps);
+
+    const membership = await env.DB.prepare(
+      'SELECT cid_number, account_id, membership_level FROM square_memberships WHERE cid_number = ?',
+    ).bind(SUBSCRIBER_CID).first<Record<string, unknown>>();
+    expect(membership).toMatchObject({
+      cid_number: SUBSCRIBER_CID,
+      account_id: ACCOUNT,
+      membership_level: 'freedom',
+    });
+    await expect(cursor()).resolves.toMatchObject({ finalized_block_number: 1 });
   });
 });
 

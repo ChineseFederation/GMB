@@ -25,8 +25,8 @@ abstract interface class CreatorApi {
     required String blockHashHex,
   });
 
-  /// 读某创作者的档位（订阅者在他人主页选档用）。无档返回 null。
-  Future<CreatorPlan?> fetchPlanOf(
+  /// 读某创作者档位及当前会话对其订阅状态；两者均来自 CitizenServe finalized 投影。
+  Future<CreatorView> fetchViewOf(
     SquareSession session,
     String creatorCidNumber,
   );
@@ -37,6 +37,39 @@ abstract interface class CreatorApi {
     required String txHash,
     required String blockHashHex,
   });
+}
+
+class CreatorView {
+  const CreatorView({required this.plan, required this.subscription});
+
+  final CreatorPlan? plan;
+  final CreatorSubscriptionState? subscription;
+}
+
+class CreatorSubscriptionState {
+  const CreatorSubscriptionState({
+    required this.tierId,
+    required this.billingPeriod,
+    required this.subscriptionStatus,
+    required this.paidUntil,
+    required this.active,
+  });
+
+  final String tierId;
+  final String billingPeriod;
+  final String subscriptionStatus;
+  final int paidUntil;
+  final bool active;
+
+  factory CreatorSubscriptionState.fromJson(Map<String, dynamic> json) {
+    return CreatorSubscriptionState(
+      tierId: json['tier_id']?.toString() ?? '',
+      billingPeriod: json['billing_period']?.toString() ?? '',
+      subscriptionStatus: json['subscription_status']?.toString() ?? '',
+      paidUntil: json['paid_until'] is int ? json['paid_until'] as int : 0,
+      active: json['active'] == true,
+    );
+  }
 }
 
 class CreatorApiException implements Exception {
@@ -54,10 +87,10 @@ class CreatorApiException implements Exception {
 ///   POST /square/creator/plan             （校验 finalized 链状态后覆盖查询投影）
 class CreatorApiHttp implements CreatorApi {
   CreatorApiHttp({String? baseUrl, http.Client? httpClient})
-      : baseUrl = SquareApiConfig.normalizeBaseUrl(
-          baseUrl ?? SquareApiConfig.defaultBaseUrl,
-        ),
-        _http = httpClient ?? http.Client();
+    : baseUrl = SquareApiConfig.normalizeBaseUrl(
+        baseUrl ?? SquareApiConfig.defaultBaseUrl,
+      ),
+      _http = httpClient ?? http.Client();
 
   final String baseUrl;
   final http.Client _http;
@@ -84,13 +117,10 @@ class CreatorApiHttp implements CreatorApi {
     required String txHash,
     required String blockHashHex,
   }) async {
-    final saved = await _postFinalizedProjectionJson(
-        '/square/creator/plan',
-        {
-          'tx_hash': txHash,
-          'block_hash': blockHashHex,
-        },
-        session);
+    final saved = await _postFinalizedProjectionJson('/square/creator/plan', {
+      'tx_hash': txHash,
+      'block_hash': blockHashHex,
+    }, session);
     final plan = saved['plan'];
     if (plan is! Map<String, dynamic>) {
       throw const CreatorApiException('创作者档位保存响应不完整');
@@ -99,7 +129,7 @@ class CreatorApiHttp implements CreatorApi {
   }
 
   @override
-  Future<CreatorPlan?> fetchPlanOf(
+  Future<CreatorView> fetchViewOf(
     SquareSession session,
     String creatorCidNumber,
   ) async {
@@ -108,8 +138,15 @@ class CreatorApiHttp implements CreatorApi {
       session,
     );
     final plan = data['plan'];
-    if (plan is! Map<String, dynamic>) return null;
-    return CreatorPlan.fromJson(plan);
+    return CreatorView(
+      plan: plan is Map<String, dynamic> ? CreatorPlan.fromJson(plan) : null,
+      subscription:
+          data['tier_id'] is String &&
+              data['billing_period'] is String &&
+              data['subscription_status'] is String
+          ? CreatorSubscriptionState.fromJson(data)
+          : null,
+    );
   }
 
   @override
@@ -118,13 +155,10 @@ class CreatorApiHttp implements CreatorApi {
     required String txHash,
     required String blockHashHex,
   }) async {
-    await _postFinalizedProjectionJson(
-        '/square/creator/subscription/confirm',
-        {
-          'tx_hash': txHash,
-          'block_hash': blockHashHex,
-        },
-        session);
+    await _postFinalizedProjectionJson('/square/creator/subscription/confirm', {
+      'tx_hash': txHash,
+      'block_hash': blockHashHex,
+    }, session);
   }
 
   Future<Map<String, dynamic>> _getJson(
@@ -204,8 +238,8 @@ class CreatorApiHttp implements CreatorApi {
 /// 离线内存实现：本地开发 / 测试用（不依赖真 Cloudflare）。
 class FakeCreatorApi implements CreatorApi {
   FakeCreatorApi({CreatorPlan? initialPlan, CreatorOverview? overview})
-      : _plan = initialPlan,
-        _overview = overview;
+    : _plan = initialPlan,
+      _overview = overview;
 
   CreatorPlan? _plan;
   final CreatorOverview? _overview;
@@ -236,11 +270,10 @@ class FakeCreatorApi implements CreatorApi {
   }
 
   @override
-  Future<CreatorPlan?> fetchPlanOf(
+  Future<CreatorView> fetchViewOf(
     SquareSession session,
     String creatorCidNumber,
-  ) async =>
-      _plan;
+  ) async => CreatorView(plan: _plan, subscription: null);
 
   @override
   Future<void> confirmCreatorSubscription({

@@ -20,7 +20,7 @@ import 'package:citizenapp/ui/app_layout.dart';
 
 /// 「我的 → 创作者」：管理自己的创作者会员（档位 / 收入概览）。
 ///
-/// 首帧直接使用「我的」页传入的会员展示态或 CID 本地快照；链与 Worker 只在后台
+/// 首帧直接使用「我的」页传入的 CitizenServe 会员缓存；创作者档位只在后台
 /// 刷新读模型。档位名称和价格都由链上保存；整次保存只产生一次
 /// `set_creator_plans` 账户签名，展示快照不参与授权。
 class CreatorPage extends StatefulWidget {
@@ -28,7 +28,8 @@ class CreatorPage extends StatefulWidget {
     super.key,
     CreatorService? service,
     this.initialCidNumber = '',
-    this.initialMembershipDecision = MembershipDisplayDecision.inactiveConfirmed,
+    this.initialMembershipDecision =
+        MembershipDisplayDecision.inactiveConfirmed,
   }) : _service = service;
 
   final CreatorService? _service;
@@ -37,7 +38,7 @@ class CreatorPage extends StatefulWidget {
   final String initialCidNumber;
 
   /// 仅作为首帧展示提示；只允许有效或无效二元态。
-  /// 创建、编辑等动作仍重新读取 finalized 会员真态。
+  /// 创建、编辑等动作仍由 CitizenServe D1 重新鉴权。
   final MembershipDisplayDecision initialMembershipDecision;
 
   @override
@@ -61,9 +62,9 @@ class _CreatorPageState extends State<CreatorPage> {
     _data = switch (widget.initialMembershipDecision) {
       MembershipDisplayDecision.inactiveConfirmed => CreatorPageData.gated(),
       MembershipDisplayDecision.activeConfirmed => CreatorPageData.active(
-          plan: CreatorPlan.empty(initialCidNumber),
-          overview: CreatorOverview.zero,
-        ),
+        plan: CreatorPlan.empty(initialCidNumber),
+        overview: CreatorOverview.zero,
+      ),
     };
     WalletManager.walletsRevision.addListener(_onIdentityChanged);
     MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
@@ -124,7 +125,7 @@ class _CreatorPageState extends State<CreatorPage> {
 
       final snapshot = await _service.readDisplaySnapshot(cidNumber);
       if (!mounted || generation != _loadGeneration) return;
-      // Creator 展示快照只由 finalized 会员与创作者读取写入，可信度高于入口二元提示；
+      // Creator 展示快照只由 CitizenServe 会员缓存与创作者读取写入，可信度高于入口提示；
       // 已确认有效的本地快照可以覆盖旧的无会员入口状态。
       if (snapshot != null) {
         setState(() {
@@ -137,10 +138,7 @@ class _CreatorPageState extends State<CreatorPage> {
       final fresh =
           snapshot?.isFresh(DateTime.now().millisecondsSinceEpoch) == true;
       if (force || !fresh) {
-        unawaited(_refresh(
-          generation: generation,
-          forceVisibleError: false,
-        ));
+        unawaited(_refresh(generation: generation, forceVisibleError: false));
       }
     } on Exception catch (e) {
       if (!mounted || generation != _loadGeneration) return;
@@ -238,8 +236,9 @@ class _CreatorPageState extends State<CreatorPage> {
             _emptyTiers(resolved: resolved)
           else ...[
             Padding(
-              padding:
-                  EdgeInsets.symmetric(horizontal: AppLayout.scaledValue(2)),
+              padding: EdgeInsets.symmetric(
+                horizontal: AppLayout.scaledValue(2),
+              ),
               child: Row(
                 children: [
                   Text(
@@ -254,8 +253,9 @@ class _CreatorPageState extends State<CreatorPage> {
                   Text(
                     '${plan.tiers.length} / ${CreatorPlan.maxTiers}',
                     style: TextStyle(
-                        fontSize: AppLayout.scaledValue(12),
-                        color: AppTheme.textTertiary),
+                      fontSize: AppLayout.scaledValue(12),
+                      color: AppTheme.textTertiary,
+                    ),
                   ),
                 ],
               ),
@@ -280,8 +280,9 @@ class _CreatorPageState extends State<CreatorPage> {
               '价格以公民币结算 · 订阅款全额进你的钱包 · 保存只签名一次',
               textAlign: TextAlign.center,
               style: TextStyle(
-                  fontSize: AppLayout.scaledValue(11),
-                  color: AppTheme.textTertiary),
+                fontSize: AppLayout.scaledValue(11),
+                color: AppTheme.textTertiary,
+              ),
             ),
           ),
         ],
@@ -293,8 +294,9 @@ class _CreatorPageState extends State<CreatorPage> {
     return Container(
       decoration: AppTheme.cardDecoration(),
       padding: EdgeInsets.symmetric(
-          horizontal: AppLayout.scaledValue(16),
-          vertical: AppLayout.scaledValue(24)),
+        horizontal: AppLayout.scaledValue(16),
+        vertical: AppLayout.scaledValue(24),
+      ),
       child: Column(
         children: [
           Container(
@@ -305,22 +307,31 @@ class _CreatorPageState extends State<CreatorPage> {
               color: AppTheme.primary.withAlpha(24),
               borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             ),
-            child: Icon(Icons.storefront_outlined,
-                size: AppLayout.scaledValue(26), color: AppTheme.primary),
+            child: Icon(
+              Icons.storefront_outlined,
+              size: AppLayout.scaledValue(26),
+              color: AppTheme.primary,
+            ),
           ),
           SizedBox(height: AppLayout.scaledValue(12)),
-          Text(resolved ? '还没有会员档' : '会员档',
-              style: TextStyle(
-                  fontSize: AppLayout.scaledValue(15),
-                  fontWeight: FontWeight.w600,
-                  color: AppTheme.textPrimary)),
+          Text(
+            resolved ? '还没有会员档' : '会员档',
+            style: TextStyle(
+              fontSize: AppLayout.scaledValue(15),
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textPrimary,
+            ),
+          ),
           SizedBox(height: AppLayout.scaledValue(6)),
-          Text(resolved ? '创建第一个会员档，粉丝就能用公民币订阅你。' : '创建和管理你的会员档。',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontSize: AppLayout.scaledValue(13),
-                  height: 1.5,
-                  color: AppTheme.textSecondary)),
+          Text(
+            resolved ? '创建第一个会员档，粉丝就能用公民币订阅你。' : '创建和管理你的会员档。',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: AppLayout.scaledValue(13),
+              height: 1.5,
+              color: AppTheme.textSecondary,
+            ),
+          ),
           SizedBox(height: AppLayout.scaledValue(16)),
           FilledButton.icon(
             onPressed: resolved ? () => _openEdit(null) : null,
@@ -349,9 +360,11 @@ class _CreatorPageState extends State<CreatorPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.add,
-                size: AppLayout.scaledValue(18),
-                color: atMax ? AppTheme.textTertiary : AppTheme.primary),
+            Icon(
+              Icons.add,
+              size: AppLayout.scaledValue(18),
+              color: atMax ? AppTheme.textTertiary : AppTheme.primary,
+            ),
             SizedBox(width: AppLayout.scaledValue(6)),
             Text(
               atMax ? '已达 ${CreatorPlan.maxTiers} 档上限' : '新增会员档',
@@ -370,16 +383,17 @@ class _CreatorPageState extends State<CreatorPage> {
   Widget _subscribersEntry(int count, {required bool resolved}) {
     return InkWell(
       onTap: resolved
-          ? () => ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('订阅者明细即将上线')),
-              )
+          ? () => ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(const SnackBar(content: Text('订阅者明细即将上线')))
           : null,
       borderRadius: BorderRadius.circular(AppTheme.radiusMd),
       child: Container(
         decoration: AppTheme.cardDecoration(),
         padding: EdgeInsets.symmetric(
-            horizontal: AppLayout.scaledValue(14),
-            vertical: AppLayout.scaledValue(13)),
+          horizontal: AppLayout.scaledValue(14),
+          vertical: AppLayout.scaledValue(13),
+        ),
         child: Row(
           children: [
             Container(
@@ -390,24 +404,36 @@ class _CreatorPageState extends State<CreatorPage> {
                 color: AppTheme.info.withAlpha(24),
                 borderRadius: BorderRadius.circular(AppTheme.radiusSm),
               ),
-              child: Icon(Icons.group_outlined,
-                  size: AppLayout.scaledValue(17), color: AppTheme.info),
+              child: Icon(
+                Icons.group_outlined,
+                size: AppLayout.scaledValue(17),
+                color: AppTheme.info,
+              ),
             ),
             SizedBox(width: AppLayout.scaledValue(10)),
             Expanded(
-              child: Text('谁订阅了我',
-                  style: TextStyle(
-                      fontSize: AppLayout.scaledValue(14),
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.textPrimary)),
-            ),
-            Text(resolved ? '$count 位' : '--',
+              child: Text(
+                '谁订阅了我',
                 style: TextStyle(
-                    fontSize: AppLayout.scaledValue(13),
-                    color: AppTheme.textSecondary)),
+                  fontSize: AppLayout.scaledValue(14),
+                  fontWeight: FontWeight.w600,
+                  color: AppTheme.textPrimary,
+                ),
+              ),
+            ),
+            Text(
+              resolved ? '$count 位' : '--',
+              style: TextStyle(
+                fontSize: AppLayout.scaledValue(13),
+                color: AppTheme.textSecondary,
+              ),
+            ),
             SizedBox(width: AppLayout.scaledValue(4)),
-            Icon(Icons.chevron_right,
-                size: AppLayout.scaledValue(20), color: AppTheme.textTertiary),
+            Icon(
+              Icons.chevron_right,
+              size: AppLayout.scaledValue(20),
+              color: AppTheme.textTertiary,
+            ),
           ],
         ),
       ),
@@ -468,19 +494,21 @@ class _CreatorPageState extends State<CreatorPage> {
         _data = data;
         _error = null;
       });
-      unawaited(_service.rememberDisplayData(
-        cidNumber: _cidNumber,
-        data: data,
-        membershipFetchedAtMs: _membershipFetchedAtMs,
-        creatorFetchedAtMs: DateTime.now().millisecondsSinceEpoch,
-      ));
+      unawaited(
+        _service.rememberDisplayData(
+          cidNumber: _cidNumber,
+          data: data,
+          membershipFetchedAtMs: _membershipFetchedAtMs,
+          creatorFetchedAtMs: DateTime.now().millisecondsSinceEpoch,
+        ),
+      );
     }
   }
 
   Future<void> _openMembership() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => const MembershipPage()),
-    );
+    await Navigator.of(
+      context,
+    ).push(MaterialPageRoute(builder: (_) => const MembershipPage()));
     if (mounted) await _refresh(forceVisibleError: false);
   }
 }

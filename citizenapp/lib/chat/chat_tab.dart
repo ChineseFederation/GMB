@@ -12,6 +12,8 @@ import '../8964/profile/services/square_session_provider.dart';
 import '../8964/profile/widgets/profile_avatar.dart';
 import '../8964/services/square_api_client.dart';
 import '../my/myid/current_user_context.dart';
+import '../my/membership/membership_revision.dart';
+import '../my/membership/subscription_service.dart';
 import '../my/myid/register_identity_flow.dart';
 import '../my/user/contact_book_page.dart';
 import '../my/user/contact_service.dart';
@@ -33,15 +35,16 @@ import 'group/ui/open_group_chat.dart';
 import 'storage/chat_store.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 
-typedef ChatSendTextFactory = ChatSendTextCallback? Function(
-    String peerCidNumber, String conversationId);
+typedef ChatSendTextFactory =
+    ChatSendTextCallback? Function(String peerCidNumber, String conversationId);
 typedef ChatSyncFactory = ChatSyncCallback? Function(String peerCidNumber);
-typedef ChatSendMediaFactory = ChatSendMediaCallback? Function(
-  String peerCidNumber,
-  String conversationId,
-);
-typedef ChatDownloadAttachmentFactory = ChatDownloadAttachmentCallback?
-    Function(String peerCidNumber);
+typedef ChatSendMediaFactory =
+    ChatSendMediaCallback? Function(
+      String peerCidNumber,
+      String conversationId,
+    );
+typedef ChatDownloadAttachmentFactory =
+    ChatDownloadAttachmentCallback? Function(String peerCidNumber);
 
 /// 聊天页加号菜单 5 个动作的可注入入口。
 ///
@@ -100,8 +103,9 @@ class ChatTab extends StatefulWidget {
     this.profileMediaCache,
     this.sessionProvider,
     this.contactService,
-  })  : store = store ?? ChatStore(),
-        walletManager = walletManager ?? WalletManager();
+    this.subscriptionService,
+  }) : store = store ?? ChatStore(),
+       walletManager = walletManager ?? WalletManager();
 
   final ChatStore store;
   final WalletManager walletManager;
@@ -122,6 +126,7 @@ class ChatTab extends StatefulWidget {
   final CitizenProfileMediaCache? profileMediaCache;
   final SquareSessionProvider? sessionProvider;
   final UserContactService? contactService;
+  final SubscriptionService? subscriptionService;
 
   @override
   State<ChatTab> createState() => _ChatTabState();
@@ -144,8 +149,10 @@ class _ChatTabState extends State<ChatTab> {
       widget.profileMediaCache ?? CitizenProfileMediaCache();
   late final SquareSessionProvider _sessionProvider =
       widget.sessionProvider ?? SquareSessionProvider.instance;
-  late final SquareApiClient _squareApi = SquareApiClient();
-  late final UserContactService _contactService = widget.contactService ??
+  late final SubscriptionService _subscriptionService =
+      widget.subscriptionService ?? SubscriptionService();
+  late final UserContactService _contactService =
+      widget.contactService ??
       UserContactService(walletManager: widget.walletManager);
   final Map<String, CitizenProfile> _peerProfiles = <String, CitizenProfile>{};
   final Map<String, CitizenProfileMediaSnapshot> _peerProfileMedia =
@@ -178,6 +185,7 @@ class _ChatTabState extends State<ChatTab> {
   @override
   void initState() {
     super.initState();
+    MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
     final lifecycleState = WidgetsBinding.instance.lifecycleState;
     _appResumed =
         lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
@@ -213,12 +221,20 @@ class _ChatTabState extends State<ChatTab> {
 
   @override
   void dispose() {
+    MembershipRevision.instance.listenable.removeListener(_onMembershipChanged);
     CitizenProfileCache.revision.removeListener(_onProfileRevision);
     WalletManager.walletsRevision.removeListener(_onWalletsChanged);
     widget.selectedTab?.removeListener(_onSelectedTabChanged);
     _pauseSync();
     WidgetsBinding.instance.removeObserver(_lifecycleObserver);
     super.dispose();
+  }
+
+  void _onMembershipChanged() {
+    final event = MembershipRevision.instance.listenable.value;
+    if (mounted && event != null && event.cidNumber == _cidNumber) {
+      setState(() {});
+    }
   }
 
   void _onProfileRevision() {
@@ -277,14 +293,12 @@ class _ChatTabState extends State<ChatTab> {
 
   List<ChatConversationPreview> _withoutDeletingConversations(
     Iterable<ChatConversationPreview> conversations,
-  ) =>
-      conversations
-          .where(
-            (preview) => !_conversationDeletesInFlight.contains(
-              preview.conversationId,
-            ),
-          )
-          .toList(growable: false);
+  ) => conversations
+      .where(
+        (preview) =>
+            !_conversationDeletesInFlight.contains(preview.conversationId),
+      )
+      .toList(growable: false);
 
   Future<void> _reload({bool syncFirst = false}) async {
     if (!_isActive) {
@@ -369,7 +383,7 @@ class _ChatTabState extends State<ChatTab> {
     }
   }
 
-  /// 当前 CID 的聊天会员权益只读 CitizenServe D1；不读链、不扫描区块。
+  /// 当前 CID 在身份鉴权时读取一次 CitizenServe；聊天列表和窗口复用统一本地缓存。
   /// 结果由 [ChatMediaLimits] 绑定 CID，切换钱包后旧 CID 权益不能复用。
   Future<void> _ensureChatEntitlement(
     String cidNumber,
@@ -380,7 +394,7 @@ class _ChatTabState extends State<ChatTab> {
       final session = _profileSession ?? await _sessionProvider.ensureSession();
       if (session == null || session.cidNumber.trim() != cidNumber) return;
       _profileSession = session;
-      await _squareApi.fetchMembership(session);
+      await _subscriptionService.authorizeMembership(session);
     } on Exception {
       ChatMediaLimits.markUnresolved(cidNumber);
     }
@@ -499,7 +513,7 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   /// 对端公开资料按四个 CID 一组刷新，防止大聊天列表产生无界请求；会员展示只采用
-  /// CitizenServe 当前 D1 结果，所有授权仍由会员业务自己的 finalized 门禁处理。
+  /// CitizenServe 当前 D1 结果；本人的聊天授权统一由会员缓存与服务端 D1 门禁处理。
   Future<void> _refreshPeerProfiles(
     List<ChatConversationPreview> conversations,
   ) async {
@@ -511,8 +525,9 @@ class _ChatTabState extends State<ChatTab> {
       return;
     }
     for (var offset = 0; offset < cidNumbers.length; offset += 4) {
-      final end =
-          offset + 4 < cidNumbers.length ? offset + 4 : cidNumbers.length;
+      final end = offset + 4 < cidNumbers.length
+          ? offset + 4
+          : cidNumbers.length;
       final batch = cidNumbers.sublist(offset, end);
       await Future.wait(
         batch.map((cidNumber) async {
@@ -523,8 +538,9 @@ class _ChatTabState extends State<ChatTab> {
             );
             _peerProfiles[cidNumber] = profile;
             _resolvedPeerCidNumbers.add(cidNumber);
-            _peerProfileMedia[cidNumber] =
-                await _profileMediaCache.read(profile);
+            _peerProfileMedia[cidNumber] = await _profileMediaCache.read(
+              profile,
+            );
             await _profileCache.write(profile);
             final avatarKey = profile.avatarObjectKey?.trim();
             if (avatarKey == null ||
@@ -1014,70 +1030,74 @@ class _ChatTabState extends State<ChatTab> {
               peerUserId: preview.peerCidNumber,
               title: preview.title,
               store: widget.store,
-              onSendText: widget.sendTextFactory?.call(
+              onSendText:
+                  widget.sendTextFactory?.call(
                     preview.peerCidNumber,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (text) => widget.runtime!.sendText(
-                            peerCidNumber: preview.peerCidNumber,
-                            conversationId: preview.conversationId,
-                            text: text,
-                          )),
-              onSendMedia: widget.sendMediaFactory?.call(
+                          peerCidNumber: preview.peerCidNumber,
+                          conversationId: preview.conversationId,
+                          text: text,
+                        )),
+              onSendMedia:
+                  widget.sendMediaFactory?.call(
                     preview.peerCidNumber,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (media, {onLocalCommitted}) =>
-                          widget.runtime!.sendMedia(
-                            peerCidNumber: preview.peerCidNumber,
-                            conversationId: preview.conversationId,
-                            media: media,
-                            onLocalCommitted: onLocalCommitted,
-                          )),
+                            widget.runtime!.sendMedia(
+                              peerCidNumber: preview.peerCidNumber,
+                              conversationId: preview.conversationId,
+                              media: media,
+                              onLocalCommitted: onLocalCommitted,
+                            )),
               onSendSticker: widget.runtime == null
                   ? null
                   : (packId, stickerId) => widget.runtime!.sendSticker(
-                        peerCidNumber: preview.peerCidNumber,
-                        conversationId: preview.conversationId,
-                        packId: packId,
-                        stickerId: stickerId,
-                      ),
+                      peerCidNumber: preview.peerCidNumber,
+                      conversationId: preview.conversationId,
+                      packId: packId,
+                      stickerId: stickerId,
+                    ),
               onResolveMediaPaths: widget.runtime == null
                   ? null
                   : (String conversationId, List<ChatContent> contents) =>
-                      widget.runtime!.resolveCachedMediaPaths(
-                        conversationId: conversationId,
-                        contents: contents,
-                      ),
-              onDownloadAttachment: widget.downloadAttachmentFactory?.call(
+                        widget.runtime!.resolveCachedMediaPaths(
+                          conversationId: conversationId,
+                          contents: contents,
+                        ),
+              onDownloadAttachment:
+                  widget.downloadAttachmentFactory?.call(
                     preview.peerCidNumber,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (String conversationId, String controlPlaintext) =>
-                          widget.runtime!.downloadAttachment(
-                            conversationId: conversationId,
-                            controlPlaintext: controlPlaintext,
-                          )),
-              onSync: widget.syncFactory?.call(preview.peerCidNumber) ??
+                            widget.runtime!.downloadAttachment(
+                              conversationId: conversationId,
+                              controlPlaintext: controlPlaintext,
+                            )),
+              onSync:
+                  widget.syncFactory?.call(preview.peerCidNumber) ??
                   (widget.runtime == null
                       ? null
                       : () => widget.runtime!.retryOutgoing(
-                            conversationId: preview.conversationId,
-                            recipientCidNumber: preview.peerCidNumber,
-                          )),
+                          conversationId: preview.conversationId,
+                          recipientCidNumber: preview.peerCidNumber,
+                        )),
               onStartRealtime: widget.runtime == null
                   ? null
                   : ({required onNotice, onDisconnected}) =>
-                      widget.runtime!.startRealtimeSync(
-                        onNotice: onNotice,
-                        onDisconnected: onDisconnected,
-                        retryOutgoingOnConnect: false,
-                      ),
+                        widget.runtime!.startRealtimeSync(
+                          onNotice: onNotice,
+                          onDisconnected: onDisconnected,
+                          retryOutgoingOnConnect: false,
+                        ),
               onDeleteConversation: () =>
                   _deleteConversationInBackground(preview.conversationId),
               initialProfile: _peerProfiles[preview.peerCidNumber],
@@ -1413,20 +1433,23 @@ class _ChatEntryMenu extends StatelessWidget {
                                               ),
                                               colorFilter:
                                                   const ColorFilter.mode(
-                                                Colors.white,
-                                                BlendMode.srcIn,
-                                              ),
+                                                    Colors.white,
+                                                    BlendMode.srcIn,
+                                                  ),
                                             )
                                           : Icon(
                                               item.icon,
-                                              size:
-                                                  AppLayout.scaled(context, 20),
+                                              size: AppLayout.scaled(
+                                                context,
+                                                20,
+                                              ),
                                               color: Colors.white,
                                             ),
                                     ),
                                   ),
                                   SizedBox(
-                                      width: AppLayout.scaled(context, 12)),
+                                    width: AppLayout.scaled(context, 12),
+                                  ),
                                   Text(
                                     item.label,
                                     style: TextStyle(
@@ -1702,11 +1725,11 @@ class _ListTileShell extends StatelessWidget {
                       imagePath: profileMedia?.avatarPath,
                       imageUrl:
                           profile?.avatarObjectKey?.trim().isNotEmpty == true
-                              ? profileApi.mediaUrl(
-                                  profile!.avatarObjectKey!,
-                                  updatedAt: profile!.updatedAt,
-                                )
-                              : null,
+                          ? profileApi.mediaUrl(
+                              profile!.avatarObjectKey!,
+                              updatedAt: profile!.updatedAt,
+                            )
+                          : null,
                       imageHeaders: profileSession == null
                           ? null
                           : <String, String>{

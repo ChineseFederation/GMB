@@ -40,13 +40,14 @@ class CreatorSubscribeService {
     SquareSessionProvider? sessionProvider,
     CreatorApi? api,
     SharedPreferences? preferences,
-  })  : _rpc = rpc ?? SubscriptionRpc(),
-        _wallet = walletManager ?? WalletManager(),
-        _defaultAccountReader = defaultAccountReader ??
-            DefaultAccountService(walletManager: walletManager),
-        _session = sessionProvider ?? SquareSessionProvider.instance,
-        _api = api ?? CreatorApiHttp(),
-        _preferences = preferences {
+  }) : _rpc = rpc ?? SubscriptionRpc(),
+       _wallet = walletManager ?? WalletManager(),
+       _defaultAccountReader =
+           defaultAccountReader ??
+           DefaultAccountService(walletManager: walletManager),
+       _session = sessionProvider ?? SquareSessionProvider.instance,
+       _api = api ?? CreatorApiHttp(),
+       _preferences = preferences {
     _walletAccountSigner = WalletAccountSigner(walletManager: _wallet);
     unawaited(_retryPendingMirrors());
   }
@@ -59,25 +60,13 @@ class CreatorSubscribeService {
   final SharedPreferences? _preferences;
   late final WalletAccountSigner _walletAccountSigner;
 
-  Future<FinalizedSubscriptionSnapshot> fetchFinalizedState({
-    required String subscriberCidNumber,
-    required String creatorCidNumber,
-  }) async {
+  Future<CreatorView> fetchView(
+    SquareSession session,
+    String creatorCidNumber,
+  ) async {
     await _retryPendingMirrors();
-    return _rpc.fetchSubscriptionSnapshot(
-      subscriberCidNumber: subscriberCidNumber,
-      creatorCidNumber: creatorCidNumber,
-    );
+    return _api.fetchViewOf(session, creatorCidNumber);
   }
-
-  Future<List<ChainCreatorTier>> fetchCreatorPlans(String creatorCidNumber) =>
-      _rpc.fetchCreatorPlans(creatorCidNumber);
-
-  /// 读某 CID 的平台会员 finalized 快照（不传创作者主体即平台 IssuerKey）。
-  /// 供他人主页订阅按钮判定被查看创作者本人平台会员是否仍有效（订阅按钮门禁）。
-  Future<FinalizedSubscriptionSnapshot> fetchPlatformSnapshot(
-          String cidNumber) =>
-      _rpc.fetchSubscriptionSnapshot(subscriberCidNumber: cidNumber);
 
   /// 订阅创作者某档某周期（priceFen=该档该周期价，分）。
   Future<void> subscribe({
@@ -311,12 +300,16 @@ class CreatorSubscribeService {
   }
 
   Future<void> _storeLocalProof(
-      String subscriberCidNumber, Map<String, dynamic> proof) async {
+    String subscriberCidNumber,
+    Map<String, dynamic> proof,
+  ) async {
     final pending = await _readList(_pendingKey(subscriberCidNumber));
     pending.removeWhere((item) => item['tx_hash'] == proof['tx_hash']);
     pending.add(proof);
-    await (await _prefs)
-        .setString(_pendingKey(subscriberCidNumber), jsonEncode(pending));
+    await (await _prefs).setString(
+      _pendingKey(subscriberCidNumber),
+      jsonEncode(pending),
+    );
 
     final historyKey = 'subscription_tx_history_by_cid:$subscriberCidNumber';
     final history = await _readList(historyKey);

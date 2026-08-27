@@ -2,12 +2,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:citizenapp/8964/services/square_api_client.dart'
-    show SquareSession;
+    show SquareMembershipState, SquareSession;
 import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/my/creator/creator_api.dart';
 import 'package:citizenapp/my/creator/creator_service.dart';
 import 'package:citizenapp/my/creator/models/creator_overview.dart';
 import 'package:citizenapp/my/creator/models/creator_plan.dart';
+import 'package:citizenapp/my/membership/subscription_service.dart';
 import 'package:citizenapp/my/myid/finalized_identity_resolver.dart';
 import 'package:citizenapp/my/myid/citizen_identity_chain_reader.dart';
 import 'package:citizenapp/rpc/chain_rpc.dart' show TxPoolWatchCallback;
@@ -80,13 +81,15 @@ void main() {
         expect(request.headers['authorization'], 'Bearer t');
         expect(request.headers, isNot(contains('x-device-signature')));
         return http.Response.bytes(
-          utf8.encode(jsonEncode({
-            'plan': {
-              'creator_cid_number': 'CN220-CTZN2-198805200-2026',
-              'tiers': [tier.toJson()],
-              'updated_at': 1,
-            },
-          })),
+          utf8.encode(
+            jsonEncode({
+              'plan': {
+                'creator_cid_number': 'CN220-CTZN2-198805200-2026',
+                'tiers': [tier.toJson()],
+                'updated_at': 1,
+              },
+            }),
+          ),
           200,
           headers: {'content-type': 'application/json; charset=utf-8'},
         );
@@ -157,6 +160,7 @@ void main() {
       subscriptionRpc: _FakeSubscriptionRpc(),
       walletManager: _FakeWalletManager(),
       sessionProvider: _FakeSessionProvider(),
+      subscriptionService: _ActiveMembershipService(),
     );
     final display = CreatorPageData.active(
       plan: const CreatorPlan(
@@ -197,6 +201,7 @@ void main() {
       walletManager: _FakeWalletManager(),
       defaultAccountReader: _FakeDefaultAccountReader(),
       sessionProvider: sessionProvider,
+      subscriptionService: _ActiveMembershipService(),
     );
 
     final saved = await service.saveTiers(const [tier]);
@@ -214,34 +219,38 @@ void main() {
     expect(rpc.signCount, 1, reason: '同一业务不得再次账户签名');
   });
 
-  test('创作者刷新复用会员快照的 finalized 区块读取档位', () async {
+  test('创作者刷新只使用 CitizenServe 会员与档位投影', () async {
     final rpc = _FakeSubscriptionRpc();
     final service = CreatorService(
       api: FakeCreatorApi(),
       subscriptionRpc: rpc,
       walletManager: _FakeWalletManager(),
       sessionProvider: _FakeSessionProvider(),
+      subscriptionService: _ActiveMembershipService(),
     );
 
     final data = await service.load(expectedCidNumber: _creatorCidNumber);
 
     expect(data.gated, isFalse);
-    expect(
-      rpc.lastPlansBlockHash,
-      '0x${List.filled(64, '0').join()}',
-      reason: '会员资格与创作者档位必须来自同一个 finalized 区块',
-    );
+    expect(rpc.lastPlansBlockHash, isNull, reason: '页面展示不得再直接读取链上创作者档位');
   });
 
   test('仅改档位名只提交 call_index 6，不重写价格计划', () async {
     final rpc = _FakeSubscriptionRpc();
-    final api = FakeCreatorApi();
+    final api = FakeCreatorApi(
+      initialPlan: CreatorPlan(
+        creatorCidNumber: _creatorCidNumber,
+        tiers: [tier.copyWith(tierName: '核心支持者')],
+        updatedAt: 1,
+      ),
+    );
     final service = CreatorService(
       api: api,
       subscriptionRpc: rpc,
       walletManager: _FakeWalletManager(),
       defaultAccountReader: _FakeDefaultAccountReader(),
       sessionProvider: _FakeSessionProvider(),
+      subscriptionService: _ActiveMembershipService(),
     );
 
     final plan = await service.updateTierName(
@@ -312,7 +321,9 @@ class _FakeWalletManager extends WalletManager {
 
   @override
   Future<Uint8List> signForAccountId(
-          String accountId, Uint8List payload) async =>
+    String accountId,
+    Uint8List payload,
+  ) async =>
       Uint8List(64);
 }
 
@@ -324,6 +335,21 @@ class _FakeDefaultAccountReader implements DefaultAccountReader {
         accountName: 'creator',
         signMode: SignMode.hot,
         walletIndex: 1,
+      );
+}
+
+class _ActiveMembershipService extends SubscriptionService {
+  @override
+  Future<SquareMembershipState> authorizeMembership(
+    SquareSession session, {
+    bool forceRefresh = false,
+  }) async =>
+      const SquareMembershipState(
+        active: true,
+        paidUntil: 9999999999999,
+        membershipLevel: 'freedom',
+        subscriptionStatus: 'active',
+        subscriptionActive: true,
       );
 }
 
@@ -394,7 +420,8 @@ class _FakeSubscriptionRpc extends SubscriptionRpc {
 
   @override
   Future<List<ChainCreatorTier>> fetchCreatorPlans(
-          String creatorCidNumber) async =>
+    String creatorCidNumber,
+  ) async =>
       [
         ChainCreatorTier(
           tierId: 't1',

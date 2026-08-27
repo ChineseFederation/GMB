@@ -225,6 +225,44 @@ export async function fetchChainCidProjectionStatesAtBlock(
   return result;
 }
 
+/** 同一 finalized 区块批量读取当前 CID 与 AccountId 绑定；订阅投影不得依赖 D1 用户先存在。 */
+export async function fetchChainAccountIdsByCidAtBlock(
+  env: Env,
+  cidNumbers: readonly string[],
+  blockHash: string,
+): Promise<Map<string, string | null>> {
+  const cids = [...new Set(cidNumbers.map(assertCidNumber))];
+  const keys = cids.flatMap((cid) => {
+    const cidScale = encodeBoundedBytes(new TextEncoder().encode(cid));
+    return [
+      storageMapKey("CitizenIdentity", "AccountIdByCid", cidScale),
+      storageMapKey("CitizenIdentity", "CidRegistry", cidScale),
+    ];
+  });
+  const values = await fetchChainStorageBatch(
+    env,
+    keys.map((key) => ({
+      storageKeyHex: `0x${bytesToHex(key)}`,
+      blockHashHex: blockHash,
+    })),
+  );
+  const result = new Map<string, string | null>();
+  cids.forEach((cid, index) => {
+    const accountHex = values[index * 2] ?? null;
+    const recordHex = values[index * 2 + 1] ?? null;
+    if (!accountHex || !recordHex || !cidRecordIsActive(hexToBytes(recordHex))) {
+      result.set(cid, null);
+      return;
+    }
+    const accountBytes = hexToBytes(accountHex);
+    if (accountBytes.length !== 32) {
+      throw new Error("finalized AccountIdByCid is invalid");
+    }
+    result.set(cid, `0x${bytesToHex(accountBytes)}`);
+  });
+  return result;
+}
+
 function decodeCidProjectionState(
   cid: string,
   chainTimestamp: number,

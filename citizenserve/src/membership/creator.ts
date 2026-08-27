@@ -243,11 +243,32 @@ export async function creatorPlanOfRoute(
   env: Env,
   cid: string,
 ): Promise<Response> {
-  await requireSession(request, env);
+  const session = await requireSession(request, env);
   const creatorCidNumber = decodeURIComponent(cid);
   const membership = await getMembership(env, creatorCidNumber);
-  if (!membership || !subscriptionIsActive(membership)) return jsonResponse({ plan: null });
-  return jsonResponse({ plan: await readPlan(env, creatorCidNumber) });
+  const plan = membership && subscriptionIsActive(membership)
+    ? await readPlan(env, creatorCidNumber)
+    : null;
+  const subscription = await env.DB.prepare(
+    `SELECT tier_id, billing_period, subscription_status, paid_until
+      FROM square_creator_subscriptions
+      WHERE subscriber_cid_number = ? AND creator_cid_number = ?`,
+  )
+    .bind(session.cid_number, creatorCidNumber)
+    .first<{
+      tier_id: string;
+      billing_period: string;
+      subscription_status: string;
+      paid_until: number;
+    }>();
+  return jsonResponse({
+    plan,
+    tier_id: subscription?.tier_id ?? null,
+    billing_period: subscription?.billing_period ?? null,
+    subscription_status: subscription?.subscription_status ?? null,
+    paid_until: subscription?.paid_until ?? 0,
+    active: subscription ? isSubscriptionProjectionEffective(subscription) : false,
+  });
 }
 
 /** GET /square/creator/overview —— 只统计 D1 中当前仍有效的订阅关系。 */

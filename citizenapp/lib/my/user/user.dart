@@ -86,14 +86,10 @@ class _ProfilePageState extends State<MyTab> {
   String? _profileRefreshCid;
 
   /// 默认钱包的会员购买态（档位色 + 对勾）；best-effort，读失败为 null。
-  late final SquareApiClient _squareApi;
   late final SubscriptionService _subscriptionService;
   SquareMembershipState? _membership;
   MembershipDisplayDecision _membershipDecision =
       MembershipDisplayDecision.inactiveConfirmed;
-
-  /// 同一加载代次内 Worker 已回写后，本地旧展示快照不得逆序覆盖。
-  int _membershipRemoteGeneration = -1;
 
   /// _loadState 世代号：本地钱包、资料和徽章快照并发重载时，旧结果
   /// 不得覆盖新默认钱包。
@@ -111,8 +107,8 @@ class _ProfilePageState extends State<MyTab> {
   /// 公开昵称唯一真源是 CID 资料的 display_name；资料尚未缓存时稳定兜底。
   /// 本机 walletName 只用于钱包列表，绝不进入此展示链路。
   String get _nickname => ProfilePresentation.forIdentityKey(
-        _publicProfile?.cidNumber ?? _communicationAccountId,
-      ).resolveDisplayName(publicName: _publicProfile?.displayName);
+    _publicProfile?.cidNumber ?? _communicationAccountId,
+  ).resolveDisplayName(publicName: _publicProfile?.displayName);
 
   /// 默认钱包徽章信号：颜色只来自 CID 级链上身份快照，勾来自会员匹配。
   String? get _defaultWalletMembershipLevel => _membership?.membershipLevel;
@@ -122,10 +118,10 @@ class _ProfilePageState extends State<MyTab> {
 
   // 个人页副标题只组合既有身份与会员快照，不新增第二套身份或订阅真源。
   String get _identityLabel => switch (_defaultWalletIdentityLevel) {
-        'candidate' => '竞选身份',
-        'voting' => '投票身份',
-        _ => '匿名访客',
-      };
+    'candidate' => '竞选身份',
+    'voting' => '投票身份',
+    _ => '匿名访客',
+  };
 
   String? get _membershipLabel {
     if (!_defaultWalletMembershipActive) return null;
@@ -154,8 +150,9 @@ class _ProfilePageState extends State<MyTab> {
     _profileCache = widget.profileCache ?? const CitizenProfileCache();
     _profileMediaCache = widget.profileMediaCache ?? CitizenProfileMediaCache();
     _sessionProvider = widget.sessionProvider ?? SquareSessionProvider.instance;
-    _squareApi = widget.squareApi ?? SquareApiClient();
-    _subscriptionService = widget.subscriptionService ?? SubscriptionService();
+    _subscriptionService =
+        widget.subscriptionService ??
+        SubscriptionService(api: widget.squareApi ?? SquareApiClient());
     // 本页常驻 IndexedStack，initState 只跑一次；身份账户（CID 绑定账户）在
     // 「我的钱包」被切换 / CID 换绑 / 增删改名时经 walletsRevision 广播，这里重读身份，
     // 保证昵称、地址、认证勾和「我的主页」入参始终是当前身份账户。
@@ -183,14 +180,14 @@ class _ProfilePageState extends State<MyTab> {
     unawaited(_reloadCachedPublicProfile(event.cidNumber, _loadGeneration));
   }
 
-  /// finalized 会员镜像推进后，只重读当前永久 CID 的公开资料与会员状态；不复用
-  /// 钱包 revision，也不从广播事件直接授予徽章。
+  /// 统一会员缓存推进后，只重读当前永久 CID 的本机快照；不重复访问 CitizenServe，
+  /// 也不从广播事件本身推导或授予徽章。
   void _onMembershipChanged() {
     final event = MembershipRevision.instance.listenable.value;
     if (!mounted || event == null || event.cidNumber != _identityCidNumber) {
       return;
     }
-    unawaited(_refreshRemoteState(_loadGeneration));
+    unawaited(_loadMembershipSnapshot(event.cidNumber, _loadGeneration));
   }
 
   Future<void> _onWalletsChanged() async {
@@ -232,7 +229,8 @@ class _ProfilePageState extends State<MyTab> {
     if (!mounted || generation != _loadGeneration) {
       return;
     }
-    final identityChanged = identityAccountId != _identityAccountId ||
+    final identityChanged =
+        identityAccountId != _identityAccountId ||
         identityCidNumber != _identityCidNumber;
     setState(() {
       _defaultWallet = defaultWallet;
@@ -257,18 +255,15 @@ class _ProfilePageState extends State<MyTab> {
     unawaited(_refreshRemoteState(generation));
   }
 
-  Future<void> _loadMembershipSnapshot(
-    String cidNumber,
-    int generation,
-  ) async {
+  Future<void> _loadMembershipSnapshot(String cidNumber, int generation) async {
     try {
-      final snapshot =
-          await _subscriptionService.readDisplaySnapshot(cidNumber);
+      final snapshot = await _subscriptionService.readDisplaySnapshot(
+        cidNumber,
+      );
       if (snapshot == null ||
           !mounted ||
           generation != _loadGeneration ||
-          cidNumber != _identityCidNumber ||
-          _membershipRemoteGeneration == generation) {
+          cidNumber != _identityCidNumber) {
         return;
       }
       setState(() {
@@ -299,27 +294,17 @@ class _ProfilePageState extends State<MyTab> {
     await _loadPublicProfile(session, generation);
 
     try {
-      // 资料读取只使用 CitizenServe 已同步的会员记录，不在页面或发布路径点查链。
-      final membership = await _squareApi.fetchMembership(session);
+      // 身份会话只通过统一会员服务读取一次 CitizenServe；其它页面复用同一缓存。
+      final membership = await _subscriptionService.authorizeMembership(
+        session,
+      );
       if (!mounted || generation != _loadGeneration) return;
       setState(() {
         _membership = membership;
         _membershipDecision = membership.active
             ? MembershipDisplayDecision.activeConfirmed
             : MembershipDisplayDecision.inactiveConfirmed;
-        _membershipRemoteGeneration = generation;
       });
-      final previous =
-          await _subscriptionService.readDisplaySnapshot(session.cidNumber);
-      await _subscriptionService.writeDisplaySnapshot(
-        session.cidNumber,
-        MembershipDisplaySnapshot(
-          state: membership,
-          prices: previous?.prices ?? const <String, int>{},
-          subscriptionFetchedAtMs: DateTime.now().millisecondsSinceEpoch,
-          pricesFetchedAtMs: previous?.pricesFetchedAtMs ?? 0,
-        ),
-      );
     } on Exception catch (e) {
       AppLog.d('profile membership load failed: $e');
     }
@@ -333,11 +318,13 @@ class _ProfilePageState extends State<MyTab> {
       final cached = await _profileCache.read(cidNumber);
       if (cached != null && mounted && generation == _loadGeneration) {
         setState(() => _publicProfile = cached);
-        unawaited(_loadPublicProfileMedia(
-          cached,
-          session: session,
-          generation: generation,
-        ));
+        unawaited(
+          _loadPublicProfileMedia(
+            cached,
+            session: session,
+            generation: generation,
+          ),
+        );
       }
     } on Exception catch (e) {
       AppLog.d('public profile cache load failed: $e');
@@ -350,12 +337,14 @@ class _ProfilePageState extends State<MyTab> {
       await _profileCache.write(fresh);
       if (!mounted || generation != _loadGeneration) return;
       setState(() => _publicProfile = fresh);
-      unawaited(_loadPublicProfileMedia(
-        fresh,
-        session: session,
-        generation: generation,
-        refresh: true,
-      ));
+      unawaited(
+        _loadPublicProfileMedia(
+          fresh,
+          session: session,
+          generation: generation,
+          refresh: true,
+        ),
+      );
     } on Exception catch (e) {
       AppLog.d('public profile refresh failed: $e');
     }
@@ -426,9 +415,7 @@ class _ProfilePageState extends State<MyTab> {
     final session = _profileSession;
     return session == null
         ? null
-        : <String, String>{
-            'authorization': 'Bearer ${session.sessionToken}',
-          };
+        : <String, String>{'authorization': 'Bearer ${session.sessionToken}'};
   }
 
   Future<void> _openContacts() async {
@@ -519,9 +506,7 @@ class _ProfilePageState extends State<MyTab> {
 
   void _openCreator() {
     // MyTab 已持有 CID 与会员展示态，直接作为下一路由首帧；创作者页后台复核真态。
-    Navigator.of(
-      context,
-    ).push<void>(
+    Navigator.of(context).push<void>(
       MaterialPageRoute(
         builder: (_) => CreatorPage(
           service: widget.creatorService,
@@ -768,21 +753,21 @@ class _ProfilePageState extends State<MyTab> {
     final topPadding = MediaQuery.of(context).padding.top;
     final headerHeight = topPadding + 260.0;
     final myTitleStyle = DefaultTextStyle.of(context).style.merge(
-          TextStyle(
-            color: Colors.white,
-            fontSize: AppLayout.scaled(context, 20),
-            fontWeight: FontWeight.w700,
-            // 显式锁定页面原有 1.4 行高，使定位测量和 Scaffold 内真实 Text 完全一致。
-            height: AppLayout.bodyLineHeight,
-            shadows: [
-              Shadow(
-                color: const Color(0x66000000),
-                blurRadius: AppLayout.scaled(context, 12),
-                offset: Offset(0, AppLayout.scaledValue(2)),
-              ),
-            ],
+      TextStyle(
+        color: Colors.white,
+        fontSize: AppLayout.scaled(context, 20),
+        fontWeight: FontWeight.w700,
+        // 显式锁定页面原有 1.4 行高，使定位测量和 Scaffold 内真实 Text 完全一致。
+        height: AppLayout.bodyLineHeight,
+        shadows: [
+          Shadow(
+            color: const Color(0x66000000),
+            blurRadius: AppLayout.scaled(context, 12),
+            offset: Offset(0, AppLayout.scaledValue(2)),
           ),
-        );
+        ],
+      ),
+    );
     final myTitlePainter = TextPainter(
       text: TextSpan(text: '我的', style: myTitleStyle),
       textDirection: Directionality.of(context),
@@ -793,7 +778,8 @@ class _ProfilePageState extends State<MyTab> {
     final userCodeIconSize = AppLayout.scaled(context, 22);
     // 可见图标位于点击区正中；按标题实际行高计算按钮顶部，使二维码顶部
     // 始终落在“我的”文字底部之后，系统文字倍率变化时也不重新重叠。
-    final userCodeButtonTop = topPadding +
+    final userCodeButtonTop =
+        topPadding +
         AppLayout.scaled(context, 10) +
         myTitlePainter.height -
         (userCodeButtonSize - userCodeIconSize) / 2 +
@@ -824,7 +810,7 @@ class _ProfilePageState extends State<MyTab> {
                       imageHeaders: _publicMediaHeaders,
                       userImageSet:
                           _publicProfile?.bannerObjectKey?.trim().isNotEmpty ==
-                              true,
+                          true,
                       height: headerHeight,
                       seed: _identityCidNumber.isEmpty
                           ? _communicationAccountId
@@ -855,12 +841,7 @@ class _ProfilePageState extends State<MyTab> {
                     top: topPadding + 10,
                     left: 0,
                     right: 0,
-                    child: Center(
-                      child: Text(
-                        '我的',
-                        style: myTitleStyle,
-                      ),
-                    ),
+                    child: Center(child: Text('我的', style: myTitleStyle)),
                   ),
                   Positioned(
                     // 整个点击区随可见二维码下移；不能只挪图标造成点击位置错位。
@@ -1077,8 +1058,8 @@ class _HeaderBackground extends StatelessWidget {
         fit: BoxFit.cover,
         frameBuilder: (context, child, frame, syncLoaded) =>
             syncLoaded || frame != null
-                ? child
-                : const ColoredBox(color: AppTheme.surfaceMuted),
+            ? child
+            : const ColoredBox(color: AppTheme.surfaceMuted),
         errorBuilder: (_, __, ___) =>
             const ColoredBox(color: AppTheme.surfaceMuted),
       );
@@ -1192,9 +1173,9 @@ class _SettingsPageState extends State<SettingsPage> {
       setState(() => _openChatOnLaunch = value);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('首页设置保存失败，请重试')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('首页设置保存失败，请重试')));
     } finally {
       if (mounted) setState(() => _savingHomeTab = false);
     }
@@ -1341,8 +1322,9 @@ class _SettingsPageState extends State<SettingsPage> {
                       _buildSettingTile(
                         icon: Icons.fingerprint_rounded,
                         title: '设备锁',
-                        subtitle:
-                            _pinLockEnabled ? '请先关闭应用锁' : '启动应用时需要生物识别或设备密码',
+                        subtitle: _pinLockEnabled
+                            ? '请先关闭应用锁'
+                            : '启动应用时需要生物识别或设备密码',
                         value: _deviceLockEnabled,
                         onChanged: _pinLockEnabled ? null : _toggleDeviceLock,
                       ),
@@ -1359,14 +1341,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         subtitle: _deviceLockEnabled
                             ? '请先关闭设备锁'
                             : !_pinLockEnabled
-                                ? '启动应用时需要输入 6 位数字密码'
-                                : _duressModeEnabled
-                                    ? '防共匪模式已开启'
-                                    : '点击设置防共匪密码',
+                            ? '启动应用时需要输入 6 位数字密码'
+                            : _duressModeEnabled
+                            ? '防共匪模式已开启'
+                            : '点击设置防共匪密码',
                         value: _pinLockEnabled,
                         onChanged: _deviceLockEnabled ? null : _togglePinLock,
-                        onTap:
-                            _deviceLockEnabled ? null : _handlePinLockAreaTap,
+                        onTap: _deviceLockEnabled
+                            ? null
+                            : _handlePinLockAreaTap,
                       ),
                     ],
                   ),
@@ -1495,14 +1478,16 @@ class _SettingsPageState extends State<SettingsPage> {
                       color: disabled
                           ? AppTheme.surfaceElevated
                           : AppTheme.primary.withAlpha(20),
-                      borderRadius:
-                          BorderRadius.circular(AppLayout.scaledValue(8)),
+                      borderRadius: BorderRadius.circular(
+                        AppLayout.scaledValue(8),
+                      ),
                     ),
                     child: Icon(
                       icon,
                       size: AppLayout.scaledValue(20),
-                      color:
-                          disabled ? AppTheme.textTertiary : AppTheme.primary,
+                      color: disabled
+                          ? AppTheme.textTertiary
+                          : AppTheme.primary,
                     ),
                   ),
                   SizedBox(width: AppLayout.scaledValue(14)),
@@ -1614,8 +1599,8 @@ class _SettingsPageState extends State<SettingsPage> {
     final label = downloading
         ? '$progress%'
         : installing
-            ? '安装'
-            : '更新';
+        ? '安装'
+        : '更新';
 
     return SizedBox(
       height: AppLayout.scaledValue(30),

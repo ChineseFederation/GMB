@@ -72,13 +72,17 @@ export async function requireActiveMembership(
 
 export async function membershipRoute(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
-  // 所有读取统一使用 D1；会员变更同步与资料/发布读取彻底分离。
-  const membership = await getMembership(env, session.cid_number);
+  return jsonResponse(await membershipPayload(env, session.cid_number));
+}
+
+/// 会员查询与 finalized 交易确认共用同一份 D1 响应，禁止形成两套手机缓存口径。
+export async function membershipPayload(env: Env, cidNumber: string): Promise<Record<string, unknown>> {
+  const membership = await getMembership(env, cidNumber);
   const active = membership ? subscriptionIsActive(membership) : false;
   const usageState = active && membership
-    ? await readMembershipUsageState(env, session.cid_number, membership)
+    ? await readMembershipUsageState(env, cidNumber, membership)
     : null;
-  return jsonResponse({
+  return {
     ok: true,
     plans: membershipPlanList(),
     membership,
@@ -86,7 +90,7 @@ export async function membershipRoute(request: Request, env: Env): Promise<Respo
     subscription_active: active,
     active,
     usage_state: usageState,
-  });
+  };
 }
 
 /// Active 或已签名取消但尚在已付周期内的 Cancelled 都有效；其余状态或过期拒绝。

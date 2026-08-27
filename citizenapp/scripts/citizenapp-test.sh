@@ -11,6 +11,34 @@ CITIZENAPP_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$CITIZENAPP_DIR")"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 
+if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
+  CONSOLE_TARGET_ROOT="${CONSOLE_TARGET_ROOT:-/Users/rhett/Only/console/target}"
+  CONSOLE_WORK_DIR="$CONSOLE_TARGET_ROOT/.work/citizenapp-test"
+  helper=/Users/rhett/Only/console/actions/local-build.sh
+  [[ -f "$helper" && "$CONSOLE_WORK_DIR" == /Users/rhett/Only/console/target/.work/citizenapp-test ]] \
+    || { echo '本机CitizenApp测试缺少Console中央快照入口' >&2; exit 1; }
+  /usr/bin/find "$CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+  mkdir -p "$CONSOLE_WORK_DIR"
+  export CONSOLE_TARGET_ROOT CONSOLE_WORK_DIR
+  # shellcheck disable=SC1090
+  source "$helper"
+  snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
+  cleanup_snapshot() {
+    /usr/bin/find "$CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+    rmdir "$CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
+  }
+  trap cleanup_snapshot EXIT INT TERM HUP
+  GMB_CENTRAL_SNAPSHOT=1 CONSOLE_TARGET_ROOT="$CONSOLE_TARGET_ROOT" \
+    CONSOLE_WORK_DIR="$CONSOLE_WORK_DIR" \
+    bash "$snapshot_root/citizenapp/scripts/citizenapp-test.sh" "$@"
+  exit $?
+fi
+
+if [[ "${CI:-}" != true ]]; then
+  [[ "$CITIZENAPP_DIR" == "$CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
+    || { echo "CitizenApp本机测试源码不在Console中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
+fi
+
 if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then
   echo "错误: 找不到 Flutter: $FLUTTER_BIN" >&2
   exit 1
@@ -30,8 +58,11 @@ if [ "$ACTUAL_FLUTTER_VERSION" != "$EXPECTED_FLUTTER_VERSION" ]; then
 fi
 
 if [ ! -f "$CITIZENAPP_DIR/.dart_tool/package_config.json" ]; then
-  echo "错误: 缺少 .dart_tool/package_config.json；先用锁定 Flutter 执行 flutter pub get" >&2
-  exit 1
+  if [[ "${CI:-}" == true ]]; then
+    echo "错误: 缺少 .dart_tool/package_config.json；CI必须先执行锁定依赖解析" >&2
+    exit 1
+  fi
+  (cd "$CITIZENAPP_DIR" && "$FLUTTER_BIN" pub get --enforce-lockfile)
 fi
 
 # 设备 Release 构建会先 cargo clean；测试必须从宿主库构建开始一直持锁到最后一个

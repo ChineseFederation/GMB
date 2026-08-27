@@ -40,7 +40,7 @@ class ProfileHeaderCard extends StatelessWidget {
   final String? avatarUrl;
   final Map<String, String>? avatarHeaders;
 
-  /// 本人页面可传入已由 finalized 会员变更同步到 CitizenServe 的会员展示态。
+  /// 本人页面可传入 CitizenServe 已确认并写入统一缓存的会员展示态。
   /// null 表示尚未确认，继续使用公开资料镜像；false 表示已确认无有效会员。
   final String? confirmedMembershipLevel;
   final bool? confirmedMembershipActive;
@@ -99,12 +99,12 @@ class ProfileHeaderCard extends StatelessWidget {
     final bioHeight = normalizedBio.isEmpty
         ? 0.0
         : 8 +
-            textHeight(
-              normalizedBio,
-              bioStyle,
-              maxLines: 2,
-              maxWidth: MediaQuery.sizeOf(context).width - 32,
-            );
+              textHeight(
+                normalizedBio,
+                bioStyle,
+                maxLines: 2,
+                maxWidth: MediaQuery.sizeOf(context).width - 32,
+              );
     // SliverAppBar.bottom 与 flexible space 叠层会吃掉约 2.5px；外部高度需同时
     // 扣除分类文字内部顶部间距并补回叠层，才能得到产品定义的 15px 视觉间距。
     const statsToCategoryOuterGap =

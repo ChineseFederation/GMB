@@ -55,7 +55,8 @@ class UserProfilePage extends StatefulWidget {
     this.mediaCache,
     this.sessionProvider,
     this.subscriptionService,
-    this.initialMembershipDecision = MembershipDisplayDecision.inactiveConfirmed,
+    this.initialMembershipDecision =
+        MembershipDisplayDecision.inactiveConfirmed,
     this.initialMembershipState,
     this.onOpenDirectChat,
     this.viewerAccountLoader,
@@ -159,12 +160,13 @@ class _UserProfilePageState extends State<UserProfilePage> {
     unawaited(_load());
   }
 
-  /// 本人徽章读取本地 finalized 展示快照；没有快照时保持无会员展示。
+  /// 本人徽章读取本地 CitizenServe 展示快照；没有快照时保持无会员展示。
   /// 他人主页使用 CitizenServe 当前 D1 公开资料，不存在第三种未知展示态。
   Future<void> _loadConfirmedMembership() async {
     try {
-      final snapshot =
-          await _subscriptionService.readDisplaySnapshot(widget.cidNumber);
+      final snapshot = await _subscriptionService.readDisplaySnapshot(
+        widget.cidNumber,
+      );
       if (!mounted || snapshot == null) return;
       setState(() {
         _membershipDecision = snapshot.decision;
@@ -193,7 +195,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final target = targetAccountId?.trim() ?? '';
     if (target.isEmpty) return;
     // 浏览者身份账户来自本机当前默认账户上下文，不为普通主页读取链。
-    final loadViewer = widget.viewerAccountLoader ??
+    final loadViewer =
+        widget.viewerAccountLoader ??
         () async => CurrentUserContext.instance.accountId();
     try {
       final viewer = (await loadViewer())?.trim() ?? '';
@@ -219,10 +222,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
     final session = await _ensureSession();
     try {
       // 带 session 拉取 → is_following 反映当前登录者视角。
-      final fresh = await _api.fetchProfile(
-        widget.cidNumber,
-        session: session,
-      );
+      final fresh = await _api.fetchProfile(widget.cidNumber, session: session);
       if (!mounted) return;
       setState(() => _profile = fresh);
       unawaited(_resolveOwnAccount(fresh.accountId));
@@ -310,8 +310,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
         : current.followers + 1;
     final nextMutualFollowing = current.isFollowedBy
         ? (wasFollowing
-            ? (current.mutualFollowing > 0 ? current.mutualFollowing - 1 : 0)
-            : current.mutualFollowing + 1)
+              ? (current.mutualFollowing > 0 ? current.mutualFollowing - 1 : 0)
+              : current.mutualFollowing + 1)
         : current.mutualFollowing;
     // 乐观更新。
     setState(() {
@@ -441,14 +441,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
         accountId: selfAccountId,
         // 账户注销是钱包账户签名：Hot 读本机私钥，Cold 只走 CitizenWallet QR_V1。
         // 设备子钥仍按 cid_number 精确删除，不进入 SignMode。
-        signAction: (message) async => '0x${bytesToHex(await walletSigner.sign(
-          context: context,
-          accountId: selfAccountId,
-          signMode: signMode,
-          payload: message,
-          action: QrActions.squareAccountAction,
-          requestPrefix: 'sqdel_',
-        ))}',
+        signAction: (message) async =>
+            '0x${bytesToHex(await walletSigner.sign(context: context, accountId: selfAccountId, signMode: signMode, payload: message, action: QrActions.squareAccountAction, requestPrefix: 'sqdel_'))}',
       );
     } on SquareAccountLocalCleanupException catch (e) {
       // Worker 已经完成不可逆注销；此时不能误报“注销失败”诱导用户重复提交。
@@ -542,11 +536,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   String? _mediaUrl(String? objectKey, {CitizenProfile? profile}) =>
       objectKey == null
-          ? null
-          : _api.mediaUrl(
-              objectKey,
-              updatedAt: (profile ?? _profile)?.updatedAt,
-            );
+      ? null
+      : _api.mediaUrl(objectKey, updatedAt: (profile ?? _profile)?.updatedAt);
 
   Map<String, String>? get _mediaHeaders => _session == null
       ? null
@@ -571,8 +562,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
       fit: BoxFit.cover,
       frameBuilder: (context, child, frame, syncLoaded) =>
           syncLoaded || frame != null
-              ? child
-              : const ColoredBox(color: AppTheme.surfaceMuted),
+          ? child
+          : const ColoredBox(color: AppTheme.surfaceMuted),
       errorBuilder: (_, __, ___) =>
           const ColoredBox(color: AppTheme.surfaceMuted),
     );
@@ -681,7 +672,8 @@ class _UserProfilePageState extends State<UserProfilePage> {
 
   @override
   Widget build(BuildContext context) {
-    final expandedHeight = _bannerHeight +
+    final expandedHeight =
+        _bannerHeight +
         ProfileCategoryTabs.height +
         ProfileHeaderCard.requiredHeight(context, bio: _profile?.bio ?? '');
     return DefaultTabController(

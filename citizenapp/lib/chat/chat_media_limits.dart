@@ -6,8 +6,8 @@ import 'chat_models.dart';
 /// `chat_file_max_bytes` 同源。发送端、服务端和接收端将在各自边界执行同一限制；本类负责
 /// 手机端当前有效会员档的本地门控，不把未知档位错误提升为自由会员。
 ///
-/// 当前档由 [applyMembershipLevel] 在会员状态载入时设置（见
-/// `SquareApiClient.fetchMembership`），无订阅或未知档位 fail-closed 为 0。
+/// 当前档只由 SubscriptionService 写入统一会员缓存时设置；网络 API 保持纯解析，
+/// 无订阅、缓存过期或未知档位一律 fail-closed 为 0。
 class ChatMediaLimits {
   ChatMediaLimits._();
 
@@ -29,11 +29,11 @@ class ChatMediaLimits {
 
   /// 会员档 → 单个文件上限(纯函数,可测)。未知 / 无订阅一律禁止。
   static int maxBytesForLevel(String? level) => switch (level) {
-        'spark' => sparkMaxBytes,
-        'democracy' => democracyMaxBytes,
-        'freedom' => freedomMaxBytes,
-        _ => 0,
-      };
+    'spark' => sparkMaxBytes,
+    'democracy' => democracyMaxBytes,
+    'freedom' => freedomMaxBytes,
+    _ => 0,
+  };
 
   /// 会员状态载入后设置当前档上限；订阅失效或档位未知时统一关闭聊天权益。
   static void applyMembershipLevel(String? level, {String? cidNumber}) {
@@ -75,13 +75,12 @@ class ChatMediaLimits {
 
   /// 按消息类型取上限。媒体(image/video/file/audio)= 当前档上限;text / sticker 无字节返回 0。
   static int forKind(ChatMessageKind kind) => switch (kind) {
-        ChatMessageKind.image ||
-        ChatMessageKind.video ||
-        ChatMessageKind.file ||
-        ChatMessageKind.audio =>
-          _currentMaxBytes,
-        ChatMessageKind.text || ChatMessageKind.sticker => 0,
-      };
+    ChatMessageKind.image ||
+    ChatMessageKind.video ||
+    ChatMessageKind.file ||
+    ChatMessageKind.audio => _currentMaxBytes,
+    ChatMessageKind.text || ChatMessageKind.sticker => 0,
+  };
 
   /// 按 MIME 取上限；媒体一律取当前有效会员档上限。
   static int forMime(String mime) => _currentMaxBytes;
@@ -124,7 +123,10 @@ class ChatMediaTooLargeException implements Exception {
 
 /// 语音或视频消息超过统一的 3 分钟上限。
 class ChatMediaTooLongException implements Exception {
-  const ChatMediaTooLongException({required this.kind, required this.durationMs});
+  const ChatMediaTooLongException({
+    required this.kind,
+    required this.durationMs,
+  });
 
   final ChatMessageKind kind;
   final int durationMs;

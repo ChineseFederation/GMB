@@ -20,14 +20,14 @@ class _NullIdentityCache extends CurrentUserContext {
 }
 
 Widget _wrap({required bool isSelf}) => MaterialApp(
-      home: UserProfilePage(
-        cidNumber: kOwner,
-        isSelf: isSelf,
-        api: FakeProfileApi(sampleProfile()),
-        cache: FakeProfileCache(),
-        sessionProvider: FakeSessionProvider(fakeSession()),
-      ),
-    );
+  home: UserProfilePage(
+    cidNumber: kOwner,
+    isSelf: isSelf,
+    api: FakeProfileApi(sampleProfile()),
+    cache: FakeProfileCache(),
+    sessionProvider: FakeSessionProvider(fakeSession()),
+  ),
+);
 
 void main() {
   setUp(() {
@@ -36,16 +36,14 @@ void main() {
 
   tearDown(CurrentUserContext.resetDebugInstance);
 
-  testWidgets('renders 4 counted category tabs without a photo tab',
-      (tester) async {
+  testWidgets('renders 4 counted category tabs without a photo tab', (
+    tester,
+  ) async {
     await tester.pumpWidget(_wrap(isSelf: true));
     await tester.pumpAndSettle();
 
     for (final tab in ['posts', 'campaign', 'videos', 'articles']) {
-      expect(
-        find.byKey(ValueKey<String>('profile-tab-$tab')),
-        findsOneWidget,
-      );
+      expect(find.byKey(ValueKey<String>('profile-tab-$tab')), findsOneWidget);
     }
     expect(find.textContaining('照片'), findsNothing);
     expect(find.text('公文{36}'), findsOneWidget);
@@ -131,11 +129,11 @@ void main() {
     await tester.pumpAndSettle();
     expect(api.calls, 1);
 
-    MembershipRevision.instance.notifyConfirmed('OTHER-CID');
+    MembershipRevision.instance.notifyChanged('OTHER-CID');
     await tester.pumpAndSettle();
     expect(api.calls, 1);
 
-    MembershipRevision.instance.notifyConfirmed(kOwner);
+    MembershipRevision.instance.notifyChanged(kOwner);
     await tester.pumpAndSettle();
     expect(api.calls, 2);
   });

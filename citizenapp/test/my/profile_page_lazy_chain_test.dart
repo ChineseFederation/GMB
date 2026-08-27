@@ -78,15 +78,10 @@ class _FakeIdentityBadgeSnapshotStore extends IdentityBadgeSnapshotStore {
 
 class _FakeSquareApi extends SquareApiClient {
   int membershipCalls = 0;
-  bool? lastVerifyOnDeny;
 
   @override
-  Future<SquareMembershipState> fetchMembership(
-    SquareSession session, {
-    bool verifyOnDeny = false,
-  }) async {
+  Future<SquareMembershipState> fetchMembership(SquareSession session) async {
     membershipCalls += 1;
-    lastVerifyOnDeny = verifyOnDeny;
     return const SquareMembershipState(active: false, paidUntil: 0);
   }
 }
@@ -94,24 +89,15 @@ class _FakeSquareApi extends SquareApiClient {
 class _PendingMembershipSquareApi extends SquareApiClient {
   final Completer<SquareMembershipState> result =
       Completer<SquareMembershipState>();
-  bool? lastVerifyOnDeny;
 
   @override
-  Future<SquareMembershipState> fetchMembership(
-    SquareSession session, {
-    bool verifyOnDeny = false,
-  }) {
-    lastVerifyOnDeny = verifyOnDeny;
-    return result.future;
-  }
+  Future<SquareMembershipState> fetchMembership(SquareSession session) =>
+      result.future;
 }
 
 class _ActiveMembershipSquareApi extends SquareApiClient {
   @override
-  Future<SquareMembershipState> fetchMembership(
-    SquareSession session, {
-    bool verifyOnDeny = false,
-  }) async {
+  Future<SquareMembershipState> fetchMembership(SquareSession session) async {
     return const SquareMembershipState(
       active: true,
       paidUntil: 9999999999999,
@@ -121,8 +107,10 @@ class _ActiveMembershipSquareApi extends SquareApiClient {
 }
 
 class _StaticProfileMediaCache extends CitizenProfileMediaCache {
-  _StaticProfileMediaCache(
-      {required this.avatarPath, required this.bannerPath});
+  _StaticProfileMediaCache({
+    required this.avatarPath,
+    required this.bannerPath,
+  });
 
   final String avatarPath;
   final String bannerPath;
@@ -147,7 +135,8 @@ class _StaticProfileMediaCache extends CitizenProfileMediaCache {
 class _ConfirmedMembershipSnapshotService extends SubscriptionService {
   @override
   Future<MembershipDisplaySnapshot?> readDisplaySnapshot(
-      String cidNumber) async {
+    String cidNumber,
+  ) async {
     return const MembershipDisplaySnapshot(
       state: SquareMembershipState(
         active: true,
@@ -172,9 +161,7 @@ class _DelayedMembershipSnapshotService extends SubscriptionService {
       Completer<MembershipDisplaySnapshot?>();
 
   @override
-  Future<MembershipDisplaySnapshot?> readDisplaySnapshot(
-    String cidNumber,
-  ) =>
+  Future<MembershipDisplaySnapshot?> readDisplaySnapshot(String cidNumber) =>
       snapshot.future;
 
   @override
@@ -335,7 +322,6 @@ void main() {
     expect(find.text('不得公开的钱包名'), findsNothing);
     expect(profileApi.calls, 1);
     expect(squareApi.membershipCalls, 1);
-    expect(squareApi.lastVerifyOnDeny, isFalse);
 
     // 钱包名变更也会产生 revision 广播，但身份账户不变时不得重拉公开资料。
     WalletManager.walletsRevision.value += 1;
@@ -343,10 +329,10 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(profileApi.calls, 1);
 
-    MembershipRevision.instance.notifyConfirmed(_cidNumber);
+    MembershipRevision.instance.notifyChanged(_cidNumber);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(squareApi.membershipCalls, 2);
+    expect(squareApi.membershipCalls, 1);
 
     await tester.pumpWidget(const SizedBox.shrink());
   });
@@ -478,7 +464,6 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
-    expect(squareApi.lastVerifyOnDeny, isFalse);
     final badge = tester.widget<IdentityBadge>(find.byType(IdentityBadge));
     expect(badge.style.checked, isTrue);
     await tester.tap(find.text('创作者'));
@@ -489,10 +474,12 @@ void main() {
     expect(find.text('还没有会员档'), findsOneWidget);
     expect(find.textContaining('同步'), findsNothing);
 
-    creatorService.refresh.complete(CreatorPageData.active(
-      plan: CreatorPlan.empty(_cidNumber),
-      overview: CreatorOverview.zero,
-    ));
+    creatorService.refresh.complete(
+      CreatorPageData.active(
+        plan: CreatorPlan.empty(_cidNumber),
+        overview: CreatorOverview.zero,
+      ),
+    );
     squareApi.result.complete(
       const SquareMembershipState(
         active: true,

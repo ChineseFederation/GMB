@@ -24,6 +24,12 @@ cd "$CITIZENWALLET_DIR"
 case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenwallet-$PLATFORM") ;; *)
   echo "公民钱包中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
 esac
+# 与公民使用同一条不可绕过边界：脚本只接受Console中央一次性源码快照，禁止
+# 通过手工注入中央build目录却仍在GMB主检出执行Flutter并恢复产品缓存。
+[[ "$CITIZENWALLET_DIR" == "$CONSOLE_WORK_DIR/source/GMB/citizenwallet" ]] || {
+  echo "公民钱包本机编译只能在Console中央源码快照中运行：$CITIZENWALLET_DIR" >&2
+  exit 1
+}
 BUILD_DIR="$CONSOLE_WORK_DIR/build"
 ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenwallet"
 export CONSOLE_BUILD_DIR="$BUILD_DIR"

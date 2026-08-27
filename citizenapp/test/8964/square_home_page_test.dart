@@ -73,9 +73,7 @@ class _RecordingSignWalletManager extends WalletManager {
 class _StaticProfileMediaCache extends CitizenProfileMediaCache {
   @override
   Future<CitizenProfileMediaSnapshot> read(CitizenProfile profile) async =>
-      const CitizenProfileMediaSnapshot(
-        avatarPath: '/tmp/synced-avatar.png',
-      );
+      const CitizenProfileMediaSnapshot(avatarPath: '/tmp/synced-avatar.png');
 }
 
 class _FakeDefaultAccountReader implements DefaultAccountReader {
@@ -115,15 +113,14 @@ const _registeredDefaultAccount = DefaultAccount(
 
 SquareIdentityService _registeredIdentityService({
   _FakeSquareChainService? chainService,
-}) =>
-    SquareIdentityService(
-      walletManager: _FakeWalletManager(_registeredWallet),
-      defaultAccountReader: const _FakeDefaultAccountReader(
-        _registeredDefaultAccount,
-      ),
-      chainService:
-          chainService ?? _FakeSquareChainService('CN220-CTZN2-100000001-2026'),
-    );
+}) => SquareIdentityService(
+  walletManager: _FakeWalletManager(_registeredWallet),
+  defaultAccountReader: const _FakeDefaultAccountReader(
+    _registeredDefaultAccount,
+  ),
+  chainService:
+      chainService ?? _FakeSquareChainService('CN220-CTZN2-100000001-2026'),
+);
 
 class _FakeSquareChainService extends SquareChainService {
   _FakeSquareChainService(this.cidNumber);
@@ -230,16 +227,16 @@ class _FakeSquareApiClient extends SquareApiClient {
 class _UnregisteredIdentityCache extends CurrentUserContext {
   @override
   Future<CurrentUser?> resolve() async => const CurrentUser(
-        account: DefaultAccount(
-          accountId:
-              '0x1111111111111111111111111111111111111111111111111111111111111111',
-          ss58Address: 'ss58-demo',
-          accountName: '默认账户',
-          signMode: SignMode.hot,
-          walletIndex: 1,
-        ),
-        binding: null,
-      );
+    account: DefaultAccount(
+      accountId:
+          '0x1111111111111111111111111111111111111111111111111111111111111111',
+      ss58Address: 'ss58-demo',
+      accountName: '默认账户',
+      signMode: SignMode.hot,
+      walletIndex: 1,
+    ),
+    binding: null,
+  );
 }
 
 /// Worker 真源判定:登录挑战对未绑定账户回 403 cid_not_bound。
@@ -404,8 +401,9 @@ void main() {
     expect(find.text('暂无竞选内容'), findsNothing);
 
     // 中央背景只使用选定的人物坦克透明资源；旧单坦克水印不再存在。
-    final watermarkFinder =
-        find.byKey(const ValueKey<String>('square-person-tank-watermark'));
+    final watermarkFinder = find.byKey(
+      const ValueKey<String>('square-person-tank-watermark'),
+    );
     expect(watermarkFinder, findsOneWidget);
     expect(
       find.byKey(const ValueKey<String>('square-tank-watermark')),
@@ -473,7 +471,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(feedSource.calls, 1);
 
-    MembershipRevision.instance.notifyConfirmed('CID-1');
+    MembershipRevision.instance.notifyChanged('CID-1');
     await tester.pumpAndSettle();
     expect(feedSource.calls, 2);
   });
@@ -674,8 +672,8 @@ void main() {
     await tester.pumpAndSettle();
 
     FilledButton publishButton() => tester.widget<FilledButton>(
-          find.byKey(const ValueKey('compose-publish-button')),
-        );
+      find.byKey(const ValueKey('compose-publish-button')),
+    );
     expect(publishButton().onPressed, isNull);
 
     await tester.enterText(
@@ -715,8 +713,10 @@ void main() {
       tester.widget<ComposeMediaAddButton>(coverFinder).icon,
       Icons.add_photo_alternate_outlined,
     );
-    expect(tester.getCenter(coverFinder).dy,
-        lessThan(tester.getCenter(inlineFinder).dy));
+    expect(
+      tester.getCenter(coverFinder).dy,
+      lessThan(tester.getCenter(inlineFinder).dy),
+    );
     expect(
       tester.getCenter(addSectionFinder).dx,
       greaterThan(tester.getSize(find.byType(SquareComposePage)).width * 0.75),

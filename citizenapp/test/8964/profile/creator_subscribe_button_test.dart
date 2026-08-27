@@ -3,94 +3,57 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:citizenapp/8964/profile/widgets/creator_subscribe_button.dart';
 import 'package:citizenapp/8964/subscribe/creator_subscribe_service.dart';
+import 'package:citizenapp/8964/services/square_api_client.dart'
+    show SquareSession;
 import 'package:citizenapp/my/creator/creator_api.dart';
-import 'package:citizenapp/rpc/subscription_rpc.dart';
+import 'package:citizenapp/my/creator/models/creator_plan.dart';
 
 import 'fake_profile.dart';
 
-/// 只覆盖订阅按钮的显示门禁：有档 且 创作者本人平台会员有效才显示，其余一律隐藏。
+/// 只覆盖订阅按钮的 CitizenServe 投影门禁：服务端返回有效档位才显示，其余隐藏。
 class _FakeSubscribeService extends CreatorSubscribeService {
-  _FakeSubscribeService({
-    required this.tiers,
-    required this.creatorPlatform,
-    this.subscriberState,
-    this.throwCreatorPlatform = false,
-  }) : super();
+  _FakeSubscribeService({required this.view, this.throwView = false}) : super();
 
-  final List<ChainCreatorTier> tiers;
-  final FinalizedSubscriptionSnapshot creatorPlatform;
-  final ChainSubscriptionState? subscriberState;
-  final bool throwCreatorPlatform;
+  final CreatorView view;
+  final bool throwView;
 
   @override
-  Future<List<ChainCreatorTier>> fetchCreatorPlans(
-          String creatorCidNumber) async =>
-      tiers;
-
-  @override
-  Future<FinalizedSubscriptionSnapshot> fetchFinalizedState({
-    required String subscriberCidNumber,
-    required String creatorCidNumber,
-  }) async =>
-      _snapshot(state: subscriberState);
-
-  @override
-  Future<FinalizedSubscriptionSnapshot> fetchPlatformSnapshot(
-      String cidNumber) async {
-    // 真实 fetchSubscriptionSnapshot 在链读/解码失败时抛 FormatException（Exception）。
-    if (throwCreatorPlatform) throw const FormatException('chain read failed');
-    return creatorPlatform;
+  Future<CreatorView> fetchView(
+    SquareSession session,
+    String creatorCidNumber,
+  ) async {
+    if (throwView) throw const CreatorApiException('service unavailable');
+    return view;
   }
 }
 
-FinalizedSubscriptionSnapshot _snapshot(
-        {required ChainSubscriptionState? state}) =>
-    FinalizedSubscriptionSnapshot(
-      state: state,
-      chainNowMs: 1000,
-      blockHashHex: '0x00',
-    );
+final _plan = CreatorPlan.fromJson({
+  'creator_cid_number': 'CN001-CTZN-000000001-2026',
+  'tiers': [
+    {
+      'tier_id': 't1',
+      'tier_name': '支持者',
+      'prices_fen': {'monthly': 299},
+    },
+  ],
+  'updated_at': 1,
+});
 
-/// 平台会员快照：active → paidUntil 远大于 chainNowMs 且状态 active；否则 terminated 已到期。
-FinalizedSubscriptionSnapshot _platform({required bool active}) => _snapshot(
-      state: ChainSubscriptionState(
-        plan: const ChainSubscriptionPlan.platform('freedom'),
-        startedAt: 0,
-        lastChargedAt: 0,
-        lastChargedPriceFen: BigInt.zero,
-        paidUntil: active ? 9999999999999 : 500,
-        status: active ? 'active' : 'terminated',
-        authorizedPriceFen: BigInt.zero,
-        suspendReason: null,
-      ),
-    );
-
-/// 访客对该创作者的有效订阅真态，用于验证顶部仍为单一入口。
-ChainSubscriptionState _activeCreatorSubscription() => ChainSubscriptionState(
-      plan: const ChainSubscriptionPlan.creator('t1', 'monthly'),
-      startedAt: 0,
-      lastChargedAt: 0,
-      lastChargedPriceFen: BigInt.from(299),
+CreatorSubscriptionState _activeCreatorSubscription() =>
+    const CreatorSubscriptionState(
+      tierId: 't1',
+      billingPeriod: 'monthly',
+      subscriptionStatus: 'active',
       paidUntil: 9999999999999,
-      status: 'active',
-      authorizedPriceFen: BigInt.from(299),
-      suspendReason: null,
+      active: true,
     );
-
-final _tiers = <ChainCreatorTier>[
-  ChainCreatorTier(
-    tierId: 't1',
-    tierName: '支持者',
-    pricesFen: {'monthly': BigInt.from(299)},
-  ),
-];
 
 void main() {
   Future<void> pump(
     WidgetTester tester, {
     required bool creatorActive,
-    List<ChainCreatorTier>? tiers,
-    ChainSubscriptionState? subscriberState,
+    bool hasTiers = true,
+    CreatorSubscriptionState? subscriberState,
     bool throwCreator = false,
   }) async {
     await tester.pumpWidget(
@@ -99,12 +62,12 @@ void main() {
           body: CreatorSubscribeButton(
             creatorCidNumber: 'CN001-CTZN-000000001-2026',
             service: _FakeSubscribeService(
-              tiers: tiers ?? _tiers,
-              creatorPlatform: _platform(active: creatorActive),
-              subscriberState: subscriberState,
-              throwCreatorPlatform: throwCreator,
+              view: CreatorView(
+                plan: creatorActive && hasTiers ? _plan : null,
+                subscription: subscriberState,
+              ),
+              throwView: throwCreator,
             ),
-            api: FakeCreatorApi(),
             sessionProvider: FakeSessionProvider(fakeSession()),
           ),
         ),
@@ -136,18 +99,18 @@ void main() {
     expect(find.text('取消订阅'), findsOneWidget);
   });
 
-  testWidgets('有档 但 创作者平台会员过期 → 隐藏', (tester) async {
+  testWidgets('CitizenServe 不返回创作者有效档位时隐藏', (tester) async {
     await pump(tester, creatorActive: false);
     expect(find.text('订阅'), findsNothing);
   });
 
-  testWidgets('创作者平台会员快照读失败 → 隐藏（fail-closed）', (tester) async {
+  testWidgets('CitizenServe 创作者投影读取失败时隐藏（fail-closed）', (tester) async {
     await pump(tester, creatorActive: true, throwCreator: true);
     expect(find.text('订阅'), findsNothing);
   });
 
   testWidgets('无档 → 隐藏（既有行为不回归）', (tester) async {
-    await pump(tester, creatorActive: true, tiers: const <ChainCreatorTier>[]);
+    await pump(tester, creatorActive: true, hasTiers: false);
     expect(find.text('订阅'), findsNothing);
   });
 }

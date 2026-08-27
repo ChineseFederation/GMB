@@ -6,31 +6,27 @@ import 'package:citizenapp/my/creator/creator_api.dart';
 import 'package:citizenapp/my/creator/creator_money.dart';
 import 'package:citizenapp/my/creator/models/creator_plan.dart';
 import 'package:citizenapp/my/myid/register_identity_flow.dart';
-import 'package:citizenapp/rpc/subscription_rpc.dart';
 import 'package:citizenapp/ui/app_theme.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 
 /// 广场他人主页的创作者订阅入口（订阅者侧）。
 ///
-/// 有档才显示；订阅、取消、更换分别只提交一笔账户签名交易。价格只采用 finalized 链上档位，
-/// Cloudflare 只提供查询投影；档位名称和价格来自同一 finalized 链状态。
+/// 有档才显示；订阅、取消、更换分别只提交一笔账户签名交易。档位、价格和当前订阅展示
+/// 统一采用 CitizenServe finalized 投影，手机页面不再直接读取链上会员状态。
 class CreatorSubscribeButton extends StatefulWidget {
   const CreatorSubscribeButton({
     super.key,
     required this.creatorCidNumber,
     this.enabled = true,
-    CreatorApi? api,
     CreatorSubscribeService? service,
     SquareSessionProvider? sessionProvider,
-  })  : _api = api,
-        _service = service,
-        _sessionProvider = sessionProvider;
+  }) : _service = service,
+       _sessionProvider = sessionProvider;
 
   final String creatorCidNumber;
 
   /// false=置灰不可点（以他人视角看自己时，订阅自己无意义）。
   final bool enabled;
-  final CreatorApi? _api;
   final CreatorSubscribeService? _service;
   final SquareSessionProvider? _sessionProvider;
 
@@ -39,7 +35,6 @@ class CreatorSubscribeButton extends StatefulWidget {
 }
 
 class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
-  late final CreatorApi _api = widget._api ?? CreatorApiHttp();
   late final CreatorSubscribeService _service =
       widget._service ?? CreatorSubscribeService();
   late final SquareSessionProvider _session =
@@ -48,10 +43,7 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
   bool _loading = true;
   bool _busy = false;
   CreatorPlan? _plan;
-  FinalizedSubscriptionSnapshot? _snapshot;
-
-  /// 被查看创作者本人的平台会员 finalized 快照；仅其有效时才显示订阅按钮。
-  FinalizedSubscriptionSnapshot? _creatorPlatform;
+  CreatorSubscriptionState? _subscription;
 
   @override
   void initState() {
@@ -67,30 +59,11 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
         if (mounted) setState(() => _loading = false);
         return;
       }
-      final results = await Future.wait<Object?>([
-        // Cloudflare 只补投影时间；名称与价格直接读取同一 finalized 链状态。
-        _api
-            .fetchPlanOf(session, widget.creatorCidNumber)
-            .catchError((_) => null),
-        _service.fetchCreatorPlans(widget.creatorCidNumber),
-        _service.fetchFinalizedState(
-          subscriberCidNumber: session.cidNumber,
-          creatorCidNumber: widget.creatorCidNumber,
-        ),
-        // 被查看创作者本人平台会员真态：读失败 → 整个 _load 落 catch → 按钮隐藏（fail-closed）。
-        _service.fetchPlatformSnapshot(widget.creatorCidNumber),
-      ]);
-      final displayPlan = results[0] as CreatorPlan?;
-      final chainTiers = results[1] as List<ChainCreatorTier>;
+      final view = await _service.fetchView(session, widget.creatorCidNumber);
       if (!mounted) return;
       setState(() {
-        _plan = mergeCreatorPlanWithChain(
-          creatorCidNumber: widget.creatorCidNumber,
-          displayPlan: displayPlan,
-          chainTiers: chainTiers,
-        );
-        _snapshot = results[2] as FinalizedSubscriptionSnapshot;
-        _creatorPlatform = results[3] as FinalizedSubscriptionSnapshot;
+        _plan = view.plan;
+        _subscription = view.subscription;
         _loading = false;
       });
     } on Exception {
@@ -100,19 +73,12 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
 
   @override
   Widget build(BuildContext context) {
-    final creatorPlatformActive =
-        _creatorPlatform?.state?.isEffectiveAt(_creatorPlatform!.chainNowMs) ==
-            true;
-    // 双条件 fail-closed：有档 且 创作者本人平台会员有效，才显示订阅按钮。
-    // 未开档 / 加载中 / 创作者平台会员过期或缺失 / 快照读失败 一律隐藏，绝不诱导无效订阅。
-    if (_loading ||
-        _plan == null ||
-        _plan!.tiers.isEmpty ||
-        !creatorPlatformActive) {
+    // 服务端只有在创作者平台会员有效时才返回档位；无档或读取失败一律隐藏。
+    if (_loading || _plan == null || _plan!.tiers.isEmpty) {
       return const SizedBox.shrink();
     }
     final actionable = widget.enabled && !_busy;
-    final subscribed = _snapshot?.state?.status == 'active';
+    final subscribed = _subscription?.subscriptionStatus == 'active';
     // 顶部操作栏只保留一个紧凑入口，并固定在通知图标左侧。是否已订阅只决定
     // 点击后的操作面板，不能在主页头部展开成两个按钮或增加纵向高度。
     return SizedBox(
@@ -123,8 +89,9 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
             : null,
         style: OutlinedButton.styleFrom(
           minimumSize: Size(0, AppLayout.scaled(context, 34)),
-          padding:
-              EdgeInsets.symmetric(horizontal: AppLayout.scaled(context, 12)),
+          padding: EdgeInsets.symmetric(
+            horizontal: AppLayout.scaled(context, 12),
+          ),
           visualDensity: VisualDensity.compact,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
@@ -183,13 +150,14 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
       builder: (_) => _TierPeriodPicker(plan: _plan!),
     );
     if (selection == null || !mounted) return;
-    final current = _snapshot?.state;
-    final samePlan = current?.plan.kind == 'creator' &&
-        current?.plan.tierId == selection.tierId &&
-        current?.plan.billingPeriod == selection.period.key;
+    final current = _subscription;
+    final samePlan =
+        current?.tierId == selection.tierId &&
+        current?.billingPeriod == selection.period.key;
     final shouldChange =
-        (current?.status == 'active' || current?.status == 'cancelled') &&
-            !samePlan;
+        (current?.subscriptionStatus == 'active' ||
+            current?.subscriptionStatus == 'cancelled') &&
+        !samePlan;
     await _run(
       () => shouldChange
           ? _service.changePlan(
@@ -245,8 +213,9 @@ class _CreatorSubscribeButtonState extends State<CreatorSubscribeButton> {
       await _load();
     } on CreatorSubscribeException catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text(e.message)));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(e.message)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -301,8 +270,9 @@ class _TierPeriodPicker extends StatelessWidget {
             Text(
               '订阅后区块链按所选周期自动扣公民币；款项全额进创作者钱包。',
               style: TextStyle(
-                  fontSize: AppLayout.scaled(context, 12),
-                  color: AppTheme.textSecondary),
+                fontSize: AppLayout.scaled(context, 12),
+                color: AppTheme.textSecondary,
+              ),
             ),
             SizedBox(height: AppLayout.scaled(context, 14)),
             for (final tier in plan.tiers) _tierBlock(context, tier),
@@ -313,8 +283,9 @@ class _TierPeriodPicker extends StatelessWidget {
   }
 
   Widget _tierBlock(BuildContext context, CreatorTier tier) {
-    final periods =
-        BillingPeriod.values.where((period) => tier.hasPeriod(period)).toList();
+    final periods = BillingPeriod.values
+        .where((period) => tier.hasPeriod(period))
+        .toList();
     return Padding(
       padding: EdgeInsets.only(bottom: AppLayout.scaled(context, 14)),
       child: Column(
@@ -335,13 +306,14 @@ class _TierPeriodPicker extends StatelessWidget {
             children: periods.map((period) {
               final fen = tier.priceFenOf(period)!;
               return OutlinedButton(
-                onPressed: () => Navigator.of(context).pop(
-                  _TierPeriodSelection(tier.tierId, period, fen),
-                ),
+                onPressed: () => Navigator.of(
+                  context,
+                ).pop(_TierPeriodSelection(tier.tierId, period, fen)),
                 style: OutlinedButton.styleFrom(
                   minimumSize: Size(0, AppLayout.scaled(context, 40)),
                   padding: EdgeInsets.symmetric(
-                      horizontal: AppLayout.scaled(context, 14)),
+                    horizontal: AppLayout.scaled(context, 14),
+                  ),
                 ),
                 child: Text('${period.label} ${fenToYuanLabel(fen)} 元'),
               );

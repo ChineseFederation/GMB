@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart'
-    show SquareMembershipState, SquareSession;
+    show SquareSession;
 import 'package:citizenapp/my/creator/creator_api.dart';
 import 'package:citizenapp/my/creator/models/creator_overview.dart';
 import 'package:citizenapp/my/creator/models/creator_plan.dart';
@@ -38,13 +38,12 @@ class CreatorPageData {
   factory CreatorPageData.active({
     required CreatorPlan plan,
     required CreatorOverview overview,
-  }) =>
-      CreatorPageData._(gated: false, plan: plan, overview: overview);
+  }) => CreatorPageData._(gated: false, plan: plan, overview: overview);
 }
 
 /// 创作者页本地展示快照。
 ///
-/// 快照只决定首帧展示，不授予会员权益，也不允许绕过保存动作中的 finalized 校验。
+/// 快照只决定首帧展示，不授予会员权益，也不允许绕过保存动作中的 CitizenServe 鉴权。
 /// CID 是快照唯一归属主键；会员态与创作者数据分别记录成功读取时间，便于页面只在
 /// 数据过期时后台刷新，而不是每次进页面都等待网络和链。
 class CreatorDisplaySnapshot {
@@ -92,13 +91,14 @@ class CreatorService {
     DefaultAccountReader? defaultAccountReader,
     SquareSessionProvider? sessionProvider,
     SubscriptionService? subscriptionService,
-  })  : _api = api ?? CreatorApiHttp(),
-        _subscriptionRpc = subscriptionRpc ?? SubscriptionRpc(),
-        _wallet = walletManager ?? WalletManager(),
-        _defaultAccountReader = defaultAccountReader ??
-            DefaultAccountService(walletManager: walletManager),
-        _session = sessionProvider ?? SquareSessionProvider.instance,
-        _subscriptionService = subscriptionService ?? SubscriptionService() {
+  }) : _api = api ?? CreatorApiHttp(),
+       _subscriptionRpc = subscriptionRpc ?? SubscriptionRpc(),
+       _wallet = walletManager ?? WalletManager(),
+       _defaultAccountReader =
+           defaultAccountReader ??
+           DefaultAccountService(walletManager: walletManager),
+       _session = sessionProvider ?? SquareSessionProvider.instance,
+       _subscriptionService = subscriptionService ?? SubscriptionService() {
     _walletAccountSigner = WalletAccountSigner(walletManager: _wallet);
   }
 
@@ -196,7 +196,7 @@ class CreatorService {
     );
   }
 
-  /// 后台刷新：按 finalized 平台订阅真态门禁，并在同一区块读取创作者档位。
+  /// 后台刷新：平台会员只读 CitizenServe 统一缓存，创作者档位仍读取其 finalized 链状态。
   ///
   /// 页面首帧不等待本方法；[expectedCidNumber] 防止旧会话结果写入新身份页面。
   Future<CreatorPageData> load({String? expectedCidNumber}) async {
@@ -210,18 +210,9 @@ class CreatorService {
       throw const CreatorException('当前会话与创作者身份不一致，请稍后重试');
     }
 
-    final membership = await _subscriptionRpc.fetchSubscriptionSnapshot(
-      subscriberCidNumber: session.cidNumber,
-    );
+    final membership = await _subscriptionService.authorizeMembership(session);
     final nowMs = DateTime.now().millisecondsSinceEpoch;
-    final membershipActive =
-        membership.state?.isEffectiveAt(membership.chainNowMs) == true;
-    await _rememberMembershipSnapshot(
-      cidNumber: session.cidNumber,
-      membership: membership,
-      fetchedAtMs: nowMs,
-    );
-    if (!membershipActive) {
+    if (!membership.active) {
       final data = CreatorPageData.gated();
       await rememberDisplayData(
         cidNumber: session.cidNumber,
@@ -250,26 +241,21 @@ class CreatorService {
       }
     }();
     final results = await Future.wait([
-      // Cloudflare 只补投影时间与统计；瞬时不可用时仍允许按链上真态进入页面。
+      // 档位、统计与平台会员全部采用 CitizenServe finalized 投影。
       displayPlanFuture,
       overviewFuture,
-      _subscriptionRpc.fetchCreatorPlansAtBlock(
-        session.cidNumber,
-        membership.blockHashHex,
-      ),
     ]);
     final displayPlan = results[0] as CreatorPlan?;
     final cached = await readDisplaySnapshot(session.cidNumber);
-    final overview = results[1] as CreatorOverview? ??
+    final overview =
+        results[1] as CreatorOverview? ??
         cached?.data.overview ??
         CreatorOverview.zero;
-    final chainTiers = results[2] as List<ChainCreatorTier>;
     final data = CreatorPageData.active(
-      plan: mergeCreatorPlanWithChain(
-        creatorCidNumber: session.cidNumber,
-        displayPlan: displayPlan,
-        chainTiers: chainTiers,
-      ),
+      plan:
+          displayPlan ??
+          cached?.data.plan ??
+          CreatorPlan.empty(session.cidNumber),
       overview: overview,
     );
     await rememberDisplayData(
@@ -279,32 +265,6 @@ class CreatorService {
       creatorFetchedAtMs: nowMs,
     );
     return data;
-  }
-
-  Future<void> _rememberMembershipSnapshot({
-    required String cidNumber,
-    required FinalizedSubscriptionSnapshot membership,
-    required int fetchedAtMs,
-  }) async {
-    final previous = await _subscriptionService.readDisplaySnapshot(cidNumber);
-    final state = membership.state;
-    final active = state?.isEffectiveAt(membership.chainNowMs) == true;
-    await _subscriptionService.writeDisplaySnapshot(
-      cidNumber,
-      MembershipDisplaySnapshot(
-        state: SquareMembershipState(
-          active: active,
-          paidUntil: state?.paidUntil ?? 0,
-          membershipLevel: state?.plan.membershipLevel,
-          subscriptionStatus: state?.status,
-          subscriptionActive: active,
-          lastChargedAt: state?.lastChargedAt ?? 0,
-        ),
-        prices: previous?.prices ?? const <String, int>{},
-        subscriptionFetchedAtMs: fetchedAtMs,
-        pricesFetchedAtMs: previous?.pricesFetchedAtMs ?? 0,
-      ),
-    );
   }
 
   /// 覆盖式保存档位：一次链上签名原子写入名称与价格，再确认 finalized 投影。
@@ -325,10 +285,11 @@ class CreatorService {
       throw const CreatorException('当前会话与默认钱包账户不一致，请重新登录');
     }
     try {
-      final membership = await _subscriptionRpc.fetchSubscriptionSnapshot(
-        subscriberCidNumber: session.cidNumber,
+      final membership = await _subscriptionService.authorizeMembership(
+        session,
+        forceRefresh: true,
       );
-      if (membership.state?.isEffectiveAt(membership.chainNowMs) != true) {
+      if (!membership.active) {
         throw const CreatorException('需要当前有效的平台会员才能设置创作者会员档');
       }
       final result = await _subscriptionRpc.setCreatorPlans(
@@ -435,8 +396,9 @@ class CreatorService {
       } on Exception {
         // 链上已经 finalized；本地待同步缓存失败不改变交易结果。
       }
+      CreatorPlan? projectedPlan;
       try {
-        await _api.saveMyPlan(
+        projectedPlan = await _api.saveMyPlan(
           session: session,
           txHash: result.txHash,
           blockHashHex: result.blockHashHex,
@@ -452,17 +414,7 @@ class CreatorService {
         tiers: List.unmodifiable(localTiers),
         updatedAt: 0,
       );
-      try {
-        final chainTiers =
-            await _subscriptionRpc.fetchCreatorPlans(session.cidNumber);
-        return mergeCreatorPlanWithChain(
-          creatorCidNumber: session.cidNumber,
-          displayPlan: null,
-          chainTiers: chainTiers,
-        );
-      } on Exception {
-        return localPlan;
-      }
+      return projectedPlan ?? localPlan;
     } on SecureSeedException catch (e) {
       throw CreatorException(seedSignErrorMessage(e));
     } on WalletAuthException catch (e) {
@@ -500,10 +452,7 @@ class CreatorService {
   }) async {
     await _writeCreatorState(
       _pendingProjectionKey(creatorCidNumber),
-      jsonEncode({
-        'tx_hash': txHash,
-        'block_hash': blockHashHex,
-      }),
+      jsonEncode({'tx_hash': txHash, 'block_hash': blockHashHex}),
     );
   }
 
@@ -513,8 +462,9 @@ class CreatorService {
 
   Future<void> _retryPendingProjection(SquareSession session) async {
     try {
-      final raw =
-          await _readCreatorState(_pendingProjectionKey(session.cidNumber));
+      final raw = await _readCreatorState(
+        _pendingProjectionKey(session.cidNumber),
+      );
       if (raw == null) return;
       final decoded = jsonDecode(raw);
       if (decoded is! Map<String, dynamic>) return;
@@ -530,7 +480,7 @@ class CreatorService {
       );
       await _deleteCreatorState(_pendingProjectionKey(session.cidNumber));
     } on Exception {
-      // 保留待同步记录；页面仍以 finalized 链上名称与价格为真源，不阻断创作者功能。
+      // 保留待同步记录；页面继续使用上一次 CitizenServe 快照，不阻断创作者功能。
     }
   }
 
@@ -577,18 +527,7 @@ class CreatorService {
       // 保留待同步记录；下次进入创作者页只重试 HTTP。
     }
 
-    try {
-      final chainTiers = await _subscriptionRpc.fetchCreatorPlans(
-        creatorCidNumber,
-      );
-      return mergeCreatorPlanWithChain(
-        creatorCidNumber: creatorCidNumber,
-        displayPlan: displayPlan,
-        chainTiers: chainTiers,
-      );
-    } on Exception {
-      return localPlan;
-    }
+    return displayPlan;
   }
 
   /// 本地按永久 CID 保留有限条 finalized 交易证明；签名账户留在证明内部作为
@@ -621,14 +560,14 @@ class CreatorService {
   }
 
   Future<String?> _readCreatorState(String key) => WalletIsar.instance.read(
-        (isar) async =>
-            (await isar.walletCreatorStateEntitys.getByStateKey(key))
-                ?.payloadJson,
-      );
+    (isar) async =>
+        (await isar.walletCreatorStateEntitys.getByStateKey(key))?.payloadJson,
+  );
 
   Future<void> _writeCreatorState(String key, String payloadJson) =>
       WalletIsar.instance.writeTxn((isar) async {
-        final row = await isar.walletCreatorStateEntitys.getByStateKey(key) ??
+        final row =
+            await isar.walletCreatorStateEntitys.getByStateKey(key) ??
             WalletCreatorStateEntity();
         row
           ..stateKey = key
@@ -642,16 +581,16 @@ class CreatorService {
       });
 
   Future<String?> _readMembershipState(String key) => WalletIsar.instance.read(
-        (isar) async =>
-            (await isar.walletMembershipStateEntitys.getByStateKey(key))
-                ?.payloadJson,
-      );
+    (isar) async => (await isar.walletMembershipStateEntitys.getByStateKey(
+      key,
+    ))?.payloadJson,
+  );
 
   Future<void> _writeMembershipState(String key, String payloadJson) =>
       WalletIsar.instance.writeTxn((isar) async {
         final row =
             await isar.walletMembershipStateEntitys.getByStateKey(key) ??
-                WalletMembershipStateEntity();
+            WalletMembershipStateEntity();
         row
           ..stateKey = key
           ..payloadJson = payloadJson;

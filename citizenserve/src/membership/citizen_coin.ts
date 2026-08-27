@@ -13,6 +13,7 @@ import {
   type VerifiedFinalizedTransaction,
 } from "../chain/subscription";
 import { assertMembershipLevel } from "./plans";
+import { membershipPayload } from "./service";
 
 /**
  * 平台订阅 BFF 只接收 CitizenApp 已完成交易的 tx_hash 与 finalized block_hash。Worker
@@ -86,12 +87,7 @@ export async function platformSubscriptionConfirmRoute(
     verifiedAt: confirmedAt,
     lastTxHash: transaction.txHash,
   });
-  return jsonResponse({
-    ok: true,
-    subscription_status: state!.status,
-    membership_level: state!.plan.kind === "platform" ? state!.plan.membershipLevel : null,
-    paid_until: state!.paidUntil,
-  });
+  return jsonResponse(await membershipPayload(env, session.cid_number));
 }
 
 function verifiedPlatformAction(

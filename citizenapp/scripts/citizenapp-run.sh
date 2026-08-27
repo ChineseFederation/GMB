@@ -28,6 +28,12 @@ if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
   case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
     echo "公民中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
   esac
+  # Flutter会把.dart_tool、Pods、Gradle和Xcode状态写到当前工程。编译脚本只接受
+  # Console建立的一次性源码快照，直接从GMB主检出运行必须在任何Flutter命令前失败。
+  [[ "$APP_ROOT" == "$CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] || {
+    echo "公民本机编译只能在Console中央源码快照中运行：$APP_ROOT" >&2
+    exit 1
+  }
   BUILD_DIR="$CONSOLE_WORK_DIR/build"
   ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenapp"
   export CONSOLE_BUILD_DIR="$BUILD_DIR"

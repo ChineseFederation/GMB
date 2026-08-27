@@ -1193,6 +1193,10 @@ void main() {
               fileName: 'photo.txt',
               mime: 'text/plain',
               byteSize: 3,
+              cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+              cipherByteSize: 19,
+              cipherSha256:
+                  '0000000000000000000000000000000000000000000000000000000000000000',
             ),
           ),
         ),
@@ -1567,6 +1571,10 @@ ChatStoredMessage _mediaStored({
         width: 800,
         height: 600,
         blurhash: blurhash,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 116,
+        cipherSha256:
+            '1111111111111111111111111111111111111111111111111111111111111111',
       ),
     ),
   );

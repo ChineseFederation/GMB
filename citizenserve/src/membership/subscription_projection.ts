@@ -1,4 +1,4 @@
-import { readUserByCidNumber } from '../account/user_repository';
+import { fetchChainAccountIdsByCidAtBlock } from '../chain/identity';
 import { decodeSquarePostSubscriptionEvents } from '../chain/square_post_event';
 import {
   fetchBlockHeader,
@@ -36,6 +36,7 @@ export interface SubscriptionProjectionDeps {
   fetchSystemEventsAtBlock: typeof fetchSystemEventsAtBlock;
   readSubscriptionsAtBlock: typeof readSubscriptionsAtBlock;
   readCreatorPlansBatchAtBlock: typeof readCreatorPlansBatchAtBlock;
+  fetchChainAccountIdsByCidAtBlock: typeof fetchChainAccountIdsByCidAtBlock;
 }
 
 const defaultDeps: SubscriptionProjectionDeps = {
@@ -45,6 +46,7 @@ const defaultDeps: SubscriptionProjectionDeps = {
   fetchSystemEventsAtBlock,
   readSubscriptionsAtBlock,
   readCreatorPlansBatchAtBlock,
+  fetchChainAccountIdsByCidAtBlock,
 };
 
 export interface SubscriptionProjectionReconcileResult {
@@ -137,17 +139,37 @@ async function projectCanonicalBlock(
   }
   const relationList = [...relations.values()];
   const creatorList = [...creatorCidNumbers];
-  const [states, creatorPlans] = await Promise.all([
+  const identityCidNumbers = [...new Set([
+    ...relationList.flatMap((relation) => relation.issuer.kind === 'creator'
+      ? [relation.subscriberCidNumber, relation.issuer.creatorCidNumber]
+      : [relation.subscriberCidNumber]),
+    ...creatorList,
+  ])];
+  const [states, creatorPlans, accountIds, projectedCidNumbers] = await Promise.all([
     deps.readSubscriptionsAtBlock(env, relationList, blockHash),
     deps.readCreatorPlansBatchAtBlock(env, creatorList, blockHash),
+    deps.fetchChainAccountIdsByCidAtBlock(env, identityCidNumbers, blockHash),
+    readProjectedCidNumbers(env, identityCidNumbers),
   ]);
   const point = { blockNumber, blockHash, verifiedAt: nowMs(), lastTxHash: null };
+
+  // 会员表保留 users 外键：同区块链上仍有效、但 D1 用户投影尚未落库时必须停止游标，
+  // 等 Cron 先完成用户 finalized 投影后原区块重放，禁止伪造用户或永久跳过会员。
+  for (const cidNumber of identityCidNumbers) {
+    if (accountIds.has(cidNumber) && !projectedCidNumbers.has(cidNumber)) {
+      throw new HttpError(
+        409,
+        'subscription_identity_projection_pending',
+        `会员投影等待用户 finalized 投影：${cidNumber}`,
+      );
+    }
+  }
 
   for (let index = 0; index < relationList.length; index += 1) {
     const relation = relationList[index];
     const state = states[index] ?? null;
-    const subscriber = await readUserByCidNumber(env, relation.subscriberCidNumber);
-    if (!subscriber) {
+    const subscriberAccountId = accountIds.get(relation.subscriberCidNumber) ?? null;
+    if (!subscriberAccountId) {
       await deleteRelationProjection(env, relation, blockNumber);
       continue;
     }
@@ -155,12 +177,12 @@ async function projectCanonicalBlock(
       if (state === null) await deleteRelationProjection(env, relation, blockNumber);
       else {
         assertPlanKind(state, 'platform');
-        await projectPlatformSubscription(env, relation.subscriberCidNumber, subscriber.account_id, state, point);
+        await projectPlatformSubscription(env, relation.subscriberCidNumber, subscriberAccountId, state, point);
       }
       continue;
     }
-    const creator = await readUserByCidNumber(env, relation.issuer.creatorCidNumber);
-    if (!creator || state === null) {
+    const creatorAccountId = accountIds.get(relation.issuer.creatorCidNumber) ?? null;
+    if (!creatorAccountId || state === null) {
       await deleteRelationProjection(env, relation, blockNumber);
       continue;
     }
@@ -168,26 +190,36 @@ async function projectCanonicalBlock(
     await projectCreatorSubscription(
       env,
       relation.subscriberCidNumber,
-      subscriber.account_id,
+      subscriberAccountId,
       relation.issuer.creatorCidNumber,
-      creator.account_id,
+      creatorAccountId,
       state,
       point,
     );
   }
   for (let index = 0; index < creatorList.length; index += 1) {
     const creatorCidNumber = creatorList[index];
-    const creator = await readUserByCidNumber(env, creatorCidNumber);
-    if (!creator) continue;
+    const creatorAccountId = accountIds.get(creatorCidNumber) ?? null;
+    if (!creatorAccountId) continue;
     await replaceCreatorTierProjection(
       env,
       creatorCidNumber,
-      creator.account_id,
+      creatorAccountId,
       projectionTiers(creatorPlans[index] ?? []),
       point,
     );
   }
   return { projectedSubscriptions: relationList.length, projectedCreators: creatorList.length };
+}
+
+async function readProjectedCidNumbers(env: Env, cidNumbers: string[]): Promise<Set<string>> {
+  const distinct = [...new Set(cidNumbers)];
+  if (distinct.length === 0) return new Set();
+  const placeholders = distinct.map(() => '?').join(', ');
+  const result = await env.DB.prepare(
+    `SELECT cid_number FROM users WHERE cid_number IN (${placeholders})`,
+  ).bind(...distinct).all<{ cid_number: string }>();
+  return new Set((result.results ?? []).map((row) => row.cid_number));
 }
 
 async function deleteRelationProjection(

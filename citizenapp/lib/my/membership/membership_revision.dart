@@ -1,9 +1,9 @@
 import 'package:flutter/foundation.dart';
 
-/// 已由 Worker 确认推进的会员镜像事件。
+/// CitizenServe 会员缓存已经推进的定向事件。
 ///
-/// 事件只通知已挂载页面按永久 [cidNumber] 重读 Worker；它不携带会员档位、有效态或
-/// 到期时间，更不能作为展示或授权真源。
+/// 事件只通知已挂载页面按永久 [cidNumber] 重读本机统一缓存；它不携带会员档位、
+/// 有效态或到期时间，避免各页面复制第二份会员状态。
 @immutable
 class MembershipRevisionEvent {
   const MembershipRevisionEvent({
@@ -15,11 +15,10 @@ class MembershipRevisionEvent {
   final int revision;
 }
 
-/// CitizenApp 会员镜像刷新唯一广播器。
+/// CitizenApp 会员缓存刷新唯一广播器。
 ///
-/// 钱包 revision 只表示钱包／身份绑定变化，不能混入纯会员变化；因此会员确认成功后
-/// 通过本广播器按 CID 定向失效页面数据。页面收到事件后仍须重新读取 Worker，禁止直接
-/// 从事件推导会员权益。
+/// 钱包 revision 只表示钱包／身份绑定变化，不能混入纯会员变化；CitizenServe 快照写入
+/// 统一缓存后通过本广播器按 CID 定向刷新页面。网络读取只由会员服务在身份鉴权边界执行。
 class MembershipRevision {
   MembershipRevision._();
 
@@ -30,7 +29,7 @@ class MembershipRevision {
 
   int _revision = 0;
 
-  void notifyConfirmed(String cidNumber) {
+  void notifyChanged(String cidNumber) {
     final normalized = cidNumber.trim();
     if (normalized.isEmpty) return;
     listenable.value = MembershipRevisionEvent(
