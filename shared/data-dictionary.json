@@ -330,45 +330,6 @@
       ]
     },
     {
-      "domain": "citizenapp",
-      "concept_id": "chat_turn_credential",
-      "field_name": "turn_credential",
-      "field_name_zh": "WebRTC TURN 短期凭证",
-      "authority": "gmb",
-      "data_type": "string",
-      "forbidden_names": [],
-      "paths": [
-        "citizenserve/src/chat/**",
-        "citizenserve/test/chat.test.ts"
-      ]
-    },
-    {
-      "domain": "citizenapp",
-      "concept_id": "chat_turn_urls",
-      "field_name": "turn_urls",
-      "field_name_zh": "WebRTC TURN 地址",
-      "authority": "gmb",
-      "data_type": "array",
-      "forbidden_names": [],
-      "paths": [
-        "citizenserve/src/chat/**",
-        "citizenserve/test/chat.test.ts"
-      ]
-    },
-    {
-      "domain": "citizenapp",
-      "concept_id": "chat_turn_username",
-      "field_name": "turn_username",
-      "field_name_zh": "WebRTC TURN 短期用户名",
-      "authority": "gmb",
-      "data_type": "string",
-      "forbidden_names": [],
-      "paths": [
-        "citizenserve/src/chat/**",
-        "citizenserve/test/chat.test.ts"
-      ]
-    },
-    {
       "domain": "release",
       "concept_id": "ci_run_id",
       "field_name": "ci_run_id",
@@ -1587,9 +1548,6 @@
         "chat_signal_kind",
         "chat_stun_urls",
         "chat_ttl_millis",
-        "chat_turn_credential",
-        "chat_turn_urls",
-        "chat_turn_username",
         "delivery_state"
       ],
       "value_sets": [

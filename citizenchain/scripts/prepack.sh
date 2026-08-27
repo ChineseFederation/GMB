@@ -9,6 +9,11 @@
 #   citizenchain/scripts/prepack.sh
 set -euo pipefail
 
+if [[ "${CI:-}" != true ]]; then
+  echo '本机预打包已停用；请从Console编译，禁止恢复公民链产品目录产物' >&2
+  exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"   # citizenchain/scripts
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"          # citizenchain/
 HERE="$ROOT/node"                             # citizenchain/node

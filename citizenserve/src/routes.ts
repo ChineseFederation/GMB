@@ -232,7 +232,7 @@ export async function routeRequest(
   if (request.method === "GET" && path === "/chat/signals") {
     return openChatSignal(request, env);
   }
-  // WebRTC 短期 ICE 凭证独立于 WSS 信令；长期 TURN Token 只在 Worker Secret 中使用。
+  // WebRTC 只读取固定公开 STUN 地址；没有中继密钥、短期凭证或流量回退。
   if (request.method === "POST" && path === "/chat/ice") {
     return issueChatIce(request, env);
   }

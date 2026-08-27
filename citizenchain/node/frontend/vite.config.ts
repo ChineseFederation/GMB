@@ -3,8 +3,15 @@ import react from '@vitejs/plugin-react';
 
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig({
+export default defineConfig(({ command }) => {
+  if (command === 'build' && !process.env.CITIZENCHAIN_FRONTEND_DIST && process.env.CI !== 'true') {
+    throw new Error('本机编译必须由Console提供CITIZENCHAIN_FRONTEND_DIST，禁止恢复产品目录dist');
+  }
+  return {
   plugins: [react()],
+  build: {
+    outDir: process.env.CITIZENCHAIN_FRONTEND_DIST || 'dist'
+  },
   // 白皮书由 citizenchain/scripts/generate-local-docs.mjs 内置进 bundle;
   // 公民宪法改由链上 runtime API 返回，不再维护静态目录副本。
   publicDir: false,
@@ -21,4 +28,5 @@ export default defineConfig({
         }
       : undefined
   }
+  };
 });

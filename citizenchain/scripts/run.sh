@@ -109,7 +109,18 @@ resolve_macos_profile() {
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
 GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
-TARGET_DIR="$REPO_ROOT/target"
+: "${CONSOLE_TARGET_ROOT:?公民链本机编译必须由Console提供中央产物目录}"
+: "${CONSOLE_WORK_DIR:?公民链本机编译必须由Console提供中央工作目录}"
+[[ "$CONSOLE_WORK_DIR" == "$CONSOLE_TARGET_ROOT/.work/citizenchain-macos" ]] || {
+    echo "    [error] 公民链中央工作目录不合法：$CONSOLE_WORK_DIR" >&2
+    exit 1
+}
+TARGET_DIR="$CONSOLE_WORK_DIR/cargo"
+export CARGO_TARGET_DIR="$TARGET_DIR"
+NODE_FRONTEND_DIST="$CONSOLE_WORK_DIR/node-frontend"
+ONCHINA_BUILD_DIST="$CONSOLE_WORK_DIR/onchina-frontend/dist"
+PACKAGE_RESOURCES="$CONSOLE_WORK_DIR/resources"
+ARTIFACT_DIR="$CONSOLE_TARGET_ROOT/citizenchain"
 GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 
 # 读取仓库统一依赖真源中的精确 Node.js 版本和 npm lockfile。
@@ -121,7 +132,7 @@ unset WASM_FILE
 # Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
 # 本任务不迁移、不删除正式 gmb 数据，也不让控制台启动的软件争用正式安装版 RocksDB。
 export CITIZENCHAIN_DATA_PROFILE=dev
-mkdir -p "$TARGET_DIR" "$GENESIS_STATE_RESOURCE_DIR"
+mkdir -p "$TARGET_DIR" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onchina-frontend"
 
 # ── OnChina 控制台本机配置 ──
 # 启动节点不需要任何机构鉴权/身份。这里只让本机能跑起链上中国平台服务:
@@ -131,7 +142,9 @@ mkdir -p "$TARGET_DIR" "$GENESIS_STATE_RESOURCE_DIR"
 echo "==> 构建 OnChina 本机优化二进制 + 前端..."
 ( cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 cargo build --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
-( cd "$REPO_ROOT/onchina/frontend" && npm run build )
+( cd "$REPO_ROOT/onchina/frontend" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
+cp "$TARGET_DIR/release/onchina" "$PACKAGE_RESOURCES/onchina-bin/onchina"
+cp -R "$ONCHINA_BUILD_DIST" "$PACKAGE_RESOURCES/onchina-frontend/dist"
 PG_PREFIX=""
 for v in postgresql@17 postgresql@16 postgresql@15 postgresql; do
     if p="$(brew --prefix "$v" 2>/dev/null)" && [ -x "$p/bin/initdb" ]; then PG_PREFIX="$p"; break; fi
@@ -146,7 +159,7 @@ else
     echo "    [warn] 未找到本机 PostgreSQL(brew install postgresql@16);链上中国平台仍可起但缺 DB,功能受限。"
 fi
 export ONCHINA_CHINA_DB="$REPO_ROOT/onchina/src/cid/china/china.sqlite"
-export ONCHINA_FRONTEND_DIST="$REPO_ROOT/onchina/frontend/dist"
+export ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST"
 export ONCHINA_ENABLE_TLS=1
 export ONCHINA_TLS_DIR="$HOME/Library/Application Support/gmb.dev/onchina-tls"
 # 公权机构目录只允许从链上投影到本地缓存;开发启动不再打开旧本地生成开关。
@@ -175,11 +188,16 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     MACOS_APP_BUNDLE="$app_bundle"
     # Tauri 2 的 build 默认使用优化 profile；--debug 才会切换为调试产物。
     # 编译与封装分离，时间戳瞬时失败时只重试封装签名，不重复整轮 Rust 编译。
-    CARGO_INCREMENTAL=0 node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked
+    tauri_override="$(python3 -c 'import json,sys; print(json.dumps({"build":{"frontendDist":sys.argv[1]},"bundle":{"resources":{sys.argv[2]+"/":"",sys.argv[3]+"/":"",sys.argv[4]:"china.sqlite"}}}))' "$NODE_FRONTEND_DIST" "$PACKAGE_RESOURCES" "$REPO_ROOT/node/resources" "$REPO_ROOT/onchina/src/cid/china/china.sqlite")"
+    CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=0 \
+        node frontend/node_modules/@tauri-apps/cli/tauri.js build --config "$tauri_override" \
+        --no-bundle --ci -- --locked
     MACOS_APP_PENDING=1
     bundle_macos_app() {
         rm -rf -- "$app_bundle"
-        CARGO_INCREMENTAL=0 node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --bundles app --ci
+        CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=0 \
+            node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --config "$tauri_override" \
+            --bundles app --ci
     }
     run_with_macos_timestamp_retry "Tauri App 封装签名" bundle_macos_app
 
@@ -246,22 +264,32 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     }
     MACOS_APP_PENDING=0
     echo "    本机优化路径、新团队签名、Bundle ID、Hardened Runtime、安全时间戳与 entitlement 校验通过"
-    # Build 成功产物只进入 citizenchain 唯一 target/ 根；按完成时间保留最近两份。
-    # 先写同卷 staging，完整压缩成功后再原子改名，任何失败都不形成成功代际。
-    local_artifact_root="$TARGET_DIR/local-artifacts/macos"
-    local_artifact_generation="$(date -u +%Y%m%dT%H%M%SZ)-$$"
-    local_artifact_staging="$local_artifact_root/.staging-$local_artifact_generation"
-    local_artifact_destination="$local_artifact_root/$local_artifact_generation"
-    mkdir -p "$local_artifact_staging"
-    if ! ditto -c -k --sequesterRsrc --keepParent \
-        "$app_bundle" "$local_artifact_staging/CitizenChain.app.zip"; then
-        rm -rf "$local_artifact_staging"
-        echo "    [error] CitizenChain 本机成功产物归档失败" >&2
+    # 成功后只覆盖中央产品目录中的唯一App，不保留压缩副本、时间目录或历史代次。
+    mkdir -p "$ARTIFACT_DIR"
+    previous_app="$CONSOLE_WORK_DIR/.previous-CitizenChain.app"
+    rm -rf "$previous_app"
+    if [[ -d "$ARTIFACT_DIR/CitizenChain.app" ]]; then
+        mv "$ARTIFACT_DIR/CitizenChain.app" "$previous_app"
+    fi
+    if ! mv "$app_bundle" "$ARTIFACT_DIR/CitizenChain.app"; then
+        [[ ! -d "$previous_app" ]] || mv "$previous_app" "$ARTIFACT_DIR/CitizenChain.app"
+        echo '    [error] 中央成功产物替换失败，已恢复上一次成功产物' >&2
         exit 1
     fi
-    mv "$local_artifact_staging" "$local_artifact_destination"
-    find "$local_artifact_root" -mindepth 1 -maxdepth 1 -type d -name '20*' -exec basename {} \; \
-        | sort -r | tail -n +3 | while IFS= read -r old; do rm -rf "${local_artifact_root:?}/$old"; done
+    rm -rf "$previous_app"
+    app_bundle="$ARTIFACT_DIR/CitizenChain.app"
+    app_executable="$app_bundle/Contents/MacOS/citizenchain"
+    export ONCHINA_FRONTEND_DIST="$app_bundle/Contents/Resources/onchina-frontend/dist"
+    # 编译不因旧版本正在运行而跳过；只有新产物完整验真后才结束旧实例并启动新实例。
+    pkill -TERM -f "$app_executable" 2>/dev/null || true
+    for _ in {1..30}; do
+        pgrep -f "$app_executable" >/dev/null 2>&1 || break
+        sleep 0.2
+    done
+    pgrep -f "$app_executable" >/dev/null 2>&1 && {
+        echo '    [error] 旧公民链实例未能正常退出' >&2
+        exit 1
+    }
     # 不重定向 LaunchServices 的标准流：桌面会话下把 /dev/stdout、/dev/stderr 作为目标路径
     # 会触发 LS -10810，导致已正确签名的 App 根本无法启动。
     open_args=(-n)
@@ -272,7 +300,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         [[ -z "${!name:-}" ]] || open_args+=(--env "$name=${!name}")
     done
     # LaunchServices 让 TCC 以 macOS.citizenappchain 识别请求方；编译任务只负责确认
-    # App 进程和 RPC 已就绪，不继续占用 CitizenConsole 标签跟踪节点生命周期。
+    # App进程和RPC已就绪，不继续占用Console标签跟踪节点生命周期。
     open "${open_args[@]}" "$app_bundle"
     node_health=''
     node_ready=0

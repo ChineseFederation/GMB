@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
-# CitizenConsole 原生安全进程在 Touch ID 后签名并安装。
+# Console 原生安全进程使用固定本机开发签名并安装。
 #
 # 用法：citizenwallet-run.sh <ios|android>
 #
@@ -9,8 +9,7 @@
 # 而回落的那一端会被当成用户想编的那一端。控制台的「编译iOS端 / 编译Android端」
 # 两个按钮各自传死这个参数。与 citizenapp-run.sh 同口径。
 #
-# 本机成功 Build 的最终签名包按端保存在本项目唯一 build/ 根内，只留最近两个任务产物；
-# Flutter 中间树与失败候选不属于成功产物，失败后不得进入该目录。
+# 本机中间文件只允许进入 Console 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CITIZENWALLET_DIR="$SCRIPT_DIR/.."
@@ -19,6 +18,21 @@ PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 [[ "$PLATFORM" == ios || "$PLATFORM" == android ]] \
   || { echo "本机目标平台只接受 ios 或 android：$PLATFORM" >&2; exit 1; }
 cd "$CITIZENWALLET_DIR"
+
+: "${CONSOLE_TARGET_ROOT:?本机编译必须由 Console 提供中央产物目录}"
+: "${CONSOLE_WORK_DIR:?本机编译必须由 Console 提供中央工作目录}"
+case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenwallet-$PLATFORM") ;; *)
+  echo "公民钱包中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
+esac
+BUILD_DIR="$CONSOLE_WORK_DIR/build"
+ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenwallet"
+export CONSOLE_BUILD_DIR="$BUILD_DIR"
+export CONSOLE_NATIVE_ANDROID_DIR="$CONSOLE_WORK_DIR/native/android"
+export CONSOLE_NATIVE_IOS_DIR="$CONSOLE_WORK_DIR/native/ios"
+export XDG_CONFIG_HOME="$CONSOLE_WORK_DIR/flutter-config"
+mkdir -p "$XDG_CONFIG_HOME"
+build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$CITIZENWALLET_DIR")"
+flutter config --build-dir="$build_dir_relative" >/dev/null
 
 # 与 CitizenApp 共用仓库根 Flutter 依赖真源；版本不符必须在
 # 依赖解析之前失败，不能生成另一套 iOS 依赖状态污染工程。
@@ -29,35 +43,19 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
   exit 1
 }
 
-# 与 CitizenApp 相同，两个平台必须同时执行。全工程 `flutter clean` 会让 Android 任务
-# 删除正在使用的 iOS Xcode 数据库；这里只删除目标平台中间树，永远保留另一端和成功包。
+# 与CitizenApp相同，两个平台使用独立中央工作目录，产品仓库不得恢复`build/`。
 clean_platform_build_outputs() {
-  mkdir -p "$CITIZENWALLET_DIR/build"
-  if [[ "$PLATFORM" == ios ]]; then
-    rm -rf "$CITIZENWALLET_DIR/build/ios"
-    return
-  fi
-  find "$CITIZENWALLET_DIR/build" -mindepth 1 -maxdepth 1 \
-    ! -name ios ! -name local-artifacts -exec rm -rf {} +
+  rm -rf "$BUILD_DIR"
+  mkdir -p "$BUILD_DIR"
 }
 
 retain_ios_local_artifact() {
-  local app_bundle="$1" root="$CITIZENWALLET_DIR/build/local-artifacts/ios"
-  local artifact_id staging destination
-  artifact_id="$(date -u +%Y%m%dT%H%M%SZ)-$"
-  staging="$root/.staging-${artifact_id}"
-  destination="$root/$artifact_id"
-  mkdir -p "$root"
-  rm -rf "$staging"
-  mkdir -p "$staging"
-  if ! ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging/CitizenWallet.app.zip"; then
-    rm -rf "$staging"
-    return 1
-  fi
-  rm -rf "$destination"
-  mv "$staging" "$destination"
-  find "$root" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -exec basename {} \; \
-    | sort -nr | tail -n +3 | while IFS= read -r old; do rm -rf "$root/$old"; done
+  local app_bundle="$1" staging="$CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
+  rm -f "$staging"
+  ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging"
+  mkdir -p "$ARTIFACT_ROOT"
+  # 同卷固定名称覆盖保证失败时不先删除上一次成功产物。
+  mv -f "$staging" "$destination"
 }
 
 
@@ -209,17 +207,19 @@ fi
 echo "==> 编译本机优化安装包..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release
-  "$SCRIPT_DIR/build-signer-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
-  install_ios_update "$DEVICE_ID" ios.citizenwallet build/ios/iphoneos/Runner.app citizenwallet.isar
-  retain_ios_local_artifact build/ios/iphoneos/Runner.app
+  IOS_APP="$BUILD_DIR/ios/iphoneos/Runner.app"
+  "$SCRIPT_DIR/build-signer-native.sh" verify-ios-package "$IOS_APP"
+  install_ios_update "$DEVICE_ID" ios.citizenwallet "$IOS_APP" citizenwallet.isar
+  retain_ios_local_artifact "$IOS_APP"
   echo ""
   echo "==> 安装完成:请在设备桌面点开「公民钱包」。"
 elif [[ "$PLATFORM" == android ]]; then
   flutter build apk --release --target-platform android-arm64
-  [[ -f build/app/outputs/flutter-apk/app-release.apk ]] || {
+  ANDROID_APK="$BUILD_DIR/app/outputs/flutter-apk/app-release.apk"
+  [[ -f "$ANDROID_APK" ]] || {
     echo "Android 本机无私钥 APK 不存在" >&2
     exit 1
   }
-  "$SCRIPT_DIR/build-signer-native.sh" verify-android-package build/app/outputs/flutter-apk/app-release.apk
+  "$SCRIPT_DIR/build-signer-native.sh" verify-android-package "$ANDROID_APK"
   echo "==> Android 本机候选完成，正在交给原生安全进程做本机开发签名并安装。"
 fi

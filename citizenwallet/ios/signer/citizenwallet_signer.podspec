@@ -16,6 +16,9 @@
 #   Release → Runner.app/Runner
 #   命令：llvm-nm -g <binary> | grep -c citizen_sr25519   应为 4
 #
+native_dir = ENV['CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
+library_path = File.expand_path('libcitizenwallet_signer.a', native_dir)
+
 Pod::Spec.new do |s|
   s.name             = 'citizenwallet_signer'
   s.version          = '1.0.0'
@@ -32,7 +35,7 @@ CitizenWallet 冷钱包 sr25519 原生签名（schnorrkel）。全端唯一实�
 
   # CocoaPods 要求至少有一个源文件；用一个空的占位 .m，真正的实现全在 .a 里。
   s.source_files     = 'placeholder.m'
-  s.vendored_libraries = 'libcitizenwallet_signer.a'
+  s.vendored_libraries = library_path
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
@@ -50,7 +53,7 @@ CitizenWallet 冷钱包 sr25519 原生签名（schnorrkel）。全端唯一实�
   # （"No such file or directory: '_citizen_sr25519_public_key'"）。
   # `-Wl,-u,x` 每个都是独立的一个参数，不会被合并。
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS' => '-force_load ${PODS_ROOT}/../signer/libcitizenwallet_signer.a ' \
+    'OTHER_LDFLAGS' => "-force_load #{library_path} " \
                        '-Wl,-u,_citizen_sr25519_derive_hard ' \
                        '-Wl,-u,_citizen_sr25519_public_key ' \
                        '-Wl,-u,_citizen_sr25519_sign ' \
