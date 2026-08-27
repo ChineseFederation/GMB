@@ -3,6 +3,7 @@ import { manifestObjectKey } from '../storage/r2_keys';
 import { deleteR2MediaAssets } from '../media/service';
 import { clearIdentitySessions } from '../auth/session_index';
 import { closeChatRealtime } from '../chat/realtime';
+import { purgeChatAttachmentsForCid } from '../chat/attachments';
 import { HttpError } from '../shared/http';
 
 export interface PurgeIdentityResult {
@@ -20,7 +21,7 @@ interface PurgeUploadRow {
 
 /// 按唯一身份主键 CID 硬删除其在 Cloudflare 中可清除的身份、社交、鉴权、会话和媒体数据。
 /// 边界：
-/// - Chat 不保存消息或附件；注销先断开连接并删除全部推送端点。
+/// - Chat 消息只存有界密文；注销会删除推送端点、本人附件及共享附件收件人映射。
 /// - 身份内容、设备、会话和 off-chain 关系全部按 cid_number 删除。
 /// - finalized 交易最小证明与充值订单都带 CID 归属并随身份完整删除；链上原始交易事实
 ///   仍由公链保存，不以 D1 台账残留为审计前提。
@@ -30,9 +31,10 @@ export async function purgeIdentity(
   env: Env,
   cidNumber: string
 ): Promise<PurgeIdentityResult> {
-  // 1. Chat 信令连接与最小推送端点均属于 CID；聊天内容只在用户设备，不存在云端清单。
+  // 1. Chat 信令连接、推送端点和七天密文附件索引均属于 CID。
   await closeChatRealtime(env, cidNumber);
   await env.DB.prepare(`DELETE FROM chat_push_endpoints WHERE cid_number = ?`).bind(cidNumber).run();
+  const deletedChatObjects = await purgeChatAttachmentsForCid(env, cidNumber);
 
   // 2. 先完整读取并校验该 CID 的上传对象索引；清单损坏或已发布帖缺上传索引时 fail-closed，
   //    禁止先删 R2/D1 后丢失继续清理所需的唯一对象事实。
@@ -79,7 +81,8 @@ export async function purgeIdentity(
     await env.SQUARE_PRIVATE.delete(postObjectKeys.slice(index, index + 1000));
   }
   const deletedProfileObjects = await deleteR2Prefix(env, `profile/${cidNumber}/`);
-  const deletedR2 = postObjectKeys.length + mediaRows.length * 2 + deletedProfileObjects;
+  const deletedR2 =
+    deletedChatObjects + postObjectKeys.length + mediaRows.length * 2 + deletedProfileObjects;
 
   // 5. KV：注销按 CID 失效历次换绑账户签发的全部会话；用户身份不再使用 KV 缓存。
   await clearIdentitySessions(env, cidNumber);

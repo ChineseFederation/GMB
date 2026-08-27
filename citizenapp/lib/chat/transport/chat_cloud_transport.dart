@@ -124,7 +124,7 @@ class ChatMailboxEnvelope {
   }
 }
 
-/// Cloudflare 官方短期 ICE 配置；长期 TURN Token 永远不会进入手机。
+/// 固定 STUN 配置。产品禁止 TURN；无法直连时必须明确失败。
 class ChatIceConfiguration {
   const ChatIceConfiguration({required this.iceServers});
 
@@ -133,8 +133,8 @@ class ChatIceConfiguration {
 
 /// CitizenServe Chat 网络边界。
 ///
-/// HTTPS 只承载系统推送端点、端到端密文邮箱和短期 ICE 凭据；同一账户级 WSS
-/// 同时承载在线密文与扁平 WebRTC 信令。CitizenServe 不接收明文或附件字节。
+/// HTTPS 只承载系统推送端点、端到端密文邮箱和固定 STUN 配置；同一账户级 WSS
+/// 同时承载在线密文与扁平 KeyPackage WebRTC 信令。Worker 不接收明文或附件字节。
 class ChatCloudTransport implements ChatTransport {
   ChatCloudTransport({
     required this.accountId,
@@ -255,7 +255,107 @@ class ChatCloudTransport implements ChatTransport {
     await _postMap('/chat/messages/ack', envelopeIds);
   }
 
-  /// 每个有效期只向 CitizenServe 读取一次 Cloudflare 官方短期 STUN/TURN 配置。
+  /// 手机把已经端到端加密的临时文件分片直传 R2；Worker 只返回签名 URL。
+  Future<void> uploadEncryptedAttachment({
+    required String attachmentId,
+    required List<String> recipientCidNumbers,
+    required File cipherFile,
+    required int cipherByteSize,
+    required String cipherSha256,
+  }) async {
+    final plan = await _postMap('/chat/attachments/prepare', {
+      'attachment_id': attachmentId,
+      'recipient_cid_numbers': recipientCidNumbers,
+      'cipher_byte_size': cipherByteSize,
+      'cipher_sha256': cipherSha256,
+    });
+    if (plan['upload_state'] == 'ready') return;
+    final rawParts = plan['parts'];
+    if (rawParts is! List<dynamic> || rawParts.isEmpty) {
+      throw const FormatException('Chat 附件上传分片计划不合法');
+    }
+    final etags = <String>[];
+    try {
+      for (final rawPart in rawParts) {
+        if (rawPart is! Map<String, dynamic>) {
+          throw const FormatException('Chat 附件上传分片不合法');
+        }
+        final offset = rawPart['offset'];
+        final byteSize = rawPart['byte_size'];
+        final uploadUrl = rawPart['upload_url'];
+        final uploadHeaders = rawPart['upload_headers'];
+        if (offset is! int || offset < 0 || byteSize is! int || byteSize <= 0 ||
+            uploadUrl is! String || uploadHeaders is! Map<String, dynamic>) {
+          throw const FormatException('Chat 附件上传分片内容不合法');
+        }
+        final uri = Uri.parse(uploadUrl);
+        if (uri.scheme != 'https' || uri.host.isEmpty) {
+          throw const FormatException('Chat 附件只允许 HTTPS 直传地址');
+        }
+        final request = http.StreamedRequest('PUT', uri)
+          ..contentLength = byteSize
+          ..headers.addAll(uploadHeaders.map((key, value) => MapEntry(key, value.toString())));
+        final sending = _httpClient.send(request).timeout(const Duration(hours: 6));
+        await request.sink.addStream(cipherFile.openRead(offset, offset + byteSize));
+        await request.sink.close();
+        final response = await sending;
+        await response.stream.drain<void>();
+        final etag = response.headers['etag'];
+        if (response.statusCode < 200 || response.statusCode >= 300 || etag == null || etag.isEmpty) {
+          throw StateError('chat_attachment_part_upload_failed');
+        }
+        etags.add(etag);
+      }
+      await _postMap('/chat/attachments/complete', {
+        'attachment_id': attachmentId,
+        'etags': etags,
+      });
+    } catch (_) {
+      await abortAttachment(attachmentId).catchError((Object _) {});
+      rethrow;
+    }
+  }
+
+  /// 接收端把 R2 密文流式写入临时文件并复核长度；SHA-256 由运行态统一校验。
+  Future<void> downloadEncryptedAttachment({
+    required String attachmentId,
+    required File target,
+    required int expectedByteSize,
+    required String expectedSha256,
+  }) async {
+    final plan = await _postMap('/chat/attachments/download', {'attachment_id': attachmentId});
+    if (plan['cipher_byte_size'] != expectedByteSize || plan['cipher_sha256'] != expectedSha256) {
+      throw const FormatException('Chat 附件密文索引与 OpenMLS 控制消息不一致');
+    }
+    final rawUrl = plan['download_url'];
+    if (rawUrl is! String) throw const FormatException('Chat 附件下载地址缺失');
+    final uri = Uri.parse(rawUrl);
+    if (uri.scheme != 'https' || uri.host.isEmpty) {
+      throw const FormatException('Chat 附件只允许 HTTPS 下载地址');
+    }
+    await target.parent.create(recursive: true);
+    if (await target.exists()) await target.delete();
+    final response = await _httpClient.send(http.Request('GET', uri)).timeout(const Duration(hours: 6));
+    if (response.statusCode != 200) throw StateError('chat_attachment_download_failed');
+    final sink = target.openWrite();
+    try {
+      await sink.addStream(response.stream);
+    } finally {
+      await sink.close();
+    }
+    if (await target.length() != expectedByteSize) {
+      await target.delete();
+      throw const FormatException('Chat 附件密文下载长度不一致');
+    }
+  }
+
+  Future<void> acknowledgeAttachment(String attachmentId) =>
+      _postMap('/chat/attachments/ack', {'attachment_id': attachmentId});
+
+  Future<void> abortAttachment(String attachmentId) =>
+      _postMap('/chat/attachments/abort', {'attachment_id': attachmentId});
+
+  /// 每个缓存周期只读取一次固定 STUN 配置；响应出现 TURN 字段也不会采用。
   Future<ChatIceConfiguration> fetchIceConfiguration() async {
     final cached = _cachedIce;
     final cachedAt = _iceCachedAt;
@@ -266,24 +366,11 @@ class ChatCloudTransport implements ChatTransport {
     }
     final value = await _postMap('/chat/ice', const <String, Object?>{});
     final stunUrls = _iceUrls(value['stun_urls'], const {'stun:', 'stuns:'});
-    final turnUrls = _iceUrls(value['turn_urls'], const {'turn:', 'turns:'});
-    final username = value['turn_username'];
-    final credential = value['turn_credential'];
-    if (stunUrls.isEmpty ||
-        turnUrls.isEmpty ||
-        username is! String ||
-        username.isEmpty ||
-        credential is! String ||
-        credential.isEmpty) {
+    if (stunUrls.isEmpty) {
       throw const FormatException('Chat ICE 配置不完整');
     }
     final configuration = ChatIceConfiguration(iceServers: [
       <String, dynamic>{'urls': stunUrls},
-      <String, dynamic>{
-        'urls': turnUrls,
-        'username': username,
-        'credential': credential,
-      },
     ]);
     _cachedIce = configuration;
     _iceCachedAt = DateTime.now();

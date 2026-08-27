@@ -32,6 +32,9 @@ void main() {
           height: 1920,
           durationMs: kind == ChatMessageKind.video ? 4200 : null,
           blurhash: 'L6Pj0',
+          cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          cipherByteSize: 2084,
+          cipherSha256: '0000000000000000000000000000000000000000000000000000000000000000',
         ),
       );
       final decoded = ChatPayloadCodec.decode(encoded);
@@ -45,6 +48,7 @@ void main() {
       expect(decoded.height, 1920);
       expect(decoded.blurhash, 'L6Pj0');
       expect(decoded.durationMs, kind == ChatMessageKind.video ? 4200 : null);
+      expect(decoded.cipherByteSize, 2084);
     }
   });
 
@@ -56,6 +60,9 @@ void main() {
       mime: 'audio/mp4',
       byteSize: 4096,
       durationMs: 12500,
+      cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      cipherByteSize: 4132,
+      cipherSha256: '1111111111111111111111111111111111111111111111111111111111111111',
     ));
     final decoded = ChatPayloadCodec.decode(encoded);
     expect(decoded.kind, ChatMessageKind.audio);
@@ -129,6 +136,9 @@ void main() {
         fileName: 'p.png',
         mime: 'image/png',
         byteSize: 1,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 21,
+        cipherSha256: '2222222222222222222222222222222222222222222222222222222222222222',
       )),
       '[图片]',
     );
@@ -139,6 +149,9 @@ void main() {
         fileName: 'v.mp4',
         mime: 'video/mp4',
         byteSize: 1,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 21,
+        cipherSha256: '3333333333333333333333333333333333333333333333333333333333333333',
       )),
       '[视频]',
     );
@@ -149,6 +162,9 @@ void main() {
         fileName: 'doc.pdf',
         mime: 'application/pdf',
         byteSize: 1,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 21,
+        cipherSha256: '4444444444444444444444444444444444444444444444444444444444444444',
       )),
       '[文件] doc.pdf',
     );
@@ -160,6 +176,9 @@ void main() {
         mime: 'audio/mp4',
         byteSize: 1,
         durationMs: 1000,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 21,
+        cipherSha256: '5555555555555555555555555555555555555555555555555555555555555555',
       )),
       '[语音]',
     );

@@ -121,6 +121,7 @@ class SquareMembershipPlan {
     required this.membershipLevel,
     required this.displayName,
     required this.chatFileMaxBytes,
+    required this.chat,
     required this.document,
     required this.video,
     required this.article,
@@ -132,16 +133,18 @@ class SquareMembershipPlan {
 
   /// 聊天文件大小上限（字节，会员权益之一，ADR-037）：自由 10MB / 民主 100MB / 薪火 5GB。
   final int chatFileMaxBytes;
+  final SquareChatQuota chat;
   final SquareDocumentQuota document;
   final SquareVideoQuota video;
   final SquareArticleQuota article;
   final SquareMembershipUsageQuota usage;
 
-  /// 大文件（>100MB）中转仅薪火可用（后端 relay.ts 强制）。
-  bool get supportsLargeFileRelay => membershipLevel == 'spark';
-
   /// 提炼展示用短串（卡片与详情页共用，杜绝口径漂移）。
   String get chatFileSizeLabel => _fileSize(chatFileMaxBytes);
+  String get chatVoiceDurationLabel =>
+      _duration(chat.voiceMessageMaxSeconds);
+  String get chatVideoDurationLabel =>
+      _duration(chat.videoMessageMaxSeconds);
   String get documentImageQualityLabel => _quality(document.imageQuality);
   String get videoQualityLabel => _quality(video.videoQuality);
   String get videoDurationLabel => _duration(video.maxVideoSeconds);
@@ -154,7 +157,7 @@ class SquareMembershipPlan {
       '${_thousands(usage.monthlyVideoSeconds ~/ 60)} 分钟';
   String get storageSizeLabel => _decimalFileSize(usage.storageBytes);
 
-  String get chatFileLabel => '聊天文件：单个 ≤ ${_fileSize(chatFileMaxBytes)}';
+  String get chatFileLabel => '聊天附件：单个 ≤ ${_fileSize(chatFileMaxBytes)}';
 
   String get documentLabel =>
       '公文：${document.textMaxChars} 字、${document.maxImages} 张${_quality(document.imageQuality)}图片';
@@ -200,6 +203,30 @@ class SquareMembershipPlan {
     if (bytes >= mb && bytes % mb == 0) return '${bytes ~/ mb}MB';
     return '$bytes B';
   }
+}
+
+/// CitizenServe 下发的聊天权益。只有 [SquareMembershipState.activePlan] 存在时才可使用；
+/// 无会员不会构造虚假的自由会员权益。
+class SquareChatQuota {
+  const SquareChatQuota({
+    required this.textEnabled,
+    required this.emojiEnabled,
+    required this.stickerEnabled,
+    required this.imageEnabled,
+    required this.voiceMessageMaxSeconds,
+    required this.videoMessageMaxSeconds,
+    required this.voiceCallEnabled,
+    required this.videoCallEnabled,
+  });
+
+  final bool textEnabled;
+  final bool emojiEnabled;
+  final bool stickerEnabled;
+  final bool imageEnabled;
+  final int voiceMessageMaxSeconds;
+  final int videoMessageMaxSeconds;
+  final bool voiceCallEnabled;
+  final bool videoCallEnabled;
 }
 
 /// 公文额度结构与 Worker `document` 对象逐字段对应。
@@ -839,8 +866,11 @@ class SquareApiClient
     final usageState = _parseMembershipUsageState(data['usage_state']);
     // 会员与身份解耦（ADR-037）：响应只含订阅与套餐，无身份/冻结字段。
     if (membership is! Map<String, dynamic>) {
-      // 无订阅 → 聊天文件上限 fail-closed 到自由档（ADR-037 会员权益）。
-      ChatMediaLimits.applyMembershipLevel(null);
+      // 无订阅 → 关闭聊天权益，禁止错误降级为自由会员。
+      ChatMediaLimits.applyMembershipLevel(
+        null,
+        cidNumber: session.cidNumber,
+      );
       return SquareMembershipState(
         active: false,
         paidUntil: 0,
@@ -849,8 +879,11 @@ class SquareApiClient
       );
     }
     final membershipLevel = membership['membership_level']?.toString();
-    // 会员权益之一 = 聊天文件上限按档；订阅有效才享该档，失效回落自由档。
-    ChatMediaLimits.applyMembershipLevel(active ? membershipLevel : null);
+    // 只有有效订阅才享有对应聊天权益；失效或未知档位统一关闭。
+    ChatMediaLimits.applyMembershipLevel(
+      active ? membershipLevel : null,
+      cidNumber: session.cidNumber,
+    );
     return SquareMembershipState(
       active: active,
       paidUntil: _asInt(membership['paid_until']),
@@ -1625,6 +1658,9 @@ class SquareApiClient
   }
 
   SquareMembershipPlan _parseMembershipPlan(Map<String, dynamic> data) {
+    final chatQuota = data['chat'] is Map<String, dynamic>
+        ? data['chat'] as Map<String, dynamic>
+        : const <String, dynamic>{};
     final documentQuota = data['document'] is Map<String, dynamic>
         ? data['document'] as Map<String, dynamic>
         : const <String, dynamic>{};
@@ -1641,6 +1677,18 @@ class SquareApiClient
       membershipLevel: _requireString(data, 'membership_level'),
       displayName: _requireString(data, 'display_name'),
       chatFileMaxBytes: _asInt(data['chat_file_max_bytes']),
+      chat: SquareChatQuota(
+        textEnabled: chatQuota['text_enabled'] == true,
+        emojiEnabled: chatQuota['emoji_enabled'] == true,
+        stickerEnabled: chatQuota['sticker_enabled'] == true,
+        imageEnabled: chatQuota['image_enabled'] == true,
+        voiceMessageMaxSeconds:
+            _asInt(chatQuota['voice_message_max_seconds']),
+        videoMessageMaxSeconds:
+            _asInt(chatQuota['video_message_max_seconds']),
+        voiceCallEnabled: chatQuota['voice_call_enabled'] == true,
+        videoCallEnabled: chatQuota['video_call_enabled'] == true,
+      ),
       document: SquareDocumentQuota(
         textMaxChars: _asInt(documentQuota['text_max_chars']),
         imageQuality: documentQuota['image_quality']?.toString() ?? 'sd',

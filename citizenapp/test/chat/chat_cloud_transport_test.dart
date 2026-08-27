@@ -144,7 +144,7 @@ void main() {
     expect(calls, 2);
   });
 
-  test('短期ICE配置同时提供STUN和TURN且在55分钟窗口内复用', () async {
+  test('ICE配置只允许STUN且在55分钟窗口内复用', () async {
     var calls = 0;
     final transport = _transport((request) async {
       calls += 1;
@@ -153,16 +153,13 @@ void main() {
       expect(jsonDecode(request.body), <String, dynamic>{});
       return _json({
         'stun_urls': ['stun:stun.cloudflare.com:3478'],
-        'turn_urls': ['turn:turn.cloudflare.com:3478?transport=udp'],
-        'turn_username': 'short-user',
-        'turn_credential': 'short-credential',
       });
     });
 
     final first = await transport.fetchIceConfiguration();
     final second = await transport.fetchIceConfiguration();
-    expect(first.iceServers, hasLength(2));
-    expect(first.iceServers[1]['username'], 'short-user');
+    expect(first.iceServers, hasLength(1));
+    expect(first.iceServers.single.keys, <String>['urls']);
     expect(identical(first, second), isTrue);
     expect(calls, 1);
   });

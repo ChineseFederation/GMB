@@ -17,7 +17,14 @@
 #   Release → Runner.app/Runner
 #   命令:llvm-nm -g <binary> | grep -cE 'smoldot_|citizen_'   应等于清单行数
 #
-symbols_path = File.expand_path('exported_symbols.txt', File.dirname(__FILE__))
+require 'pathname'
+
+native_dir = ENV['CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
+library_path = File.expand_path('libsmoldot.a', native_dir)
+symbols_path = File.expand_path('exported_symbols.txt', native_dir)
+# CocoaPods 1.17 禁止 vendored_libraries 使用绝对文件模式。中央产物仍留在
+# Console 工作目录，只在 podspec 解析时转换为相对本文件的路径，不复制回源码树。
+library_pattern = Pathname.new(library_path).relative_path_from(Pathname.new(__dir__)).to_s
 unless File.exist?(symbols_path)
   raise "缺少 #{symbols_path},先运行 scripts/build-smoldot-native.sh ios 生成静态库与符号清单"
 end
@@ -35,12 +42,13 @@ CitizenApp 热端原生库:smoldot 轻节点、sr25519 原生签名(与 CitizenW
   s.homepage         = 'https://github.com/ChineseFederation/GMB'
   s.license          = { :type => 'Apache-2.0' }
   s.author           = { 'voyager_rhett' => 'chinanation@icloud.com' }
-  s.source           = { :path => '.' }
+  # Podfile 的 :path 决定本机实际来源；这里仅提供 CocoaPods 要求的合法来源元数据。
+  s.source           = { :git => 'https://github.com/ChineseFederation/GMB.git' }
   s.platform         = :ios, '16.0'
 
   # CocoaPods 要求至少有一个源文件;用一个空的占位 .m,真正的实现全在 .a 里。
   s.source_files     = 'placeholder.m'
-  s.vendored_libraries = 'libsmoldot.a'
+  s.vendored_libraries = library_pattern
 
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
@@ -55,7 +63,7 @@ CitizenApp 热端原生库:smoldot 轻节点、sr25519 原生签名(与 CitizenW
   # 必须写成 `-Wl,-u,<符号>` 而不是 `-u <符号>`:CocoaPods 会把重复的 `-u` 前缀
   # 去重合并成 `-u a b c d`,后面的被链接器当成文件名报 No such file or directory。
   s.user_target_xcconfig = {
-    'OTHER_LDFLAGS' => '-force_load ${PODS_ROOT}/../smoldot/libsmoldot.a ' +
+    'OTHER_LDFLAGS' => "-force_load #{library_path} " +
                        ffi_symbols.map { |sym| "-Wl,-u,#{sym}" }.join(' '),
   }
 end

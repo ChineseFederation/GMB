@@ -85,6 +85,8 @@ interface WorkerSecretsAndOptionalVars {
   CF_ACCOUNT_ID?: string;
   R2_KEY?: string;
   R2_SECRET?: string;
+  /// 私有聊天附件桶的公开资源名；凭据仍只来自 R2_KEY / R2_SECRET。
+  SQUARE_PRIVATE_BUCKET_NAME?: string;
   // 公开媒体删除后按精确 URL 清理全网 CDN；令牌权限只允许 Cache Purge。
   ZONE_ID?: string;
   PURGE?: string;
@@ -95,9 +97,6 @@ interface WorkerSecretsAndOptionalVars {
   // 官网「公民宪法」tab 读链文档的 KV 短缓存 TTL（秒，缺省 300）。修宪后一个 TTL 内自动刷新。
   CONSTITUTION_TTL_SECONDS?: string;
   TURNSTILE_SECRET?: string;
-  // Cloudflare TURN Key ID 是公开资源身份；API Token 是只允许服务端生成短期 ICE 凭证的密钥。
-  TURN_KEY_ID?: string;
-  TURN_KEY_API_TOKEN?: string;
   HASH_KEY?: string;
   // 本地部署控制台↔Worker 结算接口鉴权令牌，只放 Worker Secret。
   SETTLE_TOKEN?: string;
@@ -143,7 +142,7 @@ export interface SessionState {
   expires_at: number;
 }
 
-/// CitizenServe 只接收序列化后的 OpenMLS ChatEnvelope 密文，不解析正文、附件或密钥。
+/// CitizenServe 只接收序列化后的 OpenMLS ChatEnvelope 密文，不解析正文或附件密钥。
 /// envelope_id 是协议已有的唯一幂等键；禁止再增加 operation_id 或服务端消息编号。
 export interface ChatEnvelopePayload {
   envelope_id: string;

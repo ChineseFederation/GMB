@@ -33,11 +33,6 @@ String newGroupId(String creatorCidNumber) {
 }
 
 /// 登记/清除某成员的待投递群媒体(离线补发按成员;键 attachmentId+成员 CID)。
-typedef GroupMemberMediaRecorder = Future<void> Function(
-  String attachmentId,
-  String memberCidNumber,
-);
-
 class ChatGroupFlow {
   const ChatGroupFlow({
     required MlsGroupCrypto crypto,
@@ -49,7 +44,8 @@ class ChatGroupFlow {
     required String currentAccountId,
     required String localDeviceId,
     this.deliveryScheduler,
-    this.defaultTtlMillis = 30 * 24 * 60 * 60 * 1000,
+    this.beforeIncomingStore,
+    this.defaultTtlMillis = chatMailboxTtlMillis,
   })  : _crypto = crypto,
         _store = store,
         _deliverer = deliverer,
@@ -71,6 +67,7 @@ class ChatGroupFlow {
   final String _currentAccountId;
   final String _localDeviceId;
   final ChatEnvelopeDeliveryScheduler? deliveryScheduler;
+  final ChatIncomingContentHandler? beforeIncomingStore;
   final int defaultTtlMillis;
 
   /// 建群:创建者为唯一成员(admin),可选带初始邀请。
@@ -304,88 +301,40 @@ class ChatGroupFlow {
     );
   }
 
-  /// 群发媒体：控制消息单次加密扇 N，字节对每个成员逐个 WebRTC 直传；
-  /// 任一成员暂时无法直连时，只保留该成员对应的发送方本地待发项。
-  Future<List<ChatDeliveryResult>> sendGroupMedia({
+  /// Returns the current group recipients for one encrypted cloud object.
+  Future<List<String>> recipientCidNumbers({
+    required String groupId,
+    required String senderCidNumber,
+  }) async {
+    final group = await _store.readGroup(_ownerCidNumber, groupId);
+    if (group == null || group.leftLocally) {
+      throw StateError('群聊不存在或已退出');
+    }
+    return group.memberCidNumbers
+        .where((cidNumber) => cidNumber != senderCidNumber)
+        .toList(growable: false);
+  }
+
+  /// Queues only the encrypted attachment control payload. Attachment bytes are
+  /// uploaded once to private R2 and are never sent through WebRTC DataChannel.
+  Future<List<ChatDeliveryResult>> sendGroupMediaControl({
     required String groupId,
     required String senderCidNumber,
     required String senderDeviceId,
-    required ChatMediaDraft media,
-    required ChatAttachmentDeviceSender sendMemberAttachment,
-    ChatLocalAttachmentSaver? saveLocalAttachment,
-    GroupMemberMediaRecorder? recordPendingMember,
-    GroupMemberMediaRecorder? markMemberDelivered,
-    ChatMediaLocalCommitNotifier? onLocalCommitted,
-  }) async {
-    final group = await _requireGroup(groupId);
-    if (group.leftLocally) {
-      throw StateError('已退出该群，无法发送');
+    required ChatContent content,
+    ChatMediaLocalCommitNotifier? onApplicationStored,
+  }) {
+    if (!content.isMedia) {
+      throw ArgumentError.value(content.kind, 'content', '必须是媒体消息');
     }
-    // 门①:己档硬拦(非薪火发不出 >100MB)。
-    if (ChatMediaLimits.exceedsForKind(media.kind, media.byteSize)) {
-      throw ChatMediaTooLargeException(
-        byteSize: media.byteSize,
-        limitBytes: ChatMediaLimits.forKind(media.kind),
-        kind: media.kind,
-      );
-    }
-    final nowMillis = DateTime.now().millisecondsSinceEpoch;
-    final attachmentId = 'att-$nowMillis-${_nonce()}';
-
-    final payload = ChatPayloadCodec.encode(
-      ChatContent.media(
-        kind: media.kind,
-        attachmentId: attachmentId,
-        fileName: media.fileName,
-        mime: media.contentType,
-        byteSize: media.byteSize,
-        width: media.width,
-        height: media.height,
-        durationMs: media.durationMs,
-        blurhash: media.blurhash,
-      ),
-    );
-    // 控制消息单次加密扇 N + 落 1 逻辑媒体消息(复用共用编排)。
-    final results = await _sendGroupUserMessage(
+    return _sendGroupUserMessage(
       groupId: groupId,
       senderCidNumber: senderCidNumber,
       senderDeviceId: senderDeviceId,
-      messageKind: media.kind,
-      payload: payload,
-      onApplicationStored: () async {
-        await saveLocalAttachment?.call(
-          conversationId: groupId,
-          attachmentId: attachmentId,
-          fileName: media.fileName,
-          contentType: media.contentType,
-          sourcePath: media.sourcePath,
-          byteSize: media.byteSize,
-        );
-        await onLocalCommitted?.call();
-      },
+      messageKind: content.kind,
+      payload: ChatPayloadCodec.encode(content),
+      onApplicationStored: onApplicationStored,
     );
-    // 对每个成员 CID 逐个 WebRTC 直传（离线按成员留 pending 补发）。
-    final members = group.memberCidNumbers
-        .where((account) => account != senderCidNumber)
-        .toList(growable: false);
-    for (final member in members) {
-      await recordPendingMember?.call(attachmentId, member);
-      try {
-        await sendMemberAttachment(
-          recipientCidNumber: member,
-          conversationId: groupId,
-          attachmentId: attachmentId,
-          fileName: media.fileName,
-          contentType: media.contentType,
-          sourcePath: media.sourcePath,
-          byteSize: media.byteSize,
-        );
-        await markMemberDelivered?.call(attachmentId, member);
-      } on Exception {
-        // 该成员离线/直连失败:留 pending,peer_ready 补发。
-      }
-    }
-    return results;
   }
 
   /// 群发用户消息(文本/贴纸)共用编排:单次加密 → 扇 N → 1 逻辑消息 + N 出站队列。
@@ -590,13 +539,17 @@ class ChatGroupFlow {
           await _handleGroupControl(envelope, control);
           return replayedEnvelopes;
         }
+        final content = ChatPayloadCodec.decode(plaintext);
+        if (beforeIncomingStore != null) {
+          await beforeIncomingStore!(envelope, content);
+        }
         await _store.saveIncomingGroupMessage(
           bindingToken: _bindingToken,
           ownerCidNumber: _ownerCidNumber,
           currentAccountId: _currentAccountId,
           envelope: envelope,
           envelopeBytes: envelopeBytes,
-          messageKind: ChatPayloadCodec.decode(plaintext).kind,
+          messageKind: content.kind,
           plaintext: plaintext,
         );
       case GroupInboundKind.unknown:

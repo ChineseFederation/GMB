@@ -169,7 +169,7 @@ void main() {
         baseUrl: 'https://square.test',
         httpClient: MockClient(
           (_) async => http.Response(
-            '''{"active":true,"subscription_active":true,"membership":{"membership_level":"democracy","paid_until":200,"last_charged_at":100},"plans":[{"membership_level":"democracy","display_name":"民主会员","chat_file_max_bytes":1,"document":{"text_max_chars":300,"image_quality":"hd","max_images":9},"video":{"text_max_chars":300,"video_quality":"hd","max_video_seconds":1800,"max_video_bytes":300000000},"article":{"title_min_chars":10,"title_max_chars":50,"body_max_chars":30000,"cover_quality":"hd","image_quality":"hd","max_images":100,"max_videos":3},"usage":{"monthly_images":1500,"monthly_video_seconds":60000,"active_uploads":2,"storage_bytes":1000000000000}}],"usage_state":{"period_start":100,"period_end":200,"image_count":12,"video_seconds":345,"active_uploads":1}}''',
+            '''{"active":true,"subscription_active":true,"membership":{"membership_level":"democracy","paid_until":200,"last_charged_at":100},"plans":[{"membership_level":"democracy","display_name":"民主会员","chat_file_max_bytes":1,"chat":{"text_enabled":true,"emoji_enabled":true,"sticker_enabled":true,"image_enabled":true,"voice_message_max_seconds":180,"video_message_max_seconds":180,"voice_call_enabled":true,"video_call_enabled":true},"document":{"text_max_chars":300,"image_quality":"hd","max_images":9},"video":{"text_max_chars":300,"video_quality":"hd","max_video_seconds":1800,"max_video_bytes":300000000},"article":{"title_min_chars":10,"title_max_chars":50,"body_max_chars":30000,"cover_quality":"hd","image_quality":"hd","max_images":100,"max_videos":3},"usage":{"monthly_images":1500,"monthly_video_seconds":60000,"active_uploads":2,"storage_bytes":1000000000000}}],"usage_state":{"period_start":100,"period_end":200,"image_count":12,"video_seconds":345,"active_uploads":1}}''',
             200,
             headers: {'content-type': 'application/json'},
           ),
@@ -704,6 +704,16 @@ const _democracyPlan = SquareMembershipPlan(
   membershipLevel: 'democracy',
   displayName: '民主会员',
   chatFileMaxBytes: 1,
+  chat: SquareChatQuota(
+    textEnabled: true,
+    emojiEnabled: true,
+    stickerEnabled: true,
+    imageEnabled: true,
+    voiceMessageMaxSeconds: 180,
+    videoMessageMaxSeconds: 180,
+    voiceCallEnabled: true,
+    videoCallEnabled: true,
+  ),
   document: SquareDocumentQuota(
     textMaxChars: 300,
     imageQuality: 'hd',

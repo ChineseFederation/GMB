@@ -470,9 +470,8 @@ CREATE INDEX idx_chain_extrinsic_relays_tx_hash
   ON chain_extrinsic_relays(tx_hash)
   WHERE tx_hash IS NOT NULL;
 
--- Chat 云端只保存操作系统无内容唤醒所需的最小推送端点。
--- Chat 明文、MLS 密文、Envelope、KeyPackage、附件和消息元数据均禁止进入
--- D1、KV、R2、Durable Object Storage 或请求日志。
+-- Chat 云端保存无内容唤醒端点、Durable Object 小密文邮箱，以及私有 R2 附件密文。
+-- 明文、OpenMLS/附件解密密钥、文件名、MIME 和用户内容均禁止进入服务端存储或日志。
 CREATE TABLE chat_push_endpoints (
   cid_number TEXT NOT NULL,
   binding_revision INTEGER NOT NULL CHECK(binding_revision > 0),
@@ -494,6 +493,35 @@ CREATE UNIQUE INDEX idx_chat_push_endpoints_token
   ON chat_push_endpoints(push_provider, push_token);
 CREATE INDEX idx_chat_push_endpoints_expires
   ON chat_push_endpoints(expires_at);
+
+-- 普通聊天附件只保存一份手机端加密后的不透明密文，固定七天到期；
+-- 收件人映射逐个确认，最后一个收件人落盘后才删除对象，任何重试都不得延长 expires_at。
+CREATE TABLE chat_attachments (
+  attachment_id TEXT PRIMARY KEY,
+  sender_cid_number TEXT NOT NULL,
+  -- 兼容已部署 D1 的旧 NOT NULL 列；仅写首个收件人，授权真源是下方映射表。
+  recipient_cid_number TEXT NOT NULL,
+  object_key TEXT NOT NULL UNIQUE,
+  cipher_byte_size INTEGER NOT NULL CHECK(cipher_byte_size > 0),
+  cipher_sha256 TEXT NOT NULL CHECK(length(cipher_sha256) = 64 AND cipher_sha256 NOT GLOB '*[^0-9a-f]*'),
+  multipart_upload_id TEXT NOT NULL,
+  part_count INTEGER NOT NULL CHECK(part_count > 0 AND part_count <= 10000),
+  upload_state TEXT NOT NULL CHECK(upload_state IN ('uploading', 'ready')),
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL CHECK(expires_at > created_at)
+);
+CREATE INDEX idx_chat_attachments_expires
+  ON chat_attachments(expires_at);
+
+CREATE TABLE chat_attachment_recipients (
+  attachment_id TEXT NOT NULL,
+  recipient_cid_number TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (attachment_id, recipient_cid_number),
+  FOREIGN KEY (attachment_id) REFERENCES chat_attachments(attachment_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_chat_attachment_recipients_cid
+  ON chat_attachment_recipients(recipient_cid_number, created_at);
 
 -- 稳定币到账后的公民币发放台账。一行只代表一笔已确认 EVM 到账；
 -- 目标账户已绑定身份时，cid_number 固化付款意图签发时的 finalized 身份归属，供注销按

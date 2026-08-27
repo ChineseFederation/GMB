@@ -8,9 +8,8 @@ import 'chat_models.dart';
 /// 接收端与展示端解码都只经此处。载荷只使用显式 `kind` 判别消息类型，
 /// 不存在额外类型别名、版本字段或另一套文本格式。
 ///
-/// 本 JSON 只存在于端到端明文里:图片/视频/文件/语音的**字节**走端到端附件通道
-/// 直传,本结构只承载文件名、尺寸、时长、blurhash 占位等**控制元数据**;
-/// 该 JSON 与媒体字节都只在参与聊天的设备之间传输，Cloudflare 不接收其明文或密文。
+/// 本 JSON 只存在于 OpenMLS 端到端明文里。媒体字节先由发送手机使用独立随机密钥
+/// 加密，再直传私有 R2；CitizenServe 只能看到临时密文索引，不能取得这里的解密密钥。
 class ChatContent {
   const ChatContent._({
     required this.kind,
@@ -23,6 +22,9 @@ class ChatContent {
     this.height,
     this.durationMs,
     this.blurhash,
+    this.cipherKey,
+    this.cipherByteSize,
+    this.cipherSha256,
     this.packId,
     this.stickerId,
   });
@@ -43,6 +45,9 @@ class ChatContent {
     int? height,
     int? durationMs,
     String? blurhash,
+    String? cipherKey,
+    int? cipherByteSize,
+    String? cipherSha256,
   }) {
     assert(
       kind == ChatMessageKind.image ||
@@ -61,6 +66,9 @@ class ChatContent {
       height: height,
       durationMs: durationMs,
       blurhash: blurhash,
+      cipherKey: cipherKey,
+      cipherByteSize: cipherByteSize,
+      cipherSha256: cipherSha256,
     );
   }
 
@@ -93,6 +101,11 @@ class ChatContent {
 
   /// image/video 的低清占位串(blurhash),字节到达前先渲染占位。
   final String? blurhash;
+
+  /// 仅存在于 OpenMLS 明文中的附件传输密钥及密文完整性信息。
+  final String? cipherKey;
+  final int? cipherByteSize;
+  final String? cipherSha256;
 
   /// kind=sticker:内置贴纸包与贴纸 id。
   final String? packId;
@@ -140,6 +153,9 @@ class ChatPayloadCodec {
         if (content.height != null) map['height'] = content.height;
         if (content.durationMs != null) map['duration_ms'] = content.durationMs;
         if (content.blurhash != null) map['blurhash'] = content.blurhash;
+        map['cipher_key'] = content.cipherKey;
+        map['cipher_byte_size'] = content.cipherByteSize;
+        map['cipher_sha256'] = content.cipherSha256;
       case ChatMessageKind.sticker:
         map['pack_id'] = content.packId;
         map['sticker_id'] = content.stickerId;
@@ -204,6 +220,9 @@ class ChatPayloadCodec {
       'file_name',
       'mime',
       'byte_size',
+      'cipher_key',
+      'cipher_byte_size',
+      'cipher_sha256',
     };
     const optionalKeys = <String>{
       'width',
@@ -220,6 +239,14 @@ class ChatPayloadCodec {
     final height = _optionalNonNegativeInt(map, 'height');
     final durationMs = _optionalNonNegativeInt(map, 'duration_ms');
     final blurhash = _optionalString(map, 'blurhash');
+    final cipherKey = _requiredString(map, 'cipher_key');
+    final cipherByteSize = _requiredNonNegativeInt(map, 'cipher_byte_size');
+    final cipherSha256 = _requiredString(map, 'cipher_sha256');
+    if (!_isTransportKey(cipherKey) ||
+        cipherByteSize <= 0 ||
+        !RegExp(r'^[0-9a-f]{64}$').hasMatch(cipherSha256)) {
+      throw const FormatException('附件传输密钥或密文完整性字段不合法');
+    }
     if (kind == ChatMessageKind.audio) {
       if (!mime.startsWith('audio/')) {
         throw const FormatException('语音消息 mime 必须是 audio 类型');
@@ -227,8 +254,8 @@ class ChatPayloadCodec {
       if (byteSize <= 0) {
         throw const FormatException('语音消息 byte_size 必须是正整数');
       }
-      if (durationMs == null || durationMs <= 0 || durationMs > 60000) {
-        throw const FormatException('语音消息 duration_ms 必须在1至60000之间');
+      if (durationMs == null || durationMs <= 0 || durationMs > 180000) {
+        throw const FormatException('语音消息 duration_ms 必须在1至180000之间');
       }
       if (width != null || height != null || blurhash != null) {
         throw const FormatException('语音消息不得携带图像元数据');
@@ -244,7 +271,18 @@ class ChatPayloadCodec {
       height: height,
       durationMs: durationMs,
       blurhash: blurhash,
+      cipherKey: cipherKey,
+      cipherByteSize: cipherByteSize,
+      cipherSha256: cipherSha256,
     );
+  }
+
+  static bool _isTransportKey(String value) {
+    try {
+      return base64Url.decode(value.padRight((value.length + 3) ~/ 4 * 4, '=')).length == 32;
+    } on FormatException {
+      return false;
+    }
   }
 
   static ChatContent _decodeSticker(Map<String, dynamic> map) {

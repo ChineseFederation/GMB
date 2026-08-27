@@ -15,10 +15,17 @@ allprojects {
     }
 }
 
+// 本机编译必须由Console把Gradle输出导向中央工作目录；GitHub临时Runner仍使用其短命工作区。
+val consoleBuildDir = System.getenv("CONSOLE_BUILD_DIR")
 val newBuildDir: Directory =
-    rootProject.layout.buildDirectory
-        .dir("../../build")
-        .get()
+    if (!consoleBuildDir.isNullOrBlank()) {
+        rootProject.layout.dir(rootProject.provider { rootProject.file(consoleBuildDir) }).get()
+    } else {
+        if (System.getenv("CI") != "true") {
+            throw GradleException("本机Android编译必须由Console提供CONSOLE_BUILD_DIR")
+        }
+        rootProject.layout.buildDirectory.dir("../../build").get()
+    }
 rootProject.layout.buildDirectory.value(newBuildDir)
 
 subprojects {

@@ -12,6 +12,11 @@ android {
     // 设备测试必须挂到正式 Release 变体，禁止为验收生成影子 Debug 应用。
     testBuildType = "release"
 
+    // Console本机编译只从中央工作目录打包Rust库，产品仓库不得保留生成的jniLibs。
+    System.getenv("CONSOLE_NATIVE_ANDROID_DIR")?.takeIf { it.isNotBlank() }?.let { nativeDir ->
+        sourceSets.getByName("main").jniLibs.setSrcDirs(listOf(nativeDir))
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

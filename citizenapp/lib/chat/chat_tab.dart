@@ -21,6 +21,7 @@ import '../ui/widgets/identity_register_guide.dart';
 import '../wallet/core/wallet_manager.dart';
 import '../wallet/widgets/wallet_qr_dialog.dart';
 import 'chat_page.dart';
+import 'chat_media_limits.dart';
 import 'chat_payload.dart';
 import 'chat_runtime.dart';
 import 'crypto/mls_native.dart';
@@ -143,6 +144,7 @@ class _ChatTabState extends State<ChatTab> {
       widget.profileMediaCache ?? CitizenProfileMediaCache();
   late final SquareSessionProvider _sessionProvider =
       widget.sessionProvider ?? SquareSessionProvider.instance;
+  late final SquareApiClient _squareApi = SquareApiClient();
   late final UserContactService _contactService = widget.contactService ??
       UserContactService(walletManager: widget.walletManager);
   final Map<String, CitizenProfile> _peerProfiles = <String, CitizenProfile>{};
@@ -313,6 +315,7 @@ class _ChatTabState extends State<ChatTab> {
         _cidNumber = ownerCidNumber;
         _accountId = activeWallet;
       });
+      unawaited(_ensureChatEntitlement(ownerCidNumber, generation));
       if (ownerCidNumber.isEmpty) {
         // 默认账户未注册 CID 是合法状态；禁止回退到其他账户，必须在此
         // 短路。会话存储读取第一步就要解析密钥绑定,对未注册身份必抛
@@ -363,6 +366,28 @@ class _ChatTabState extends State<ChatTab> {
         // 二级页返回只需恢复既有轮询/Realtime，不重复执行首次补发链。
         _configurePolling(serviceAccountId);
       }
+    }
+  }
+
+  /// 当前 CID 的聊天会员权益只读 CitizenServe D1；不读链、不扫描区块。
+  /// 结果由 [ChatMediaLimits] 绑定 CID，切换钱包后旧 CID 权益不能复用。
+  Future<void> _ensureChatEntitlement(
+    String cidNumber,
+    int reloadGeneration,
+  ) async {
+    if (cidNumber.isEmpty || ChatMediaLimits.resolvedFor(cidNumber)) return;
+    try {
+      final session = _profileSession ?? await _sessionProvider.ensureSession();
+      if (session == null || session.cidNumber.trim() != cidNumber) return;
+      _profileSession = session;
+      await _squareApi.fetchMembership(session);
+    } on Exception {
+      ChatMediaLimits.markUnresolved(cidNumber);
+    }
+    if (mounted &&
+        reloadGeneration == _reloadGeneration &&
+        cidNumber == _cidNumber) {
+      setState(() {});
     }
   }
 
@@ -804,6 +829,7 @@ class _ChatTabState extends State<ChatTab> {
 
   void _openConversation(ChatConversationPreview preview) {
     if (!_requireChatIdentity()) return;
+    if (!_requireChatMembership()) return;
     if (preview.isGroup) {
       openGroupChat(
         context,
@@ -819,6 +845,7 @@ class _ChatTabState extends State<ChatTab> {
 
   void _openCreateGroup() {
     if (!_requireChatIdentity()) return;
+    if (!_requireChatMembership()) return;
     final opener = widget.openers?.openCreateGroup;
     if (opener != null) {
       unawaited(opener(context));
@@ -853,6 +880,16 @@ class _ChatTabState extends State<ChatTab> {
       return false;
     }
     return true;
+  }
+
+  bool _requireChatMembership() {
+    if (ChatMediaLimits.chatEnabledFor(_cidNumber)) return true;
+    setState(() {
+      _error = ChatMediaLimits.resolvedFor(_cidNumber)
+          ? '尚未开通会员，订阅任一会员后即可使用聊天'
+          : '暂时无法验证会员状态，请稍后重试';
+    });
+    return false;
   }
 
   /// 加号菜单动作分派。
@@ -910,6 +947,7 @@ class _ChatTabState extends State<ChatTab> {
   /// 发私信 = 通讯录单选，点联系人直接开私聊。
   Future<void> _openSendMessage() async {
     if (!_requireChatIdentity()) return;
+    if (!_requireChatMembership()) return;
     final opener = widget.openers?.openSendMessage;
     if (opener != null) {
       await opener(context);
@@ -939,6 +977,7 @@ class _ChatTabState extends State<ChatTab> {
   /// 搜索 = 进入独立搜索页；透传 store 与账户，避免搜索页重复解析依赖。
   Future<void> _openSearch() async {
     if (!_requireChatIdentity()) return;
+    if (!_requireChatMembership()) return;
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
         builder: (_) => ChatSearchPage(
@@ -951,6 +990,7 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   void _openGroupManage(ChatConversationPreview preview) {
+    if (!_requireChatMembership()) return;
     Navigator.of(context)
         .push(
           MaterialPageRoute<void>(

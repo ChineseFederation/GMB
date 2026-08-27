@@ -17,6 +17,7 @@ export type ResourceKey =
   | 'chat_signal'
   | 'chat_envelope'
   | 'chat_ack'
+  | 'chat_attachment'
   | 'push_wake'
   | 'chain_extrinsic'
   | 'chain_extrinsic_json'
@@ -136,6 +137,8 @@ export const resourceLimits: Readonly<Record<ResourceKey, ResourceLimit>> = {
     max_total_bytes: 8 * mib,
   },
   chat_ack: { max_bytes: 16 * kib, max_items: 100 },
+  // Worker 只接收 multipart 签名和密文索引 JSON，附件字节直接进入私有 R2。
+  chat_attachment: { max_bytes: 128 * kib, max_items: 100, ttl_seconds: 7 * 24 * 60 * 60 },
   push_wake: { max_bytes: 1 * kib },
   chain_extrinsic: { max_bytes: 64 * kib },
   chain_extrinsic_json: { max_bytes: 132 * kib },
@@ -205,6 +208,7 @@ const route = (method: string, path: RegExp, resource_key: ResourceKey = 'api_js
 /** 已登记路由是 Worker 进入风控和 D1 前的白名单。 */
 const routeLimits: readonly RouteLimit[] = [
   route('GET', /^\/health$/),
+  route('POST', /^\/chat\/attachments\/(?:prepare|complete|download|ack|abort)$/, 'chat_attachment'),
   route('GET', /^\/download\/(?:citizenapp\/android|citizenwallet\/android|citizenchain\/(?:linux-amd64|linux-arm64|macos-arm64(?:-updater)?|windows-x86_64))$/),
   route('GET', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),
   route('PUT', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),

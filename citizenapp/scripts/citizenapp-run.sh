@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
-# CitizenConsole 原生安全进程在 Touch ID 后签名并安装。
+# Console 原生安全进程使用固定本机开发签名并安装。
 #
 # 用法：citizenapp-run.sh <ios|android>
 # 只读包检查：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
@@ -10,8 +10,7 @@
 # 而回落的那一端会被当成用户想编的那一端——「以为编了 iOS、实际编的 Android」
 # 就是这么来的。控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
 #
-# 本机成功 Build 的最终签名包按端保存在本项目唯一 build/ 根内，只留最近两个任务产物；
-# Flutter 中间树与失败候选不属于成功产物，失败后不得进入该目录。
+# 本机中间文件只允许进入 Console 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
 # 固定使用 smoldot 轻节点连接区块链（无需 RPC 服务器）。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,6 +22,23 @@ PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
   || { echo "目标平台或检查模式不合法：$PLATFORM" >&2; exit 1; }
 cd "$APP_ROOT"
 
+if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
+  : "${CONSOLE_TARGET_ROOT:?本机编译必须由 Console 提供中央产物目录}"
+  : "${CONSOLE_WORK_DIR:?本机编译必须由 Console 提供中央工作目录}"
+  case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
+    echo "公民中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
+  esac
+  BUILD_DIR="$CONSOLE_WORK_DIR/build"
+  ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenapp"
+  export CONSOLE_BUILD_DIR="$BUILD_DIR"
+  export CONSOLE_NATIVE_ANDROID_DIR="$CONSOLE_WORK_DIR/native/android"
+  export CONSOLE_NATIVE_IOS_DIR="$CONSOLE_WORK_DIR/native/ios"
+  export XDG_CONFIG_HOME="$CONSOLE_WORK_DIR/flutter-config"
+  mkdir -p "$XDG_CONFIG_HOME"
+  build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
+  flutter config --build-dir="$build_dir_relative" >/dev/null
+fi
+
 # 本机编译只读取仓库统一的 Flutter 依赖真源。禁止直接接受 PATH 中任意
 # Flutter；否则同一 iOS 工程会在旧 CocoaPods 与新 SPM 生成状态之间来回切换。
 EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
@@ -32,38 +48,20 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
   exit 1
 }
 
-# iOS 与 Android 是两个独立本机任务，禁止 `flutter clean`：它会跨平台执行 Xcode Clean，
-# 曾在 Android 编译启动时删除正在使用的 iOS build.db 与 Swift 文件清单。iOS 的全部 Flutter/
-# Xcode 中间产物固定在 build/ios；Android 的 Gradle 子项目位于 build/ 其它一级目录。
-# 精确清理目标平台即可让两个任务同时执行；已验真本机包保存在公民控制台运行时目录。
+# iOS 与 Android 使用两个独立中央工作目录，禁止在产品仓库创建或清理 `build/`。
 clean_platform_build_outputs() {
-  mkdir -p "$APP_ROOT/build"
-  if [[ "$PLATFORM" == ios ]]; then
-    rm -rf "$APP_ROOT/build/ios"
-    return
-  fi
-  find "$APP_ROOT/build" -mindepth 1 -maxdepth 1 \
-    ! -name ios -exec rm -rf {} +
+  rm -rf "$BUILD_DIR"
+  mkdir -p "$BUILD_DIR"
 }
 
-# iOS 的 Runner.app 已由系统签名并经设备安装回读验证；成功后归档，按包版本标识只保留两份。
+# iOS 的 Runner.app 已由系统签名并经设备安装回读验证；成功后只覆盖固定 `ios.app.zip`。
 retain_ios_local_artifact() {
-  local app_bundle="$1" root="${CITIZENCONSOLE_ARTIFACT_ROOT:-$HOME/Library/Application Support/CitizenConsole/artifacts}/citizenapp/ios"
-  local artifact_id staging destination
-  artifact_id="$(date -u +%Y%m%dT%H%M%SZ)-$"
-  staging="$root/.staging-${artifact_id}"
-  destination="$root/$artifact_id"
-  mkdir -p "$root"
-  rm -rf "$staging"
-  mkdir -p "$staging"
-  if ! ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging/CitizenApp.app.zip"; then
-    rm -rf "$staging"
-    return 1
-  fi
-  rm -rf "$destination"
-  mv "$staging" "$destination"
-  find "$root" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*' -exec basename {} \; \
-    | sort -nr | tail -n +3 | while IFS= read -r old; do rm -rf "$root/$old"; done
+  local app_bundle="$1" staging="$CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
+  rm -f "$staging"
+  ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging"
+  mkdir -p "$ARTIFACT_ROOT"
+  # 同卷固定名称覆盖保证失败时不先删除上一次成功产物。
+  mv -f "$staging" "$destination"
 }
 
 # iOS 必须走 CoreDevice 的原位安装，禁止 `flutter install`：该命令的卸载式安装
@@ -232,7 +230,7 @@ verify_android_release_localization() {
   [[ -f "$apk" ]] || { echo "Android Release APK 不存在：$apk" >&2; return 1; }
   aapt_bin="$(command -v aapt2 || true)"
   if [[ -z "$aapt_bin" ]]; then
-    # CitizenConsole 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
+    # Console 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
     # ANDROID_HOME。与原生库构建保持同一确定性规则：显式 SDK 优先，macOS 默认
     # SDK 目录兜底，再从已安装 build-tools 中选择最高版本，禁止硬编码具体版本。
     sdk_home="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
@@ -330,20 +328,31 @@ fi
 echo "==> 编译本机优化安装包..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
-  "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package build/ios/iphoneos/Runner.app
-  verify_ios_release_localization build/ios/iphoneos/Runner.app
-  install_ios_update "$DEVICE_ID" ios.citizenapp build/ios/iphoneos/Runner.app citizenapp.isar
-  retain_ios_local_artifact build/ios/iphoneos/Runner.app
+  IOS_APP="$BUILD_DIR/ios/iphoneos/Runner.app"
+  "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package "$IOS_APP"
+  verify_ios_release_localization "$IOS_APP"
+  install_ios_update "$DEVICE_ID" ios.citizenapp "$IOS_APP" citizenapp.isar
+  retain_ios_local_artifact "$IOS_APP"
   echo ""
   echo "==> 安装完成:请在设备桌面点开「公民」。"
 elif [[ "$PLATFORM" == android ]]; then
-  flutter build apk --release --target-platform android-arm64 \
-    ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
-  [[ -f build/app/outputs/flutter-apk/app-release.apk ]] || {
+  ANDROID_APK="$BUILD_DIR/app/outputs/flutter-apk/app-release.apk"
+  # Flutter 27 的 Android 包定位器仍可能只检查产品默认 build/，即使 Gradle 已按
+  # CONSOLE_BUILD_DIR 把唯一 Release APK 写入中央目录。只允许用这个准确中央产物
+  # 收口该工具误报；Gradle 未产出时保持失败，禁止搜索猜测或复制回源码目录。
+  if ! flutter build apk --release --target-platform android-arm64 \
+    ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}; then
+    [[ -f "$ANDROID_APK" ]] || {
+      echo "Android Gradle 未产出中央无私钥 APK" >&2
+      exit 1
+    }
+    echo "==> Flutter 未识别中央 APK，已按唯一固定路径接管 Gradle 成功产物。"
+  fi
+  [[ -f "$ANDROID_APK" ]] || {
     echo "Android 本机无私钥 APK 不存在" >&2
     exit 1
   }
-  "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package build/app/outputs/flutter-apk/app-release.apk
-  verify_android_release_localization build/app/outputs/flutter-apk/app-release.apk
+  "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package "$ANDROID_APK"
+  verify_android_release_localization "$ANDROID_APK"
   echo "==> Android 本机候选完成，正在交给原生安全进程做本机开发签名并安装。"
 fi

@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
+import '../chat_media_limits.dart';
+
 class VoiceRecordingResult {
   const VoiceRecordingResult({required this.path, required this.duration});
 
@@ -34,7 +36,7 @@ class VoicePermissionDeniedException implements Exception {
   String toString() => '请在系统设置中允许麦克风权限';
 }
 
-/// Chat 语音录制唯一控制器：AAC-LC 单声道、六十秒自动停止、取消即删临时明文。
+/// Chat 语音录制唯一控制器：AAC-LC 单声道、三分钟自动停止、取消即删临时明文。
 class VoiceRecorder {
   VoiceRecorder({
     AudioRecorder? recorder,
@@ -43,7 +45,7 @@ class VoiceRecorder {
   }) : _recorder = recorder ?? AudioRecorder();
 
   final AudioRecorder _recorder;
-  static const defaultMaximumDuration = Duration(seconds: 60);
+  static const defaultMaximumDuration = ChatMediaLimits.messageMaximumDuration;
   final Duration maximumDuration;
   final Future<void> Function(VoiceRecordingResult result)? onMaximumReached;
   final ValueNotifier<VoiceRecordingState> state =

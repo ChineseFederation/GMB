@@ -1317,6 +1317,21 @@ test5("\u79FB\u52A8\u7AEF CI\u3001Release \u4E0E\u672C\u5730\u6784\u5EFA\u90FD\u
     }
   }
 });
+// 中文注释：中央原生产物可以位于仓库外，但 CocoaPods 文件模式必须始终保持相对路径。
+test5("CitizenApp iOS 本机中央原生库使用 CocoaPods 合法相对文件模式", () => {
+  const podspec = readFileSync7(new URL("../../../citizenapp/ios/smoldot/smoldot_ffi.podspec", import.meta.url), "utf8");
+  assert5.match(podspec, /Pathname\.new\(library_path\)\.relative_path_from\(Pathname\.new\(__dir__\)\)\.to_s/);
+  assert5.match(podspec, /s\.source\s*=\s*\{ :git => 'https:\/\/github\.com\/ChineseFederation\/GMB\.git' \}/);
+  assert5.match(podspec, /s\.vendored_libraries\s*=\s*library_pattern/);
+  assert5.doesNotMatch(podspec, /s\.vendored_libraries\s*=\s*library_path/);
+});
+// 中文注释：Flutter 的默认目录误报只能由准确中央 APK 收口，禁止搜索或复制回产品 build。
+test5("CitizenApp Android 本机只接管固定中央 Gradle 产物", () => {
+  const localRun = readFileSync7(new URL("../../../citizenapp/scripts/citizenapp-run.sh", import.meta.url), "utf8");
+  assert5.match(localRun, /ANDROID_APK="\$BUILD_DIR\/app\/outputs\/flutter-apk\/app-release\.apk"[\s\S]*if ! flutter build apk/);
+  assert5.match(localRun, /if ! flutter build apk[\s\S]*\[\[ -f "\$ANDROID_APK" \]\]/);
+  assert5.doesNotMatch(localRun, /find [^\n]*app-release\.apk|cp [^\n]*ANDROID_APK[^\n]*build\//);
+});
 test5("CitizenApp \u5BBF\u4E3B\u6D4B\u8BD5\u53EA\u4ECE smoldot/ffi \u65B0\u76EE\u5F55\u52A0\u8F7D\u539F\u751F\u5E93", () => {
   const platform = readFileSync7(new URL("../../../citizenapp/smoldot/dart/lib/src/platform.dart", import.meta.url), "utf8");
   const mls = readFileSync7(new URL("../../../citizenapp/lib/chat/crypto/mls_native.dart", import.meta.url), "utf8");

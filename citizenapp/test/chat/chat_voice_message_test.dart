@@ -6,8 +6,8 @@ import 'package:citizenapp/chat/media/voice_message_player.dart';
 import 'package:citizenapp/chat/media/voice_recorder.dart';
 
 void main() {
-  test('语音单条唯一上限为六十秒', () {
-    expect(VoiceRecorder.defaultMaximumDuration, const Duration(seconds: 60));
+  test('语音单条唯一上限为三分钟', () {
+    expect(VoiceRecorder.defaultMaximumDuration, const Duration(minutes: 3));
   });
 
   testWidgets('未到达的语音气泡显示下载入口并走既有附件回调', (tester) async {

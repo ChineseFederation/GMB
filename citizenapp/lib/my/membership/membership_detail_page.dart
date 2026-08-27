@@ -41,8 +41,12 @@ class MembershipDetailPage extends StatelessWidget {
           _header(level, tierColor, onTier),
           SizedBox(height: AppLayout.scaled(context, 16)),
           _section(tierColor, Icons.chat_bubble_outline, '聊天', [
-            _row('单文件上限', '每个 ${plan.chatFileSizeLabel}'),
-            _row('大文件中转（>100MB）', plan.supportsLargeFileRelay ? '支持' : '不支持'),
+            _row('消息', '文字、表情、贴纸、图片'),
+            _row('语音消息', '最长 ${plan.chatVoiceDurationLabel}'),
+            _row('视频消息', '最长 ${plan.chatVideoDurationLabel}'),
+            _row('单个附件', '最大 ${plan.chatFileSizeLabel}'),
+            _row('语音通话', plan.chat.voiceCallEnabled ? '支持' : '不支持'),
+            _row('视频通话', plan.chat.videoCallEnabled ? '支持' : '不支持'),
           ]),
           SizedBox(height: AppLayout.scaled(context, 12)),
           _section(tierColor, Icons.description_outlined, '公文', [

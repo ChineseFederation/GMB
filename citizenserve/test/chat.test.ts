@@ -71,6 +71,23 @@ class ChatStmt {
   }
 
   async first<T>(): Promise<T | null> {
+    if (this.sql.includes("FROM square_memberships")) {
+      return {
+        cid_number: this.values[0] as string,
+        account_id: ACCOUNT_ID,
+        membership_level: "freedom",
+        started_at: 1,
+        last_charged_at: 1,
+        last_charged_price_fen: 100,
+        paid_until: Date.now() + 86_400_000,
+        subscription_status: "active",
+        finalized_block_number: 1,
+        finalized_block_hash: `0x${"1".repeat(64)}`,
+        verified_at: Date.now(),
+        entitlement_lapsed_at: null,
+        last_tx_hash: `0x${"2".repeat(64)}`,
+      } as T;
+    }
     if (
       this.sql.includes("FROM users") &&
       this.sql.includes("WHERE cid_number = ?")
@@ -322,23 +339,8 @@ describe("device-only Chat control plane", () => {
     expect(state).toBe("unavailable");
   });
 
-  it("returns only normalized short-lived Cloudflare ICE credentials", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
-      iceServers: [
-        { urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"] },
-        {
-          urls: [
-            "turn:turn.cloudflare.com:3478?transport=udp",
-            "turns:turn.cloudflare.com:443?transport=tcp",
-          ],
-          username: "temporary-username",
-          credential: "temporary-credential",
-        },
-      ],
-    }), { status: 201 })));
+  it("returns only fixed STUN addresses and never issues TURN credentials", async () => {
     const env = fakeEnv();
-    env.TURN_KEY_ID = "turn-key-12345678";
-    env.TURN_KEY_API_TOKEN = "server-only-token";
     const response = await issueChatIce(new Request("https://worker.test/chat/ice", {
       method: "POST",
       headers: {
@@ -349,12 +351,6 @@ describe("device-only Chat control plane", () => {
     }), env);
     expect(await response.json()).toEqual({
       stun_urls: ["stun:stun.cloudflare.com:3478", "stun:stun.cloudflare.com:53"],
-      turn_urls: [
-        "turn:turn.cloudflare.com:3478?transport=udp",
-        "turns:turn.cloudflare.com:443?transport=tcp",
-      ],
-      turn_username: "temporary-username",
-      turn_credential: "temporary-credential",
     });
   });
 

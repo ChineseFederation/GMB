@@ -11,6 +11,7 @@ import { reconcileFinalizedUserProjection } from './account/user_projection';
 import { reconcileFinalizedSubscriptionProjection } from './membership/subscription_projection';
 import { auditSquareR2Consistency } from './media/service';
 import { cleanupExpiredChatPushEndpoints } from './chat/service';
+import { cleanupExpiredChatAttachments } from './chat/attachments';
 
 export { Chat } from './chat/realtime';
 
@@ -37,6 +38,7 @@ export default {
           cleanupExpiredReservations(env),
           cleanupExpiredSessionIndexes(env),
           cleanupExpiredChatPushEndpoints(env),
+          cleanupExpiredChatAttachments(env),
         ]);
         await reconcileFinalizedUserProjection(env);
         await reconcileFinalizedSubscriptionProjection(env);

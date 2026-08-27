@@ -1,3 +1,7 @@
+/// Chat mailbox and encrypted attachment retention are fixed at seven days.
+/// Retries reuse the original envelope expiry and never extend this deadline.
+const int chatMailboxTtlMillis = 7 * 24 * 60 * 60 * 1000;
+
 /// Chat 会话与投递状态的前端基础模型。
 ///
 /// 本文件只定义公民端展示和状态机所需的轻量模型；真实消息持久化
@@ -6,16 +10,16 @@ enum ChatMessageKind {
   /// 普通文本消息。
   text,
 
-  /// 相册/相机图片消息。字节经 WebRTC 端到端直传,内联展示。
+  /// 相册/相机图片消息。字节以端到端密文暂存，内联展示。
   image,
 
-  /// 视频消息。字节经 WebRTC 端到端直传,展示封面并可播放。
+  /// 视频消息。字节以端到端密文暂存，展示封面并可播放。
   video,
 
   /// 通用文件附件消息(非图片/视频)。
   file,
 
-  /// 语音消息。字节经既有端到端附件通道传输，载荷只保存时长等控制元数据。
+  /// 语音消息。字节以端到端密文暂存，载荷只保存时长等控制元数据。
   audio,
 
   /// 内置贴纸消息。只传贴纸 id,字节不过网,本地资源渲染。

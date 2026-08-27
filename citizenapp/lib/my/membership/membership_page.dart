@@ -645,7 +645,7 @@ class _MembershipViewData {
 }
 
 /// 单张会员档卡（ADR-037）：一张卡 = 一个订阅档（自由/民主/薪火）。档色顶带 + 大字档名
-/// + 会员权益（聊天文件上限 / 公文 / 文章 / 视频）+ 公民币月价 + 订阅按钮。无任何身份字段。
+/// + 会员权益（完整聊天矩阵 / 公文 / 文章 / 视频）+ 公民币月价 + 订阅按钮。无任何身份字段。
 class _MembershipTierCard extends StatelessWidget {
   const _MembershipTierCard({
     required this.plan,
@@ -746,10 +746,22 @@ class _MembershipTierCard extends StatelessWidget {
                           SizedBox(height: AppLayout.scaled(context, 10)),
                           // 卡片提炼短行（每条 1 行）；完整权益见「查看详细权益」详情页。
                           _ParamLine(
-                            icon: Icons.attach_file_outlined,
+                            icon: Icons.chat_bubble_outline,
+                            color: tierColor,
+                            text: '聊天 文字/表情/贴纸/图片',
+                          ),
+                          SizedBox(height: AppLayout.scaled(context, 8)),
+                          _ParamLine(
+                            icon: Icons.mic_none_outlined,
                             color: tierColor,
                             text:
-                                '聊天文件 每个 ${plan.chatFileSizeLabel}${plan.supportsLargeFileRelay ? ' · 大文件中转' : ''}',
+                                '语音/视频消息 ${plan.chatVoiceDurationLabel} · 语音/视频通话',
+                          ),
+                          SizedBox(height: AppLayout.scaled(context, 8)),
+                          _ParamLine(
+                            icon: Icons.attach_file_outlined,
+                            color: tierColor,
+                            text: '聊天附件 每个 ${plan.chatFileSizeLabel}',
                           ),
                           SizedBox(height: AppLayout.scaled(context, 8)),
                           _ParamLine(
@@ -1397,6 +1409,19 @@ String _formatYmd(int ms) {
 
 const int _mib = 1024 * 1024;
 
+/// 三档会员共用的聊天能力；无有效会员时 [SquareMembershipState.activePlan] 为 null，
+/// 手机端不得使用这里的静态展示数据授予聊天权限。
+const SquareChatQuota _activeChatQuota = SquareChatQuota(
+  textEnabled: true,
+  emojiEnabled: true,
+  stickerEnabled: true,
+  imageEnabled: true,
+  voiceMessageMaxSeconds: 180,
+  videoMessageMaxSeconds: 180,
+  voiceCallEnabled: true,
+  videoCallEnabled: true,
+);
+
 /// 三档 App 内置套餐：进入页面第一帧直接使用，与 Worker 权益参数对齐（ADR-037）。
 /// 价格不进入静态套餐，仍以链上 `PlatformPrice` 为单一真源。
 const List<SquareMembershipPlan> _fallbackMembershipPlans = [
@@ -1404,6 +1429,7 @@ const List<SquareMembershipPlan> _fallbackMembershipPlans = [
     membershipLevel: 'freedom',
     displayName: '自由会员',
     chatFileMaxBytes: 10 * _mib,
+    chat: _activeChatQuota,
     document: SquareDocumentQuota(
       textMaxChars: 300,
       imageQuality: 'sd',
@@ -1435,6 +1461,7 @@ const List<SquareMembershipPlan> _fallbackMembershipPlans = [
     membershipLevel: 'democracy',
     displayName: '民主会员',
     chatFileMaxBytes: 100 * _mib,
+    chat: _activeChatQuota,
     document: SquareDocumentQuota(
       textMaxChars: 300,
       imageQuality: 'hd',
@@ -1466,6 +1493,7 @@ const List<SquareMembershipPlan> _fallbackMembershipPlans = [
     membershipLevel: 'spark',
     displayName: '薪火会员',
     chatFileMaxBytes: 5120 * _mib,
+    chat: _activeChatQuota,
     document: SquareDocumentQuota(
       textMaxChars: 300,
       imageQuality: 'hd',

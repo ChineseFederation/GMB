@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
 import 'package:citizenapp/chat/chat_page.dart';
+import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/compose/composer_bar.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/ui/app_layout.dart';
@@ -27,6 +28,7 @@ class _EmptyStore extends ChatStore {
 Widget _host({
   bool isGroup = false,
   ChatResolvePeerAddressCallback? resolvePeerAddress,
+  ChatStartCallCallback? onStartCall,
 }) =>
     MaterialApp(
       theme: AppTheme.lightTheme,
@@ -41,6 +43,7 @@ Widget _host({
         isGroup: isGroup,
         store: _EmptyStore(),
         onSync: () async => 0,
+        onStartCall: onStartCall,
         resolvePeerAddress: resolvePeerAddress,
       ),
     );
@@ -49,6 +52,7 @@ Future<void> _open(
   WidgetTester tester, {
   bool isGroup = false,
   ChatResolvePeerAddressCallback? resolvePeerAddress,
+  ChatStartCallCallback? onStartCall,
 }) async {
   tester.view.physicalSize = _iphone16ProLogicalSize;
   tester.view.devicePixelRatio = 1;
@@ -57,6 +61,7 @@ Future<void> _open(
   await tester.pumpWidget(_host(
     isGroup: isGroup,
     resolvePeerAddress: resolvePeerAddress,
+    onStartCall: onStartCall,
   ));
   await tester.pump(const Duration(milliseconds: 200));
 }
@@ -103,6 +108,9 @@ Widget _voiceComposerHost({
 }
 
 void main() {
+  setUp(() => ChatMediaLimits.applyMembershipLevel('freedom'));
+  tearDown(() => ChatMediaLimits.applyMembershipLevel(null));
+
   testWidgets('输入栏顺序固定且键盘语音切换保留文本草稿', (tester) async {
     await _open(tester);
     final voice = find.byKey(const ValueKey('chat-input-mode-toggle'));
@@ -269,8 +277,12 @@ void main() {
     expect(overlay, findsNothing);
   });
 
-  testWidgets('一对一加号面板为4+3七项且未开放功能只提示', (tester) async {
-    await _open(tester);
+  testWidgets('一对一加号面板为七项且语音视频通话进入真实回调', (tester) async {
+    final calls = <bool>[];
+    await _open(
+      tester,
+      onStartCall: ({required bool video}) async => calls.add(video),
+    );
     await tester.tap(find.byKey(const ValueKey('chat-actions-toggle')));
     await tester.pump();
 
@@ -301,7 +313,8 @@ void main() {
 
     await tester.tap(find.byKey(const ValueKey('chat-action-videoCall')));
     await tester.pump();
-    expect(find.text('功能完善中，敬请期待'), findsOneWidget);
+    expect(calls, [true]);
+    expect(find.text('功能完善中，敬请期待'), findsNothing);
   });
 
   testWidgets('群聊动作面板不创建转账按钮', (tester) async {
@@ -315,8 +328,20 @@ void main() {
       greaterThanOrEqualTo(tester.getBottomRight(input).dy),
     );
     expect(find.byKey(const ValueKey('chat-action-transfer')), findsNothing);
+    expect(find.byKey(const ValueKey('chat-action-videoCall')), findsNothing);
+    expect(find.byKey(const ValueKey('chat-action-voiceCall')), findsNothing);
     expect(find.byKey(const ValueKey('chat-action-location')), findsOneWidget);
     expect(find.byKey(const ValueKey('chat-action-file')), findsOneWidget);
+  });
+
+  testWidgets('无会员聊天窗口只显示订阅门禁且不创建输入操作', (tester) async {
+    ChatMediaLimits.applyMembershipLevel(null);
+    await _open(tester);
+
+    expect(find.byKey(const ValueKey('chat-membership-required')), findsOneWidget);
+    expect(find.text('尚未开通会员，订阅任一会员后即可使用聊天'), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-text-input')), findsNothing);
+    expect(find.byKey(const ValueKey('chat-actions-toggle')), findsNothing);
   });
 
   testWidgets('一对一转账把对方 CID 交给 finalized 地址解析边界', (tester) async {

@@ -9,6 +9,29 @@ import 'package:flutter_test/flutter_test.dart';
 /// 重点是**明文生命周期**：长期缓存必须是密文；解出的明文只能活在专用短命目录，
 /// 用完即删、异常路径也删、崩溃残留由启动清理兜底。
 void main() {
+  test('传输密文流式往返并提供稳定 SHA-256', () async {
+    final root = await Directory.systemTemp.createTemp('chat-transfer-');
+    addTearDown(() => root.delete(recursive: true));
+    final source = File('${root.path}/source.bin')
+      ..writeAsBytesSync(
+        List<int>.generate(2 * 1024 * 1024 + 17, (index) => index % 251),
+      );
+    final key = List<int>.generate(32, (index) => index);
+    final sealed = await AttachmentVault.sealForTransport(
+      plainSource: source,
+      cipherTarget: File('${root.path}/cipher.bin'),
+      key: key,
+    );
+    expect(sealed.byteSize, greaterThan(await source.length()));
+    expect(sealed.sha256, hasLength(64));
+    final opened = await AttachmentVault.openTransportCipher(
+      cipherSource: sealed.file,
+      plainTarget: File('${root.path}/opened.bin'),
+      key: key,
+    );
+    expect(await opened.readAsBytes(), await source.readAsBytes());
+  });
+
   late Directory root;
   late Directory cacheDir;
   late Directory plainDir;

@@ -6,8 +6,8 @@ import 'package:citizenapp/my/myid/current_user_context.dart';
 
 /// 打开某群的群聊详情。
 ///
-/// 群目前支持文本 + emoji(emoji 即文本);媒体/贴纸群发是后续步,故只接
-/// `onSendText`。复用 1:1 的 `ChatPage`,发送走 `runtime.sendGroupText`。
+/// 群聊复用与私聊相同的 `ChatPage` 会员门禁和消息入口；文本、贴纸、媒体分别
+/// 进入 `ChatRuntime` 的群发送方法，不另建第二套权限实现。群语音/视频通话不在当前范围。
 Future<void> openGroupChat(
   BuildContext context, {
   required String groupId,

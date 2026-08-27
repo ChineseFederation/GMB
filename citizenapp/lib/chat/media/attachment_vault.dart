@@ -3,6 +3,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' as crypto_hash;
+
 import 'package:cryptography/cryptography.dart';
 
 /// 聊天附件的本地静止态金库。
@@ -46,6 +48,51 @@ class AttachmentVault {
     );
     if (deleteSource && await plainSource.exists()) {
       await plainSource.delete();
+    }
+  }
+
+  /// 生成可直传 R2 的分块密文；调用方持有并最终擦除 [key]，服务端永远看不到它。
+  static Future<AttachmentTransportCipher> sealForTransport({
+    required File plainSource,
+    required File cipherTarget,
+    required List<int> key,
+  }) async {
+    await cipherTarget.parent.create(recursive: true);
+    try {
+      final byteSize = await _AttachmentCrypto.encryptFile(
+        sourcePath: plainSource.path,
+        destPath: cipherTarget.path,
+        key: key,
+      );
+      final digest = await crypto_hash.sha256.bind(cipherTarget.openRead()).first;
+      return AttachmentTransportCipher(
+        file: cipherTarget,
+        byteSize: byteSize,
+        sha256: digest.toString(),
+      );
+    } catch (_) {
+      if (await cipherTarget.exists()) await cipherTarget.delete();
+      rethrow;
+    }
+  }
+
+  /// 校验后的 R2 密文流式解密到短命明文；失败删除半成品，禁止进入长期缓存。
+  static Future<File> openTransportCipher({
+    required File cipherSource,
+    required File plainTarget,
+    required List<int> key,
+  }) async {
+    if (await plainTarget.exists()) await plainTarget.delete();
+    try {
+      await _AttachmentCrypto.decryptFile(
+        sourcePath: cipherSource.path,
+        destPath: plainTarget.path,
+        key: key,
+      );
+      return plainTarget;
+    } catch (_) {
+      if (await plainTarget.exists()) await plainTarget.delete();
+      rethrow;
     }
   }
 
@@ -255,6 +302,18 @@ class AttachmentVault {
     final base = cachePath.split(Platform.pathSeparator).last;
     return base.isEmpty ? 'attachment.bin' : base;
   }
+}
+
+class AttachmentTransportCipher {
+  const AttachmentTransportCipher({
+    required this.file,
+    required this.byteSize,
+    required this.sha256,
+  });
+
+  final File file;
+  final int byteSize;
+  final String sha256;
 }
 
 /// 附件本地静止态的分块 AES-256-GCM 实现。

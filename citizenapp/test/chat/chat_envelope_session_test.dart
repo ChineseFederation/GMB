@@ -75,6 +75,7 @@ void main() {
 
   test('接收设备离线时密文只留发送设备本机队列', () async {
     final store = ChatStore();
+    final delivered = <ChatEnvelope>[];
     final bindingToken = await _activateBinding(store, _aliceAccountId);
     final flow = ChatFlow(
       ownerCidNumber: _ownerCidNumber,
@@ -82,11 +83,14 @@ void main() {
       crypto: _FakeMlsCrypto(),
       store: store,
       bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.queued,
-      ),
+      deliverer: (envelope, _, __) async {
+        delivered.add(envelope);
+        return ChatDeliveryResult(
+          envelopeId: envelope.envelopeId,
+          transportType: ChatTransportType.mailbox,
+          state: ChatMessageDeliveryState.queued,
+        );
+      },
     );
 
     await flow.sendText(
@@ -103,6 +107,7 @@ void main() {
       bindingToken: bindingToken,
     );
     expect(queued, hasLength(2));
+    expect(delivered.every((item) => item.ttlMillis == chatMailboxTtlMillis), isTrue);
     expect(
       queued.every((item) => item.recipientCidNumber == _bobCidNumber),
       isTrue,
@@ -468,550 +473,21 @@ void main() {
     );
   });
 
-  test('媒体经设备通道流式发送、控制不含云端引用,且路径/自存以同一 attachmentId 关联', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-chat-send-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/photo.jpg');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-
-    String? sentSourcePath;
-    int? sentByteSize;
-    String? sentAttachmentId;
-    String? sentFileName;
-    String? savedSourcePath;
-    String? savedAttachmentId;
-    int? savedByteSize;
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.sent,
-      ),
-    );
-
-    await flow.sendMedia(
-      conversationId: 'conv-attachment',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
-      senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
-      media: ChatMediaDraft(
-        kind: ChatMessageKind.image,
-        fileName: 'photo.jpg',
-        contentType: 'image/jpeg',
-        sourcePath: source.path,
-        byteSize: 4,
-      ),
-      sendDeviceAttachment: ({
-        required recipientCidNumber,
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {
-        sentSourcePath = sourcePath;
-        sentByteSize = byteSize;
-        sentAttachmentId = attachmentId;
-        sentFileName = fileName;
-      },
-      saveLocalAttachment: ({
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {
-        savedSourcePath = sourcePath;
-        savedAttachmentId = attachmentId;
-        savedByteSize = byteSize;
-      },
-    );
-
-    expect(sentSourcePath, source.path);
-    expect(sentByteSize, 4);
-    final message = (await ChatStore().readMessages(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      conversationId: 'conv-attachment',
-    ))
-        .single
-        .plaintext!;
-    // 控制载荷是端到端明文,只带元数据,绝无任何云端对象引用。
-    expect(message, contains('"kind":"image"'));
-    expect(message, contains('"byte_size":4'));
-    expect(message, isNot(contains('object_key')));
-    expect(message, isNot(contains('manifest')));
-    // WebRTC 字节与 MLS 控制消息必须以同一 attachmentId 关联,否则接收端按控制
-    // 里的 id 找不到设备通道存下的字节。
-    final controlAttachmentId = ChatPayloadCodec.decode(message).attachmentId;
-    expect(controlAttachmentId, isNotNull);
-    expect(sentAttachmentId, controlAttachmentId);
-    expect(sentFileName, 'photo.jpg');
-    // 发送方本机自存副本用同一 id/源/大小,发送方才能在会话里看到自己发出的媒体。
-    expect(savedAttachmentId, controlAttachmentId);
-    expect(savedSourcePath, source.path);
-    expect(savedByteSize, 4);
-  });
-
-  test('语音经 sendMedia 完整发送并保留 60 秒上限内的时长元数据', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-chat-voice-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/voice.m4a');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-
-    String? sentContentType;
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.sent,
-      ),
-    );
-
-    await flow.sendMedia(
-      conversationId: 'conv-voice',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
-      senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
-      media: ChatMediaDraft(
-        kind: ChatMessageKind.audio,
-        fileName: 'voice.m4a',
-        contentType: 'audio/mp4',
-        sourcePath: source.path,
-        byteSize: 4,
-        durationMs: 60000,
-      ),
-      sendDeviceAttachment: ({
-        required recipientCidNumber,
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {
-        sentContentType = contentType;
-      },
-      saveLocalAttachment: ({
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {},
-    );
-
-    final message = (await ChatStore().readMessages(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      conversationId: 'conv-voice',
-    ))
-        .single
-        .plaintext!;
-    final content = ChatPayloadCodec.decode(message);
-    expect(content.kind, ChatMessageKind.audio);
-    expect(content.mime, 'audio/mp4');
-    expect(content.durationMs, 60000);
-    expect(content.width, isNull);
-    expect(content.height, isNull);
-    expect(sentContentType, 'audio/mp4');
-  });
-
-  test('语音本地落盘后立即通知界面，不等待唤醒、建连和 WebRTC 投递', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-chat-voice-local-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/voice.m4a');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-
-    final callbackEntered = Completer<void>();
-    final releaseCallback = Completer<void>();
-    final deliveryEntered = Completer<void>();
-    final releaseDelivery = Completer<void>();
-    final events = <String>[];
-    var sendCompleted = false;
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async {
-        events.add('network-delivery');
-        if (!deliveryEntered.isCompleted) deliveryEntered.complete();
-        await releaseDelivery.future;
-        return ChatDeliveryResult(
-          envelopeId: envelope.envelopeId,
-          transportType: ChatTransportType.mailbox,
-          state: ChatMessageDeliveryState.sent,
-        );
-      },
-    );
-
-    final sending = flow
-        .sendMedia(
-          conversationId: 'conv-voice-local',
-          senderCidNumber: _ownerCidNumber,
-          recipientCidNumber: _bobCidNumber,
-          senderDeviceId: 'alice-phone',
-          recipientKeyPackage: _dummyKeyPackage(),
-          media: ChatMediaDraft(
-            kind: ChatMessageKind.audio,
-            fileName: 'voice.m4a',
-            contentType: 'audio/mp4',
-            sourcePath: source.path,
-            byteSize: 4,
-            durationMs: 8000,
-          ),
-          sendDeviceAttachment: ({
-            required recipientCidNumber,
-            required conversationId,
-            required attachmentId,
-            required fileName,
-            required contentType,
-            required sourcePath,
-            required byteSize,
-          }) async {},
-          saveLocalAttachment: ({
-            required conversationId,
-            required attachmentId,
-            required fileName,
-            required contentType,
-            required sourcePath,
-            required byteSize,
-          }) async {
-            events.add('local-attachment');
-          },
-          onLocalCommitted: () async {
-            events.add('local-commit');
-            callbackEntered.complete();
-            await releaseCallback.future;
-          },
-        )
-        .whenComplete(() => sendCompleted = true);
-
-    await callbackEntered.future.timeout(const Duration(seconds: 2));
-    expect(events, <String>['local-attachment', 'local-commit']);
-    expect(deliveryEntered.isCompleted, isFalse);
-    expect(sendCompleted, isFalse);
-    final localMessages = await store.readMessages(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      conversationId: 'conv-voice-local',
-    );
-    expect(localMessages, hasLength(1));
-    expect(localMessages.single.messageKind, ChatMessageKind.audio);
-
-    releaseCallback.complete();
-    await deliveryEntered.future.timeout(const Duration(seconds: 2));
-    expect(sendCompleted, isFalse);
-    releaseDelivery.complete();
-    await sending;
-    expect(sendCompleted, isTrue);
-  });
-
-  test('门①:sendMedia 超限文件抛 ChatMediaTooLargeException 且不发字节', () async {
-    var deviceSendCalls = 0;
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.sent,
-      ),
-    );
-
-    await expectLater(
-      flow.sendMedia(
-        conversationId: 'conv-oversize',
-        senderCidNumber: _ownerCidNumber,
-        recipientCidNumber: _bobCidNumber,
-        senderDeviceId: 'alice-phone',
-        recipientKeyPackage: _dummyKeyPackage(),
-        // byteSize 超出自由档 10MB 上限;门控看 byteSize 字段,发前即拦,不触碰源文件。
-        media: ChatMediaDraft(
-          kind: ChatMessageKind.image,
-          fileName: 'huge.jpg',
-          contentType: 'image/jpeg',
-          sourcePath: '/nonexistent',
-          byteSize: ChatMediaLimits.maxBytesForLevel('freedom') + 1,
-        ),
-        sendDeviceAttachment: ({
-          required recipientCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required sourcePath,
-          required byteSize,
-        }) async {
-          deviceSendCalls += 1;
-        },
-      ),
-      throwsA(isA<ChatMediaTooLargeException>()),
-    );
-    expect(deviceSendCalls, 0);
-  });
-
-  test('sendMedia 控制消息加密失败时绝不先发 WebRTC 字节(零泄漏顺序)', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-chat-leak-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/photo.jpg');
-    await source.writeAsBytes(const [9, 9, 9], flush: true);
-    var deviceSendCalls = 0;
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.sent,
-      ),
-    );
-
-    // 全新会话且不提供 KeyPackage:_FakeMlsCrypto.encrypt 抛错,模拟首次会话缺
-    // KeyPackage。字节必须在加密成功之后才发,否则会泄漏一条永远送不达的媒体。
-    await expectLater(
-      flow.sendMedia(
-        conversationId: 'conv-no-keypackage',
-        senderCidNumber: _ownerCidNumber,
-        recipientCidNumber: _bobCidNumber,
-        senderDeviceId: 'alice-phone',
-        media: ChatMediaDraft(
-          kind: ChatMessageKind.image,
-          fileName: 'photo.jpg',
-          contentType: 'image/jpeg',
-          sourcePath: source.path,
-          byteSize: 3,
-        ),
-        sendDeviceAttachment: ({
-          required recipientCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required sourcePath,
-          required byteSize,
-        }) async {
-          deviceSendCalls += 1;
-        },
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect(deviceSendCalls, 0);
-  });
-
-  test('sendMedia 在线送达:登记待投递后随即标记已送达(同一 attachmentId,净零)', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-online-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/photo.jpg');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-    final recorded = <String>[];
-    final delivered = <String>[];
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.sent,
-      ),
-    );
-
-    await flow.sendMedia(
-      conversationId: 'conv-online',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
-      senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
-      media: ChatMediaDraft(
-        kind: ChatMessageKind.image,
-        fileName: 'photo.jpg',
-        contentType: 'image/jpeg',
-        sourcePath: source.path,
-        byteSize: 4,
-      ),
-      // sendDeviceAttachment 成功(对方在线)。
-      sendDeviceAttachment: ({
-        required recipientCidNumber,
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {},
-      recordPendingMedia: (id) async => recorded.add(id),
-      onDeviceDelivered: (id) async => delivered.add(id),
-    );
-
-    // 先登记待投递、字节送达后随即标记已送达:同一 attachmentId,净零残留。
-    expect(recorded, hasLength(1));
-    expect(delivered, hasLength(1));
-    expect(recorded.single, delivered.single);
-  });
-
-  test('sendMedia 对离线对端:控制消息仍成立、登记待投递、不抛错', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-offline-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/photo.jpg');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-    final recorded = <String>[];
-    final delivered = <String>[];
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.queued,
-      ),
-    );
-
-    // sendDeviceAttachment 抛错模拟对方离线(WebRTC 连不上);sendMedia 必须吞掉
-    // 该异常:控制消息已成立,字节留待上线补发。
-    final results = await flow.sendMedia(
-      conversationId: 'conv-offline',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
-      senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
-      media: ChatMediaDraft(
-        kind: ChatMessageKind.image,
-        fileName: 'photo.jpg',
-        contentType: 'image/jpeg',
-        sourcePath: source.path,
-        byteSize: 4,
-      ),
-      sendDeviceAttachment: ({
-        required recipientCidNumber,
-        required conversationId,
-        required attachmentId,
-        required fileName,
-        required contentType,
-        required sourcePath,
-        required byteSize,
-      }) async {
-        throw const SocketException('offline');
-      },
-      recordPendingMedia: (id) async => recorded.add(id),
-      onDeviceDelivered: (id) async => delivered.add(id),
-    );
-
-    // 控制消息仍落库成立,sendMedia 未抛错。
-    expect(results, isNotEmpty);
-    final message = (await ChatStore().readMessages(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      conversationId: 'conv-offline',
-    ))
-        .single;
-    expect(message.messageKind, ChatMessageKind.image);
-    // 登记了待投递,但未标记已送达(离线,字节没发出去)。
-    expect(recorded, hasLength(1));
-    expect(delivered, isEmpty);
-  });
-
-  test('媒体正式控制消息与待补发字节事实原子落盘', () async {
-    final root = await Directory.systemTemp.createTemp('gmb-media-atomic-');
-    addTearDown(() => root.delete(recursive: true));
-    final source = File('${root.path}/photo.jpg');
-    await source.writeAsBytes(const [1, 2, 3, 4], flush: true);
-    final store = ChatStore();
-    final bindingToken = await _activateBinding(store, _aliceAccountId);
-    final flow = ChatFlow(
-      ownerCidNumber: _ownerCidNumber,
-      currentAccountId: _aliceAccountId,
-      crypto: _FakeMlsCrypto(),
-      store: store,
-      bindingToken: bindingToken,
-      deliverer: (envelope, _, __) async => ChatDeliveryResult(
-        envelopeId: envelope.envelopeId,
-        transportType: ChatTransportType.mailbox,
-        state: ChatMessageDeliveryState.queued,
-      ),
-    );
-
-    await expectLater(
-      flow.sendMedia(
-        conversationId: 'conv-media-atomic',
-        senderCidNumber: _ownerCidNumber,
-        recipientCidNumber: _bobCidNumber,
-        senderDeviceId: 'alice-phone',
-        recipientKeyPackage: _dummyKeyPackage(),
-        media: ChatMediaDraft(
-          kind: ChatMessageKind.image,
-          fileName: 'photo.jpg',
-          contentType: 'image/jpeg',
-          sourcePath: source.path,
-          byteSize: 4,
-        ),
-        sendDeviceAttachment: ({
-          required recipientCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required sourcePath,
-          required byteSize,
-        }) async {},
-        // 模拟正式消息事务提交后的后置通知中断；可靠字节事实不能依赖它。
-        recordPendingMedia: (_) async => throw StateError('模拟后置媒体通知中断'),
-      ),
-      throwsStateError,
-    );
-
-    final pending = await store.readPendingOutgoingMedia(
-      bindingToken: bindingToken,
-      ownerCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
-    );
-    expect(pending, hasLength(1));
-    expect(pending.single.conversationId, 'conv-media-atomic');
-    expect(pending.single.fileName, 'photo.jpg');
-    expect(await store.outboundQueueCount(_ownerCidNumber), 2);
-  });
+test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
+  final content = ChatContent.media(
+    kind: ChatMessageKind.file,
+    attachmentId: 'attachment-cloud-1234',
+    fileName: 'note.txt',
+    mime: 'text/plain',
+    byteSize: 4,
+    cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    cipherByteSize: 24,
+    cipherSha256: '0000000000000000000000000000000000000000000000000000000000000000',
+  );
+  final decoded = ChatPayloadCodec.decode(ChatPayloadCodec.encode(content));
+  expect(decoded.attachmentId, 'attachment-cloud-1234');
+  expect(decoded.cipherByteSize, 24);
+});
 
   test('downloadAttachment 拒绝非媒体控制消息', () async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-neg-');
@@ -1045,6 +521,9 @@ void main() {
         fileName: 'note.txt',
         mime: 'text/plain',
         byteSize: 10,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 30,
+        cipherSha256: '1111111111111111111111111111111111111111111111111111111111111111',
       ),
     );
 
@@ -1111,6 +590,9 @@ void main() {
         fileName: 'note.txt',
         mime: 'text/plain',
         byteSize: 10,
+        cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+        cipherByteSize: 30,
+        cipherSha256: '2222222222222222222222222222222222222222222222222222222222222222',
       ),
     );
 
@@ -1150,6 +632,7 @@ void main() {
   });
 
   test('门③:接收落盘二次门控——超限删临时不入缓存,达标则移入', () async {
+    ChatMediaLimits.applyMembershipLevel('freedom');
     final root = await Directory.systemTemp.createTemp('gmb-chat-gate3-');
     addTearDown(() => root.delete(recursive: true));
 
@@ -1176,8 +659,8 @@ void main() {
     final accepted = await ChatFlow.acceptReceivedMediaToCache(
       conversationId: 'conv-g3',
       attachmentId: 'att-ok',
-      fileName: 'ok.txt',
-      contentType: 'text/plain',
+      fileName: 'ok.bin',
+      contentType: 'application/octet-stream',
       tempFilePath: ok.path,
       byteSize: 2,
       cacheDirectory: root,

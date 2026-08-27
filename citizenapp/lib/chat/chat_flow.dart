@@ -27,38 +27,13 @@ typedef ChatEnvelopeDeliveryScheduler = void Function(
   Future<void> Function() delivery,
 );
 
-/// 把本机源文件字节经 WebRTC 流式发给对端设备。传路径而非整块字节:大文件
-/// (最大 5GB)绝不整块进内存,由发送端 openRead 分片 + 背压推送。
-///
-/// [recipientCidNumber] 为对端身份主键 CID 号（WebRTC 信令按 CID 路由）。
-typedef ChatAttachmentDeviceSender = Future<void> Function({
-  required String recipientCidNumber,
-  required String conversationId,
-  required String attachmentId,
-  required String fileName,
-  required String contentType,
-  required String sourcePath,
-  required int byteSize,
-});
-
-/// 发送方把自己发出的媒体自存一份到本机缓存,以便在会话里看到并支持上线补发。
-typedef ChatLocalAttachmentSaver = Future<void> Function({
-  required String conversationId,
-  required String attachmentId,
-  required String fileName,
-  required String contentType,
-  required String sourcePath,
-  required int byteSize,
-});
-
-/// 登记一条待设备投递的媒体(字节未送达对方设备,留待上线补发)。
-typedef ChatMediaPendingRecorder = Future<void> Function(String attachmentId);
-
-/// 字节已送达对方设备(收到 WebRTC ack)后清除待投递登记。
-typedef ChatMediaDeliveredMarker = Future<void> Function(String attachmentId);
-
 /// 媒体控制消息和发送方本地附件均已安全落盘，可以立即刷新本机聊天气泡。
 typedef ChatMediaLocalCommitNotifier = Future<void> Function();
+
+typedef ChatIncomingContentHandler = Future<void> Function(
+  ChatEnvelope envelope,
+  ChatContent content,
+);
 
 /// 待发送的本机明文媒体(图片 / 视频 / 文件 / 语音)。
 ///
@@ -164,7 +139,8 @@ class ChatFlow {
     required String ownerCidNumber,
     required String currentAccountId,
     this.deliveryScheduler,
-    this.defaultTtlMillis = 30 * 24 * 60 * 60 * 1000,
+    this.beforeIncomingStore,
+    this.defaultTtlMillis = chatMailboxTtlMillis,
   })  : _crypto = crypto,
         _store = store,
         _deliverer = deliverer,
@@ -179,6 +155,7 @@ class ChatFlow {
   final String _ownerCidNumber;
   final String _currentAccountId;
   final ChatEnvelopeDeliveryScheduler? deliveryScheduler;
+  final ChatIncomingContentHandler? beforeIncomingStore;
   final int defaultTtlMillis;
 
   Future<List<ChatDeliveryResult>> sendText({
@@ -247,61 +224,34 @@ class ChatFlow {
     );
   }
 
-  /// 发送图片 / 视频 / 文件 / 语音：控制消息(含尺寸、时长、blurhash)走 MLS 信封,
-  /// 媒体字节走 WebRTC 端到端直传。
-  ///
-  /// 顺序:加密 → **控制消息先离线安全入队/投递**(和文字一样,不依赖 WebRTC 成功)
-  /// → 自存缓存 + 登记待设备投递 → 尝试 WebRTC 字节。字节发送失败(对方离线)**不
-  /// 抛错**,留 pending 由对方上线时补发。加密仍在发字节之前,保持零泄漏顺序。
-  Future<List<ChatDeliveryResult>> sendMedia({
+  /// 附件密文已在 R2 ready 后，只把含传输密钥/摘要的控制消息放入 OpenMLS 信封。
+  Future<List<ChatDeliveryResult>> sendMediaControl({
     required String conversationId,
     required String senderCidNumber,
     required String recipientCidNumber,
     required String senderDeviceId,
     MlsKeyPackage? recipientKeyPackage,
-    required ChatMediaDraft media,
-    required ChatAttachmentDeviceSender sendDeviceAttachment,
-    ChatLocalAttachmentSaver? saveLocalAttachment,
-    ChatMediaPendingRecorder? recordPendingMedia,
-    ChatMediaDeliveredMarker? onDeviceDelivered,
-    ChatMediaLocalCommitNotifier? onLocalCommitted,
-    String? attachmentId,
+    required ChatContent media,
     String? pendingLocalMessageId,
     int? createdAtMillis,
   }) async {
-    // 门①:发送端大小硬门控。即使 UI 被绕过也在此拦下,此刻字节尚未进入任何
-    // 通道。与接收端字节层门控(门②)配合,构成收发双端强制。
-    if (ChatMediaLimits.exceedsForKind(media.kind, media.byteSize)) {
+    if (!media.isMedia || media.byteSize == null ||
+        ChatMediaLimits.exceedsForKind(media.kind, media.byteSize!)) {
       throw ChatMediaTooLargeException(
-        byteSize: media.byteSize,
+        byteSize: media.byteSize ?? 0,
         limitBytes: ChatMediaLimits.forKind(media.kind),
         kind: media.kind,
       );
     }
     final now = createdAtMillis ?? DateTime.now().millisecondsSinceEpoch;
-    final stableAttachmentId = attachmentId ?? _newAttachmentId(now);
-
-    final payload = ChatPayloadCodec.encode(
-      ChatContent.media(
-        kind: media.kind,
-        attachmentId: stableAttachmentId,
-        fileName: media.fileName,
-        mime: media.contentType,
-        byteSize: media.byteSize,
-        width: media.width,
-        height: media.height,
-        durationMs: media.durationMs,
-        blurhash: media.blurhash,
-      ),
-    );
+    final payload = ChatPayloadCodec.encode(media);
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
       recipientCidNumber: recipientCidNumber,
       recipientKeyPackage: recipientKeyPackage,
       plaintext: utf8.encode(payload),
     );
-    // 控制消息先离线安全落库/投递:即便对方离线、WebRTC 发不出,消息仍成立。
-    final results = await _deliverOutbound(
+    return _deliverOutbound(
       outbound: outbound,
       conversationId: conversationId,
       senderCidNumber: senderCidNumber,
@@ -311,46 +261,7 @@ class ChatFlow {
       messageKind: media.kind,
       payload: payload,
       pendingLocalMessageId: pendingLocalMessageId,
-      pendingMedia: ChatPendingMedia(
-        attachmentId: stableAttachmentId,
-        recipientCidNumber: recipientCidNumber,
-        conversationId: conversationId,
-        fileName: media.fileName,
-        contentType: media.contentType,
-        byteSize: media.byteSize,
-      ),
-      onApplicationStored: () async {
-        // 本机气泡只等待消息与本地附件安全落盘；云端投递和 WebRTC ack 不再
-        // 阻塞本机显示。
-        await saveLocalAttachment?.call(
-          conversationId: conversationId,
-          attachmentId: stableAttachmentId,
-          fileName: media.fileName,
-          contentType: media.contentType,
-          sourcePath: media.sourcePath,
-          byteSize: media.byteSize,
-        );
-        await onLocalCommitted?.call();
-      },
     );
-    await recordPendingMedia?.call(stableAttachmentId);
-    // 尝试 WebRTC 字节;对方离线/直连失败**不抛错**,留 pending 待上线补发。
-    // 所有媒体字节均由 WebRTC DTLS 端到端传输；任何大小都不得进入 Worker/R2。
-    try {
-      await sendDeviceAttachment(
-        recipientCidNumber: recipientCidNumber,
-        conversationId: conversationId,
-        attachmentId: stableAttachmentId,
-        fileName: media.fileName,
-        contentType: media.contentType,
-        sourcePath: media.sourcePath,
-        byteSize: media.byteSize,
-      );
-      await onDeviceDelivered?.call(stableAttachmentId);
-    } on Exception {
-      // 留 pending 行,对方上线(peer_ready)时由 retryOutgoing 补发。
-    }
-    return results;
   }
 
   /// 把加密结果逐条落库并投递。应用消息进消息表 + 出站队列，握手消息只进出站
@@ -366,7 +277,6 @@ class ChatFlow {
     required String payload,
     ChatMediaLocalCommitNotifier? onApplicationStored,
     String? pendingLocalMessageId,
-    ChatPendingMedia? pendingMedia,
   }) async {
     final queued = <({ChatEnvelope envelope, List<int> envelopeBytes})>[];
     var applicationStored = false;
@@ -411,7 +321,6 @@ class ChatFlow {
           deliveryState: ChatMessageDeliveryState.queued,
           plaintext: payload,
           pendingLocalMessageId: pendingLocalMessageId,
-          pendingMedia: pendingMedia,
         );
         applicationStored = true;
       } else {
@@ -513,18 +422,20 @@ class ChatFlow {
       }
 
       final plaintext = utf8.decode(inbound.plaintext ?? const []);
+      final content = ChatPayloadCodec.decode(plaintext);
+      await beforeIncomingStore?.call(envelope, content);
       await _store.saveIncomingEnvelope(
         bindingToken: _bindingToken,
         ownerCidNumber: _ownerCidNumber,
         currentAccountId: _currentAccountId,
         envelope: envelope,
         envelopeBytes: envelopeBytes,
-        messageKind: ChatPayloadCodec.decode(plaintext).kind,
+        messageKind: content.kind,
         plaintext: plaintext,
       );
       AppLog.d(
         '[ChatTrace] envelope.received id=${envelope.envelopeId} '
-        'kind=${ChatPayloadCodec.decode(plaintext).kind.name}',
+        'kind=${content.kind.name}',
       );
       return ChatIncomingProcessResult(
         envelopeId: envelope.envelopeId,

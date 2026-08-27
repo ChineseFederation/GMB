@@ -15,9 +15,9 @@ typedef ImageCompressStep = Future<String?> Function(String path, int limit);
 
 /// 媒体大小门控(采集侧,门①的上游)。
 ///
-/// 定稿策略:**图片仅超限才压缩**——正常图原样直通(尊重 100MB 上限);
-/// 只有 >100MB 才压一次,压后仍超则拒。视频/文件**不转码**,超限直接拒。
-/// 全程按文件大小(stat)判定,不整解码,100MB 图也不炸内存。
+/// 定稿策略:**图片仅超过当前会员上限才压缩**——正常图原样直通；超限只压一次，
+/// 压后仍超则拒。视频/文件**不转码**，超限直接拒。全程按文件大小(stat)判定，
+/// 不把文件整体解码进内存。
 class MediaCompressor {
   MediaCompressor({
     FileSizeReader? sizeOf,

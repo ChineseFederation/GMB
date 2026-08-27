@@ -16,6 +16,13 @@ import {
   registerChatPushEndpoint,
   submitChatEnvelope,
 } from "./chat/service";
+import {
+  abortChatAttachment,
+  acknowledgeChatAttachment,
+  completeChatAttachment,
+  downloadChatAttachment,
+  prepareChatAttachment,
+} from "./chat/attachments";
 import { feedRoute } from "./feeds/service";
 import { followRoute, setFollowNotifyRoute, unfollowRoute } from "./feeds/follows";
 import { getNotifyUnreadRoute, markNotifyReadRoute } from "./feeds/notify";
@@ -235,6 +242,21 @@ export async function routeRequest(
   }
   if (request.method === "POST" && path === "/chat/messages/ack") {
     return acknowledgeChatMailbox(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/attachments/prepare") {
+    return prepareChatAttachment(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/attachments/complete") {
+    return completeChatAttachment(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/attachments/download") {
+    return downloadChatAttachment(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/attachments/ack") {
+    return acknowledgeChatAttachment(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/attachments/abort") {
+    return abortChatAttachment(request, env);
   }
   throw new HttpError(404, "route_not_found", "广场接口不存在");
 }

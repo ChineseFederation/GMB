@@ -28,7 +28,6 @@ import 'chat_payload.dart';
 import 'chat_push_service.dart';
 import 'group/group_flow.dart';
 import 'group/group_model.dart';
-import 'media/media_resend.dart';
 import 'proto/chat_envelope.pb.dart';
 import 'storage/chat_store.dart';
 import 'transport/chat_cloud_transport.dart';
@@ -3795,7 +3794,7 @@ class ChatRuntime {
       );
     }
     // barrier 已确认此前 flow/build/file action 全部离开；此时不持 CID lease 关闭
-    // WebRTC，让其 peer tail 中可能晚到的附件回调能自行取得旧 token lease 并收口，
+    // WebRTC KeyPackage 控制连接可自行取得旧 token lease 并收口，
     // 避免“持 admin lease 等待一个正在等同一 lease 的 tail”自锁。
     for (final context in contexts) {
       await _captureCleanupFailure(
@@ -3952,58 +3951,82 @@ class ChatRuntime {
       conversationId,
       DateTime.now().millisecondsSinceEpoch,
     );
-    final payload = ChatPayloadCodec.encode(ChatContent.media(
-      kind: media.kind,
-      attachmentId: attachmentId,
-      fileName: media.fileName,
-      mime: media.contentType,
-      byteSize: media.byteSize,
-      width: media.width,
-      height: media.height,
-      durationMs: media.durationMs,
-      blurhash: media.blurhash,
-    ));
-    await _savePendingDirectPayload(
-      peerCidNumber: peerCidNumber,
-      conversationId: conversationId,
-      messageKind: media.kind,
-      payload: payload,
-      media: media,
-      onLocalCommitted: onLocalCommitted,
-    );
-    return const <ChatDeliveryResult>[];
+    final account = await _readAccount();
+    final context = await _readyContext(account);
+    try {
+      final content = await _uploadEncryptedMedia(
+        context: context,
+        attachmentId: attachmentId,
+        recipientCidNumbers: <String>[peerCidNumber],
+        media: media,
+      );
+      await _savePendingDirectPayload(
+        peerCidNumber: peerCidNumber,
+        conversationId: conversationId,
+        messageKind: media.kind,
+        payload: ChatPayloadCodec.encode(content),
+        media: media,
+        onLocalCommitted: onLocalCommitted,
+      );
+      return const <ChatDeliveryResult>[];
+    } catch (_) {
+      await context.transport
+          .abortAttachment(attachmentId)
+          .catchError((Object _) {});
+      rethrow;
+    }
   }
 
-  /// 包住 WebRTC 字节发送,把 attachmentId 计入在途集合(去重防双传),结束即移除。
-  ChatAttachmentDeviceSender _guardedDeviceSender(_ChatAccountContext context) {
-    return ({
-      required recipientCidNumber,
-      required conversationId,
-      required attachmentId,
-      required fileName,
-      required contentType,
-      required sourcePath,
-      required byteSize,
-    }) async {
-      final inFlightKey = MediaResend.inFlightKey(
-        attachmentId,
-        recipientCidNumber,
+  /// Encrypts one attachment once and uploads one ciphertext object for every
+  /// direct or group recipient. Worker and R2 never receive the plaintext key.
+  Future<ChatContent> _uploadEncryptedMedia({
+    required _ChatAccountContext context,
+    required String attachmentId,
+    required List<String> recipientCidNumbers,
+    required ChatMediaDraft media,
+  }) async {
+    if (recipientCidNumbers.isEmpty) {
+      throw StateError('Chat 附件没有有效收件人');
+    }
+    final random = Random.secure();
+    final transferKey = List<int>.generate(32, (_) => random.nextInt(256));
+    final tempRoot = Directory(
+      '${(await _attachmentDirectoryForToken(context.bindingToken)).path}/.tmp',
+    );
+    final cipherTarget = File(
+      '${tempRoot.path}/${_safePath(attachmentId)}.upload',
+    );
+    try {
+      final cipher = await AttachmentVault.sealForTransport(
+        plainSource: File(media.sourcePath),
+        cipherTarget: cipherTarget,
+        key: transferKey,
       );
-      _mediaBytesInFlight.add(inFlightKey);
-      try {
-        await context.webrtc.sendAttachment(
-          recipientCidNumber: recipientCidNumber,
-          conversationId: conversationId,
-          attachmentId: attachmentId,
-          fileName: fileName,
-          contentType: contentType,
-          sourcePath: sourcePath,
-          byteSize: byteSize,
-        );
-      } finally {
-        _mediaBytesInFlight.remove(inFlightKey);
-      }
-    };
+      await context.transport.uploadEncryptedAttachment(
+        attachmentId: attachmentId,
+        recipientCidNumbers: recipientCidNumbers,
+        cipherFile: cipher.file,
+        cipherByteSize: cipher.byteSize,
+        cipherSha256: cipher.sha256,
+      );
+      return ChatContent.media(
+        kind: media.kind,
+        attachmentId: attachmentId,
+        fileName: media.fileName,
+        mime: media.contentType,
+        byteSize: media.byteSize,
+        width: media.width,
+        height: media.height,
+        durationMs: media.durationMs,
+        blurhash: media.blurhash,
+        cipherKey: base64UrlEncode(transferKey).replaceAll('=', ''),
+        cipherByteSize: cipher.byteSize,
+        cipherSha256: cipher.sha256,
+      );
+    } finally {
+      transferKey.fillRange(0, transferKey.length, 0);
+      if (await cipherTarget.exists()) await cipherTarget.delete();
+    }
   }
 
   /// 发送内置贴纸:只走控制信封,不经 WebRTC。首次会话缺 KeyPackage 时同样
@@ -4128,40 +4151,58 @@ class ChatRuntime {
     });
   }
 
-  /// 群发媒体：所有字节都对每个成员 WebRTC 直传，离线按成员保留本地待发项。
+  /// 群附件只加密和上传一次；每个群成员拥有独立 ACK，最后一个 ACK 删除对象。
   Future<List<ChatDeliveryResult>> sendGroupMedia({
     required String groupId,
     required ChatMediaDraft media,
     ChatMediaLocalCommitNotifier? onLocalCommitted,
   }) {
+    if (ChatMediaLimits.exceedsForKind(media.kind, media.byteSize)) {
+      throw ChatMediaTooLargeException(
+        byteSize: media.byteSize,
+        limitBytes: ChatMediaLimits.forKind(media.kind),
+        kind: media.kind,
+      );
+    }
     return _runWithReadyContext((context) async {
-      return _groupFlow(context).sendGroupMedia(
+      final flow = _groupFlow(context);
+      final recipients = await flow.recipientCidNumbers(
         groupId: groupId,
         senderCidNumber: context.account.cidNumber,
-        senderDeviceId: context.deviceId,
-        media: media,
-        sendMemberAttachment: _guardedDeviceSender(context),
-        saveLocalAttachment: _localAttachmentSaver(context.bindingToken),
-        onLocalCommitted: onLocalCommitted,
-        recordPendingMember: (attachmentId, memberCidNumber) =>
-            _store.recordOutgoingMedia(
-          bindingToken: context.bindingToken,
-          ownerCidNumber: context.account.cidNumber,
+      );
+      final attachmentId = _newPendingAttachmentId(
+        groupId,
+        DateTime.now().millisecondsSinceEpoch,
+      );
+      try {
+        final content = await _uploadEncryptedMedia(
+          context: context,
           attachmentId: attachmentId,
-          recipientCidNumber: memberCidNumber,
+          recipientCidNumbers: recipients,
+          media: media,
+        );
+        await _copySentAttachmentToCache(
+          bindingToken: context.bindingToken,
           conversationId: groupId,
+          attachmentId: attachmentId,
           fileName: media.fileName,
           contentType: media.contentType,
+          sourcePath: media.sourcePath,
           byteSize: media.byteSize,
-        ),
-        markMemberDelivered: (attachmentId, memberCidNumber) =>
-            _store.deleteOutgoingMedia(
-          context.account.cidNumber,
-          attachmentId,
-          memberCidNumber,
-          bindingToken: context.bindingToken,
-        ),
-      );
+        );
+        return flow.sendGroupMediaControl(
+          groupId: groupId,
+          senderCidNumber: context.account.cidNumber,
+          senderDeviceId: context.deviceId,
+          content: content,
+          onApplicationStored: onLocalCommitted,
+        );
+      } catch (_) {
+        await context.transport
+            .abortAttachment(attachmentId)
+            .catchError((Object _) {});
+        rethrow;
+      }
     });
   }
 
@@ -4207,6 +4248,8 @@ class ChatRuntime {
       localDeviceId: context.deviceId,
       deliveryScheduler: (conversationId, delivery) =>
           _scheduleOutboundDelivery(context, conversationId, delivery),
+      beforeIncomingStore: (envelope, content) =>
+          _cacheIncomingCloudAttachment(context, envelope, content),
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
           transport: context.transport,
@@ -4407,14 +4450,6 @@ class ChatRuntime {
         recipientCidNumber: recipientCidNumber,
         conversationId: conversationId,
       );
-      // 明确对端上线时，队列动作与媒体补发必须共用同一 token/lease；否则
-      // clear/换绑可插在“读旧队列”和网络副作用之间，让旧绑定消息迟到发送。
-      if (recipientCidNumber != null) {
-        await _resendPendingMedia(
-          context,
-          recipientCidNumber: recipientCidNumber,
-        );
-      }
       return sent;
     });
   }
@@ -4511,57 +4546,13 @@ class ChatRuntime {
     required ChatContent content,
     MlsKeyPackage? keyPackage,
   }) async {
-    final attachmentId = content.attachmentId ?? '';
-    final fileName = content.fileName ?? '';
-    final contentType = content.mime ?? 'application/octet-stream';
-    final byteSize = content.byteSize ?? 0;
-    final cacheDirectory = await _attachmentDirectoryForToken(
-      context.bindingToken,
-    );
-    final attachmentKey = await _attachmentKeyForBinding(context.bindingToken);
-    late final ChatDownloadedAttachment? cached;
-    try {
-      cached = await ChatFlow.readCachedAttachment(
-        conversationId: pending.conversationId,
-        attachmentId: attachmentId,
-        fileName: fileName,
-        contentType: contentType,
-        clearByteSize: byteSize,
-        cacheDirectory: cacheDirectory,
-        attachmentKey: attachmentKey,
-        plainDirectory: await _plainDirectoryForBinding(context.bindingToken),
-      );
-    } finally {
-      attachmentKey.fillRange(0, attachmentKey.length, 0);
-    }
-    if (cached == null) throw StateError('Chat 本地待发送媒体密文缓存缺失');
-
-    Future<void> markDelivered(String value) => _store.deleteOutgoingMedia(
-          context.account.cidNumber,
-          value,
-          pending.recipientCidNumber,
-          bindingToken: context.bindingToken,
-        );
-    await flow.sendMedia(
+    await flow.sendMediaControl(
       conversationId: pending.conversationId,
       senderCidNumber: context.account.cidNumber,
       recipientCidNumber: pending.recipientCidNumber,
       senderDeviceId: context.deviceId,
       recipientKeyPackage: keyPackage,
-      media: ChatMediaDraft(
-        kind: content.kind,
-        fileName: fileName,
-        contentType: contentType,
-        sourcePath: cached.filePath,
-        byteSize: byteSize,
-        width: content.width,
-        height: content.height,
-        durationMs: content.durationMs,
-        blurhash: content.blurhash,
-      ),
-      sendDeviceAttachment: _guardedDeviceSender(context),
-      onDeviceDelivered: markDelivered,
-      attachmentId: attachmentId,
+      media: content,
       pendingLocalMessageId: pending.localMessageId,
       createdAtMillis: pending.createdAtMillis,
     );
@@ -4597,94 +4588,7 @@ class ChatRuntime {
     return sent;
   }
 
-  /// 上线补发:遍历待设备投递的媒体,从本机缓存副本重发 WebRTC 字节。核心去重/清孤
-  /// 儿/删行逻辑在可测的 [MediaResend.run];缓存路径按**当前 Documents 目录重算**
-  /// (不用持久化的绝对路径,避免容器 UUID 变更后误判丢失)。
-  Future<void> _resendPendingMedia(
-    _ChatAccountContext context, {
-    required String recipientCidNumber,
-  }) async {
-    final pending = await _store.readPendingOutgoingMedia(
-      bindingToken: context.bindingToken,
-      ownerCidNumber: context.account.cidNumber,
-      recipientCidNumber: recipientCidNumber,
-    );
-    if (pending.isEmpty) return;
-    final cacheDir = await _attachmentDirectoryForToken(context.bindingToken);
-    final plainDirectory =
-        await _plainDirectoryForBinding(context.bindingToken);
-    final attachmentKey = await _attachmentKeyForBinding(context.bindingToken);
-    try {
-      await MediaResend.run(
-        pending: pending,
-        inFlight: _mediaBytesInFlight,
-        resolveCachePath: (media) => ChatFlow.attachmentCachePath(
-          cacheDirectory: cacheDir,
-          conversationId: media.conversationId,
-          attachmentId: media.attachmentId,
-          fileName: media.fileName,
-        ),
-        cacheFileExists: AttachmentVault.hasCipher,
-        sendBytes: (media, _) async {
-          final cached = await ChatFlow.readCachedAttachment(
-            conversationId: media.conversationId,
-            attachmentId: media.attachmentId,
-            fileName: media.fileName,
-            contentType: media.contentType,
-            clearByteSize: media.byteSize,
-            cacheDirectory: cacheDir,
-            attachmentKey: attachmentKey,
-            plainDirectory: plainDirectory,
-          );
-          if (cached == null) throw StateError('Chat 待补发媒体密文缓存损坏');
-          await context.webrtc.sendAttachment(
-            recipientCidNumber: media.recipientCidNumber,
-            conversationId: media.conversationId,
-            attachmentId: media.attachmentId,
-            fileName: media.fileName,
-            contentType: media.contentType,
-            sourcePath: cached.filePath,
-            byteSize: media.byteSize,
-          );
-        },
-        deletePending: (media) => _store.deleteOutgoingMedia(
-          context.account.cidNumber,
-          media.attachmentId,
-          media.recipientCidNumber,
-          bindingToken: context.bindingToken,
-        ),
-      );
-    } finally {
-      attachmentKey.fillRange(0, attachmentKey.length, 0);
-    }
-  }
-
-  /// 门③:接收端落盘二次门控。委托给可单测的 [ChatFlow.acceptReceivedMediaToCache]
-  /// (超限删临时不入缓存;否则移入缓存)。
-  Future<void> _saveReceivedAttachmentToCache({
-    required ChatBindingFenceToken bindingToken,
-    required String senderCidNumber,
-    required String conversationId,
-    required String attachmentId,
-    required String fileName,
-    required String contentType,
-    required String filePath,
-    required int byteSize,
-  }) {
-    return _runBindingFileMutation(
-      bindingToken,
-      () => _saveReceivedAttachmentToCacheMutation(
-        bindingToken: bindingToken,
-        conversationId: conversationId,
-        attachmentId: attachmentId,
-        fileName: fileName,
-        contentType: contentType,
-        filePath: filePath,
-        byteSize: byteSize,
-      ),
-    );
-  }
-
+  /// 接收端下载、验哈希和解密成功后，把明文重新写入账户绑定的本机加密缓存。
   Future<void> _saveReceivedAttachmentToCacheMutation({
     required ChatBindingFenceToken bindingToken,
     required String conversationId,
@@ -4708,30 +4612,7 @@ class ChatRuntime {
     );
   }
 
-  /// 发送端把自己发出的媒体**复制**一份进缓存(保留源),以便在会话里看到并支持
-  /// 上线补发。
-  ChatLocalAttachmentSaver _localAttachmentSaver(
-    ChatBindingFenceToken bindingToken,
-  ) {
-    return ({
-      required conversationId,
-      required attachmentId,
-      required fileName,
-      required contentType,
-      required sourcePath,
-      required byteSize,
-    }) =>
-        _copySentAttachmentToCache(
-          bindingToken: bindingToken,
-          conversationId: conversationId,
-          attachmentId: attachmentId,
-          fileName: fileName,
-          contentType: contentType,
-          sourcePath: sourcePath,
-          byteSize: byteSize,
-        );
-  }
-
+  /// 发送端复制本机源文件进账户缓存；云端失败不会改写或移动用户源文件。
   Future<void> _copySentAttachmentToCache({
     required ChatBindingFenceToken bindingToken,
     required String conversationId,
@@ -5348,14 +5229,6 @@ class ChatRuntime {
         prefs: prefs,
       );
       transport = service.transport;
-      final tempDirectory =
-          '${(await _attachmentDirectoryForToken(bindingToken)).path}/.tmp';
-      // 回收被永久放弃的续传残档(对端删会话/待投递后不会再续写的 .part)。
-      try {
-        await ChatAttachmentReceiveBuffer.sweepStalePartials(tempDirectory);
-      } catch (_) {
-        // 残档回收失败不阻断当前上下文，但仍处于同一 CID lease，绝不与换绑并发。
-      }
       final fencedCrypto = _ChatBindingFencedMlsCrypto(
         runtime: this,
         bindingToken: bindingToken,
@@ -5372,28 +5245,8 @@ class ChatRuntime {
           recipientCidNumber: recipientCidNumber,
           signal: signal,
         ),
-        tempDirectory: tempDirectory,
         runBindingMutation: <T>(Future<T> Function() operation) =>
             _runBindingFileMutation(bindingToken, operation),
-        onAttachment: ({
-          required senderCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required filePath,
-          required byteSize,
-        }) =>
-            _saveReceivedAttachmentToCache(
-          bindingToken: bindingToken,
-          senderCidNumber: senderCidNumber,
-          conversationId: conversationId,
-          attachmentId: attachmentId,
-          fileName: fileName,
-          contentType: contentType,
-          filePath: filePath,
-          byteSize: byteSize,
-        ),
         createKeyPackage: () => _createDirectKeyPackage(context),
       );
       keepStateStore = true;
@@ -5665,7 +5518,76 @@ class ChatRuntime {
           recipientCidNumber: recipientCidNumber,
         );
       },
+      beforeIncomingStore: (envelope, content) =>
+          _cacheIncomingCloudAttachment(context, envelope, content),
     );
+  }
+
+  Future<void> _cacheIncomingCloudAttachment(
+    _ChatAccountContext context,
+    ChatEnvelope envelope,
+    ChatContent content,
+  ) async {
+    if (!content.isMedia) return;
+    final attachmentId = content.attachmentId ?? '';
+    final cacheDirectory =
+        await _attachmentDirectoryForToken(context.bindingToken);
+    final cachePath = ChatFlow.attachmentCachePath(
+      cacheDirectory: cacheDirectory,
+      conversationId: envelope.conversationId,
+      attachmentId: attachmentId,
+      fileName: content.fileName ?? 'attachment.bin',
+    );
+    if (await AttachmentVault.hasCipher(cachePath)) {
+      await context.transport.acknowledgeAttachment(attachmentId);
+      return;
+    }
+    final encodedKey = content.cipherKey ?? '';
+    final cipherKey = base64Url.decode(
+      encodedKey.padRight((encodedKey.length + 3) ~/ 4 * 4, '='),
+    );
+    if (cipherKey.length != 32) {
+      throw const FormatException('Chat 附件传输密钥不合法');
+    }
+    final tempDirectory = Directory('${cacheDirectory.path}/.tmp');
+    final cipherFile =
+        File('${tempDirectory.path}/${_safePath(attachmentId)}.download');
+    final plainFile =
+        File('${tempDirectory.path}/${_safePath(attachmentId)}.plain');
+    try {
+      await context.transport.downloadEncryptedAttachment(
+        attachmentId: attachmentId,
+        target: cipherFile,
+        expectedByteSize: content.cipherByteSize ?? 0,
+        expectedSha256: content.cipherSha256 ?? '',
+      );
+      final digest = await crypto_hash.sha256.bind(cipherFile.openRead()).first;
+      if (digest.toString() != content.cipherSha256) {
+        throw const FormatException('Chat 附件密文摘要不一致');
+      }
+      await AttachmentVault.openTransportCipher(
+        cipherSource: cipherFile,
+        plainTarget: plainFile,
+        key: cipherKey,
+      );
+      if (await plainFile.length() != content.byteSize) {
+        throw const FormatException('Chat 附件明文大小不一致');
+      }
+      await _saveReceivedAttachmentToCacheMutation(
+        bindingToken: context.bindingToken,
+        conversationId: envelope.conversationId,
+        attachmentId: attachmentId,
+        fileName: content.fileName ?? 'attachment.bin',
+        contentType: content.mime ?? 'application/octet-stream',
+        filePath: plainFile.path,
+        byteSize: content.byteSize ?? 0,
+      );
+      await context.transport.acknowledgeAttachment(attachmentId);
+    } finally {
+      cipherKey.fillRange(0, cipherKey.length, 0);
+      if (await cipherFile.exists()) await cipherFile.delete();
+      if (await plainFile.exists()) await plainFile.delete();
+    }
   }
 
   /// CitizenServe 邮箱的唯一入站 Envelope 边界；服务端路由身份与密文内身份必须一致。

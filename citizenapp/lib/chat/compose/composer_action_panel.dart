@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 import 'package:citizenapp/ui/app_theme.dart';
 
-/// 聊天加号面板的唯一动作集合。通话和位置保留目标动作名，但当前只允许显示未开放提示。
+/// 聊天加号面板的唯一动作集合。一对一通话进入真实回调，位置仍保留未开放提示。
 enum ChatComposerAction {
   gallery,
   capture,
@@ -14,7 +14,7 @@ enum ChatComposerAction {
   file,
 }
 
-/// 输入栏下方四列动作网格。一对一为 4+3，群聊移除转账后为 4+2。
+/// 输入栏下方四列动作网格。一对一为 4+3；群聊移除转账和未设计的群通话。
 class ComposerActionPanel extends StatelessWidget {
   const ComposerActionPanel({
     super.key,
@@ -28,10 +28,8 @@ class ComposerActionPanel extends StatelessWidget {
   static const _items = <_ActionItem>[
     _ActionItem(ChatComposerAction.gallery, Icons.photo_library_rounded, '相册'),
     _ActionItem(ChatComposerAction.capture, Icons.photo_camera_rounded, '拍摄'),
-    _ActionItem(ChatComposerAction.videoCall, Icons.videocam_rounded, '视频通话',
-        unavailable: true),
-    _ActionItem(ChatComposerAction.voiceCall, Icons.call_rounded, '语音通话',
-        unavailable: true),
+    _ActionItem(ChatComposerAction.videoCall, Icons.videocam_rounded, '视频通话'),
+    _ActionItem(ChatComposerAction.voiceCall, Icons.call_rounded, '语音通话'),
     _ActionItem(
       ChatComposerAction.transfer,
       null,
@@ -47,7 +45,11 @@ class ComposerActionPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = [
       for (final item in _items)
-        if (!(isGroup && item.action == ChatComposerAction.transfer)) item,
+        if (!(isGroup &&
+            (item.action == ChatComposerAction.transfer ||
+                item.action == ChatComposerAction.videoCall ||
+                item.action == ChatComposerAction.voiceCall)))
+          item,
     ];
     return ColoredBox(
       key: const ValueKey('chat-composer-action-panel'),

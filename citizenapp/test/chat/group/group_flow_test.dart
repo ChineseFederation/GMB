@@ -488,10 +488,7 @@ void main() {
     expect(sticker.direction, 'outgoing');
   });
 
-  group('群媒体 sendGroupMedia', () {
-    setUp(() => ChatMediaLimits.applyMembershipLevel('spark')); // 5GB 档
-    tearDown(() => ChatMediaLimits.applyMembershipLevel(null));
-
+  group('群媒体云端密文控制消息', () {
     Future<ChatGroupFlow> buildGroup(
       ChatStore store, {
       ChatEnvelopeDeliverer deliverer = _okDeliverer,
@@ -523,59 +520,39 @@ void main() {
       return flow;
     }
 
-    test('媒体对每个成员各发一次 WebRTC + 按成员登记 pending', () async {
+    ChatContent mediaContent(int byteSize) => ChatContent.media(
+          kind: ChatMessageKind.file,
+          attachmentId: 'att-group-1',
+          fileName: 'archive.bin',
+          mime: 'application/octet-stream',
+          byteSize: byteSize,
+          cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          cipherByteSize: byteSize + 16,
+          cipherSha256: List<String>.filled(64, 'a').join(),
+        );
+
+    test('群附件收件人只包含其他成员且每个 CID 只出现一次', () async {
       final store = ChatStore();
       final flow = await buildGroup(store);
-      final webrtcTo = <String>[];
-      final pending = <String>[];
 
-      await flow.sendGroupMedia(
+      final recipients = await flow.recipientCidNumbers(
         groupId: 'grp:$_cidA:nm',
         senderCidNumber: _cidA,
-        senderDeviceId: 'devA',
-        media: _mediaDraft(50 * 1024 * 1024),
-        sendMemberAttachment: ({
-          required recipientCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required sourcePath,
-          required byteSize,
-        }) async {
-          webrtcTo.add(recipientCidNumber);
-        },
-        recordPendingMember: (attachmentId, member) async =>
-            pending.add(member),
-        markMemberDelivered: (attachmentId, member) async {},
       );
 
-      expect(webrtcTo.toSet(), {_cidB, _cidC}); // 每成员各一次(按成员 CID 路由)
-      expect(pending.toSet(), {_cidB, _cidC});
+      expect(recipients.toSet(), {_cidB, _cidC});
+      expect(recipients, hasLength(2));
     });
 
-    test('群语音本地落盘后立即通知界面，不等待成员网络投递', () async {
-      final callbackEntered = Completer<void>();
-      final releaseCallback = Completer<void>();
-      final deliveryEntered = Completer<void>();
-      final releaseDelivery = Completer<void>();
-      final events = <String>[];
-      var sendCompleted = false;
-      var blockMediaDelivery = false;
+    test('群附件只保存一条控制消息并向所有成员扇出', () async {
       final store = ChatStore();
+      final delivered = <ChatEnvelope>[];
+      final events = <String>[];
       final flow = await buildGroup(
         store,
         deliverer: (envelope, _, __) async {
-          if (!blockMediaDelivery) {
-            return ChatDeliveryResult(
-              envelopeId: envelope.envelopeId,
-              transportType: ChatTransportType.mailbox,
-              state: ChatMessageDeliveryState.sent,
-            );
-          }
-          events.add('network-delivery');
-          if (!deliveryEntered.isCompleted) deliveryEntered.complete();
-          await releaseDelivery.future;
+          events.add('deliver');
+          delivered.add(envelope);
           return ChatDeliveryResult(
             envelopeId: envelope.envelopeId,
             transportType: ChatTransportType.mailbox,
@@ -583,106 +560,29 @@ void main() {
           );
         },
       );
-      blockMediaDelivery = true;
+      events.clear();
+      delivered.clear();
 
-      final sending = flow
-          .sendGroupMedia(
-            groupId: 'grp:$_cidA:nm',
-            senderCidNumber: _cidA,
-            senderDeviceId: 'devA',
-            media: const ChatMediaDraft(
-              kind: ChatMessageKind.audio,
-              fileName: 'voice.m4a',
-              contentType: 'audio/mp4',
-              sourcePath: '/dev/null',
-              byteSize: 4,
-              durationMs: 8000,
-            ),
-            sendMemberAttachment: ({
-              required recipientCidNumber,
-              required conversationId,
-              required attachmentId,
-              required fileName,
-              required contentType,
-              required sourcePath,
-              required byteSize,
-            }) async {},
-            saveLocalAttachment: ({
-              required conversationId,
-              required attachmentId,
-              required fileName,
-              required contentType,
-              required sourcePath,
-              required byteSize,
-            }) async {
-              events.add('local-attachment');
-            },
-            onLocalCommitted: () async {
-              events.add('local-commit');
-              callbackEntered.complete();
-              await releaseCallback.future;
-            },
-          )
-          .whenComplete(() => sendCompleted = true);
+      await flow.sendGroupMediaControl(
+        groupId: 'grp:$_cidA:nm',
+        senderCidNumber: _cidA,
+        senderDeviceId: 'devA',
+        content: mediaContent(200 * 1024 * 1024),
+        onApplicationStored: () async => events.add('stored'),
+      );
 
-      await callbackEntered.future.timeout(const Duration(seconds: 2));
-      expect(events, <String>['local-attachment', 'local-commit']);
-      expect(deliveryEntered.isCompleted, isFalse);
-      expect(sendCompleted, isFalse);
-      final localMessages = await store.readMessages(
+      expect(events.first, 'stored');
+      expect(delivered.map((e) => e.recipientCidNumber).toSet(), {_cidB, _cidC});
+      expect(delivered.every((e) => e.ttlMillis == chatMailboxTtlMillis), isTrue);
+      final messages = await store.readMessages(
         ownerCidNumber: _ownerCidNumber,
         currentAccountId: _accountA,
         conversationId: 'grp:$_cidA:nm',
       );
-      expect(localMessages.last.messageKind, ChatMessageKind.audio);
-
-      releaseCallback.complete();
-      await deliveryEntered.future.timeout(const Duration(seconds: 2));
-      expect(sendCompleted, isFalse);
-      releaseDelivery.complete();
-      await sending;
-      expect(sendCompleted, isTrue);
-    });
-
-    test('>100MB 仍逐成员 WebRTC 直传且只生成本机附件元数据', () async {
-      final store = ChatStore();
-      final flow = await buildGroup(store);
-      final webrtcTo = <String>[];
-
-      await flow.sendGroupMedia(
-        groupId: 'grp:$_cidA:nm',
-        senderCidNumber: _cidA,
-        senderDeviceId: 'devA',
-        media: _mediaDraft(200 * 1024 * 1024),
-        sendMemberAttachment: ({
-          required recipientCidNumber,
-          required conversationId,
-          required attachmentId,
-          required fileName,
-          required contentType,
-          required sourcePath,
-          required byteSize,
-        }) async {
-          webrtcTo.add(recipientCidNumber);
-        },
-        recordPendingMember: (attachmentId, member) async {},
-        markMemberDelivered: (attachmentId, member) async {},
-      );
-
-      expect(webrtcTo.toSet(), {_cidB, _cidC});
-      final content = ChatPayloadCodec.decode(
-        (await store.readMessages(
-              ownerCidNumber: _ownerCidNumber,
-              currentAccountId: _accountA,
-              conversationId: 'grp:$_cidA:nm',
-            ))
-                .last
-                .plaintext ??
-            '',
-      );
-      expect(content.isMedia, isTrue);
-      expect(content.attachmentId, isNotEmpty);
+      final content = ChatPayloadCodec.decode(messages.last.plaintext ?? '');
+      expect(content.attachmentId, 'att-group-1');
       expect(content.byteSize, 200 * 1024 * 1024);
+      expect(content.cipherSha256, List<String>.filled(64, 'a').join());
     });
   });
 }

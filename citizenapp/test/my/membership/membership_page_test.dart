@@ -648,6 +648,9 @@ void main() {
   testWidgets('会员卡片和详情展示最新自由会员用量标准', (tester) async {
     await _pump(tester, _state());
 
+    expect(find.text('聊天 文字/表情/贴纸/图片'), findsNWidgets(3));
+    expect(find.text('语音/视频消息 3 分钟 · 语音/视频通话'), findsNWidgets(3));
+    expect(find.text('聊天附件 每个 10MB'), findsOneWidget);
     expect(find.text('视频 3 分钟 · 标清 · 16MB'), findsOneWidget);
     expect(find.text('文章 3 万字 · 50 图 · 1 视频'), findsOneWidget);
     expect(find.text('每月 图 300 · 视频 300 分钟'), findsOneWidget);
@@ -669,6 +672,15 @@ void main() {
     );
     await tester.pumpAndSettle();
 
+    expect(find.text('文字、表情、贴纸、图片'), findsOneWidget);
+    expect(find.text('最长 3 分钟'), findsNWidgets(2));
+    expect(find.text('支持'), findsNWidgets(2));
+    expect(find.text('最大 10MB'), findsOneWidget);
+    await tester.scrollUntilVisible(
+      find.text('最多 1 个'),
+      300,
+      scrollable: find.byType(Scrollable).last,
+    );
     expect(find.text('最多 1 个'), findsOneWidget);
     await tester.scrollUntilVisible(
       find.text('用量额度'),

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 
 import 'package:citizenapp/ui/app_layout.dart';
 
+import '../chat_media_limits.dart';
 import '../chat_models.dart';
 import '../media/media_mime.dart';
 import '../media/media_picker.dart';
@@ -20,7 +21,7 @@ Future<PickedMediaFile?> openChatCameraCapture(BuildContext context) {
 class CameraCapturePage extends StatefulWidget {
   const CameraCapturePage({super.key});
 
-  static const maximumVideoDuration = Duration(minutes: 3);
+  static const maximumVideoDuration = ChatMediaLimits.messageMaximumDuration;
 
   @override
   State<CameraCapturePage> createState() => _CameraCapturePageState();

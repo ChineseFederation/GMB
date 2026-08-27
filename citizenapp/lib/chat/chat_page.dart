@@ -69,6 +69,7 @@ typedef ChatDeleteConversationCallback = Future<void> Function();
 typedef ChatResolvePeerAddressCallback = Future<String> Function(
   String peerCidNumber,
 );
+typedef ChatStartCallCallback = Future<void> Function({required bool video});
 
 /// 公民 Chat 聊天详情页。
 ///
@@ -93,6 +94,7 @@ class ChatPage extends StatefulWidget {
     this.onSync,
     this.onStartRealtime,
     this.onDeleteConversation,
+    this.onStartCall,
     this.resolvePeerAddress,
     this.initialProfile,
     this.initialProfileMedia,
@@ -120,6 +122,7 @@ class ChatPage extends StatefulWidget {
   final ChatSyncCallback? onSync;
   final ChatStartRealtimeCallback? onStartRealtime;
   final ChatDeleteConversationCallback? onDeleteConversation;
+  final ChatStartCallCallback? onStartCall;
   final ChatResolvePeerAddressCallback? resolvePeerAddress;
   final CitizenProfile? initialProfile;
   final CitizenProfileMediaSnapshot? initialProfileMedia;
@@ -664,6 +667,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _handleSend(String text) async {
+    if (!_requireChatEntitlement()) return;
     final normalized = text.trim();
     if (normalized.isEmpty) {
       return;
@@ -691,7 +695,23 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _sendMediaDrafts(Iterable<ChatMediaDraft> drafts) async {
-    if (_attachmentBusy) return;
+    if (_attachmentBusy || !_requireChatEntitlement()) return;
+    final prepared = drafts.toList(growable: false);
+    for (final draft in prepared) {
+      if (ChatMediaLimits.exceedsForKind(draft.kind, draft.byteSize)) {
+        setState(() {
+          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
+        });
+        return;
+      }
+      if (ChatMediaLimits.exceedsDurationForKind(
+        draft.kind,
+        draft.durationMs,
+      )) {
+        setState(() => _error = '语音、视频消息每条最长 3 分钟');
+        return;
+      }
+    }
     final sender = widget.onSendMedia;
     if (sender == null) {
       setState(() {
@@ -704,7 +724,7 @@ class _ChatPageState extends State<ChatPage> {
       _error = null;
     });
     final pending = <({ChatMediaDraft draft, Message message})>[];
-    for (final draft in drafts) {
+    for (final draft in prepared) {
       final message = _optimisticMediaMessage(draft);
       pending.add((draft: draft, message: message));
       await _insertOptimisticMessage(message);
@@ -732,7 +752,7 @@ class _ChatPageState extends State<ChatPage> {
       );
       if (mounted) {
         setState(() {
-          _error = '文件超出大小上限：图片最大 100MB，视频/文件最大 5GB';
+          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
         });
       }
     } catch (error) {
@@ -793,6 +813,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 发送贴纸:只把 `(packId, stickerId)` 交给发送链路(走 MLS 信封瞬时中转,
   /// 零字节、零 WebRTC)。面板保持打开以便连发,不自动关闭。
   Future<void> _handleSendSticker(String packId, String stickerId) async {
+    if (!_requireChatEntitlement()) return;
     final sender = widget.onSendSticker;
     if (sender == null) {
       setState(() {
@@ -872,6 +893,15 @@ class _ChatPageState extends State<ChatPage> {
     );
     final probe = await _mediaProbe.probe(path: finalPath, kind: picked.kind);
     final byteSize = await File(finalPath).length();
+    if (ChatMediaLimits.exceedsDurationForKind(
+      picked.kind,
+      probe.durationMs,
+    )) {
+      throw ChatMediaTooLongException(
+        kind: picked.kind,
+        durationMs: probe.durationMs ?? 0,
+      );
+    }
     return ChatMediaDraft(
       kind: picked.kind,
       fileName: picked.fileName,
@@ -886,6 +916,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _handleComposerAction(ChatComposerAction action) async {
+    if (!_requireChatEntitlement()) return;
     _togglePanel(_ComposerPanel.none);
     try {
       switch (action) {
@@ -897,19 +928,36 @@ class _ChatPageState extends State<ChatPage> {
           await _handleFile();
         case ChatComposerAction.transfer:
           await _openTransfer();
-        case ChatComposerAction.videoCall ||
-              ChatComposerAction.voiceCall ||
-              ChatComposerAction.location:
+        case ChatComposerAction.videoCall:
+          await _startCall(video: true);
+        case ChatComposerAction.voiceCall:
+          await _startCall(video: false);
+        case ChatComposerAction.location:
           if (!mounted) return;
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('功能完善中，敬请期待')),
           );
       }
     } on ChatMediaTooLargeException {
-      if (mounted) setState(() => _error = '所选媒体超出当前会员档位的单个文件上限');
+      if (mounted) {
+        setState(() {
+          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
+        });
+      }
+    } on ChatMediaTooLongException {
+      if (mounted) setState(() => _error = '语音、视频消息每条最长 3 分钟');
     } catch (error) {
       if (mounted) setState(() => _error = chatUserErrorMessage(error));
     }
+  }
+
+  Future<void> _startCall({required bool video}) async {
+    final starter = widget.onStartCall;
+    if (starter == null) {
+      if (mounted) setState(() => _error = '通话链路尚未就绪');
+      return;
+    }
+    await starter(video: video);
   }
 
   Future<void> _openTransfer() async {
@@ -944,7 +992,11 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _startVoiceRecording() async {
-    if (_voiceStartInFlight != null || _voiceState.recording) return;
+    if (!_requireChatEntitlement() ||
+        _voiceStartInFlight != null ||
+        _voiceState.recording) {
+      return;
+    }
     late final Future<void> created;
     created = _voiceRecorder.start();
     _voiceStartInFlight = created;
@@ -1001,7 +1053,10 @@ class _ChatPageState extends State<ChatPage> {
           contentType: 'audio/mp4',
           sourcePath: result.path,
           byteSize: byteSize,
-          durationMs: result.duration.inMilliseconds.clamp(1, 60000),
+          durationMs: result.duration.inMilliseconds.clamp(
+            1,
+            ChatMediaLimits.messageMaximumDuration.inMilliseconds,
+          ),
         ),
       ]);
     } finally {
@@ -1508,6 +1563,29 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 统一输入栏：键盘/语音两态，共用表达面板与 4+3 动作面板。
   Widget _buildComposer(BuildContext context) {
+    if (!ChatMediaLimits.chatEnabledFor(widget.ownerCidNumber)) {
+      final resolved =
+          ChatMediaLimits.resolvedFor(widget.ownerCidNumber);
+      return Container(
+        key: const ValueKey('chat-membership-required'),
+        width: double.infinity,
+        padding: EdgeInsets.symmetric(
+          horizontal: AppLayout.scaled(context, 16),
+          vertical: AppLayout.scaled(context, 14),
+        ),
+        color: AppTheme.surfaceCard,
+        child: Text(
+          resolved
+              ? '尚未开通会员，订阅任一会员后即可使用聊天'
+              : '暂时无法验证会员状态，请稍后重试',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            color: AppTheme.textSecondary,
+            fontSize: AppLayout.scaled(context, 13),
+          ),
+        ),
+      );
+    }
     final Widget? panel = switch (_openPanel) {
       _ComposerPanel.none => null,
       _ComposerPanel.expression => _buildExpressionPanel(context),
@@ -1533,6 +1611,18 @@ class _ChatPageState extends State<ChatPage> {
       onVoicePressEnd: (cancel) => unawaited(_finishVoiceRecording(cancel)),
       panel: panel,
     );
+  }
+
+  bool _requireChatEntitlement() {
+    if (ChatMediaLimits.chatEnabledFor(widget.ownerCidNumber)) return true;
+    if (mounted) {
+      setState(() {
+        _error = ChatMediaLimits.resolvedFor(widget.ownerCidNumber)
+            ? '尚未开通会员，订阅任一会员后即可使用聊天'
+            : '暂时无法验证会员状态，请稍后重试';
+      });
+    }
+    return false;
   }
 
   Widget _buildExpressionPanel(BuildContext context) {

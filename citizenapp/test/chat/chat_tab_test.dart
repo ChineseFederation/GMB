@@ -14,6 +14,7 @@ import 'package:citizenapp/8964/profile/user_profile_page.dart';
 import 'package:citizenapp/8964/profile/widgets/profile_avatar.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/chat/chat_page.dart';
+import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/chat_flow.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
@@ -55,6 +56,9 @@ const _peerProfile = CitizenProfile(
 );
 
 void main() {
+  setUp(() => ChatMediaLimits.applyMembershipLevel('freedom'));
+  tearDown(() => ChatMediaLimits.applyMembershipLevel(null));
+
   testWidgets('本地会话未返回时直接显示聊天页面且不使用整页转圈', (tester) async {
     final store = _PendingChatStore();
     await tester.pumpWidget(
