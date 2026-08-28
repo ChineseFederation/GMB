@@ -72,6 +72,7 @@ Widget _voiceComposerHost({
   required FocusNode focusNode,
   required VoidCallback onStart,
   required ValueChanged<bool> onEnd,
+  Duration recordingDuration = const Duration(seconds: 8),
 }) {
   return ChangeNotifierProvider(
     create: (_) => ComposerHeightNotifier(),
@@ -90,7 +91,7 @@ Widget _voiceComposerHost({
                 expressionOpen: false,
                 actionsOpen: false,
                 recording: active,
-                recordingDuration: const Duration(seconds: 8),
+                recordingDuration: recordingDuration,
                 onToggleInputMode: () {},
                 onToggleExpression: () {},
                 onToggleActions: () {},
@@ -225,6 +226,7 @@ void main() {
       controller: controller,
       focusNode: focusNode,
       onStart: () => recording.value = true,
+      recordingDuration: const Duration(minutes: 2, seconds: 59),
       onEnd: (cancel) {
         outcomes.add(cancel);
         recording.value = false;
@@ -245,7 +247,7 @@ void main() {
     final cancel = find.byKey(const ValueKey('chat-voice-cancel-target'));
     final send = find.byKey(const ValueKey('chat-voice-send-target'));
     expect(overlay, findsOneWidget);
-    expect(find.text('00:08'), findsOneWidget);
+    expect(find.text('02:59'), findsOneWidget);
     expect(tester.getCenter(timer).dx, closeTo(tester.getCenter(mic).dx, 0.01));
     expect(tester.getCenter(timer).dy, greaterThan(tester.getCenter(mic).dy));
     expect(

@@ -6,12 +6,24 @@ import 'package:flutter/foundation.dart';
 import 'package:isar_community/isar.dart';
 
 import 'package:citizenapp/isar/chat_isar.dart';
+import '../../security/local_cipher.dart';
 import '../../security/local_data_key.dart';
 import '../chat_models.dart';
 import '../chat_payload.dart';
 import '../group/group_model.dart';
 import '../proto/chat_envelope.pb.dart';
 import 'chat_crypto.dart';
+
+/// 聊天窗口读取结果：只隔离无法通过本机认证解密的单条记录，不放宽严格存储接口。
+class ChatMessageDisplayBatch {
+  const ChatMessageDisplayBatch({
+    required this.messages,
+    required this.integrityFailureCount,
+  });
+
+  final List<ChatStoredMessage> messages;
+  final int integrityFailureCount;
+}
 
 /// Chat 本地消息记录。
 class ChatStoredMessage {
@@ -218,6 +230,7 @@ class ChatStore {
   /// 聊天本地密文的唯一加解密边界。加解密一律在 Isar 事务**之外**完成,
   /// 不让密码学运算占住写事务。
   final ChatCrypto _crypto;
+  final Set<String> _displayIntegrityFailureConversations = <String>{};
 
   final _ChatBindingMutationGate _bindingMutationGate;
 
@@ -1905,6 +1918,85 @@ class ChatStore {
     }
   }
 
+  /// 聊天窗口专用读取：严格接口首次发现认证失败后，仅隔离损坏行并继续返回其余
+  /// 已通过认证的记录。密文不会降级解密、不会伪造明文，也不会自动删除本机数据。
+  Future<ChatMessageDisplayBatch> readMessagesForDisplay({
+    required String ownerCidNumber,
+    required String currentAccountId,
+    required String conversationId,
+  }) async {
+    final failureKey = '$ownerCidNumber|$currentAccountId|$conversationId';
+    if (!_displayIntegrityFailureConversations.contains(failureKey)) {
+      try {
+        return ChatMessageDisplayBatch(
+          messages: await readMessages(
+            ownerCidNumber: ownerCidNumber,
+            currentAccountId: currentAccountId,
+            conversationId: conversationId,
+          ),
+          integrityFailureCount: 0,
+        );
+      } on LocalCipherException {
+        _displayIntegrityFailureConversations.add(failureKey);
+      }
+    }
+
+    final conversationRows = await _chatIsar.read((isar) async {
+      final rows = await isar.chatMessageEntitys
+          .where()
+          .conversationIdEqualTo(conversationId)
+          .findAll();
+      return rows
+          .where((row) => row.ownerCidNumber == ownerCidNumber)
+          .toList(growable: false);
+    });
+    if (conversationRows.isEmpty) {
+      _displayIntegrityFailureConversations.remove(failureKey);
+      return const ChatMessageDisplayBatch(
+        messages: <ChatStoredMessage>[],
+        integrityFailureCount: 0,
+      );
+    }
+
+    final binding = await _crypto.resolveCipherBinding(
+      ownerCidNumber: ownerCidNumber,
+      currentAccountId: currentAccountId,
+    );
+    final rows = conversationRows
+        .where((row) =>
+            row.bindingRevision == binding.bindingRevision &&
+            row.accountId == binding.accountId)
+        .toList(growable: false)
+      ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+    final session = await _crypto.openCipherSession(
+      ownerCidNumber: ownerCidNumber,
+      currentAccountId: currentAccountId,
+      binding: binding,
+    );
+    try {
+      final messages = <ChatStoredMessage>[];
+      var integrityFailureCount = 0;
+      for (final row in rows) {
+        try {
+          messages.add(
+            _messageFromEntity(row, await _openMessage(row, session)),
+          );
+        } on LocalCipherException {
+          integrityFailureCount += 1;
+        }
+      }
+      if (integrityFailureCount == 0) {
+        _displayIntegrityFailureConversations.remove(failureKey);
+      }
+      return ChatMessageDisplayBatch(
+        messages: List<ChatStoredMessage>.unmodifiable(messages),
+        integrityFailureCount: integrityFailureCount,
+      );
+    } finally {
+      session.dispose();
+    }
+  }
+
   /// 判断入站应用消息是否已经在当前绑定下落库。实时链路可能因设备确认丢失而
   /// 重投同一 envelope；必须在再次推进 MLS ratchet 前用稳定 ID 去重。
   Future<bool> hasIncomingEnvelope({
@@ -2643,15 +2735,22 @@ class ChatStore {
     );
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
+      final terminalEnvelopeFailure =
+          errorMessage == 'chat_envelope_expired' ||
+              errorMessage == 'chat_envelope_invalid';
+      final effectiveState = terminalEnvelopeFailure
+          ? ChatMessageDeliveryState.failed
+          : state;
       final queue = await isar.chatOutboundQueueEntitys
           .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
       if (queue != null) {
-        if (state == ChatMessageDeliveryState.receivedByDevice ||
-            state == ChatMessageDeliveryState.sent) {
+        if (effectiveState == ChatMessageDeliveryState.receivedByDevice ||
+            effectiveState == ChatMessageDeliveryState.sent ||
+            terminalEnvelopeFailure) {
           await isar.chatOutboundQueueEntitys.delete(queue.id);
         } else {
           queue
-            ..deliveryState = state.name
+            ..deliveryState = effectiveState.name
             ..attemptCount = queue.attemptCount + 1
             ..lastError = errorMessage
             ..updatedAtMillis = DateTime.now().millisecondsSinceEpoch;
@@ -2662,7 +2761,7 @@ class ChatStore {
       final message = await isar.chatMessageEntitys
           .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
       if (message != null) {
-        message.deliveryState = state.name;
+        message.deliveryState = effectiveState.name;
         await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(message);
         final conversation = await isar.chatConversationEntitys
             .getByOwnerCidNumberConversationId(
@@ -2670,7 +2769,7 @@ class ChatStore {
           message.conversationId,
         );
         if (conversation != null) {
-          conversation.lastDeliveryState = state.name;
+          conversation.lastDeliveryState = effectiveState.name;
           await isar.chatConversationEntitys
               .putByOwnerCidNumberConversationId(conversation);
         }

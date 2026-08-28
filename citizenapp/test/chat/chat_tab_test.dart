@@ -1124,6 +1124,57 @@ void main() {
     expect(realtimeStopCount, 1);
   });
 
+  testWidgets('历史坏密文隔离提示在心跳刷新期间保持稳定且有效消息不消失',
+      (tester) async {
+    final message = ChatStoredMessage(
+      envelopeId: 'env-readable',
+      conversationId: 'dm:me:peer',
+      direction: 'incoming',
+      senderCidNumber: _peerCidNumber,
+      recipientCidNumber: _ownerCidNumber,
+      messageKind: ChatMessageKind.text,
+      deliveryState: ChatMessageDeliveryState.receivedByDevice,
+      createdAtMillis: 1000,
+      plaintext: ChatPayloadCodec.encode(ChatContent.text('仍然可见的消息')),
+    );
+    final store = _IntegrityRefreshStore(message);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ChatPage(
+          conversationId: 'dm:me:peer',
+          ownerCidNumber: _ownerCidNumber,
+          accountId:
+              '0x1111111111111111111111111111111111111111111111111111111111111111',
+          peerUserId: _peerCidNumber,
+          title: '张三',
+          store: store,
+          onSync: () async {},
+          onStartRealtime: ({required onNotice, onDisconnected}) async =>
+              () async {},
+        ),
+      ),
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    final notice = find.text('部分本机历史消息完整性校验失败，损坏记录已隔离');
+    final readable = find.text('仍然可见的消息');
+    expect(notice, findsOneWidget);
+    expect(readable, findsOneWidget);
+    final initialTop = tester.getTopLeft(readable).dy;
+
+    await tester.pump(const Duration(seconds: 20));
+    await tester.pump();
+    expect(notice, findsOneWidget, reason: '后台刷新开始时不得先移除提示造成页面上下抖动');
+    expect(tester.getTopLeft(readable).dy, initialTop);
+
+    store.completeHeartbeat();
+    await tester.pump();
+    expect(notice, findsOneWidget);
+    expect(readable, findsOneWidget);
+    expect(tester.getTopLeft(readable).dy, initialTop);
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump();
+  });
+
   testWidgets('聊天页相册动作发送选择的加密媒体', (tester) async {
     ChatMediaDraft? sentMedia;
     ChatMediaLocalCommitNotifier? localCommitted;
@@ -1665,6 +1716,40 @@ class _PendingMessagesStore extends _FakeChatStore {
     required String conversationId,
   }) =>
       completer.future;
+}
+
+class _IntegrityRefreshStore extends _FakeChatStore {
+  _IntegrityRefreshStore(this.message)
+      : super(messages: <ChatStoredMessage>[message]);
+
+  final ChatStoredMessage message;
+  final Completer<ChatMessageDisplayBatch> _heartbeat =
+      Completer<ChatMessageDisplayBatch>();
+  var _reads = 0;
+
+  @override
+  Future<ChatMessageDisplayBatch> readMessagesForDisplay({
+    required String ownerCidNumber,
+    required String currentAccountId,
+    required String conversationId,
+  }) {
+    _reads += 1;
+    if (_reads == 1) {
+      return Future<ChatMessageDisplayBatch>.value(ChatMessageDisplayBatch(
+        messages: <ChatStoredMessage>[message],
+        integrityFailureCount: 1,
+      ));
+    }
+    return _heartbeat.future;
+  }
+
+  void completeHeartbeat() {
+    if (_heartbeat.isCompleted) return;
+    _heartbeat.complete(ChatMessageDisplayBatch(
+      messages: <ChatStoredMessage>[message],
+      integrityFailureCount: 1,
+    ));
+  }
 }
 
 class _FakeProfileApi extends CitizenProfileApi {

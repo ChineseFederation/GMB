@@ -652,6 +652,7 @@ void main() {
   test('换错密钥解密必须抛错，不得静默返回空白', () async {
     final store = ChatStore();
     await saveText(store, 'env-1', '机密内容');
+    await saveText(store, 'env-2', '仍可验证的内容', at: 2000);
 
     // 直接篡改密文，模拟密钥不匹配/密文损坏
     await ChatIsar.instance.writeTxn((isar) async {
@@ -668,6 +669,19 @@ void main() {
         conversationId: 'conv-1',
       ),
       throwsA(isA<LocalCipherException>()),
+    );
+
+    final display = await store.readMessagesForDisplay(
+      ownerCidNumber: ownerCidNumber,
+      currentAccountId: accountId,
+      conversationId: 'conv-1',
+    );
+    expect(display.integrityFailureCount, 1);
+    expect(display.messages.map((message) => message.envelopeId), ['env-2']);
+    expect(
+      ChatPayloadCodec.decode(display.messages.single.plaintext!).text,
+      '仍可验证的内容',
+      reason: '聊天窗口只隔离损坏行，严格 readMessages 仍保持 fail-closed',
     );
   });
 

@@ -174,6 +174,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> Function()? _stopRealtime;
   Future<void>? _openCoordinatorInFlight;
   int _messageReloadGeneration = 0;
+  int? _renderedMessageFingerprint;
   final Map<String, String> _resolvedMediaPaths = <String, String>{};
   final Map<String, Message> _optimisticMessages = <String, Message>{};
   int _optimisticMessageSequence = 0;
@@ -318,42 +319,55 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _reloadMessages() async {
     final generation = ++_messageReloadGeneration;
-    // 只清错误提示,不重置 _loading:首屏骨架靠初始 _loading=true 驱动,后续重载
-    // (发消息/贴纸/同步后)保持 Chat 常驻——否则整块 Chat 连同贴纸面板/分类 Tab
-    // 会 unmount 重建,连发贴纸时面板闪走、Tab 跳回第一个。
-    if (_error != null) {
-      setState(() {
-        _error = null;
-      });
-    }
     try {
-      final messages = await widget.store.readMessages(
+      final batch = await widget.store.readMessagesForDisplay(
         ownerCidNumber: widget.ownerCidNumber,
         currentAccountId: widget.accountId,
         conversationId: widget.conversationId,
       );
       if (!mounted || generation != _messageReloadGeneration) return;
-      await _chatController.setMessages(
-        _visibleMessages(messages),
-        animated: false,
-      );
+      final messages = batch.messages;
+      final fingerprint = Object.hashAll(messages.map(
+        (message) => Object.hash(
+          message.envelopeId,
+          message.direction,
+          message.messageKind,
+          message.deliveryState,
+          message.createdAtMillis,
+          message.plaintext,
+        ),
+      ));
+      // 心跳轮询只在真实快照变化时替换控制器，禁止每 8/20/30 秒把相同消息
+      // 清空后重建，造成聊天内容短暂消失或滚动位置抖动。
+      if (_renderedMessageFingerprint != fingerprint) {
+        await _chatController.setMessages(
+          _visibleMessages(messages),
+          animated: false,
+        );
+        if (!mounted || generation != _messageReloadGeneration) return;
+        _renderedMessageFingerprint = fingerprint;
+      }
       // 正文解密完成就提交首屏；媒体缓存路径随后批量解析并原位更新，不能反向
       // 阻塞文字记录、输入栏或本地加载状态。
       unawaited(_resolveAndApplyMediaPaths(messages, generation));
+      _commitReloadState(
+        generation,
+        batch.integrityFailureCount == 0
+            ? null
+            : '部分本机历史消息完整性校验失败，损坏记录已隔离',
+      );
     } catch (error) {
-      if (generation == _messageReloadGeneration) {
-        _error = chatUserErrorMessage(error);
-      }
-    } finally {
-      // 首次加载结束翻下骨架;之后 _loading 恒为 false,此处成幂等空转。
-      if (mounted &&
-          generation == _messageReloadGeneration &&
-          (_loading || _error != null)) {
-        setState(() {
-          _loading = false;
-        });
-      }
+      _commitReloadState(generation, chatUserErrorMessage(error));
     }
+  }
+
+  void _commitReloadState(int generation, String? nextError) {
+    if (!mounted || generation != _messageReloadGeneration) return;
+    if (!_loading && _error == nextError) return;
+    setState(() {
+      _loading = false;
+      _error = nextError;
+    });
   }
 
   /// 预解析媒体消息在本机缓存中的绝对路径,按 attachment_id 建表。字节未到达

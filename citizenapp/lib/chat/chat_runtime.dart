@@ -1606,6 +1606,7 @@ class ChatRuntime {
   /// WSS 在线帧与连接后补拉可能命中同一密文；进程内先按既有 envelope_id 去重，
   /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
+  final Set<String> _incomingConvergenceInFlight = <String>{};
 
   /// 同一账户/设备只允许一条初始化链。成功上下文复用到 session 临近过期；
   /// 失败只释放命中的 future，不得误删后来创建的新初始化。
@@ -2114,6 +2115,8 @@ class ChatRuntime {
     _readyFlights.clear();
     _accountContextKeys.clear();
     _mediaBytesInFlight.clear();
+    _mailboxEnvelopeReceipts.clear();
+    _incomingConvergenceInFlight.clear();
 
     final failures = <String>[];
     // 第一阶段只停止所有实时生产源。session 会同步拒绝新 callback，关闭
@@ -4570,7 +4573,34 @@ class ChatRuntime {
       conversationId: conversationId,
     );
     var sent = 0;
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
     for (final item in queued) {
+      ChatEnvelope envelope;
+      try {
+        envelope = ChatEnvelope.fromBuffer(item.envelopeBytes);
+      } catch (_) {
+        await _store.markOutgoingDelivery(
+          bindingToken: context.bindingToken,
+          ownerCidNumber: context.account.cidNumber,
+          envelopeId: item.envelopeId,
+          state: ChatMessageDeliveryState.failed,
+          errorMessage: 'chat_envelope_invalid',
+        );
+        continue;
+      }
+      if (envelope.createdAtMillis.toInt() + envelope.ttlMillis.toInt() <=
+          nowMillis) {
+        // 七天 TTL 是原信封的固定终点；过期后直接失败并清队列，禁止继续请求
+        // CitizenServe，也禁止重试时给旧消息续期。
+        await _store.markOutgoingDelivery(
+          bindingToken: context.bindingToken,
+          ownerCidNumber: context.account.cidNumber,
+          envelopeId: item.envelopeId,
+          state: ChatMessageDeliveryState.failed,
+          errorMessage: 'chat_envelope_expired',
+        );
+        continue;
+      }
       final result = await context.transport.sendEncryptedEnvelope(
         envelopeId: item.envelopeId,
         envelopeBytes: item.envelopeBytes,
@@ -5058,6 +5088,7 @@ class ChatRuntime {
     ChatMailboxEnvelope item,
   ) async {
     final receiptKey = '${account.accountId}|${item.envelopeId}';
+    var processedNow = false;
     if (!_mailboxEnvelopeReceipts.contains(receiptKey)) {
       try {
         final context = await _readyContext(account);
@@ -5070,6 +5101,7 @@ class ChatRuntime {
           ),
         );
         _mailboxEnvelopeReceipts.add(receiptKey);
+        processedNow = true;
         // 单邮箱最多 1000 条；保留四倍窗口足以覆盖 ACK 瞬时失败，同时限制内存。
         while (_mailboxEnvelopeReceipts.length > 4000) {
           _mailboxEnvelopeReceipts.remove(_mailboxEnvelopeReceipts.first);
@@ -5079,7 +5111,34 @@ class ChatRuntime {
         rethrow;
       }
     }
+    if (processedNow) {
+      _scheduleIncomingConvergence(account, item.senderCidNumber);
+    }
     await transport.acknowledgeMailbox(<String>[item.envelopeId]);
+  }
+
+  /// 新密文完成本机验密落盘后，按发送方合并一次反向收敛。该任务不阻塞邮箱 ACK；
+  /// 重复 Envelope 只确认删除云端副本，不再次触发发送或形成 peer_ready 风暴。
+  void _scheduleIncomingConvergence(
+    _ChatAccount account,
+    String senderCidNumber,
+  ) {
+    if (senderCidNumber.isEmpty) return;
+    final key = '${account.accountId}|$senderCidNumber';
+    if (!_incomingConvergenceInFlight.add(key)) return;
+    unawaited(
+      _runRuntimeOperation(() async {
+        final current = await _readAccount(
+          expectedAccountId: account.accountId,
+        );
+        final context = await _readyContext(current);
+        await _convergeWithWakeSender(context, senderCidNumber);
+      }).catchError((Object _) {
+        // 本机可靠队列保留到下一次 WSS、推送或心跳收敛。
+      }).whenComplete(() {
+        _incomingConvergenceInFlight.remove(key);
+      }),
+    );
   }
 
   /// 任一端收到无内容唤醒，都先发送peer_ready，再检查本机待发队列。

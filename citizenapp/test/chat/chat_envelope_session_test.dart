@@ -671,6 +671,63 @@ test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
     expect(await ok.exists(), isFalse);
     expect(await File(accepted!.filePath).readAsString(), 'ok');
   });
+
+  test('七天 TTL 过期信封转为失败并退出本机重试队列', () async {
+    final store = ChatStore();
+    final bindingToken = await _activateBinding(store, _aliceAccountId);
+    final flow = ChatFlow(
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _aliceAccountId,
+      crypto: _FakeMlsCrypto(),
+      store: store,
+      bindingToken: bindingToken,
+      deliverer: (envelope, _, __) async => ChatDeliveryResult(
+        envelopeId: envelope.envelopeId,
+        transportType: ChatTransportType.mailbox,
+        state: ChatMessageDeliveryState.queued,
+      ),
+    );
+    await flow.sendText(
+      conversationId: 'conv-expired',
+      senderCidNumber: _ownerCidNumber,
+      recipientCidNumber: _bobCidNumber,
+      senderDeviceId: 'alice-phone',
+      recipientKeyPackage: _dummyKeyPackage(),
+      text: '不会继续重试的旧消息',
+    );
+    final queued = await store.readQueuedEnvelopes(
+      bindingToken: bindingToken,
+      ownerCidNumber: _ownerCidNumber,
+    );
+    expect(queued, hasLength(2));
+    for (final item in queued) {
+      await store.markOutgoingDelivery(
+        bindingToken: bindingToken,
+        ownerCidNumber: _ownerCidNumber,
+        envelopeId: item.envelopeId,
+        state: ChatMessageDeliveryState.queued,
+        errorMessage: 'chat_envelope_expired',
+      );
+    }
+    expect(
+      await store.readQueuedEnvelopes(
+        bindingToken: bindingToken,
+        ownerCidNumber: _ownerCidNumber,
+      ),
+      isEmpty,
+    );
+    final messages = await store.readMessages(
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _aliceAccountId,
+      conversationId: 'conv-expired',
+    );
+    expect(
+      messages.every(
+        (message) => message.deliveryState == ChatMessageDeliveryState.failed,
+      ),
+      isTrue,
+    );
+  });
 }
 
 class _FakeMlsCrypto implements MlsCrypto {

@@ -417,7 +417,7 @@ class _ComposerBarState extends State<ComposerBar> {
 }
 
 String _formatDuration(Duration duration) {
-  final seconds = duration.inSeconds.clamp(0, 60);
+  final seconds = duration.inSeconds.clamp(0, 180);
   final minutes = seconds ~/ 60;
   final remainder = seconds % 60;
   return '${minutes.toString().padLeft(2, '0')}:'
