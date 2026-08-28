@@ -1603,6 +1603,7 @@ class ChatRuntime {
   /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
   final Set<String> _incomingConvergenceInFlight = <String>{};
+  final Set<String> _keyPackagePublications = <String>{};
 
   /// 同一账户/设备只允许一条初始化链。成功上下文复用到 session 临近过期；
   /// 失败只释放命中的 future，不得误删后来创建的新初始化。
@@ -2113,6 +2114,7 @@ class ChatRuntime {
     _mediaBytesInFlight.clear();
     _mailboxEnvelopeReceipts.clear();
     _incomingConvergenceInFlight.clear();
+    _keyPackagePublications.clear();
 
     final failures = <String>[];
     // 第一阶段只停止所有实时生产源。session 会同步拒绝新 callback，关闭
@@ -5089,19 +5091,21 @@ class ChatRuntime {
                 if (senderCidNumber is! String || senderCidNumber.isEmpty) {
                   return;
                 }
-                final context = await _readyContext(account);
+                await _readyContext(account);
                 if (message['signal_kind'] == 'peer_ready') {
                   await retryOutgoing(recipientCidNumber: senderCidNumber);
                 }
               } else if (type == 'citizen_chat_envelope') {
-                await _consumeMailboxEnvelope(
+                await _consumeMailboxBatch(
                   account,
                   signalContext.transport,
-                  ChatMailboxEnvelope.fromJson(
-                    message,
-                    localCidNumber: account.cidNumber,
-                    realtime: true,
-                  ),
+                  <ChatMailboxEnvelope>[
+                    ChatMailboxEnvelope.fromJson(
+                      message,
+                      localCidNumber: account.cidNumber,
+                      realtime: true,
+                    ),
+                  ],
                 );
               }
             });
@@ -5147,12 +5151,6 @@ class ChatRuntime {
       _ensureActive();
       session.ensureOpen();
 
-      // 先建立 WSS 再补拉，避免 GET 与建连之间产生离线窗口；在线帧和补拉重复由
-      // envelope_id 去重，且只有本机 OpenMLS/数据库事务成功后才确认删除云端密文。
-      for (final envelope in await signalTransport.fetchMailbox()) {
-        await _consumeMailboxEnvelope(account, signalTransport, envelope);
-      }
-
       Future<void> notifySenderReadyFromCallback(String sender) async {
         await session.runCallback(() async {
           try {
@@ -5170,7 +5168,7 @@ class ChatRuntime {
         await session.runCallback(() async {
           try {
             await _runRuntimeOperation(
-              () async => _ensurePushEndpoint(
+              () async => _ensurePushEndpointWithRetry(
                 account: signalContext.account,
                 identity: signalContext.identity,
                 prefs: await _prefs,
@@ -5198,6 +5196,13 @@ class ChatRuntime {
         (_) => unawaited(refreshPushFromCallback()),
       );
       session.attachTokenSubscription(tokenSubscription.cancel);
+      // Token 更新监听必须先于邮箱补拉登记；即使某条历史密文处理失败，iOS/Android
+      // 的新平台 Token 仍能立即重登，不能被邮箱积压阻断。
+      await _consumeMailboxBatch(
+        account,
+        signalTransport,
+        await signalTransport.fetchMailbox(),
+      );
       // Chat Tab 与后台唤醒保留账户级补发；具体聊天窗口已经按 conversationId
       // 独立重试，建连时不得再次串行扫描并发送整个账户的队列。
       if (retryOutgoingOnConnect) {
@@ -5270,7 +5275,22 @@ class ChatRuntime {
     );
   }
 
-  Future<void> _consumeMailboxEnvelope(
+  Future<void> _consumeMailboxBatch(
+    _ChatAccount account,
+    ChatCloudTransport transport,
+    List<ChatMailboxEnvelope> items,
+  ) async {
+    final acknowledgedEnvelopeIds = <String>[];
+    for (final item in items) {
+      if (await _consumeMailboxEnvelope(account, transport, item)) {
+        acknowledgedEnvelopeIds.add(item.envelopeId);
+      }
+    }
+    // 一批只发一次 ACK；单条失败不阻断同批其它密文，且失败条目不进入删除集合。
+    await transport.acknowledgeMailbox(acknowledgedEnvelopeIds);
+  }
+
+  Future<bool> _consumeMailboxEnvelope(
     _ChatAccount account,
     ChatCloudTransport transport,
     ChatMailboxEnvelope item,
@@ -5294,15 +5314,23 @@ class ChatRuntime {
         while (_mailboxEnvelopeReceipts.length > 4000) {
           _mailboxEnvelopeReceipts.remove(_mailboxEnvelopeReceipts.first);
         }
-      } catch (_) {
+      } catch (error) {
         _mailboxEnvelopeReceipts.remove(receiptKey);
-        rethrow;
+        if (error is FormatException || error is ArgumentError) {
+          // 服务端只保存不透明密文；本机已经确认不可解析或身份不一致时直接确认删除，
+          // 避免永久坏信封占住每批第一项。不得记录信封、CID 或底层异常文本。
+          transport.lastRealtimeDiagnosticCode =
+              'chat_mailbox_envelope_rejected';
+          return true;
+        }
+        transport.lastRealtimeDiagnosticCode = 'chat_mailbox_envelope_retry';
+        return false;
       }
     }
     if (processedNow) {
       _scheduleIncomingConvergence(account, item.senderCidNumber);
     }
-    await transport.acknowledgeMailbox(<String>[item.envelopeId]);
+    return true;
   }
 
   /// 新密文完成本机验密落盘后，按发送方合并一次反向收敛。该任务不阻塞邮箱 ACK；
@@ -5385,7 +5413,7 @@ class ChatRuntime {
         await _disposeContext(context);
         throw StateError('CID 当前绑定已切换，本次旧初始化结果已丢弃');
       }
-      await _publishCurrentKeyPackages(context);
+      await _ensureCurrentKeyPackages(context);
       final contextKey = _contextKey(
         context.account,
         context.identity,
@@ -5545,7 +5573,7 @@ class ChatRuntime {
           requestSigner: session.signRequest,
         );
     try {
-      await _ensurePushEndpoint(
+      await _ensurePushEndpointWithRetry(
         account: account,
         identity: identity,
         prefs: prefs,
@@ -5599,6 +5627,29 @@ class ChatRuntime {
     );
     await prefs.setInt(expiresCacheKey, expiresAt.millisecondsSinceEpoch);
     await prefs.setString(pushCacheKey, pushToken.registrationCacheValue);
+  }
+
+  /// 启动、恢复和 Token 更新共用一次有界重试；平台 Token 尚未就绪不能永久跳过登记。
+  Future<void> _ensurePushEndpointWithRetry({
+    required _ChatAccount account,
+    required ChatDevice identity,
+    required SharedPreferences prefs,
+    required ChatCloudTransport transport,
+  }) async {
+    for (var attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await _ensurePushEndpoint(
+          account: account,
+          identity: identity,
+          prefs: prefs,
+          transport: transport,
+        );
+        return;
+      } catch (_) {
+        if (attempt == 2) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 250 << attempt));
+      }
+    }
   }
 
   Future<ChatPushToken> _readPushToken() {
@@ -5829,7 +5880,12 @@ class ChatRuntime {
     String senderCidNumber,
     List<int> envelopeBytes,
   ) async {
-    final envelope = ChatEnvelope.fromBuffer(envelopeBytes);
+    late final ChatEnvelope envelope;
+    try {
+      envelope = ChatEnvelope.fromBuffer(envelopeBytes);
+    } catch (_) {
+      throw const FormatException('Chat 邮箱 Envelope 无法解析');
+    }
     if (envelope.senderCidNumber != senderCidNumber ||
         envelope.recipientCidNumber != context.account.cidNumber) {
       throw const FormatException('Chat 邮箱路由与 Envelope 身份不一致');
@@ -5868,11 +5924,14 @@ class ChatRuntime {
         .toList(growable: false);
   }
 
-  /// 为当前设备发布一个一次性包和一个 RFC 9420 兜底包。
-  /// 两个包的私密材料只进入本机 OpenMLS 状态，CitizenServe 只收到公开 wire bytes。
-  Future<void> _publishCurrentKeyPackages(
+  /// 确保当前设备拥有一个一次性包和一个 RFC 9420 兜底包。
+  /// 同一运行期不重复生成；CitizenServe 也只在缺失、过期或设备变化时接受候选包。
+  Future<void> _ensureCurrentKeyPackages(
     _ChatAccountContext context,
   ) async {
+    final publicationKey = '${context.account.cidNumber}|${context.deviceId}|'
+        '${context.devicePublicKey.toLowerCase()}';
+    if (_keyPackagePublications.contains(publicationKey)) return;
     final normal = await context.crypto.createKeyPackage(
       context.identity,
       lastResort: false,
@@ -5904,6 +5963,7 @@ class ChatRuntime {
       normal: normal,
       lastResort: lastResort,
     );
+    _keyPackagePublications.add(publicationKey);
   }
 
   Future<MlsStateStore> _stateStore(

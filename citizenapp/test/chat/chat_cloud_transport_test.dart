@@ -117,34 +117,49 @@ void main() {
   test('邮箱补拉严格解析密文并以原 envelope_id 数组确认', () async {
     final envelope = _envelope();
     final encoded = base64Url.encode(envelope.writeToBuffer());
+    final envelopeIds = <String>[envelope.envelopeId, 'env-mailbox-2'];
     var calls = 0;
     final transport = _transport((request) async {
       calls += 1;
       if (request.method == 'GET') {
         expect(request.url.path, '/api/chat/messages');
         return _json([
-          {
-            'envelope_id': envelope.envelopeId,
+          for (final envelopeId in envelopeIds) {
+            'envelope_id': envelopeId,
             'sender_cid_number': _bobCidNumber,
             'recipient_cid_number': _aliceCidNumber,
             'conversation_id': envelope.conversationId,
             'envelope': encoded,
             'created_at_millis': 1000,
             'ttl_millis': 60000,
-          }
+          },
         ]);
       }
       expect(request.method, 'POST');
       expect(request.url.path, '/api/chat/messages/ack');
-      expect(jsonDecode(request.body), [envelope.envelopeId]);
+      expect(jsonDecode(request.body), envelopeIds);
       return _json({'ok': true});
     });
 
     final items = await transport.fetchMailbox();
-    expect(items, hasLength(1));
-    expect(items.single.senderCidNumber, _bobCidNumber);
-    await transport.acknowledgeMailbox([items.single.envelopeId]);
+    expect(items, hasLength(2));
+    expect(items.every((item) => item.senderCidNumber == _bobCidNumber), isTrue);
+    await transport.acknowledgeMailbox(
+      items.map((item) => item.envelopeId).toList(growable: false),
+    );
     expect(calls, 2);
+  });
+
+  test('邮箱逐条隔离处理并在整批结束后只确认一次', () {
+    final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
+
+    expect(runtime, contains('for (final item in items)'));
+    expect(runtime, contains('acknowledgeMailbox(acknowledgedEnvelopeIds)'));
+    expect(runtime, contains('error is FormatException || error is ArgumentError'));
+    expect(
+      runtime,
+      isNot(contains('acknowledgeMailbox(<String>[item.envelopeId])')),
+    );
   });
 
   test('ICE配置只允许STUN且在55分钟窗口内复用', () async {

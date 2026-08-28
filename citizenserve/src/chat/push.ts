@@ -23,6 +23,8 @@ interface PushOutcome {
   device: PushDeviceRow;
   accepted: boolean;
   invalid: boolean;
+  status: number;
+  reason: string | null;
 }
 
 /** 同一次 Worker/Queue 调用内复用推送凭据，禁止每台设备重复签名或请求 OAuth。 */
@@ -117,9 +119,18 @@ export async function sendChatAlert(
   const auth = createPushAuth();
   const outcomes = await Promise.all(
     (result.results ?? []).map((device) =>
-      sendDeviceAlert(env, device, payload, envelopeId, auth),
+      sendDeviceAlert(env, device, payload, envelopeId, auth).catch(() => ({
+        device,
+        accepted: false,
+        invalid: false,
+        status: 0,
+        reason: 'request_failed',
+      })),
     ),
   );
+  for (const outcome of outcomes) {
+    if (!outcome.accepted) logPushFailure(outcome);
+  }
   await Promise.all(
     outcomes.filter((outcome) => outcome.invalid).map((outcome) =>
       env.DB.prepare(
@@ -140,7 +151,13 @@ async function sendDeviceAlert(
 ): Promise<PushOutcome> {
   if (device.push_provider === 'apns') {
     if (device.apns_environment === null) {
-      return { device, accepted: false, invalid: true };
+      return {
+        device,
+        accepted: false,
+        invalid: true,
+        status: 0,
+        reason: 'environment_missing',
+      };
     }
     return sendApnsChatAlert(
       env,
@@ -163,7 +180,13 @@ async function sendApnsChatAlert(
   auth: PushAuth,
 ): Promise<PushOutcome> {
   if (!env.APNS_KEY || !env.APNS_KID || !env.APNS_TEAM || !env.APNS_TOPIC) {
-    return { device, accepted: false, invalid: false };
+    return {
+      device,
+      accepted: false,
+      invalid: false,
+      status: 0,
+      reason: 'configuration_missing',
+    };
   }
   const jwt = await apnsJwt(env, auth);
   const response = await fetchPush(() => fetch(
@@ -190,11 +213,18 @@ async function sendApnsChatAlert(
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     },
   ));
-  // 只有 APNs 明确声明端点已注销才删除。BadDeviceToken/Topic 不匹配属于签名、
-  // 环境或 Topic 配置错误，删除 D1 行会与手机本地缓存组合成永久失联。
+  const reason = response.ok ? null : await pushFailureReason(response);
+  // APNs 明确拒绝当前 Token 时立即删除，手机启动、恢复或 Token 更新会幂等重登；
+  // Topic/鉴权等服务配置错误只保留端点并输出脱敏诊断。
   const invalid = response.status === 410 ||
-    await hasPushError(response, ['Unregistered']);
-  return { device, accepted: response.ok, invalid };
+    ['Unregistered', 'BadDeviceToken'].includes(reason ?? '');
+  return {
+    device,
+    accepted: response.ok,
+    invalid,
+    status: response.status,
+    reason,
+  };
 }
 
 async function sendFcmChatAlert(
@@ -205,7 +235,13 @@ async function sendFcmChatAlert(
   auth: PushAuth,
 ): Promise<PushOutcome> {
   if (!env.FCM_PROJECT || !env.FCM_EMAIL || !env.FCM_KEY) {
-    return { device, accepted: false, invalid: false };
+    return {
+      device,
+      accepted: false,
+      invalid: false,
+      status: 0,
+      reason: 'configuration_missing',
+    };
   }
   const accessToken = await fcmAccessToken(env, auth);
   const response = await fetchPush(() => fetch(
@@ -235,10 +271,13 @@ async function sendFcmChatAlert(
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     },
   ));
+  const reason = response.ok ? null : await pushFailureReason(response);
   return {
     device,
     accepted: response.ok,
-    invalid: await hasPushError(response, ['UNREGISTERED']),
+    invalid: reason === 'UNREGISTERED',
+    status: response.status,
+    reason,
   };
 }
 
@@ -268,10 +307,25 @@ async function fetchPush(send: () => Promise<Response>): Promise<Response> {
   throw failure instanceof Error ? failure : new Error('chat_push_request_failed');
 }
 
-async function hasPushError(response: Response, reasons: string[]): Promise<boolean> {
-  if (response.ok) return false;
-  const body = await response.clone().text().catch(() => '');
-  return reasons.some((reason) => body.includes(reason));
+async function pushFailureReason(response: Response): Promise<string> {
+  const body = await response.clone().json().catch(() => null) as {
+    reason?: unknown;
+    error?: { status?: unknown };
+  } | null;
+  const value = body?.reason ?? body?.error?.status;
+  return typeof value === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(value)
+    ? value
+    : `http_${response.status}`;
+}
+
+/** 只记录平台、状态和官方稳定 reason，禁止输出 CID、Token、正文或密文。 */
+function logPushFailure(outcome: PushOutcome): void {
+  console.warn(JSON.stringify({
+    stage: 'chat_push_rejected',
+    provider: outcome.device.push_provider,
+    status: outcome.status,
+    reason: outcome.reason,
+  }));
 }
 
 async function sendDeviceWake(

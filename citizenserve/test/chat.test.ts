@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acknowledgeChatMailbox,
@@ -20,7 +21,7 @@ import {
   relayAuthenticatedChatSignal,
   relayChatSignal,
 } from "../src/chat/realtime";
-import { apnsHost, sendStorageCleanupAlert } from "../src/chat/push";
+import { apnsHost, sendChatAlert, sendStorageCleanupAlert } from "../src/chat/push";
 import type { Env, UserRow } from "../src/types";
 
 const ACCOUNT_ID =
@@ -28,7 +29,10 @@ const ACCOUNT_ID =
 const SENDER_CID = "CN220-CTZN2-198805200-2026";
 const RECIPIENT_CID = "CN220-CTZN2-199001010-2026";
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 function projectedUser(cidNumber: string): UserRow {
   return {
@@ -50,6 +54,15 @@ function projectedUser(cidNumber: string): UserRow {
 
 class ChatDb {
   readonly sql: string[] = [];
+  readonly deletedPushTokens: unknown[][] = [];
+
+  constructor(
+    readonly pushDevices: Array<{
+      push_provider: "apns" | "fcm";
+      push_token: string;
+      apns_environment: "sandbox" | "production" | null;
+    }> = [],
+  ) {}
 
   prepare(sql: string): ChatStmt {
     this.sql.push(sql);
@@ -104,10 +117,16 @@ class ChatStmt {
   }
 
   async all<T>(): Promise<{ results: T[] }> {
+    if (this.sql.includes("FROM chat_push_endpoints")) {
+      return { results: this.db.pushDevices as T[] };
+    }
     return { results: [] };
   }
 
   async run(): Promise<{ meta: { changes: number } }> {
+    if (this.sql.includes("DELETE FROM chat_push_endpoints")) {
+      this.db.deletedPushTokens.push([...this.values]);
+    }
     return { meta: { changes: 1 } };
   }
 }
@@ -360,6 +379,56 @@ describe("device-only Chat control plane", () => {
       fakeEnv(),
     );
     expect(await acknowledged.json()).toEqual({ ok: true });
+  });
+
+  it("orders mailbox recovery by durable insertion order instead of device clocks", () => {
+    const source = readFileSync(
+      new URL("../src/chat/realtime.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).toContain("ORDER BY rowid");
+    expect(source).not.toContain("ORDER BY created_at_millis, envelope_id");
+  });
+
+  it("deletes a rejected APNs token and logs only safe provider diagnostics", async () => {
+    const db = new ChatDb([{
+      push_provider: "apns",
+      push_token: "rejected-device-token",
+      apns_environment: "sandbox",
+    }]);
+    const env = fakeEnv(1, undefined, db);
+    Object.assign(env, {
+      APNS_KEY: "-----BEGIN PRIVATE KEY-----\nAQ==\n-----END PRIVATE KEY-----",
+      APNS_KID: "KID",
+      APNS_TEAM: "TEAM",
+      APNS_TOPIC: "ios.citizenapp",
+    });
+    vi.stubGlobal("crypto", {
+      subtle: {
+        importKey: vi.fn(async () => ({})),
+        sign: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(
+      { reason: "BadDeviceToken" },
+      { status: 400 },
+    )));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    expect(await sendChatAlert(
+      env,
+      RECIPIENT_CID,
+      SENDER_CID,
+      `dm:${SENDER_CID}:${RECIPIENT_CID}`,
+      "envelope-12345678",
+    )).toBe(0);
+    expect(db.deletedPushTokens).toEqual([["apns", "rejected-device-token"]]);
+    const diagnostic = String(warn.mock.calls[0]?.[0] ?? "");
+    expect(diagnostic).toContain('\"provider\":\"apns\"');
+    expect(diagnostic).toContain('\"status\":400');
+    expect(diagnostic).toContain('\"reason\":\"BadDeviceToken\"');
+    expect(diagnostic).not.toContain(RECIPIENT_CID);
+    expect(diagnostic).not.toContain("rejected-device-token");
   });
 
   it("reports unavailable without storing an undelivered WSS signal", async () => {

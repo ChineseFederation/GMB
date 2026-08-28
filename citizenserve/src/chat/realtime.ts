@@ -58,6 +58,12 @@ interface ChatKeyPackageSqlRow extends Record<string, SqlStorageValue> {
   package_json: string;
 }
 
+interface ChatKeyPackageStateSqlRow extends Record<string, SqlStorageValue> {
+  package_kind: string;
+  device_id: string;
+  not_after_millis: number;
+}
+
 interface ChatMailboxUsage extends Record<string, SqlStorageValue> {
   message_count: number;
   envelope_bytes: number;
@@ -86,6 +92,15 @@ const CHAT_ENVELOPE_LIMIT = resourceLimit('chat_envelope');
 export const CHAT_MAILBOX_MAX_MESSAGES = CHAT_ENVELOPE_LIMIT.max_count ?? 1000;
 export const CHAT_MAILBOX_MAX_BYTES = CHAT_ENVELOPE_LIMIT.max_total_bytes ?? 8 * 1024 * 1024;
 export const CHAT_MAILBOX_FETCH_BATCH = CHAT_ENVELOPE_LIMIT.max_items ?? 100;
+
+/** 同一设备未过期的公开包必须保持稳定；只有缺失、过期或设备变更才接受新包。 */
+export function needsKeyPackage(
+  stored: { device_id: string; not_after_millis: number } | undefined,
+  deviceId: string,
+  current: number,
+): boolean {
+  return !stored || stored.device_id !== deviceId || stored.not_after_millis <= current;
+}
 
 /**
  * CID 级 Chat 实时入口与有界密文邮箱；WebSocket 附件额外绑定 finalized 版本与当前授权账户。
@@ -127,13 +142,31 @@ export class Chat implements DurableObject {
         normal: ChatPublishedKeyPackage;
         last_resort: ChatPublishedKeyPackage;
       };
-      this.state.storage.sql.exec('DELETE FROM chat_key_packages');
+      const current = nowMs();
+      this.state.storage.sql.exec(
+        'DELETE FROM chat_key_packages WHERE not_after_millis <= ?',
+        current,
+      );
+      let stored = this.state.storage.sql.exec<ChatKeyPackageStateSqlRow>(
+        `SELECT package_kind, device_id, not_after_millis
+           FROM chat_key_packages`,
+      ).toArray();
+      // 当前会话设备变化时，旧设备公开包必须整体退出；同一设备刷新会话不得旋转
+      // 尚未过期的包，否则已经进入邮箱的 Welcome 将失去稳定领取锚点。
+      if (stored.some((row) => row.device_id !== payload.normal.device_id)) {
+        this.state.storage.sql.exec('DELETE FROM chat_key_packages');
+        stored = [];
+      }
+      const byKind = new Map(stored.map((row) => [row.package_kind, row]));
       for (const [kind, keyPackage] of [
         ['normal', payload.normal],
         ['last_resort', payload.last_resort],
       ] as const) {
+        if (!needsKeyPackage(byKind.get(kind), keyPackage.device_id, current)) {
+          continue;
+        }
         this.state.storage.sql.exec(
-          `INSERT INTO chat_key_packages (
+          `INSERT OR REPLACE INTO chat_key_packages (
              package_kind, device_id, package_json, not_before_millis, not_after_millis
            ) VALUES (?, ?, ?, ?, ?)`,
           kind,
@@ -235,7 +268,7 @@ export class Chat implements DurableObject {
         `SELECT envelope_id, sender_cid_number, recipient_cid_number, envelope,
                 created_at_millis, ttl_millis
            FROM chat_envelopes
-          ORDER BY created_at_millis, envelope_id
+          ORDER BY rowid
           LIMIT ?`,
         CHAT_MAILBOX_FETCH_BATCH,
       ).toArray();

@@ -3,6 +3,7 @@ import {
   claimChatKeyPackage,
   publishChatKeyPackages,
 } from "../src/chat/service";
+import { needsKeyPackage } from "../src/chat/realtime";
 import type { Env, UserRow } from "../src/types";
 
 const ACCOUNT_ID =
@@ -118,6 +119,23 @@ function jsonRequest(path: string, method: string, body: object): Request {
 
 // 覆盖公开包成对发布、经聊天对象领取，以及备用标记错误时的失败关闭行为。
 describe("OpenMLS public KeyPackage delivery", () => {
+  it("preserves the same device package until it is missing or expired", () => {
+    const current = Date.now();
+    expect(needsKeyPackage(undefined, "alice-phone", current)).toBe(true);
+    expect(needsKeyPackage({
+      device_id: "alice-phone",
+      not_after_millis: current + 60_000,
+    }, "alice-phone", current)).toBe(false);
+    expect(needsKeyPackage({
+      device_id: "alice-phone",
+      not_after_millis: current,
+    }, "alice-phone", current)).toBe(true);
+    expect(needsKeyPackage({
+      device_id: "other-phone",
+      not_after_millis: current + 60_000,
+    }, "alice-phone", current)).toBe(true);
+  });
+
   it("publishes exactly one normal and one last-resort package", async () => {
     let internalBody: unknown;
     const response = await publishChatKeyPackages(

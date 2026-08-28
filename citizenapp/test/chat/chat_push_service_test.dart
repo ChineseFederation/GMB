@@ -106,7 +106,10 @@ void main() {
     expect(client, contains('setForegroundNotificationPresentationOptions'));
     expect(client, contains('message.notification != null'));
     expect(push, contains("'thread-id': payload.conversation_id"));
-    expect(push, contains("await hasPushError(response, ['Unregistered'])"));
+    expect(
+      push,
+      contains("['Unregistered', 'BadDeviceToken'].includes(reason ?? '')"),
+    );
     expect(android, contains('clearChatNotifications(conversationId)'));
     expect(
       File('ios/Runner/AppDelegate.swift').readAsStringSync(),
@@ -185,6 +188,17 @@ void main() {
       isNot(production.registrationCacheValue),
     );
     expect(fcm.registrationCacheValue, isNot(sandbox.registrationCacheValue));
+  });
+
+  test('启动恢复和Token更新统一有界重试且先于邮箱补拉登记监听', () {
+    final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
+    final tokenListener = runtime.indexOf('session.attachTokenSubscription');
+    final mailboxFetch = runtime.indexOf('await signalTransport.fetchMailbox()');
+
+    expect(runtime, contains('_ensurePushEndpointWithRetry'));
+    expect(runtime, contains('for (var attempt = 0; attempt < 3; attempt += 1)'));
+    expect(tokenListener, greaterThanOrEqualTo(0));
+    expect(mailboxFetch, greaterThan(tokenListener));
   });
 
   test('后台连续唤醒会去重保存全部发送方', () async {
