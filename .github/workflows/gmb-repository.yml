@@ -78,7 +78,8 @@ env:
 jobs:
   validate_dispatch:
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    permissions: {}
+    permissions:
+      actions: read
     runs-on: ubuntu-24.04
     steps:
       - name: 校验统一入口路由身份
@@ -130,16 +131,42 @@ jobs:
           }
           NODE
 
+      - name: 校验产品 CI 的全仓成功基线
+        if: ${{ contains(inputs.pipeline, '/ci-') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp \
+            "repos/${REPOSITORY}/actions/workflows/gmb-repository.yml/runs?branch=main&per_page=100" \
+            | node -e '
+              let source = "";
+              process.stdin.setEncoding("utf8");
+              process.stdin.on("data", (chunk) => { source += chunk; });
+              process.stdin.on("end", () => {
+                const pages = JSON.parse(source);
+                const rows = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])
+                  .filter((item) => item?.display_title === "GMB · 全仓统一")
+                  .sort((left, right) => Number(right?.id || 0) - Number(left?.id || 0));
+                const latest = rows[0];
+                if (!latest || latest.status !== "completed" || latest.conclusion !== "success") {
+                  throw new Error("GMB 最近一次全仓门禁不是成功，禁止发起产品 CI");
+                }
+                process.stdout.write("GMB 全仓成功基线：" + latest.id + "\n");
+              });
+            '
+
   retain-current-run:
     permissions:
       actions: write
       contents: read
     if: ${{ github.event_name == 'push' || inputs.pipeline == 'repository' }}
-    name: 只保留当前门禁记录
+    name: 预收口门禁历史
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: 删除当前门禁之前的全部运行记录
+      - name: 成功和失败各保留最近一条
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -147,12 +174,37 @@ jobs:
           repository='${{ github.repository }}'
           current='${{ github.run_id }}'
           workflow_id="$(gh api "repos/${repository}/actions/runs/${current}" --jq '.workflow_id')"
-          while IFS= read -r previous; do
-            [[ -n "$previous" && "$previous" != "$current" ]] || continue
-            gh api --method DELETE "repos/${repository}/actions/runs/${previous}"
-            echo "已删除上一条门禁记录：${previous}"
-          done < <(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.id < ${current} and .display_title == \"GMB · 全仓统一\") | .id")
+          success_count=0
+          failure_count=0
+          delete_run() {
+            local run_id="$1" artifact_id artifacts total
+            while true; do
+              total="$(gh api "repos/${repository}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.total_count')"
+              [[ "$total" =~ ^[0-9]+$ ]]
+              (( total == 0 )) && break
+              artifacts="$(gh api "repos/${repository}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[].id')"
+              [[ -n "$artifacts" ]]
+              while IFS= read -r artifact_id; do
+                [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+                gh api --method DELETE "repos/${repository}/actions/artifacts/${artifact_id}"
+              done <<<"$artifacts"
+            done
+            gh api --method DELETE "repos/${repository}/actions/runs/${run_id}"
+          }
+          rows="$(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and .display_title == \"GMB · 全仓统一\") | [.id, (.conclusion // \"failure\")] | @tsv")"
+          while IFS=$'\t' read -r previous conclusion; do
+            [[ "$previous" =~ ^[1-9][0-9]*$ && "$previous" != "$current" ]] || continue
+            if [[ "$conclusion" == success ]]; then
+              success_count=$((success_count + 1))
+              (( success_count == 1 )) && continue
+            else
+              failure_count=$((failure_count + 1))
+              (( failure_count == 1 )) && continue
+            fi
+            delete_run "$previous"
+            echo "已删除同状态超额门禁记录及全部产物：${previous}"
+          done <<<"$rows"
 
   dependency-contracts:
     permissions:
@@ -277,6 +329,61 @@ jobs:
       - name: 清理本次 Rust 增量缓存
         if: ${{ success() }}
         run: find target -type d -name incremental -prune -exec rm -rf {} +
+
+  retain-terminal-run:
+    permissions:
+      actions: write
+      contents: read
+    if: ${{ always() && (github.event_name == 'push' || inputs.pipeline == 'repository') }}
+    name: 按门禁终态收口同状态历史
+    needs:
+      - dependency-contracts
+      - cross-platform-contracts
+      - repository-guardrails
+      - shared-contracts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 删除同状态较早记录和全部产物
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GATE_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          repository='${{ github.repository }}'
+          current='${{ github.run_id }}'
+          workflow_id="$(gh api "repos/${repository}/actions/runs/${current}" --jq '.workflow_id')"
+          result="$(node -e '
+            const values = Object.values(JSON.parse(process.env.GATE_RESULTS));
+            process.stdout.write(values.every((value) => value.result === "success") ? "success" : "failure");
+          ')"
+          delete_run() {
+            local run_id="$1" artifact_id artifacts total
+            while true; do
+              total="$(gh api "repos/${repository}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.total_count')"
+              [[ "$total" =~ ^[0-9]+$ ]]
+              (( total == 0 )) && break
+              artifacts="$(gh api "repos/${repository}/actions/runs/${run_id}/artifacts?per_page=100" --jq '.artifacts[].id')"
+              [[ -n "$artifacts" ]]
+              while IFS= read -r artifact_id; do
+                [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+                gh api --method DELETE "repos/${repository}/actions/artifacts/${artifact_id}"
+              done <<<"$artifacts"
+            done
+            gh api --method DELETE "repos/${repository}/actions/runs/${run_id}"
+          }
+          rows="$(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
+            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and .display_title == \"GMB · 全仓统一\") | [.id, (.conclusion // \"failure\")] | @tsv")"
+          while IFS=$'\t' read -r previous conclusion; do
+            [[ "$previous" =~ ^[1-9][0-9]*$ && "$previous" != "$current" ]] || continue
+            if [[ "$result" == success && "$conclusion" != success ]] \
+                || [[ "$result" == failure && "$conclusion" == success ]]; then
+              continue
+            fi
+            delete_run "$previous"
+            echo "已删除同终态较早门禁记录及全部产物：${previous}"
+          done <<<"$rows"
 
   # ── .github/workflows/citizenapp/ci-android.yml ──
   # ── 代码检查 ──

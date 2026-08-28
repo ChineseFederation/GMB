@@ -1228,7 +1228,16 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   ]) assert5.ok(repositorySource.includes(required4), `\u72EC\u7ACB\u4ED3\u5E93\u95E8\u7981\u7F3A\u5C11 ${required4}`);
   assert5.match(repositorySource, /actions: write/);
   assert5.match(repositorySource, /retain-current-run:/);
-  assert5.match(repositorySource, /actions\/runs\/\$\{previous\}/);
+  assert5.match(repositorySource, /retain-terminal-run:/);
+  assert5.match(repositorySource, /continue-on-error: true/);
+  assert5.match(repositorySource, /success_count[\s\S]*failure_count/);
+  assert5.match(repositorySource, /校验产品 CI 的全仓成功基线/);
+  assert5.match(repositorySource, /actions\/workflows\/gmb-repository\.yml\/runs\?branch=main/);
+  assert5.match(repositorySource, /latest\.status !== "completed" \|\| latest\.conclusion !== "success"/);
+  assert5.match(repositorySource, /GMB 最近一次全仓门禁不是成功，禁止发起产品 CI/);
+  assert5.ok(repositorySource.includes('.conclusion // \\"failure\\"'));
+  assert5.match(repositorySource, /actions\/artifacts\/\$\{artifact_id\}/);
+  assert5.match(repositorySource, /actions\/runs\/\$\{run_id\}/);
   assert5.match(repositorySource, /needs: retain-current-run/g);
   assert5.match(repositorySource, /inputs\.pipeline/);
   assert5.match(repositorySource, /contains\(inputs\.pipeline, '\/release-'\)[\s\S]*inputs\.source_sha \|\| github\.sha/);

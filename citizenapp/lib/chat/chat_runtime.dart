@@ -32,7 +32,6 @@ import 'proto/chat_envelope.pb.dart';
 import 'storage/chat_store.dart';
 import 'transport/chat_cloud_transport.dart';
 import 'transport/chat_transport.dart';
-import 'transport/chat_webrtc_transport.dart';
 
 typedef ChatLoginSigner = Future<String> Function({
   required String cidNumber,
@@ -1398,7 +1397,6 @@ class _ChatAccountContext {
     required this.devicePublicKey,
     required this.crypto,
     required this.transport,
-    required this.webrtc,
     required this.sessionExpiresAt,
   });
 
@@ -1408,7 +1406,6 @@ class _ChatAccountContext {
   final String devicePublicKey;
   final MlsCrypto crypto;
   final ChatCloudTransport transport;
-  final ChatWebrtcTransport webrtc;
   final int sessionExpiresAt;
   late final _RetryableAsyncDisposer _disposer =
       _RetryableAsyncDisposer(_dispose);
@@ -1424,7 +1421,6 @@ class _ChatAccountContext {
     // 先停止会产生新附件/网络回调的资源并等待其 tail，再清零 MLS 状态钥；禁止
     // 正在执行的回调观察到已 dispose 的 crypto/stateStore。
     transport.dispose();
-    await webrtc.dispose();
     final currentCrypto = crypto;
     if (currentCrypto is _ChatBindingFencedMlsCrypto) {
       currentCrypto.dispose();
@@ -1440,7 +1436,7 @@ class _ChatAccountContext {
       );
 }
 
-/// 前台常驻只持有账户、设备标识、会话与WSS传输，不打开ChatIsar、MLS或WebRTC。
+/// 前台常驻只持有账户、设备标识、会话与WSS传输，不打开ChatIsar或MLS。
 class _ChatSignalContext {
   const _ChatSignalContext({
     required this.account,
@@ -1599,7 +1595,7 @@ class ChatRuntime {
   final _ChatCidMutationGate _outboundDeliveryGate = _ChatCidMutationGate();
   final Future<Directory> Function() _documentsDirectoryProvider;
 
-  /// 正在经 WebRTC 传输字节的媒体 attachmentId(初始发送或补发中),用于去重:
+  /// 正在经 HTTPS 上传 R2 密文的媒体 attachmentId（初始发送或补发中），用于去重：
   /// peer_ready 触发的补发不得对在途媒体再整块重传。
   final Set<String> _mediaBytesInFlight = {};
 
@@ -2163,7 +2159,7 @@ class ChatRuntime {
     ]);
 
     // 第三阶段才关闭 context：此时没有 action 会继续使用 NativeMlsCrypto、
-    // state key 或 WebRTC。flight 晚到 context 与此前失败的 pending 一并重试。
+    // state key。flight 晚到 context 与此前失败的 pending 一并重试。
     final contexts = <_ChatAccountContext>{
       ...initialContexts,
       ..._contextsPendingDisposal,
@@ -3819,8 +3815,8 @@ class ChatRuntime {
       );
     }
     // barrier 已确认此前 flow/build/file action 全部离开；此时不持 CID lease 关闭
-    // WebRTC KeyPackage 控制连接可自行取得旧 token lease 并收口，
-    // 避免“持 admin lease 等待一个正在等同一 lease 的 tail”自锁。
+    // 网络与 OpenMLS 操作已经排空，避免“持 admin lease 等待一个正在等同一
+    // lease 的 tail”自锁。
     for (final context in contexts) {
       await _captureCleanupFailure(
         '关闭账户 Chat 上下文',
@@ -3873,7 +3869,7 @@ class ChatRuntime {
   }
 
   /// 用户点击发送后的第一持久边界。这里只依赖当前 finalized 账户和本机用途钥，
-  /// 不等待 Firebase、Worker 登录、系统唤醒端点、直连 KeyPackage 或 WebSocket。
+  /// 不等待 Firebase、Worker 登录、系统唤醒端点、云端 KeyPackage 或 WebSocket。
   Future<String> _savePendingDirectPayload({
     required String peerCidNumber,
     required String conversationId,
@@ -4087,8 +4083,7 @@ class ChatRuntime {
         )).path}.uploaded',
       );
 
-  /// 发送内置贴纸:只走控制信封,不经 WebRTC。首次会话缺 KeyPackage 时同样
-  /// 领取后重试。
+  /// 发送内置贴纸只走控制信封。首次会话缺 KeyPackage 时经 HTTPS 领取后重试。
   Future<List<ChatDeliveryResult>> sendSticker({
     required String peerCidNumber,
     required String conversationId,
@@ -4272,7 +4267,7 @@ class ChatRuntime {
     }();
   }
 
-  /// 逐个被邀请 CID 建立直连并请求一枚一次性 KeyPackage。
+  /// 逐个为被邀请 CID 从 CitizenServe 领取公开 KeyPackage。
   Future<List<MlsKeyPackage>> _fetchInviteeKeyPackages(
     _ChatAccountContext context,
     List<String> inviteeCidNumbers,
@@ -4281,7 +4276,7 @@ class ChatRuntime {
     for (final cidNumber in inviteeCidNumbers) {
       final consumed = await _claimKeyPackage(context, cidNumber);
       if (consumed.cidNumber != cidNumber) {
-        throw StateError('直连返回的 KeyPackage CID 与请求目标不一致');
+        throw StateError('CitizenServe 返回的 KeyPackage CID 与请求目标不一致');
       }
       packages.add(consumed);
     }
@@ -4292,13 +4287,13 @@ class ChatRuntime {
     _ChatAccountContext context,
     String targetCidNumber,
   ) async {
-    final claimed = await context.webrtc.requestKeyPackage(targetCidNumber);
+    final claimed = await context.transport.claimKeyPackage(targetCidNumber);
     if (claimed.cidNumber != targetCidNumber) {
-      throw StateError('直连返回的 KeyPackage CID 与请求目标不一致');
+      throw StateError('CitizenServe 返回的 KeyPackage CID 与请求目标不一致');
     }
     final now = DateTime.now().millisecondsSinceEpoch;
     if (claimed.notBeforeMillis >= now || claimed.notAfterMillis <= now) {
-      throw StateError('直连返回的 KeyPackage Lifetime 当前不可用');
+      throw StateError('CitizenServe 返回的 KeyPackage Lifetime 当前不可用');
     }
     return claimed;
   }
@@ -4500,7 +4495,7 @@ class ChatRuntime {
 
   /// 重试发送设备本机队列中的密文,并补发待设备投递的媒体字节。
   /// 应用密文只有收到接收设备“已成功处理”确认后才删队列项；Worker 的 socket
-  /// 写入结果只更新内部尝试状态。媒体字节仍在收到 WebRTC ack 后删待投递行。
+  /// 写入结果只更新内部尝试状态。媒体密文完成 R2 上传后才删除待投递行。
   Future<int> retryOutgoing({
     String? recipientCidNumber,
     String? conversationId,
@@ -5097,8 +5092,6 @@ class ChatRuntime {
                 final context = await _readyContext(account);
                 if (message['signal_kind'] == 'peer_ready') {
                   await retryOutgoing(recipientCidNumber: senderCidNumber);
-                } else {
-                  await context.webrtc.handleSignal(senderCidNumber, message);
                 }
               } else if (type == 'citizen_chat_envelope') {
                 await _consumeMailboxEnvelope(
@@ -5371,7 +5364,7 @@ class ChatRuntime {
     }
     if (knownKey != null) {
       // session 过期也必须走完整失效屏障：停实时回调、排空旧 CID action、关闭
-      // WebRTC/crypto 后才允许同一 MlsStateStore 建立新上下文。
+      // crypto 后才允许同一 MlsStateStore 建立新上下文。
       await _invalidateAccountContext(account.accountId, keepBlocked: false);
       return _readyContext(account);
     }
@@ -5392,6 +5385,7 @@ class ChatRuntime {
         await _disposeContext(context);
         throw StateError('CID 当前绑定已切换，本次旧初始化结果已丢弃');
       }
+      await _publishCurrentKeyPackages(context);
       final contextKey = _contextKey(
         context.account,
         context.identity,
@@ -5488,33 +5482,16 @@ class ChatRuntime {
         bindingToken: bindingToken,
         delegate: finalCrypto,
       );
-      late final _ChatAccountContext context;
-      final webrtc = ChatWebrtcTransport(
-        accountId: account.accountId,
-        localCidNumber: account.cidNumber,
-        cloud: transport,
-        sendSignal: ({required recipientCidNumber, required signal}) =>
-            _sendRealtimeSignal(
-          account,
-          recipientCidNumber: recipientCidNumber,
-          signal: signal,
-        ),
-        runBindingMutation: <T>(Future<T> Function() operation) =>
-            _runBindingFileMutation(bindingToken, operation),
-        createKeyPackage: () => _createDirectKeyPackage(context),
-      );
       keepStateStore = true;
-      context = _ChatAccountContext(
+      return _ChatAccountContext(
         account: account,
         bindingToken: bindingToken,
         deviceId: deviceId,
         devicePublicKey: identity.devicePublicKey,
         crypto: fencedCrypto,
         transport: transport,
-        webrtc: webrtc,
         sessionExpiresAt: service.session.expiresAt,
       );
-      return context;
     } finally {
       if (!keepStateStore) {
         transport?.dispose();
@@ -5575,7 +5552,7 @@ class ChatRuntime {
         transport: transport,
       );
     } catch (_) {
-      // CID 会话与前台 WebRTC 建连不能被 APNs/FCM Token 暂时不可用阻断。
+      // CID 会话不能被 APNs/FCM Token 暂时不可用阻断。
       // 唤醒端点只提高“对端 App 未运行”时的可达性，后续 Token 回调和重连会重试。
     }
     return _ChatServiceContext(
@@ -5891,23 +5868,42 @@ class ChatRuntime {
         .toList(growable: false);
   }
 
-  Future<MlsKeyPackage> _createDirectKeyPackage(
+  /// 为当前设备发布一个一次性包和一个 RFC 9420 兜底包。
+  /// 两个包的私密材料只进入本机 OpenMLS 状态，CitizenServe 只收到公开 wire bytes。
+  Future<void> _publishCurrentKeyPackages(
     _ChatAccountContext context,
   ) async {
-    final keyPackage = await context.crypto.createKeyPackage(
+    final normal = await context.crypto.createKeyPackage(
       context.identity,
       lastResort: false,
     );
-    if (keyPackage.cidNumber != context.account.cidNumber ||
-        keyPackage.deviceId != context.deviceId ||
-        keyPackage.devicePublicKey.toLowerCase() !=
-            context.devicePublicKey.toLowerCase()) {
+    final lastResort = await context.crypto.createKeyPackage(
+      context.identity,
+      lastResort: true,
+    );
+    for (final keyPackage in <MlsKeyPackage>[normal, lastResort]) {
+      if (keyPackage.cidNumber != context.account.cidNumber ||
+          keyPackage.deviceId != context.deviceId ||
+          keyPackage.devicePublicKey.toLowerCase() !=
+              context.devicePublicKey.toLowerCase()) {
+        throw const MlsNativeException(
+          MlsNativeErrorCode.invalidResponse,
+          'OpenMLS KeyPackage 与当前本机 CID 设备身份不一致',
+        );
+      }
+    }
+    if (normal.lastResort ||
+        !lastResort.lastResort ||
+        normal.keyPackageId == lastResort.keyPackageId) {
       throw const MlsNativeException(
         MlsNativeErrorCode.invalidResponse,
-        'OpenMLS KeyPackage 与当前本机 CID 设备身份不一致',
+        'OpenMLS 普通包与 last-resort 包不合法',
       );
     }
-    return keyPackage;
+    await context.transport.publishKeyPackages(
+      normal: normal,
+      lastResort: lastResort,
+    );
   }
 
   Future<MlsStateStore> _stateStore(

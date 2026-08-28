@@ -117,3 +117,11 @@ Android 使用 FCM；应用启动和平台 Token 更新后必须向 CitizenServe
 - Turnstile 未配置、界面未就绪、用户取消或 token 不合法都必须失败关闭，不得登记设备子钥，也不得循环重试。
 - 已登记设备继续使用按 CID 隔离的 P-256 硬件子钥静默登录；该登录和日常请求不触发生物识别。
 - iOS 真机交互回归统一使用 Device Hub/XCTest；禁止用桌面坐标点击冒充设备触控。
+
+## CitizenApp / CitizenServe OpenMLS 首次会话合同（2026-08-28）
+
+- CitizenApp 保留 OpenMLS；每台当前 Chat 设备只发布一个普通一次性 KeyPackage 和一个 RFC 9420 last-resort KeyPackage。私密材料只存在于本机 OpenMLS 状态。
+- CitizenServe 通过 `PUT /chat/key-packages` 保存两个公开包，通过 `POST /chat/key-packages/claim` 原子领取普通包并在耗尽时返回兜底包；状态复用现有 Chat Durable Object，不新增 D1 表、迁移、任务编号或独立服务。
+- 首次私聊和私密小群加人必须经 HTTPS 领取公开 KeyPackage，再由本机生成 Welcome 和 MLS 密文；已有 MLS 会话直接加密并提交 `/chat/messages`。
+- WebRTC 严格只允许语音、视频通话入口使用。文字、表情、贴纸、附件和 KeyPackage 获取不得创建 PeerConnection 或 DataChannel；附件继续使用本机加密、HTTPS 私有 R2 密文与 OpenMLS 内容钥控制消息。
+- CitizenServe 永不接收 OpenMLS 私钥、聊天明文或附件明文字节；普通消息只有云端持久化成功后才可标记已发送。

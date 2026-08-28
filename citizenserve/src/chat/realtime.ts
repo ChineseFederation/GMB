@@ -42,6 +42,22 @@ interface RoutedChatMailboxItem extends ChatMailboxItem {
 
 type ChatMailboxSqlRow = ChatMailboxItem & Record<string, SqlStorageValue>;
 
+export interface ChatPublishedKeyPackage {
+  cid_number: string;
+  device_id: string;
+  device_public_key_hex: string;
+  key_package_id: string;
+  key_package: string;
+  cipher_suite: string;
+  not_before: number;
+  not_after: number;
+  last_resort: boolean;
+}
+
+interface ChatKeyPackageSqlRow extends Record<string, SqlStorageValue> {
+  package_json: string;
+}
+
 interface ChatMailboxUsage extends Record<string, SqlStorageValue> {
   message_count: number;
   envelope_bytes: number;
@@ -91,6 +107,13 @@ export class Chat implements DurableObject {
       created_at_millis INTEGER NOT NULL,
       ttl_millis INTEGER NOT NULL
     )`);
+    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_key_packages (
+      package_kind TEXT PRIMARY KEY,
+      device_id TEXT NOT NULL,
+      package_json TEXT NOT NULL,
+      not_before_millis INTEGER NOT NULL,
+      not_after_millis INTEGER NOT NULL
+    )`);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -98,6 +121,63 @@ export class Chat implements DurableObject {
     if (request.method === 'POST' && path === '/__signal') {
       const payload = (await request.json()) as ChatSignalPayload;
       return jsonResponse({ ok: true, sent: this.deliver(payload) });
+    }
+    if (request.method === 'PUT' && path === '/__key_packages') {
+      const payload = (await request.json()) as {
+        normal: ChatPublishedKeyPackage;
+        last_resort: ChatPublishedKeyPackage;
+      };
+      this.state.storage.sql.exec('DELETE FROM chat_key_packages');
+      for (const [kind, keyPackage] of [
+        ['normal', payload.normal],
+        ['last_resort', payload.last_resort],
+      ] as const) {
+        this.state.storage.sql.exec(
+          `INSERT INTO chat_key_packages (
+             package_kind, device_id, package_json, not_before_millis, not_after_millis
+           ) VALUES (?, ?, ?, ?, ?)`,
+          kind,
+          keyPackage.device_id,
+          JSON.stringify(keyPackage),
+          keyPackage.not_before,
+          keyPackage.not_after,
+        );
+      }
+      return jsonResponse({ ok: true });
+    }
+    if (request.method === 'POST' && path === '/__key_packages/claim') {
+      const current = nowMs();
+      this.state.storage.sql.exec(
+        'DELETE FROM chat_key_packages WHERE not_after_millis <= ?',
+        current,
+      );
+      let row = this.state.storage.sql.exec<ChatKeyPackageSqlRow>(
+        `SELECT package_json FROM chat_key_packages
+          WHERE package_kind = 'normal'
+            AND not_before_millis <= ? AND not_after_millis > ?`,
+        current,
+        current,
+      ).toArray()[0];
+      if (row) {
+        this.state.storage.sql.exec(
+          "DELETE FROM chat_key_packages WHERE package_kind = 'normal'",
+        );
+      } else {
+        row = this.state.storage.sql.exec<ChatKeyPackageSqlRow>(
+          `SELECT package_json FROM chat_key_packages
+            WHERE package_kind = 'last_resort'
+              AND not_before_millis <= ? AND not_after_millis > ?`,
+          current,
+          current,
+        ).toArray()[0];
+      }
+      if (!row) {
+        return jsonResponse(
+          { ok: false, error_code: 'chat_key_package_unavailable', message: '接收设备尚无可用公开密钥包' },
+          { status: 404 },
+        );
+      }
+      return jsonResponse({ ok: true, key_package: JSON.parse(row.package_json) });
     }
     if (request.method === 'POST' && path === '/__message') {
       const payload = (await request.json()) as RoutedChatMailboxItem;
@@ -179,6 +259,7 @@ export class Chat implements DurableObject {
         closed += 1;
       }
       this.state.storage.sql.exec('DELETE FROM chat_envelopes');
+      this.state.storage.sql.exec('DELETE FROM chat_key_packages');
       return jsonResponse({ ok: true, closed });
     }
     if (request.method === 'POST' && path === '/__close_stale') {
@@ -439,6 +520,50 @@ export async function relayChatSignal(env: Env, payload: ChatSignalPayload): Pro
   );
   if (!response.ok) return 0;
   return ((await response.json()) as { sent?: number }).sent ?? 0;
+}
+
+/** 以当前 CID 的最新设备公开包替换旧设备包；私钥始终只存在于手机 OpenMLS 状态。 */
+export async function storeChatKeyPackages(
+  env: Env,
+  cidNumber: string,
+  normal: ChatPublishedKeyPackage,
+  lastResort: ChatPublishedKeyPackage,
+): Promise<void> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__key_packages', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ normal, last_resort: lastResort }),
+    }));
+  if (!response.ok) {
+    throw new HttpError(503, 'chat_key_package_write_failed', 'Chat 公开密钥包写入失败');
+  }
+}
+
+/** 原子领取普通包；普通包为空时返回 RFC 9420 last-resort 包。 */
+export async function claimStoredChatKeyPackage(
+  env: Env,
+  cidNumber: string,
+): Promise<ChatPublishedKeyPackage> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__key_packages/claim', {
+      method: 'POST',
+    }));
+  const body = await response.json() as {
+    key_package?: ChatPublishedKeyPackage;
+    error_code?: string;
+    message?: string;
+  };
+  if (!response.ok || !body.key_package) {
+    throw new HttpError(
+      response.status,
+      body.error_code ?? 'chat_key_package_unavailable',
+      body.message ?? '接收设备尚无可用公开密钥包',
+    );
+  }
+  return body.key_package;
 }
 
 /** 使用已认证 socket 身份发送瞬时信令；离线只触发无内容唤醒，不保存 SDP 或 ICE。 */

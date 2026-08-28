@@ -15,9 +15,12 @@ import {
 } from "./codec";
 import {
   acknowledgeChatEnvelopes,
+  claimStoredChatKeyPackage,
   readChatMailbox,
   requireChatRealtimeNamespace,
+  storeChatKeyPackages,
   storeChatEnvelope,
+  type ChatPublishedKeyPackage,
 } from "./realtime";
 import { sendChatAlert } from "./push";
 import { resourceLimit } from "../limits/catalog";
@@ -34,6 +37,71 @@ interface RegisterPushEndpointRequest {
   push_token?: unknown;
   apns_environment?: unknown;
   expires_at?: unknown;
+}
+
+interface PublishChatKeyPackagesRequest {
+  normal?: unknown;
+  last_resort?: unknown;
+}
+
+interface ClaimChatKeyPackageRequest {
+  recipient_cid_number?: unknown;
+}
+
+/** 上传当前设备一个普通包和一个 last-resort 包；两者都只有公开 wire bytes。 */
+export async function publishChatKeyPackages(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const session = await requireSession(request, env);
+  await requireActiveMembership(env, session.cid_number, session.account_id);
+  const body = await readJson<PublishChatKeyPackagesRequest>(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "invalid_chat_key_package_fields", "Chat 公开密钥包字段不合法");
+  }
+  assertExactFields(body, ["last_resort", "normal"], "invalid_chat_key_package_fields");
+  const normal = assertPublishedKeyPackage(body.normal, false, session.cid_number);
+  const lastResort = assertPublishedKeyPackage(body.last_resort, true, session.cid_number);
+  if (
+    normal.device_id !== lastResort.device_id
+    || normal.device_public_key_hex !== lastResort.device_public_key_hex
+    || normal.key_package_id === lastResort.key_package_id
+  ) {
+    throw new HttpError(400, "chat_key_package_pair_invalid", "Chat 公开密钥包设备身份不一致");
+  }
+  await storeChatKeyPackages(env, session.cid_number, normal, lastResort);
+  return jsonResponse({ ok: true });
+}
+
+/** 领取接收设备公开包；发送方和接收方都必须具有当前有效会员。 */
+export async function claimChatKeyPackage(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJson<ClaimChatKeyPackageRequest>(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "invalid_chat_key_package_claim", "Chat 公开密钥包领取字段不合法");
+  }
+  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_key_package_claim");
+  const recipientCidNumber = assertChatCidNumber(
+    body.recipient_cid_number,
+    "invalid_recipient_cid_number",
+  );
+  await requireActiveMembership(env, session.cid_number, session.account_id);
+  const recipient = await readUserByCidNumber(env, recipientCidNumber);
+  if (!recipient) {
+    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法建立聊天会话");
+  }
+  try {
+    await requireActiveMembership(env, recipient.cid_number, recipient.account_id);
+  } catch {
+    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法建立聊天会话");
+  }
+  return jsonResponse({
+    ok: true,
+    key_package: await claimStoredChatKeyPackage(env, recipientCidNumber),
+  });
 }
 
 /**
@@ -307,6 +375,84 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
   const actual = Object.keys(value).sort();
   if (actual.length !== expected.length || actual.some((field, index) => field !== expected[index])) {
     throw new HttpError(400, "invalid_chat_envelope_fields", "Chat 信封字段不合法");
+  }
+}
+
+function assertPublishedKeyPackage(
+  value: unknown,
+  expectedLastResort: boolean,
+  expectedCidNumber: string,
+): ChatPublishedKeyPackage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new HttpError(400, "invalid_chat_key_package", "Chat 公开密钥包不合法");
+  }
+  const raw = value as Record<string, unknown>;
+  assertExactFields(raw, [
+    "cid_number",
+    "cipher_suite",
+    "device_id",
+    "device_public_key_hex",
+    "key_package",
+    "key_package_id",
+    "last_resort",
+    "not_after",
+    "not_before",
+  ], "invalid_chat_key_package");
+  const cidNumber = assertChatCidNumber(raw.cid_number, "invalid_chat_key_package_cid");
+  const deviceId = assertDeviceId(raw.device_id);
+  const devicePublicKey = raw.device_public_key_hex;
+  const keyPackageId = raw.key_package_id;
+  const keyPackage = raw.key_package;
+  const cipherSuite = raw.cipher_suite;
+  const notBefore = raw.not_before;
+  const notAfter = raw.not_after;
+  if (
+    cidNumber !== expectedCidNumber
+    || typeof devicePublicKey !== "string"
+    || !/^[0-9a-fA-F]{64,512}$/.test(devicePublicKey)
+    || typeof keyPackageId !== "string"
+    || keyPackageId.length < 8
+    || keyPackageId.length > 256
+    || /[\u0000-\u001f\u007f]/.test(keyPackageId)
+    || typeof keyPackage !== "string"
+    || keyPackage.length < 4
+    || keyPackage.length > 48 * 1024
+    || !/^[A-Za-z0-9_-]+$/.test(keyPackage)
+    || typeof cipherSuite !== "string"
+    || !/^[A-Za-z0-9_]{8,128}$/.test(cipherSuite)
+    || !Number.isSafeInteger(notBefore)
+    || !Number.isSafeInteger(notAfter)
+    || (notBefore as number) >= nowMs()
+    || (notAfter as number) <= nowMs()
+    || raw.last_resort !== expectedLastResort
+  ) {
+    throw new HttpError(400, "invalid_chat_key_package", "Chat 公开密钥包不合法");
+  }
+  return {
+    cid_number: cidNumber,
+    device_id: deviceId,
+    device_public_key_hex: devicePublicKey,
+    key_package_id: keyPackageId,
+    key_package: keyPackage,
+    cipher_suite: cipherSuite,
+    not_before: notBefore as number,
+    not_after: notAfter as number,
+    last_resort: expectedLastResort,
+  };
+}
+
+function assertExactFields(
+  value: object,
+  expected: string[],
+  errorCode: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const sortedExpected = [...expected].sort();
+  if (
+    actual.length !== sortedExpected.length
+    || actual.some((field, index) => field !== sortedExpected[index])
+  ) {
+    throw new HttpError(400, errorCode, "Chat 请求字段不合法");
   }
 }
 

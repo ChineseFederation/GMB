@@ -8,6 +8,7 @@ import 'package:citizenapp/8964/services/square_request_signer.dart';
 import 'package:http/http.dart' as http;
 
 import '../chat_models.dart';
+import '../crypto/mls_boundary.dart';
 import '../proto/chat_envelope.pb.dart';
 import 'chat_transport.dart';
 
@@ -141,8 +142,9 @@ class ChatIceConfiguration {
 
 /// CitizenServe Chat 网络边界。
 ///
-/// HTTPS 只承载系统推送端点、端到端密文邮箱和固定 STUN 配置；同一账户级 WSS
-/// 同时承载在线密文与扁平 KeyPackage WebRTC 信令。Worker 不接收明文或附件字节。
+/// HTTPS 只承载系统推送端点、OpenMLS 公开 KeyPackage、端到端密文邮箱和固定
+/// STUN 配置；同一账户级 WSS 只承载在线密文与音视频通话信令。Worker 不接收
+/// OpenMLS 私钥、聊天明文或附件明文字节。
 class ChatCloudTransport implements ChatTransport {
   ChatCloudTransport({
     required this.accountId,
@@ -201,6 +203,43 @@ class ChatCloudTransport implements ChatTransport {
       'apns_environment': apnsEnvironment,
       'expires_at': expiresAtMillis,
     });
+  }
+
+  /// 发布当前设备唯一的普通包和 RFC 9420 last-resort 包。
+  /// CitizenServe 只保存签名后的公开 wire bytes，无法据此恢复任何 MLS 私钥。
+  Future<void> publishKeyPackages({
+    required MlsKeyPackage normal,
+    required MlsKeyPackage lastResort,
+  }) async {
+    if (normal.cidNumber != localCidNumber ||
+        lastResort.cidNumber != localCidNumber ||
+        normal.deviceId != localDeviceId ||
+        lastResort.deviceId != localDeviceId ||
+        normal.lastResort ||
+        !lastResort.lastResort ||
+        normal.keyPackageId == lastResort.keyPackageId) {
+      throw const FormatException('Chat KeyPackage 与当前设备身份不一致');
+    }
+    await _putMap('/chat/key-packages', {
+      'normal': _keyPackageToJson(normal),
+      'last_resort': _keyPackageToJson(lastResort),
+    });
+  }
+
+  /// 为首次 OpenMLS 会话领取接收设备公开 KeyPackage；该动作不建立 WebRTC。
+  Future<MlsKeyPackage> claimKeyPackage(String recipientCidNumber) async {
+    final response = await _postMap('/chat/key-packages/claim', {
+      'recipient_cid_number': recipientCidNumber,
+    });
+    final raw = response['key_package'];
+    if (raw is! Map<String, dynamic>) {
+      throw const FormatException('CitizenServe 未返回 Chat KeyPackage');
+    }
+    final claimed = _keyPackageFromJson(raw);
+    if (claimed.cidNumber != recipientCidNumber) {
+      throw const FormatException('CitizenServe KeyPackage CID 不一致');
+    }
+    return claimed;
   }
 
   /// HTTP 200 表示 CitizenServe 已持久保存同一密文；失败时保留本机可靠队列。
@@ -726,6 +765,69 @@ class ChatCloudTransport implements ChatTransport {
     headers['x-chat-device'] = localDeviceId;
     return headers;
   }
+}
+
+Map<String, dynamic> _keyPackageToJson(MlsKeyPackage keyPackage) =>
+    <String, dynamic>{
+      'cid_number': keyPackage.cidNumber,
+      'device_id': keyPackage.deviceId,
+      'device_public_key_hex': keyPackage.devicePublicKey,
+      'key_package_id': keyPackage.keyPackageId,
+      'key_package': base64Url.encode(keyPackage.keyPackageBytes).replaceAll('=', ''),
+      'cipher_suite': keyPackage.cipherSuite,
+      'not_before': keyPackage.notBeforeMillis,
+      'not_after': keyPackage.notAfterMillis,
+      'last_resort': keyPackage.lastResort,
+    };
+
+MlsKeyPackage _keyPackageFromJson(Map<String, dynamic> value) {
+  const fields = <String>{
+    'cid_number',
+    'device_id',
+    'device_public_key_hex',
+    'key_package_id',
+    'key_package',
+    'cipher_suite',
+    'not_before',
+    'not_after',
+    'last_resort',
+  };
+  if (value.keys.toSet().difference(fields).isNotEmpty ||
+      fields.difference(value.keys.toSet()).isNotEmpty ||
+      value['cid_number'] is! String ||
+      value['device_id'] is! String ||
+      value['device_public_key_hex'] is! String ||
+      value['key_package_id'] is! String ||
+      value['key_package'] is! String ||
+      value['cipher_suite'] is! String ||
+      value['not_before'] is! int ||
+      value['not_after'] is! int ||
+      value['last_resort'] is! bool) {
+    throw const FormatException('CitizenServe KeyPackage 字段不合法');
+  }
+  late final List<int> bytes;
+  try {
+    final encoded = value['key_package'] as String;
+    bytes = base64Url.decode(
+      encoded.padRight((encoded.length + 3) ~/ 4 * 4, '='),
+    );
+  } on FormatException {
+    throw const FormatException('CitizenServe KeyPackage 编码不合法');
+  }
+  if (bytes.isEmpty) {
+    throw const FormatException('CitizenServe KeyPackage 不能为空');
+  }
+  return MlsKeyPackage(
+    cidNumber: value['cid_number'] as String,
+    deviceId: value['device_id'] as String,
+    devicePublicKey: value['device_public_key_hex'] as String,
+    keyPackageId: value['key_package_id'] as String,
+    keyPackageBytes: bytes,
+    cipherSuite: value['cipher_suite'] as String,
+    notBeforeMillis: value['not_before'] as int,
+    notAfterMillis: value['not_after'] as int,
+    lastResort: value['last_resort'] as bool,
+  );
 }
 
 /// WebSocket 握手异常只提取 HTTP 状态类别，不把 URL、Header 或响应正文写入日志。

@@ -256,6 +256,8 @@ const routeLimits: readonly RouteLimit[] = [
   route('POST', /^\/square\/notify\/read$/),
   route('PUT', /^\/chat\/push-endpoint$/, 'chat_push_endpoint'),
   route('GET', /^\/chat\/signals$/),
+  route('PUT', /^\/chat\/key-packages$/, 'chat_signal'),
+  route('POST', /^\/chat\/key-packages\/claim$/, 'chat_signal'),
   route('POST', /^\/chat\/ice$/, 'chat_ice'),
   route('POST', /^\/chat\/messages$/, 'chat_envelope'),
   route('GET', /^\/chat\/messages$/),

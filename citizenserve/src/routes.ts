@@ -10,9 +10,11 @@ import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
 import { deleteContactRoute, listContactsRoute, putContactRoute } from "./contacts/service";
 import {
   acknowledgeChatMailbox,
+  claimChatKeyPackage,
   fetchChatEnvelopes,
   issueChatIce,
   openChatSignal,
+  publishChatKeyPackages,
   registerChatPushEndpoint,
   submitChatEnvelope,
 } from "./chat/service";
@@ -232,6 +234,12 @@ export async function routeRequest(
   }
   if (request.method === "GET" && path === "/chat/signals") {
     return openChatSignal(request, env);
+  }
+  if (request.method === "PUT" && path === "/chat/key-packages") {
+    return publishChatKeyPackages(request, env);
+  }
+  if (request.method === "POST" && path === "/chat/key-packages/claim") {
+    return claimChatKeyPackage(request, env);
   }
   // WebRTC 只读取固定公开 STUN 地址；没有中继密钥、短期凭证或流量回退。
   if (request.method === "POST" && path === "/chat/ice") {
