@@ -117,6 +117,7 @@ void main() {
   test('邮箱补拉严格解析密文并以原 envelope_id 数组确认', () async {
     final envelope = _envelope();
     final encoded = base64Url.encode(envelope.writeToBuffer());
+    // 一次邮箱拉取中的有效信封必须整批处理、整批确认，避免逐条确认造成漏收或重复消费。
     final envelopeIds = <String>[envelope.envelopeId, 'env-mailbox-2'];
     var calls = 0;
     final transport = _transport((request) async {
@@ -151,6 +152,7 @@ void main() {
   });
 
   test('邮箱逐条隔离处理并在整批结束后只确认一次', () {
+    // 单条坏信封只能隔离自身，整批循环结束后仍只发送一次已处理信封编号列表。
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
 
     expect(runtime, contains('for (final item in items)'));

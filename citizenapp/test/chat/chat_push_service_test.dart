@@ -191,6 +191,7 @@ void main() {
   });
 
   test('启动恢复和Token更新统一有界重试且先于邮箱补拉登记监听', () {
+    // 先监听 Token 更新再补拉邮箱，保证启动窗口内发生的端点变化不会丢失。
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
     final tokenListener = runtime.indexOf('session.attachTokenSubscription');
     final mailboxFetch = runtime.indexOf('await signalTransport.fetchMailbox()');

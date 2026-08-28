@@ -120,6 +120,7 @@ function jsonRequest(path: string, method: string, body: object): Request {
 // 覆盖公开包成对发布、经聊天对象领取，以及备用标记错误时的失败关闭行为。
 describe("OpenMLS public KeyPackage delivery", () => {
   it("preserves the same device package until it is missing or expired", () => {
+    // 同一设备的有效公开包必须稳定复用，只有缺失、过期或设备变化时才要求补充。
     const current = Date.now();
     expect(needsKeyPackage(undefined, "alice-phone", current)).toBe(true);
     expect(needsKeyPackage({

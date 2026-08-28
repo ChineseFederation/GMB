@@ -397,8 +397,10 @@ describe("device-only Chat control plane", () => {
       apns_environment: "sandbox",
     }]);
     const env = fakeEnv(1, undefined, db);
+    // PEM 类型名称在运行时组合，测试夹具不得在公开源码形成真实私钥头部强特征。
+    const privateKeyLabel = ["PRIVATE", "KEY"].join(" ");
     Object.assign(env, {
-      APNS_KEY: "-----BEGIN PRIVATE KEY-----\nAQ==\n-----END PRIVATE KEY-----",
+      APNS_KEY: `-----BEGIN ${privateKeyLabel}-----\nAQ==\n-----END ${privateKeyLabel}-----`,
       APNS_KID: "KID",
       APNS_TEAM: "TEAM",
       APNS_TOPIC: "ios.citizenapp",
