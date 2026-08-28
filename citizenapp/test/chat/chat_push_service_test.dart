@@ -74,6 +74,7 @@ void main() {
   });
 
   test('双端可见聊天通知只展示固定无正文文案', () {
+    // 系统通知只能提示存在新消息，禁止把端到端加密正文写入 APNs、FCM 或系统通知栏。
     final push = File('../citizenserve/src/chat/push.ts').readAsStringSync();
     final android = File(
       'android/app/src/main/kotlin/com/crcfrcn/citizenapp/MainActivity.kt',

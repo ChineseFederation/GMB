@@ -118,6 +118,7 @@ void main() {
     expect(conversations.single.unreadCount, 1);
     expect(conversations.single.lastMessage, 'hi back');
 
+    // 当前窗口只清除已展示时间点以内的未读数，保证稍后到达的新消息不会被误标已读。
     await store.markConversationRead(
       bindingToken: bindingToken,
       ownerCidNumber: _ownerCidNumber,

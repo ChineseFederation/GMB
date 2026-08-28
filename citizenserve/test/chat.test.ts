@@ -137,6 +137,7 @@ function fakeEnv(
   db = new ChatDb(),
   stored = true,
 ): Env {
+  // stored 独立模拟首次密文入库，sent 只模拟当前 WSS 在线投递数量。
   return {
     DB: db as unknown as D1Database,
     SQUARE_CACHE: new SessionKv() as unknown as KVNamespace,
@@ -294,6 +295,7 @@ describe("device-only Chat control plane", () => {
   });
 
   it("stores one opaque encrypted envelope and treats durable storage as success", async () => {
+    // 收集 waitUntil 任务，验证 Worker 可先返回持久化成功再完成系统通知。
     const tasks: Promise<unknown>[] = [];
     const ctx = {
       waitUntil: (task: Promise<unknown>) => tasks.push(task),
@@ -306,6 +308,7 @@ describe("device-only Chat control plane", () => {
   });
 
   it("notifies only the first mailbox insert and does not depend on WSS delivery", async () => {
+    // 在线设备同样需要系统通知；重复 envelope 已有持久化事实时不得再次通知。
     const onlineTasks: Promise<unknown>[] = [];
     const onlineCtx = {
       waitUntil: (task: Promise<unknown>) => onlineTasks.push(task),

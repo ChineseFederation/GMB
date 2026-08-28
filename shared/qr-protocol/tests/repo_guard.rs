@@ -324,6 +324,10 @@ fn product_ci_runs_shared_scanner_gates() {
 #[test]
 fn node_macos_camera_capability_is_bundled_and_verified() {
     let repo_root = repo_root();
+    // 正式本机 App 必须用动态配置注入资源，再按同一命令顺序传入锁定编译参数。
+    let tauri_build_start =
+        "node frontend/node_modules/@tauri-apps/cli/tauri.js build --config \"$tauri_override\"";
+    let tauri_build_locked = "--no-bundle --ci -- --locked";
     let cases = [
         (
             "citizenchain/node/Entitlements.plist",
@@ -349,7 +353,8 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
                 "MACOS_SIGNING_IDENTITY='Developer ID Application: WEI CHENG (MHYMVRN6FC)'",
                 "MACOS_TEAM_ID='MHYMVRN6FC'",
                 "cargo build --release -p onchina",
-                "node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked",
+                tauri_build_start,
+                tauri_build_locked,
                 "node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --bundles app --ci",
                 "$TARGET_DIR/release/bundle/macos/citizenchain.app",
                 "codesign --verify --deep --strict",
@@ -409,12 +414,16 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
         }
     }
     let compile_position = run_script
-        .find("node frontend/node_modules/@tauri-apps/cli/tauri.js build --no-bundle --ci -- --locked")
+        .find(tauri_build_start)
         .expect("上方必需值检查应已确认 Tauri 编译命令存在");
+    let locked_position = run_script[compile_position..]
+        .find(tauri_build_locked)
+        .map(|position| compile_position + position)
+        .expect("上方必需值检查应已确认 Tauri 锁定编译参数存在");
     let bundle_position = run_script
         .find("node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --bundles app --ci")
         .expect("上方必需值检查应已确认 Tauri 封装命令存在");
-    if compile_position >= bundle_position {
+    if compile_position >= locked_position || locked_position >= bundle_position {
         violations.push(
             "citizenchain/scripts/run.sh: Tauri 必须先完成 Release 编译再封装 macOS App"
                 .to_string(),

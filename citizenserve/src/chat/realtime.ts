@@ -142,6 +142,7 @@ export class Chat implements DurableObject {
           payload.ttl_millis,
         );
       }
+      // 只有首次写入返回 stored=true；在线 WSS 发送数不能替代持久化去重事实。
       return jsonResponse({
         ok: true,
         stored: !existing,
@@ -457,6 +458,7 @@ export async function relayAuthenticatedChatSignal(
   return sent > 0 ? 'sent' : 'unavailable';
 }
 
+/** 区分首次密文持久化与当前在线投递数，系统通知只依据前者触发。 */
 export interface ChatMailboxDelivery {
   stored: boolean;
   sent: number;
