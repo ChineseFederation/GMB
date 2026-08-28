@@ -12,6 +12,7 @@ const RECIPIENT_CID = "CN220-CTZN2-199001010-2026";
 const DEVICE_KEY =
   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
+// 这里的内存替身只实现服务函数会访问的 D1 查询，避免测试绕过真实鉴权分支。
 class KeyPackageDb {
   prepare(sql: string): KeyPackageStmt {
     return new KeyPackageStmt(sql);
@@ -51,6 +52,7 @@ class KeyPackageStmt {
   }
 }
 
+// 固定会话绑定账户、设备和有效期，用于验证公开包接口复用现有会话认证。
 class SessionKv {
   async get<T>(key: string): Promise<T | null> {
     if (
@@ -70,6 +72,7 @@ class SessionKv {
   }
 }
 
+// 普通包和备用包共享同一密码套件与有效期，唯一差异必须是公开包身份和备用标记。
 function packageBody(lastResort: boolean) {
   const now = Date.now();
   return {
@@ -113,6 +116,7 @@ function jsonRequest(path: string, method: string, body: object): Request {
   });
 }
 
+// 覆盖公开包成对发布、经聊天对象领取，以及备用标记错误时的失败关闭行为。
 describe("OpenMLS public KeyPackage delivery", () => {
   it("publishes exactly one normal and one last-resort package", async () => {
     let internalBody: unknown;

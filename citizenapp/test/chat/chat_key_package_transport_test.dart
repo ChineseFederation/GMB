@@ -11,6 +11,7 @@ void main() {
   const peer = 'CN220-CTZN2-199001010-2026';
   final now = DateTime.now().millisecondsSinceEpoch;
 
+  // 统一构造当前设备和对端设备的公开 KeyPackage，测试只改变持有者与备用标记。
   MlsKeyPackage package(String owner, bool lastResort) => MlsKeyPackage(
         cidNumber: owner,
         deviceId: owner == cid ? 'alice-phone' : 'bob-phone',
@@ -24,6 +25,7 @@ void main() {
         lastResort: lastResort,
       );
 
+  // 发布合同必须一次提交普通包和备用包，并保持 HTTPS 服务端路径唯一。
   test('发布严格的一次性包和last-resort包且不经过WebRTC', () async {
     late Map<String, dynamic> body;
     final transport = ChatCloudTransport(
@@ -48,6 +50,7 @@ void main() {
     expect((body['last_resort'] as Map<String, dynamic>)['last_resort'], isTrue);
   });
 
+  // 首次建会话只领取对端公开包，不把私钥材料或本机会话状态送入云端。
   test('首次会话经HTTPS领取公开KeyPackage', () async {
     final claimed = package(peer, false);
     final transport = ChatCloudTransport(
