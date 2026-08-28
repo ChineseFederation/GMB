@@ -125,3 +125,6 @@ Android 使用 FCM；应用启动和平台 Token 更新后必须向 CitizenServe
 - 首次私聊和私密小群加人必须经 HTTPS 领取公开 KeyPackage，再由本机生成 Welcome 和 MLS 密文；已有 MLS 会话直接加密并提交 `/chat/messages`。
 - WebRTC 严格只允许语音、视频通话入口使用。文字、表情、贴纸、附件和 KeyPackage 获取不得创建 PeerConnection 或 DataChannel；附件继续使用本机加密、HTTPS 私有 R2 密文与 OpenMLS 内容钥控制消息。
 - CitizenServe 永不接收 OpenMLS 私钥、聊天明文或附件明文字节；普通消息只有云端持久化成功后才可标记已发送。
+- CitizenServe 跨端契约测试必须读取当前存在的 Chat 源码，锁定 KeyPackage 仅走上述 HTTPS
+  两条路由，并断言普通消息运行时不存在 `ChatWebrtcTransport`、`RTCPeerConnection` 或
+  `context.webrtc.requestKeyPackage`；禁止继续引用已删除的 WebRTC KeyPackage 文件。

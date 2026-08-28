@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // 跨端契约锁。
 //
-// Worker 承载系统唤醒、WebRTC 媒体建连信令和有界端到端密文邮箱。本文件直接读 Flutter
-// 源码文本，锁住两端共享的控制字段，并确保明文、内容密钥与附件字节没有云端消息入口。
+// Worker 承载系统唤醒、音视频通话信令、OpenMLS 公开 KeyPackage 和有界端到端密文邮箱。
+// 本文件直接读 Flutter 源码文本，锁住两端共享的控制字段，并确保明文、私钥与附件字节
+// 没有云端消息入口。
 //
 // 只锁**跨端 JSON 键名**,不锁实现细节;新增跨端字段时在此补一条。
 
@@ -17,7 +18,11 @@ function readFlutter(relativePath: string): string {
 
 describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
   const transport = readFlutter("lib/chat/transport/chat_cloud_transport.dart");
-  const webrtc = readFlutter("lib/chat/transport/chat_webrtc_transport.dart");
+  const runtime = readFlutter("lib/chat/chat_runtime.dart");
+  const removedWebrtcKeyPackageTransport = join(
+    FLUTTER_ROOT,
+    "lib/chat/transport/chat_webrtc_transport.dart",
+  );
   const workerChat = readFileSync(
     join(import.meta.dirname, "../src/chat/service.ts"),
     "utf8",
@@ -31,18 +36,24 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
     "utf8",
   );
 
-  it("云端消息边界只增加序列化 Envelope，不增加公钥、KeyPackage 或明文字段", () => {
+  it("云端消息边界只接收序列化 Envelope，不接收明文或私钥字段", () => {
     for (const forbidden of [
-      "device_public_key_hex",
-      "key_package",
       "message_body",
       "plaintext",
+      "private_key",
     ]) {
       expect(workerChat).not.toContain(forbidden);
-      expect(transport).not.toContain(forbidden);
     }
     expect(workerChat).toContain("envelope_id");
     expect(workerChat).toContain("assertEncodedChatEnvelope");
+  });
+
+  it("OpenMLS 公开 KeyPackage 只经 HTTPS 发布和领取", () => {
+    expect(transport).toContain("'/chat/key-packages'");
+    expect(transport).toContain("'/chat/key-packages/claim'");
+    expect(runtime).toContain("context.transport.claimKeyPackage(targetCidNumber)");
+    expect(runtime).not.toContain("context.webrtc.requestKeyPackage");
+    expect(existsSync(removedWebrtcKeyPackageTransport)).toBe(false);
   });
 
   it("WebRTC 信令按身份主键 recipient_cid_number 寻址", () => {
@@ -54,25 +65,24 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
   it("服务端双向 WSS 使用唯一 connection_id 并接受 Trickle ICE", () => {
     for (const field of ["signal_kind", "connection_id", "candidate", "sdp"]) {
       expect(workerSignal).toContain(field);
-      expect(`${transport}\n${webrtc}`).toContain(field);
     }
+    expect(transport).toContain("'signal_kind'");
+    expect(transport).toContain("'connection_id'");
     expect(workerSignal).not.toContain("connection_kind");
     expect(workerSignal).not.toContain("transfer_id");
-    expect(`${transport}\n${webrtc}`).not.toContain("connection_kind");
-    expect(`${transport}\n${webrtc}`).not.toContain("transfer_id");
+    expect(transport).not.toContain("connection_kind");
+    expect(transport).not.toContain("transfer_id");
     expect(workerRealtime).toContain("assertChatSignalFrame(JSON.parse(message))");
     expect(workerRealtime).toContain("CHAT_WS_SIGNAL_RESULT_TYPE");
     expect(transport).toContain("socket.add(jsonEncode(frame))");
-    expect(webrtc).toContain("connection.onIceCandidate =");
-    expect(webrtc).toContain("connection.addCandidate(ice)");
   });
 
-  it("Flutter 密文走邮箱且 WebRTC DataChannel 不再承载 Envelope", () => {
+  it("Flutter 密文走邮箱且普通消息不依赖 WebRTC", () => {
     expect(transport).toContain("'/chat/messages'");
     expect(transport).toContain("'/chat/messages/ack'");
     expect(transport).toContain("ChatTransportType.mailbox");
-    expect(webrtc).not.toContain("ChatWebrtcControlFrame.envelope");
-    expect(webrtc).not.toContain("envelope_stored");
+    expect(runtime).not.toContain("ChatWebrtcTransport");
+    expect(runtime).not.toContain("RTCPeerConnection");
   });
 
   it("推送唤醒发件人按 sender_cid_number", () => {
@@ -177,6 +187,8 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     expect(routeCatalog).toContain("^\\/square\\/contacts$");
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
     expect(routeCatalog).toContain("^\\/chat\\/signals$");
+    expect(routeCatalog).toContain("^\\/chat\\/key-packages$");
+    expect(routeCatalog).toContain("^\\/chat\\/key-packages\\/claim$");
     expect(routeCatalog).toContain("^\\/chat\\/ice$");
     expect(routeCatalog).toContain("^\\/chat\\/messages$");
     expect(workerRoutes).not.toContain('request.method === "POST" && path === "/chat/signals"');
