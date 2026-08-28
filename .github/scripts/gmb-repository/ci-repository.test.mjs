@@ -1434,3 +1434,48 @@ test5("11 个 Release 分组真源与登记入口统一禁用仓库级 Latest", 
   assert5.equal((registered.match(/--latest false/g) ?? []).length, 11);
   assert5.doesNotMatch(registered, /--latest true/);
 });
+
+// 中文注释：动作必须继续自包含，但依赖门禁载荷必须逐字一致，防止单个产品再次保留过期构建命令。
+test5("23 个独立动作的 Tauri 依赖契约完全一致", () => {
+  const actions = [
+    "citizenapp/ci-android.mjs",
+    "citizenapp/ci-ios.mjs",
+    "citizenapp/release-android.mjs",
+    "citizenapp/release-ios.mjs",
+    "citizenchain/ci-node-linux-amd.mjs",
+    "citizenchain/ci-node-linux-arm.mjs",
+    "citizenchain/ci-node-macos.mjs",
+    "citizenchain/ci-node-windows.mjs",
+    "citizenchain/ci-runtime-wasm.mjs",
+    "citizenchain/release-node-linux-amd.mjs",
+    "citizenchain/release-node-linux-arm.mjs",
+    "citizenchain/release-node-macos.mjs",
+    "citizenchain/release-node-windows.mjs",
+    "citizenchain/release-runtime-wasm.mjs",
+    "citizenserve/ci-cloudflare.mjs",
+    "citizenserve/release-cloudflare.mjs",
+    "citizenwallet/ci-android.mjs",
+    "citizenwallet/ci-ios.mjs",
+    "citizenwallet/release-android.mjs",
+    "citizenwallet/release-ios.mjs",
+    "citizenweb/ci-web.mjs",
+    "citizenweb/release-web.mjs",
+    "gmb-repository/ci-repository.mjs",
+  ];
+  assert5.equal(actions.length, 23);
+  const prefix = "const implementations = Object.freeze(";
+  const dependencies = actions.map((action) => {
+    const source = readFileSync7(new URL(`../${action}`, import.meta.url), "utf8");
+    const line = source.split("\n").find((candidate) => candidate.startsWith(prefix));
+    assert5.ok(line?.endsWith(");"), `${action} 缺少独立 implementations 登记`);
+    const implementation = JSON.parse(line.slice(prefix.length, -2)).dependencies;
+    assert5.ok(implementation.includes('`${cli} build --config "$tauri_override"`'));
+    assert5.ok(implementation.includes('`--no-bundle --ci -- --locked`'));
+    assert5.ok(implementation.includes('`${cli} bundle --config "$tauri_override"`'));
+    assert5.ok(implementation.includes('`--bundles app --ci`'));
+    assert5.doesNotMatch(implementation, /\$\{cli\} build --no-bundle --ci -- --locked/);
+    assert5.doesNotMatch(implementation, /\$\{cli\} bundle --bundles app --ci/);
+    return implementation;
+  });
+  assert5.equal(new Set(dependencies).size, 1, "23 个动作的 dependencies 实现发生漂移");
+});

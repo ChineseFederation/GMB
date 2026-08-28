@@ -328,6 +328,9 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
     let tauri_build_start =
         "node frontend/node_modules/@tauri-apps/cli/tauri.js build --config \"$tauri_override\"";
     let tauri_build_locked = "--no-bundle --ci -- --locked";
+    let tauri_bundle_start =
+        "node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --config \"$tauri_override\"";
+    let tauri_bundle_app = "--bundles app --ci";
     let cases = [
         (
             "citizenchain/node/Entitlements.plist",
@@ -355,7 +358,8 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
                 "cargo build --release -p onchina",
                 tauri_build_start,
                 tauri_build_locked,
-                "node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --bundles app --ci",
+                tauri_bundle_start,
+                tauri_bundle_app,
                 "$TARGET_DIR/release/bundle/macos/citizenchain.app",
                 "codesign --verify --deep --strict",
                 "Authority=$MACOS_SIGNING_IDENTITY",
@@ -421,9 +425,17 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
         .map(|position| compile_position + position)
         .expect("上方必需值检查应已确认 Tauri 锁定编译参数存在");
     let bundle_position = run_script
-        .find("node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --bundles app --ci")
+        .find(tauri_bundle_start)
         .expect("上方必需值检查应已确认 Tauri 封装命令存在");
-    if compile_position >= locked_position || locked_position >= bundle_position {
+    // 动态封装配置必须先于 App 参数，防止门禁只命中散落字符串却放过错误执行顺序。
+    let bundle_app_position = run_script[bundle_position..]
+        .find(tauri_bundle_app)
+        .map(|position| bundle_position + position)
+        .expect("上方必需值检查应已确认 Tauri 封装参数存在");
+    if compile_position >= locked_position
+        || locked_position >= bundle_position
+        || bundle_position >= bundle_app_position
+    {
         violations.push(
             "citizenchain/scripts/run.sh: Tauri 必须先完成 Release 编译再封装 macOS App"
                 .to_string(),
