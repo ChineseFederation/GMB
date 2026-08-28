@@ -2526,12 +2526,21 @@ class ChatRuntime {
     required String conversationId,
     required int readThroughMillis,
   }) {
-    return _runWithReadyBinding((context) => _store.markConversationRead(
-          bindingToken: context.bindingToken,
-          ownerCidNumber: context.account.cidNumber,
-          conversationId: conversationId,
-          readThroughMillis: readThroughMillis,
-        ));
+    return _runWithReadyBinding((context) async {
+      final cleared = await _store.markConversationRead(
+        bindingToken: context.bindingToken,
+        ownerCidNumber: context.account.cidNumber,
+        conversationId: conversationId,
+        readThroughMillis: readThroughMillis,
+      );
+      // 本机未读真源已经原子清零后，再按同一 conversation_id 清理系统通知。
+      // 原生通知清理失败不能撤销已读事实，也不能误清其它会话或广场通知。
+      if (cleared) {
+        await _pushService
+            .clearConversationNotifications(conversationId)
+            .catchError((Object _) {});
+      }
+    });
   }
 
   Future<String?> readAccountId() async {
@@ -3872,9 +3881,13 @@ class ChatRuntime {
     required String payload,
     ChatMediaDraft? media,
     ChatMediaLocalCommitNotifier? onLocalCommitted,
+    bool scheduleDelivery = true,
   }) async {
     _ensureActive();
     final account = await _readAccount();
+    if (!ChatMediaLimits.chatAuthorizedFor(account.cidNumber)) {
+      throw StateError('当前会话尚未通过 CitizenServe 会员鉴权');
+    }
     final bindingToken = await _convergeBindingFence(account);
     final createdAtMillis = DateTime.now().millisecondsSinceEpoch;
     final localMessageId = _newPendingMessageId(
@@ -3911,11 +3924,13 @@ class ChatRuntime {
       );
     });
     await onLocalCommitted?.call();
-    _schedulePendingOutgoing(
-      account: account,
-      recipientCidNumber: peerCidNumber,
-      conversationId: conversationId,
-    );
+    if (scheduleDelivery) {
+      _schedulePendingOutgoing(
+        account: account,
+        recipientCidNumber: peerCidNumber,
+        conversationId: conversationId,
+      );
+    }
     return localMessageId;
   }
 
@@ -3968,14 +3983,14 @@ class ChatRuntime {
       DateTime.now().millisecondsSinceEpoch,
     );
     final account = await _readAccount();
-    final context = await _readyContext(account);
+    final bindingToken = await _convergeBindingFence(account);
+    final content = await _prepareEncryptedMedia(
+      bindingToken: bindingToken,
+      conversationId: conversationId,
+      attachmentId: attachmentId,
+      media: media,
+    );
     try {
-      final content = await _uploadEncryptedMedia(
-        context: context,
-        attachmentId: attachmentId,
-        recipientCidNumbers: <String>[peerCidNumber],
-        media: media,
-      );
       await _savePendingDirectPayload(
         peerCidNumber: peerCidNumber,
         conversationId: conversationId,
@@ -3983,47 +3998,48 @@ class ChatRuntime {
         payload: ChatPayloadCodec.encode(content),
         media: media,
         onLocalCommitted: onLocalCommitted,
+        scheduleDelivery: false,
+      );
+      // 本机消息和待上传密文均已持久成立；网络初始化、R2 multipart 与 MLS
+      // 控制信封统一交给后台保序队列，上传失败只保留这一条待重试消息。
+      _schedulePendingOutgoing(
+        account: account,
+        recipientCidNumber: peerCidNumber,
+        conversationId: conversationId,
       );
       return const <ChatDeliveryResult>[];
     } catch (_) {
-      await context.transport
-          .abortAttachment(attachmentId)
-          .catchError((Object _) {});
+      final staged = await _pendingAttachmentUploadFile(
+        bindingToken,
+        conversationId,
+        attachmentId,
+      );
+      if (await staged.exists()) await staged.delete();
       rethrow;
     }
   }
 
-  /// Encrypts one attachment once and uploads one ciphertext object for every
-  /// direct or group recipient. Worker and R2 never receive the plaintext key.
-  Future<ChatContent> _uploadEncryptedMedia({
-    required _ChatAccountContext context,
+  /// 用户点击发送时只生成持久待上传密文，不等待 CitizenServe、R2 或接收设备。
+  /// 随机密钥进入本机加密 payload；Worker 与 R2 永远收不到明文密钥。
+  Future<ChatContent> _prepareEncryptedMedia({
+    required ChatBindingFenceToken bindingToken,
+    required String conversationId,
     required String attachmentId,
-    required List<String> recipientCidNumbers,
     required ChatMediaDraft media,
   }) async {
-    if (recipientCidNumbers.isEmpty) {
-      throw StateError('Chat 附件没有有效收件人');
-    }
     final random = Random.secure();
     final transferKey = List<int>.generate(32, (_) => random.nextInt(256));
-    final tempRoot = Directory(
-      '${(await _attachmentDirectoryForToken(context.bindingToken)).path}/.tmp',
+    final cipherTarget = await _pendingAttachmentUploadFile(
+      bindingToken,
+      conversationId,
+      attachmentId,
     );
-    final cipherTarget = File(
-      '${tempRoot.path}/${_safePath(attachmentId)}.upload',
-    );
+    await cipherTarget.parent.create(recursive: true);
     try {
       final cipher = await AttachmentVault.sealForTransport(
         plainSource: File(media.sourcePath),
         cipherTarget: cipherTarget,
         key: transferKey,
-      );
-      await context.transport.uploadEncryptedAttachment(
-        attachmentId: attachmentId,
-        recipientCidNumbers: recipientCidNumbers,
-        cipherFile: cipher.file,
-        cipherByteSize: cipher.byteSize,
-        cipherSha256: cipher.sha256,
       );
       return ChatContent.media(
         kind: media.kind,
@@ -4039,11 +4055,37 @@ class ChatRuntime {
         cipherByteSize: cipher.byteSize,
         cipherSha256: cipher.sha256,
       );
+    } catch (_) {
+      if (await cipherTarget.exists()) await cipherTarget.delete();
+      rethrow;
     } finally {
       transferKey.fillRange(0, transferKey.length, 0);
-      if (await cipherTarget.exists()) await cipherTarget.delete();
     }
   }
+
+  Future<File> _pendingAttachmentUploadFile(
+    ChatBindingFenceToken bindingToken,
+    String conversationId,
+    String attachmentId,
+  ) async =>
+      File(
+        '${(await _attachmentDirectoryForToken(bindingToken)).path}'
+        '/${_safePath(conversationId)}/.pending_upload/'
+        '${_safePath(attachmentId)}.cipher',
+      );
+
+  Future<File> _pendingAttachmentUploadedMarker(
+    ChatBindingFenceToken bindingToken,
+    String conversationId,
+    String attachmentId,
+  ) async =>
+      File(
+        '${(await _pendingAttachmentUploadFile(
+          bindingToken,
+          conversationId,
+          attachmentId,
+        )).path}.uploaded',
+      );
 
   /// 发送内置贴纸:只走控制信封,不经 WebRTC。首次会话缺 KeyPackage 时同样
   /// 领取后重试。
@@ -4141,6 +4183,9 @@ class ChatRuntime {
     required String text,
   }) {
     return _runWithReadyContext((context) async {
+      if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) {
+        throw StateError('当前会话尚未通过 CitizenServe 会员鉴权');
+      }
       return _groupFlow(context).sendGroupText(
         groupId: groupId,
         senderCidNumber: context.account.cidNumber,
@@ -4157,6 +4202,9 @@ class ChatRuntime {
     required String stickerId,
   }) {
     return _runWithReadyContext((context) async {
+      if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) {
+        throw StateError('当前会话尚未通过 CitizenServe 会员鉴权');
+      }
       return _groupFlow(context).sendGroupSticker(
         groupId: groupId,
         senderCidNumber: context.account.cidNumber,
@@ -4167,7 +4215,7 @@ class ChatRuntime {
     });
   }
 
-  /// 群附件只加密和上传一次；每个群成员拥有独立 ACK，最后一个 ACK 删除对象。
+  /// 群附件与直聊统一先落本机待发消息，再后台上传一次并扇出控制信封。
   Future<List<ChatDeliveryResult>> sendGroupMedia({
     required String groupId,
     required ChatMediaDraft media,
@@ -4180,46 +4228,48 @@ class ChatRuntime {
         kind: media.kind,
       );
     }
-    return _runWithReadyContext((context) async {
-      final flow = _groupFlow(context);
-      final recipients = await flow.recipientCidNumbers(
-        groupId: groupId,
-        senderCidNumber: context.account.cidNumber,
-      );
+    return () async {
+      final account = await _readAccount();
+      if (!ChatMediaLimits.chatAuthorizedFor(account.cidNumber)) {
+        throw StateError('当前会话尚未通过 CitizenServe 会员鉴权');
+      }
+      final bindingToken = await _convergeBindingFence(account);
       final attachmentId = _newPendingAttachmentId(
         groupId,
         DateTime.now().millisecondsSinceEpoch,
       );
+      final content = await _prepareEncryptedMedia(
+        bindingToken: bindingToken,
+        conversationId: groupId,
+        attachmentId: attachmentId,
+        media: media,
+      );
       try {
-        final content = await _uploadEncryptedMedia(
-          context: context,
-          attachmentId: attachmentId,
-          recipientCidNumbers: recipients,
-          media: media,
-        );
-        await _copySentAttachmentToCache(
-          bindingToken: context.bindingToken,
+        await _savePendingDirectPayload(
+          peerCidNumber: groupId,
           conversationId: groupId,
-          attachmentId: attachmentId,
-          fileName: media.fileName,
-          contentType: media.contentType,
-          sourcePath: media.sourcePath,
-          byteSize: media.byteSize,
+          messageKind: media.kind,
+          payload: ChatPayloadCodec.encode(content),
+          media: media,
+          onLocalCommitted: onLocalCommitted,
+          scheduleDelivery: false,
         );
-        return flow.sendGroupMediaControl(
-          groupId: groupId,
-          senderCidNumber: context.account.cidNumber,
-          senderDeviceId: context.deviceId,
-          content: content,
-          onApplicationStored: onLocalCommitted,
+        _schedulePendingOutgoing(
+          account: account,
+          recipientCidNumber: groupId,
+          conversationId: groupId,
         );
+        return const <ChatDeliveryResult>[];
       } catch (_) {
-        await context.transport
-            .abortAttachment(attachmentId)
-            .catchError((Object _) {});
+        final staged = await _pendingAttachmentUploadFile(
+          bindingToken,
+          groupId,
+          attachmentId,
+        );
+        if (await staged.exists()) await staged.delete();
         rethrow;
       }
-    });
+    }();
   }
 
   /// 逐个被邀请 CID 建立直连并请求一枚一次性 KeyPackage。
@@ -4477,6 +4527,7 @@ class ChatRuntime {
     String? recipientCidNumber,
     String? conversationId,
   }) async {
+    if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) return;
     final pending = await _store.readPendingOutgoingMessages(
       bindingToken: context.bindingToken,
       ownerCidNumber: context.account.cidNumber,
@@ -4484,12 +4535,56 @@ class ChatRuntime {
       recipientCidNumber: recipientCidNumber,
       conversationId: conversationId,
     );
+    final nowMillis = DateTime.now().millisecondsSinceEpoch;
     for (final item in pending) {
+      if (nowMillis - item.createdAtMillis >= chatMailboxTtlMillis) {
+        await _expirePendingOutgoing(context, item);
+        continue;
+      }
       try {
         await _sendPendingOutgoing(context, item);
       } catch (_) {
         break;
       }
+    }
+  }
+
+  Future<void> _expirePendingOutgoing(
+    _ChatAccountContext context,
+    ChatPendingOutgoingMessage pending,
+  ) async {
+    await _store.markPendingOutgoingFailed(
+      bindingToken: context.bindingToken,
+      ownerCidNumber: context.account.cidNumber,
+      localMessageId: pending.localMessageId,
+    );
+    final content = ChatPayloadCodec.decode(pending.payload);
+    final attachmentId = content.attachmentId ?? '';
+    if (!content.isMedia || attachmentId.isEmpty) return;
+    final staged = await _pendingAttachmentUploadFile(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    final uploaded = await _pendingAttachmentUploadedMarker(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    if (await uploaded.exists()) {
+      await context.transport
+          .abortAttachment(attachmentId)
+          .catchError((Object _) {});
+      try {
+        await uploaded.delete();
+      } catch (_) {
+        // 过期状态已经落库；残留标记随会话本地清理收口。
+      }
+    }
+    try {
+      if (await staged.exists()) await staged.delete();
+    } catch (_) {
+      // 过期状态已经落库；残留密文随会话本地清理收口。
     }
   }
 
@@ -4500,6 +4595,13 @@ class ChatRuntime {
     final content = ChatPayloadCodec.decode(pending.payload);
     if (content.kind != pending.messageKind) {
       throw StateError('Chat 本地待发送消息类型与载荷不一致');
+    }
+    if (pending.conversationId.startsWith('grp:')) {
+      if (!content.isMedia) {
+        throw StateError('Chat 群本地待发送载荷类型不合法');
+      }
+      await _sendPendingGroupMedia(context, pending, content);
+      return;
     }
     final flow = _messageFlow(context, scheduleDelivery: false);
 
@@ -4562,6 +4664,47 @@ class ChatRuntime {
     required ChatContent content,
     MlsKeyPackage? keyPackage,
   }) async {
+    final attachmentId = content.attachmentId ?? '';
+    final cipherByteSize = content.cipherByteSize ?? -1;
+    final cipherSha256 = content.cipherSha256 ?? '';
+    if (attachmentId.isEmpty || cipherByteSize < 1 || cipherSha256.isEmpty) {
+      throw StateError('Chat 本地待发送附件密文元数据无效');
+    }
+    final staged = await _pendingAttachmentUploadFile(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    final uploaded = await _pendingAttachmentUploadedMarker(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    if (!await uploaded.exists()) {
+      if (!await staged.exists() || await staged.length() != cipherByteSize) {
+        throw StateError('Chat 本地待上传附件密文缺失');
+      }
+      try {
+        await context.transport.uploadEncryptedAttachment(
+          attachmentId: attachmentId,
+          recipientCidNumbers: <String>[pending.recipientCidNumber],
+          cipherFile: staged,
+          cipherByteSize: cipherByteSize,
+          cipherSha256: cipherSha256,
+        );
+        await uploaded.writeAsString('uploaded', flush: true);
+      } catch (_) {
+        await context.transport
+            .abortAttachment(attachmentId)
+            .catchError((Object _) {});
+        rethrow;
+      }
+      try {
+        await staged.delete();
+      } catch (_) {
+        // 已持久写入上传标记后，缓存清理失败不能撤销已经可投递的远端密文。
+      }
+    }
     await flow.sendMediaControl(
       conversationId: pending.conversationId,
       senderCidNumber: context.account.cidNumber,
@@ -4572,6 +4715,69 @@ class ChatRuntime {
       pendingLocalMessageId: pending.localMessageId,
       createdAtMillis: pending.createdAtMillis,
     );
+    if (await uploaded.exists()) await uploaded.delete();
+  }
+
+  Future<void> _sendPendingGroupMedia(
+    _ChatAccountContext context,
+    ChatPendingOutgoingMessage pending,
+    ChatContent content,
+  ) async {
+    final attachmentId = content.attachmentId ?? '';
+    final cipherByteSize = content.cipherByteSize ?? -1;
+    final cipherSha256 = content.cipherSha256 ?? '';
+    if (attachmentId.isEmpty || cipherByteSize < 1 || cipherSha256.isEmpty) {
+      throw StateError('Chat 群待发送附件密文元数据无效');
+    }
+    final flow = _groupFlow(context);
+    final recipients = await flow.recipientCidNumbers(
+      groupId: pending.conversationId,
+      senderCidNumber: context.account.cidNumber,
+    );
+    final staged = await _pendingAttachmentUploadFile(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    final uploaded = await _pendingAttachmentUploadedMarker(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    if (!await uploaded.exists()) {
+      if (!await staged.exists() || await staged.length() != cipherByteSize) {
+        throw StateError('Chat 群待上传附件密文缺失');
+      }
+      try {
+        await context.transport.uploadEncryptedAttachment(
+          attachmentId: attachmentId,
+          recipientCidNumbers: recipients,
+          cipherFile: staged,
+          cipherByteSize: cipherByteSize,
+          cipherSha256: cipherSha256,
+        );
+        await uploaded.writeAsString('uploaded', flush: true);
+      } catch (_) {
+        await context.transport
+            .abortAttachment(attachmentId)
+            .catchError((Object _) {});
+        rethrow;
+      }
+      try {
+        await staged.delete();
+      } catch (_) {
+        // 上传标记是远端成功真值，缓存清理留给会话删除统一收口。
+      }
+    }
+    await flow.sendGroupMediaControl(
+      groupId: pending.conversationId,
+      senderCidNumber: context.account.cidNumber,
+      senderDeviceId: context.deviceId,
+      content: content,
+      pendingLocalMessageId: pending.localMessageId,
+      createdAtMillis: pending.createdAtMillis,
+    );
+    if (await uploaded.exists()) await uploaded.delete();
   }
 
   Future<int> _retryQueuedEnvelopes(
@@ -4652,30 +4858,6 @@ class ChatRuntime {
       cacheDirectory: cacheDirectory,
       attachmentKey: await _attachmentKeyForBinding(bindingToken),
       plainDirectory: await _plainDirectoryForBinding(bindingToken),
-    );
-  }
-
-  /// 发送端复制本机源文件进账户缓存；云端失败不会改写或移动用户源文件。
-  Future<void> _copySentAttachmentToCache({
-    required ChatBindingFenceToken bindingToken,
-    required String conversationId,
-    required String attachmentId,
-    required String fileName,
-    required String contentType,
-    required String sourcePath,
-    required int byteSize,
-  }) {
-    return _runBindingFileMutation(
-      bindingToken,
-      () => _copySentAttachmentToCacheMutation(
-        bindingToken: bindingToken,
-        conversationId: conversationId,
-        attachmentId: attachmentId,
-        fileName: fileName,
-        contentType: contentType,
-        sourcePath: sourcePath,
-        byteSize: byteSize,
-      ),
     );
   }
 
@@ -5423,7 +5605,9 @@ class ChatRuntime {
         // 已有未临期推送端点时，平台暂时取不到 Token 不能让整个 Chat 上下文失效。
         return;
       }
-      if (cachedPushRegistration == pushToken.registrationCacheValue) return;
+      // 本机缓存只能证明上一次输入相同，不能证明 CitizenServe 端点仍存在。
+      // Token 可读时继续幂等登记，修复服务端删除失效端点后的永久失联。
+      // Token 可读时始终继续幂等登记，不能用本机缓存推断服务端端点仍存在。
     }
     // 首次登记仍必须取得真实平台 Token；失败交由本地待发送
     // 队列保留消息并在下一次重连重试，禁止伪造占位 Token。

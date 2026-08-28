@@ -147,6 +147,7 @@ export interface SessionState {
 export interface ChatEnvelopePayload {
   envelope_id: string;
   recipient_cid_number: string;
+  conversation_id: string;
   envelope: string;
   created_at_millis: number;
   ttl_millis: number;

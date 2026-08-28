@@ -151,7 +151,7 @@ void main() {
     final registrar = DeviceSubkeyRegistrar(
       deviceSubkey: _FakeDeviceSubkey(barePub),
       apiClient: api,
-      turnstileToken: () async => null,
+      turnstileToken: () async => 'turnstile-device-bind-token',
     );
 
     await registrar.register(
@@ -173,6 +173,60 @@ void main() {
     expect(registerBody!['p256_public_key'], '0x$barePub');
     expect(registerBody!['account_id'], accountId);
     expect(registerBody!['binding_signature'], '0xBINDINGSIG');
+    expect(
+      registerBody!['turnstile_token'],
+      'turnstile-device-bind-token',
+    );
+  });
+
+  test('冷启动等待根导航器就绪后只展示一次设备验证', () async {
+    var readyChecks = 0;
+    var presentCalls = 0;
+    final token = await acquireDeviceBindingTurnstileToken(
+      isUiReady: () => ++readyChecks >= 3,
+      present: () async {
+        presentCalls++;
+        return 'turnstile-device-bind-token';
+      },
+      delay: (_) async {},
+    );
+
+    expect(token, 'turnstile-device-bind-token');
+    expect(presentCalls, 1);
+  });
+
+  test('根导航器超时不提交空 token', () async {
+    await expectLater(
+      acquireDeviceBindingTurnstileToken(
+        isUiReady: () => false,
+        present: () async => 'turnstile-device-bind-token',
+        readyTimeout: Duration.zero,
+        delay: (_) async {},
+      ),
+      throwsA(
+        isA<SquareApiException>().having(
+          (error) => error.errorCode,
+          'errorCode',
+          'turnstile_ui_unavailable',
+        ),
+      ),
+    );
+  });
+
+  test('用户取消设备验证时失败关闭且不产生空 token', () async {
+    await expectLater(
+      acquireDeviceBindingTurnstileToken(
+        isUiReady: () => true,
+        present: () async => null,
+      ),
+      throwsA(
+        isA<SquareApiException>().having(
+          (error) => error.errorCode,
+          'errorCode',
+          'turnstile_cancelled',
+        ),
+      ),
+    );
   });
 
   test('广场已有子钥直接静默登录；Worker 确认缺钥时才登记一次', () async {

@@ -56,6 +56,23 @@ void main() {
       }),
       _senderCidNumber,
     );
+    const conversationId = 'dm:CN220-CTZN2-100000001-2026:CN220-CTZN2-100000002-2026';
+    expect(
+      ChatPushService.wakeSenderFromData(const {
+        'kind': 'chat_wake',
+        'sender_cid_number': _senderCidNumber,
+        'conversation_id': conversationId,
+      }),
+      _senderCidNumber,
+    );
+    expect(
+      ChatPushService.notificationConversationFromData(const {
+        'kind': 'chat_wake',
+        'sender_cid_number': _senderCidNumber,
+        'conversation_id': conversationId,
+      }),
+      conversationId,
+    );
     expect(
       ChatPushService.wakeSenderFromData(const {
         'kind': 'chat_wake',
@@ -88,6 +105,13 @@ void main() {
     expect(android, contains('.setContentText("你有一条新消息")'));
     expect(client, contains('setForegroundNotificationPresentationOptions'));
     expect(client, contains('message.notification != null'));
+    expect(push, contains("'thread-id': payload.conversation_id"));
+    expect(push, contains("await hasPushError(response, ['Unregistered'])"));
+    expect(android, contains('clearChatNotifications(conversationId)'));
+    expect(
+      File('ios/Runner/AppDelegate.swift').readAsStringSync(),
+      contains('clearDeliveredChatNotifications'),
+    );
   });
 
   test('APNs 环境只接受原生签名映射后的两个固定值', () {

@@ -16,6 +16,7 @@ interface PushDeviceRow {
 interface WakePayload {
   kind: 'chat_wake';
   sender_cid_number: string;
+  conversation_id?: string;
 }
 
 interface PushOutcome {
@@ -80,12 +81,14 @@ export async function sendChatWake(
 
 /**
  * 密文邮箱首次保存后的可见系统通知。通知正文固定且不含聊天内容；是否存在活动 WSS
- * 不影响本通知。既有 envelope_id 只用作平台通知去重标识，不进入 data 载荷。
+ * 不影响本通知。既有 envelope_id 只用作平台通知去重标识；既有 conversation_id
+ * 只用于系统通知分组与已读清除，不携带消息或附件内容。
  */
 export async function sendChatAlert(
   env: Env,
   recipientCidNumber: string,
   senderCidNumber: string,
+  conversationId: string,
   envelopeId: string,
 ): Promise<number> {
   const recipientIdentity = await readUserByCidNumber(env, recipientCidNumber);
@@ -108,6 +111,7 @@ export async function sendChatAlert(
   const payload: WakePayload = {
     kind: 'chat_wake',
     sender_cid_number: senderCidNumber,
+    conversation_id: conversationId,
   };
   assertDeliverySize('push_wake', JSON.stringify(payload));
   const auth = createPushAuth();
@@ -179,17 +183,17 @@ async function sendApnsChatAlert(
           alert: { title: '公民', body: '你有一条新消息' },
           sound: 'default',
           'content-available': 1,
+          'thread-id': payload.conversation_id,
         },
         ...payload,
       }),
       signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
     },
   ));
-  const invalid = response.status === 410 || await hasPushError(response, [
-    'BadDeviceToken',
-    'DeviceTokenNotForTopic',
-    'Unregistered',
-  ]);
+  // 只有 APNs 明确声明端点已注销才删除。BadDeviceToken/Topic 不匹配属于签名、
+  // 环境或 Topic 配置错误，删除 D1 行会与手机本地缓存组合成永久失联。
+  const invalid = response.status === 410 ||
+    await hasPushError(response, ['Unregistered']);
   return { device, accepted: response.ok, invalid };
 }
 
@@ -223,7 +227,7 @@ async function sendFcmChatAlert(
             notification: {
               channel_id: 'chat_messages',
               sound: 'default',
-              tag: envelopeId,
+              tag: `${payload.conversation_id}|${envelopeId}`,
             },
           },
         },
@@ -236,6 +240,11 @@ async function sendFcmChatAlert(
     accepted: response.ok,
     invalid: await hasPushError(response, ['UNREGISTERED']),
   };
+}
+
+function directConversationId(leftCidNumber: string, rightCidNumber: string): string {
+  const members = [leftCidNumber, rightCidNumber].sort();
+  return `dm:${members[0]}:${members[1]}`;
 }
 
 /** APNs/FCM 短时故障在同一 Worker 生命周期内只重试一次，避免消息提交被外部服务拖住。 */

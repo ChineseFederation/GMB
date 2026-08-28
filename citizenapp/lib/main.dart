@@ -61,13 +61,19 @@ Future<void> main() async {
 
   // 注入 P-256 设备子钥登记钩子（8964 层实现，避免 wallet/core 反向依赖）。已有子钥
   // 直接静默使用；只有实际业务确认缺钥时才鉴权一次生成，不在钱包创建或页面门禁触发。
-  DeviceSubkeyRegistrar.turnstileTokenProvider = () async {
-    final navigator = appNavigatorKey.currentState;
-    if (navigator == null) return null;
-    return navigator.push<String>(
-      MaterialPageRoute(builder: (_) => const SquareTurnstilePage()),
-    );
-  };
+  DeviceSubkeyRegistrar.turnstileTokenProvider =
+      () => acquireDeviceBindingTurnstileToken(
+            // 冷启动会话可能早于 MaterialApp 首帧；必须等根导航器就绪，禁止把空 token
+            // 发送给正式 Worker 后再把 403 伪装成通用设备认证失败。
+            isUiReady: () => appNavigatorKey.currentState != null,
+            present: () {
+              final navigator = appNavigatorKey.currentState;
+              if (navigator == null) return Future<String?>.value();
+              return navigator.push<String>(
+                MaterialPageRoute(builder: (_) => const SquareTurnstilePage()),
+              );
+            },
+          );
   WalletManager.subkeyRegistrar = DeviceSubkeyRegistrar().register;
   WalletManager.coldDeviceBindingSigner = _signColdDeviceBinding;
   WalletManager.coldAccountDataKeyProvider = _provideColdAccountDataKeys;

@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
 import 'crypto/mls_boundary.dart';
 import 'media/attachment_vault.dart';
@@ -235,7 +234,8 @@ class ChatFlow {
     String? pendingLocalMessageId,
     int? createdAtMillis,
   }) async {
-    if (!media.isMedia || media.byteSize == null ||
+    if (!media.isMedia ||
+        media.byteSize == null ||
         ChatMediaLimits.exceedsForKind(media.kind, media.byteSize!)) {
       throw ChatMediaTooLargeException(
         byteSize: media.byteSize ?? 0,
@@ -662,14 +662,6 @@ String _safeTraceError(Object error) {
 String _newEnvelopeId(String conversationId, int millis, int index) {
   final normalized = conversationId.replaceAll(RegExp(r'[^a-zA-Z0-9_.-]'), '_');
   return '$normalized-$millis-$index';
-}
-
-String _newAttachmentId(int millis) {
-  final random = Random.secure();
-  final suffix = List<int>.generate(8, (_) => random.nextInt(256))
-      .map((byte) => byte.toRadixString(16).padLeft(2, '0'))
-      .join();
-  return 'att-$millis-$suffix';
 }
 
 String _safePath(String value) {

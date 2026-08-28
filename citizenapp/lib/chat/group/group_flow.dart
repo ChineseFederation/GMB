@@ -7,7 +7,6 @@ import 'dart:convert';
 import 'dart:math';
 
 import '../chat_flow.dart';
-import '../chat_media_limits.dart';
 import '../chat_models.dart';
 import '../chat_payload.dart';
 import '../crypto/mls_boundary.dart';
@@ -323,6 +322,8 @@ class ChatGroupFlow {
     required String senderDeviceId,
     required ChatContent content,
     ChatMediaLocalCommitNotifier? onApplicationStored,
+    String? pendingLocalMessageId,
+    int? createdAtMillis,
   }) {
     if (!content.isMedia) {
       throw ArgumentError.value(content.kind, 'content', '必须是媒体消息');
@@ -334,6 +335,8 @@ class ChatGroupFlow {
       messageKind: content.kind,
       payload: ChatPayloadCodec.encode(content),
       onApplicationStored: onApplicationStored,
+      pendingLocalMessageId: pendingLocalMessageId,
+      createdAtMillis: createdAtMillis,
     );
   }
 
@@ -345,18 +348,26 @@ class ChatGroupFlow {
     required ChatMessageKind messageKind,
     required String payload,
     ChatMediaLocalCommitNotifier? onApplicationStored,
+    String? pendingLocalMessageId,
+    int? createdAtMillis,
   }) async {
     final group = await _requireGroup(groupId);
     if (group.leftLocally) {
       throw StateError('已退出该群，无法发送');
     }
-    final nowMillis = DateTime.now().millisecondsSinceEpoch;
+    final nowMillis = createdAtMillis ?? DateTime.now().millisecondsSinceEpoch;
     final wire =
         await _crypto.groupCreateMessage(groupId, utf8.encode(payload));
     final recipients = group.memberCidNumbers
         .where((account) => account != senderCidNumber)
         .toList();
-    final messageId = '$groupId-msg-$nowMillis-${_nonce()}';
+    if (pendingLocalMessageId != null &&
+        !pendingLocalMessageId.startsWith('pending:')) {
+      throw StateError('Chat 群待发送消息编号不合法');
+    }
+    final messageId = pendingLocalMessageId == null
+        ? '$groupId-msg-$nowMillis-${_nonce()}'
+        : '$groupId-msg-${pendingLocalMessageId.substring('pending:'.length)}';
     final envelopes = GroupFanout.fanOut(
       wire: wire,
       recipientCidNumbers: recipients,
@@ -381,6 +392,7 @@ class ChatGroupFlow {
       recipientCidByCidNumber: {
         for (final cidNumber in recipients) cidNumber: cidNumber
       },
+      pendingLocalMessageId: pendingLocalMessageId,
     );
     await onApplicationStored?.call();
     Future<List<ChatDeliveryResult>> deliverQueued() async {

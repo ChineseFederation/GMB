@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:citizenapp/chat/chat_page.dart';
+import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/compose/sticker_panel.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 
@@ -37,6 +38,18 @@ Future<void> _settleOpen(WidgetTester tester) async {
 }
 
 void main() {
+  const cidNumber = 'CN220-CTZN2-100000001-2026';
+
+  setUp(() {
+    ChatMediaLimits.applyMembershipLevel('freedom', cidNumber: cidNumber);
+    ChatMediaLimits.applyAuthorizedMembershipLevel(
+      'freedom',
+      cidNumber: cidNumber,
+    );
+  });
+
+  tearDown(() => ChatMediaLimits.markAuthorizationUnavailable(cidNumber));
+
   testWidgets('点表情开关弹 EmojiPicker,再点收起', (tester) async {
     await tester.pumpWidget(_host());
     await _settleOpen(tester);
@@ -92,7 +105,8 @@ void main() {
     await _settleOpen(tester);
 
     await tester.tap(find.byKey(const ValueKey('chat-expression-toggle')));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
     final input = tester.widget<TextField>(
       find.byKey(const ValueKey('chat-text-input')),
     );

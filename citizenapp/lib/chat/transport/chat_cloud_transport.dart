@@ -43,6 +43,7 @@ class ChatMailboxEnvelope {
     required this.envelopeId,
     required this.senderCidNumber,
     required this.recipientCidNumber,
+    required this.conversationId,
     required this.envelopeBytes,
     required this.createdAtMillis,
     required this.ttlMillis,
@@ -51,6 +52,7 @@ class ChatMailboxEnvelope {
   final String envelopeId;
   final String senderCidNumber;
   final String recipientCidNumber;
+  final String conversationId;
   final List<int> envelopeBytes;
   final int createdAtMillis;
   final int ttlMillis;
@@ -65,6 +67,7 @@ class ChatMailboxEnvelope {
             'type',
             'envelope_id',
             'sender_cid_number',
+            'conversation_id',
             'envelope',
             'created_at_millis',
             'ttl_millis',
@@ -73,6 +76,7 @@ class ChatMailboxEnvelope {
             'envelope_id',
             'sender_cid_number',
             'recipient_cid_number',
+            'conversation_id',
             'envelope',
             'created_at_millis',
             'ttl_millis',
@@ -86,6 +90,7 @@ class ChatMailboxEnvelope {
     final senderCidNumber = value['sender_cid_number'];
     final recipientCidNumber =
         realtime ? localCidNumber : value['recipient_cid_number'];
+    final conversationId = value['conversation_id'];
     final envelope = value['envelope'];
     final createdAtMillis = value['created_at_millis'];
     final ttlMillis = value['ttl_millis'];
@@ -94,6 +99,8 @@ class ChatMailboxEnvelope {
         senderCidNumber is! String ||
         senderCidNumber.isEmpty ||
         recipientCidNumber != localCidNumber ||
+        conversationId is! String ||
+        conversationId.isEmpty ||
         envelope is! String ||
         envelope.isEmpty ||
         createdAtMillis is! int ||
@@ -117,6 +124,7 @@ class ChatMailboxEnvelope {
       envelopeId: envelopeId,
       senderCidNumber: senderCidNumber,
       recipientCidNumber: localCidNumber,
+      conversationId: conversationId,
       envelopeBytes: envelopeBytes,
       createdAtMillis: createdAtMillis,
       ttlMillis: ttlMillis,
@@ -212,6 +220,7 @@ class ChatCloudTransport implements ChatTransport {
       await _postMap('/chat/messages', {
         'envelope_id': envelopeId,
         'recipient_cid_number': recipientCidNumber,
+        'conversation_id': envelope.conversationId,
         'envelope': base64Url.encode(envelopeBytes),
         'created_at_millis': envelope.createdAtMillis.toInt(),
         'ttl_millis': envelope.ttlMillis.toInt(),
@@ -284,8 +293,12 @@ class ChatCloudTransport implements ChatTransport {
         final byteSize = rawPart['byte_size'];
         final uploadUrl = rawPart['upload_url'];
         final uploadHeaders = rawPart['upload_headers'];
-        if (offset is! int || offset < 0 || byteSize is! int || byteSize <= 0 ||
-            uploadUrl is! String || uploadHeaders is! Map<String, dynamic>) {
+        if (offset is! int ||
+            offset < 0 ||
+            byteSize is! int ||
+            byteSize <= 0 ||
+            uploadUrl is! String ||
+            uploadHeaders is! Map<String, dynamic>) {
           throw const FormatException('Chat 附件上传分片内容不合法');
         }
         final uri = Uri.parse(uploadUrl);
@@ -294,14 +307,20 @@ class ChatCloudTransport implements ChatTransport {
         }
         final request = http.StreamedRequest('PUT', uri)
           ..contentLength = byteSize
-          ..headers.addAll(uploadHeaders.map((key, value) => MapEntry(key, value.toString())));
-        final sending = _httpClient.send(request).timeout(const Duration(hours: 6));
-        await request.sink.addStream(cipherFile.openRead(offset, offset + byteSize));
+          ..headers.addAll(uploadHeaders
+              .map((key, value) => MapEntry(key, value.toString())));
+        final sending =
+            _httpClient.send(request).timeout(const Duration(hours: 6));
+        await request.sink
+            .addStream(cipherFile.openRead(offset, offset + byteSize));
         await request.sink.close();
         final response = await sending;
         await response.stream.drain<void>();
         final etag = response.headers['etag'];
-        if (response.statusCode < 200 || response.statusCode >= 300 || etag == null || etag.isEmpty) {
+        if (response.statusCode < 200 ||
+            response.statusCode >= 300 ||
+            etag == null ||
+            etag.isEmpty) {
           throw StateError('chat_attachment_part_upload_failed');
         }
         etags.add(etag);
@@ -323,8 +342,10 @@ class ChatCloudTransport implements ChatTransport {
     required int expectedByteSize,
     required String expectedSha256,
   }) async {
-    final plan = await _postMap('/chat/attachments/download', {'attachment_id': attachmentId});
-    if (plan['cipher_byte_size'] != expectedByteSize || plan['cipher_sha256'] != expectedSha256) {
+    final plan = await _postMap(
+        '/chat/attachments/download', {'attachment_id': attachmentId});
+    if (plan['cipher_byte_size'] != expectedByteSize ||
+        plan['cipher_sha256'] != expectedSha256) {
       throw const FormatException('Chat 附件密文索引与 OpenMLS 控制消息不一致');
     }
     final rawUrl = plan['download_url'];
@@ -335,8 +356,12 @@ class ChatCloudTransport implements ChatTransport {
     }
     await target.parent.create(recursive: true);
     if (await target.exists()) await target.delete();
-    final response = await _httpClient.send(http.Request('GET', uri)).timeout(const Duration(hours: 6));
-    if (response.statusCode != 200) throw StateError('chat_attachment_download_failed');
+    final response = await _httpClient
+        .send(http.Request('GET', uri))
+        .timeout(const Duration(hours: 6));
+    if (response.statusCode != 200) {
+      throw StateError('chat_attachment_download_failed');
+    }
     final sink = target.openWrite();
     try {
       await sink.addStream(response.stream);

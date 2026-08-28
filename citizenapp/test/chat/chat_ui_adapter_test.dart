@@ -9,6 +9,9 @@ import 'package:citizenapp/chat/storage/chat_store.dart';
 
 const _aliceCidNumber = 'CN220-CTZN2-100000001-2026';
 const _bobCidNumber = 'CN220-CTZN2-100000002-2026';
+const _cipherKey = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const _cipherSha256 =
+    '0000000000000000000000000000000000000000000000000000000000000000';
 
 ChatStoredMessage _stored({
   required String envelopeId,
@@ -32,6 +35,21 @@ ChatStoredMessage _stored({
 }
 
 void main() {
+  setUp(() {
+    ChatMediaLimits.applyMembershipLevel(
+      'freedom',
+      cidNumber: _aliceCidNumber,
+    );
+    ChatMediaLimits.applyAuthorizedMembershipLevel(
+      'freedom',
+      cidNumber: _aliceCidNumber,
+    );
+  });
+
+  tearDown(
+    () => ChatMediaLimits.markAuthorizationUnavailable(_aliceCidNumber),
+  );
+
   test('text messages map without user-visible delivery or read status', () {
     final outgoing = storedMessageToChatMessage(
       _stored(
@@ -75,6 +93,9 @@ void main() {
         fileName: 'p.jpg',
         mime: 'image/jpeg',
         byteSize: 2048,
+        cipherKey: _cipherKey,
+        cipherByteSize: 16384,
+        cipherSha256: _cipherSha256,
         width: 800,
         height: 600,
         blurhash: 'L6',
@@ -111,6 +132,9 @@ void main() {
         fileName: 'p.jpg',
         mime: 'image/jpeg',
         byteSize: 2048,
+        cipherKey: _cipherKey,
+        cipherByteSize: 16384,
+        cipherSha256: _cipherSha256,
       ),
     );
     final msg = storedMessageToChatMessage(
@@ -134,6 +158,9 @@ void main() {
         fileName: 'clip.mp4',
         mime: 'video/mp4',
         byteSize: 8192,
+        cipherKey: _cipherKey,
+        cipherByteSize: 16384,
+        cipherSha256: _cipherSha256,
         width: 1920,
         height: 1080,
         durationMs: 4200,
@@ -173,6 +200,9 @@ void main() {
         fileName: 'doc.pdf',
         mime: 'application/pdf',
         byteSize: 4096,
+        cipherKey: _cipherKey,
+        cipherByteSize: 16384,
+        cipherSha256: _cipherSha256,
       ),
     );
     final msg = storedMessageToChatMessage(
@@ -197,6 +227,9 @@ void main() {
       fileName: 'voice.m4a',
       mime: 'audio/mp4',
       byteSize: 2048,
+      cipherKey: _cipherKey,
+      cipherByteSize: 16384,
+      cipherSha256: _cipherSha256,
       durationMs: 9200,
     ));
     final message = storedMessageToChatMessage(
@@ -241,6 +274,9 @@ void main() {
         fileName: 'big.jpg',
         mime: 'image/jpeg',
         byteSize: ChatMediaLimits.maxBytesForLevel('freedom') + 1,
+        cipherKey: _cipherKey,
+        cipherByteSize: 16384,
+        cipherSha256: _cipherSha256,
       ),
     );
     var resolverCalled = false;

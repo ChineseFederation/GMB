@@ -67,17 +67,31 @@ class MainActivity : FlutterFragmentActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             CHAT_NOTIFICATION_METHOD_CHANNEL,
         ).setMethodCallHandler { call, result ->
-            if (call.method != "showChatNotification") {
-                result.notImplemented()
-                return@setMethodCallHandler
+            when (call.method) {
+                "showChatNotification" -> {
+                    val conversationId = call.argument<String>("conversationId")
+                        ?.takeIf { it.isNotBlank() }
+                    val envelopeId = call.argument<String>("envelopeId")
+                        ?.takeIf { it.isNotBlank() }
+                    if (conversationId == null || envelopeId == null) {
+                        result.error("INVALID_NOTIFICATION_TAG", "聊天通知缺少会话标识", null)
+                        return@setMethodCallHandler
+                    }
+                    showChatNotification(conversationId, envelopeId)
+                    result.success(null)
+                }
+                "clearConversationNotifications" -> {
+                    val conversationId = call.argument<String>("conversationId")
+                        ?.takeIf { it.isNotBlank() }
+                    if (conversationId == null) {
+                        result.error("INVALID_CONVERSATION_ID", "聊天通知缺少会话标识", null)
+                        return@setMethodCallHandler
+                    }
+                    clearChatNotifications(conversationId)
+                    result.success(null)
+                }
+                else -> result.notImplemented()
             }
-            val tag = call.argument<String>("tag")?.takeIf { it.isNotBlank() }
-            if (tag == null) {
-                result.error("INVALID_NOTIFICATION_TAG", "聊天通知缺少唯一标识", null)
-                return@setMethodCallHandler
-            }
-            showChatNotification(tag)
-            result.success(null)
         }
 
         squareMediaChannel = SquareMediaChannel(
@@ -330,8 +344,9 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     /// FCM 前台消息不会自动弹出通知；这里只展示固定无正文文案，不接收聊天内容。
-    private fun showChatNotification(tag: String) {
+    private fun showChatNotification(conversationId: String, envelopeId: String) {
         if (!isNotificationPermissionGranted()) return
+        val tag = "$conversationId|$envelopeId"
         val openApp = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -350,6 +365,21 @@ class MainActivity : FlutterFragmentActivity() {
             .setContentIntent(pendingIntent)
             .build()
         NotificationManagerCompat.from(this).notify(tag, 1, notification)
+    }
+
+    /// 只清除目标会话的聊天通知；tag 前缀使用既有 conversation_id，禁止 cancelAll
+    /// 误删其它聊天、广场或系统通知。
+    private fun clearChatNotifications(conversationId: String) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val prefix = "$conversationId|"
+        manager.activeNotifications
+            .filter { notification ->
+                notification.tag?.startsWith(prefix) == true &&
+                    (Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
+                        notification.notification.channelId == CHAT_NOTIFICATION_CHANNEL_ID)
+            }
+            .forEach { notification -> manager.cancel(notification.tag, notification.id) }
     }
 
     private fun isNotificationPermissionGranted(): Boolean {

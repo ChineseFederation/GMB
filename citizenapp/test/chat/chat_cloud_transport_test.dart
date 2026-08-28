@@ -91,12 +91,14 @@ void main() {
       expect(body.keys.toSet(), {
         'envelope_id',
         'recipient_cid_number',
+        'conversation_id',
         'envelope',
         'created_at_millis',
         'ttl_millis',
       });
       expect(body['envelope_id'], envelope.envelopeId);
       expect(body['recipient_cid_number'], _bobCidNumber);
+      expect(body['conversation_id'], envelope.conversationId);
       expect(base64Url.decode(body['envelope'] as String), bytes);
       expect(body.keys, isNot(contains('sender_cid_number')));
       return _json({'ok': true});
@@ -125,6 +127,7 @@ void main() {
             'envelope_id': envelope.envelopeId,
             'sender_cid_number': _bobCidNumber,
             'recipient_cid_number': _aliceCidNumber,
+            'conversation_id': envelope.conversationId,
             'envelope': encoded,
             'created_at_millis': 1000,
             'ttl_millis': 60000,

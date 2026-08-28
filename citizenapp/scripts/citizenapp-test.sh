@@ -23,6 +23,22 @@ if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
   # shellcheck disable=SC1090
   source "$helper"
   snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
+  # CitizenApp 的跨产品契约测试直接读取链端 SCALE 金标和 CitizenServe 推送实现，
+  # 不在应用目录保存镜像副本。中央快照必须携带这些只读真源，避免本机测试因
+  # 快照缺文件而失败，同时继续保证测试读取的是本次仓库源码而非过期复制品。
+  snapshot_truth_sources=(
+    citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json
+    citizenchain/runtime/tests/fixtures/role_permission.json
+    citizenserve/src/chat/push.ts
+  )
+  for relative_path in "${snapshot_truth_sources[@]}"; do
+    source_path="$REPO_ROOT/$relative_path"
+    snapshot_path="$snapshot_root/$relative_path"
+    [[ -f "$source_path" ]] \
+      || { echo "CitizenApp测试真源缺失：$source_path" >&2; exit 1; }
+    mkdir -p "$(dirname "$snapshot_path")"
+    /usr/bin/ditto "$source_path" "$snapshot_path"
+  done
   cleanup_snapshot() {
     /usr/bin/find "$CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
     rmdir "$CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true

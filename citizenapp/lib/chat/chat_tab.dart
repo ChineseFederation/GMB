@@ -35,16 +35,15 @@ import 'group/ui/open_group_chat.dart';
 import 'storage/chat_store.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 
-typedef ChatSendTextFactory =
-    ChatSendTextCallback? Function(String peerCidNumber, String conversationId);
+typedef ChatSendTextFactory = ChatSendTextCallback? Function(
+    String peerCidNumber, String conversationId);
 typedef ChatSyncFactory = ChatSyncCallback? Function(String peerCidNumber);
-typedef ChatSendMediaFactory =
-    ChatSendMediaCallback? Function(
-      String peerCidNumber,
-      String conversationId,
-    );
-typedef ChatDownloadAttachmentFactory =
-    ChatDownloadAttachmentCallback? Function(String peerCidNumber);
+typedef ChatSendMediaFactory = ChatSendMediaCallback? Function(
+  String peerCidNumber,
+  String conversationId,
+);
+typedef ChatDownloadAttachmentFactory = ChatDownloadAttachmentCallback?
+    Function(String peerCidNumber);
 
 /// 聊天页加号菜单 5 个动作的可注入入口。
 ///
@@ -104,8 +103,8 @@ class ChatTab extends StatefulWidget {
     this.sessionProvider,
     this.contactService,
     this.subscriptionService,
-  }) : store = store ?? ChatStore(),
-       walletManager = walletManager ?? WalletManager();
+  })  : store = store ?? ChatStore(),
+        walletManager = walletManager ?? WalletManager();
 
   final ChatStore store;
   final WalletManager walletManager;
@@ -151,8 +150,7 @@ class _ChatTabState extends State<ChatTab> {
       widget.sessionProvider ?? SquareSessionProvider.instance;
   late final SubscriptionService _subscriptionService =
       widget.subscriptionService ?? SubscriptionService();
-  late final UserContactService _contactService =
-      widget.contactService ??
+  late final UserContactService _contactService = widget.contactService ??
       UserContactService(walletManager: widget.walletManager);
   final Map<String, CitizenProfile> _peerProfiles = <String, CitizenProfile>{};
   final Map<String, CitizenProfileMediaSnapshot> _peerProfileMedia =
@@ -293,12 +291,13 @@ class _ChatTabState extends State<ChatTab> {
 
   List<ChatConversationPreview> _withoutDeletingConversations(
     Iterable<ChatConversationPreview> conversations,
-  ) => conversations
-      .where(
-        (preview) =>
-            !_conversationDeletesInFlight.contains(preview.conversationId),
-      )
-      .toList(growable: false);
+  ) =>
+      conversations
+          .where(
+            (preview) =>
+                !_conversationDeletesInFlight.contains(preview.conversationId),
+          )
+          .toList(growable: false);
 
   Future<void> _reload({bool syncFirst = false}) async {
     if (!_isActive) {
@@ -389,14 +388,23 @@ class _ChatTabState extends State<ChatTab> {
     String cidNumber,
     int reloadGeneration,
   ) async {
-    if (cidNumber.isEmpty || ChatMediaLimits.resolvedFor(cidNumber)) return;
+    if (cidNumber.isEmpty) return;
+    // 展示先恢复上一次服务端确认的本地快照，避免每次进入页面先显示无会员；
+    // 随后的服务端鉴权仍由 authorizeMembership 在同一登录会话内严格去重一次。
+    await _subscriptionService.readDisplaySnapshot(cidNumber);
+    if (mounted &&
+        reloadGeneration == _reloadGeneration &&
+        cidNumber == _cidNumber) {
+      setState(() {});
+    }
     try {
       final session = _profileSession ?? await _sessionProvider.ensureSession();
       if (session == null || session.cidNumber.trim() != cidNumber) return;
       _profileSession = session;
       await _subscriptionService.authorizeMembership(session);
     } on Exception {
-      ChatMediaLimits.markUnresolved(cidNumber);
+      // 展示仍可复用本地快照，但发送授权必须由本次会话的 CitizenServe 结果确认。
+      ChatMediaLimits.markAuthorizationUnavailable(cidNumber);
     }
     if (mounted &&
         reloadGeneration == _reloadGeneration &&
@@ -525,9 +533,8 @@ class _ChatTabState extends State<ChatTab> {
       return;
     }
     for (var offset = 0; offset < cidNumbers.length; offset += 4) {
-      final end = offset + 4 < cidNumbers.length
-          ? offset + 4
-          : cidNumbers.length;
+      final end =
+          offset + 4 < cidNumbers.length ? offset + 4 : cidNumbers.length;
       final batch = cidNumbers.sublist(offset, end);
       await Future.wait(
         batch.map((cidNumber) async {
@@ -899,9 +906,10 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   bool _requireChatMembership() {
-    if (ChatMediaLimits.chatEnabledFor(_cidNumber)) return true;
+    if (ChatMediaLimits.chatAuthorizedFor(_cidNumber)) return true;
     setState(() {
-      _error = ChatMediaLimits.resolvedFor(_cidNumber)
+      _error = ChatMediaLimits.authorizationResolvedFor(_cidNumber) &&
+              ChatMediaLimits.resolvedFor(_cidNumber)
           ? '尚未开通会员，订阅任一会员后即可使用聊天'
           : '暂时无法验证会员状态，请稍后重试';
     });
@@ -1030,74 +1038,70 @@ class _ChatTabState extends State<ChatTab> {
               peerUserId: preview.peerCidNumber,
               title: preview.title,
               store: widget.store,
-              onSendText:
-                  widget.sendTextFactory?.call(
+              onSendText: widget.sendTextFactory?.call(
                     preview.peerCidNumber,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (text) => widget.runtime!.sendText(
-                          peerCidNumber: preview.peerCidNumber,
-                          conversationId: preview.conversationId,
-                          text: text,
-                        )),
-              onSendMedia:
-                  widget.sendMediaFactory?.call(
+                            peerCidNumber: preview.peerCidNumber,
+                            conversationId: preview.conversationId,
+                            text: text,
+                          )),
+              onSendMedia: widget.sendMediaFactory?.call(
                     preview.peerCidNumber,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (media, {onLocalCommitted}) =>
-                            widget.runtime!.sendMedia(
-                              peerCidNumber: preview.peerCidNumber,
-                              conversationId: preview.conversationId,
-                              media: media,
-                              onLocalCommitted: onLocalCommitted,
-                            )),
+                          widget.runtime!.sendMedia(
+                            peerCidNumber: preview.peerCidNumber,
+                            conversationId: preview.conversationId,
+                            media: media,
+                            onLocalCommitted: onLocalCommitted,
+                          )),
               onSendSticker: widget.runtime == null
                   ? null
                   : (packId, stickerId) => widget.runtime!.sendSticker(
-                      peerCidNumber: preview.peerCidNumber,
-                      conversationId: preview.conversationId,
-                      packId: packId,
-                      stickerId: stickerId,
-                    ),
+                        peerCidNumber: preview.peerCidNumber,
+                        conversationId: preview.conversationId,
+                        packId: packId,
+                        stickerId: stickerId,
+                      ),
               onResolveMediaPaths: widget.runtime == null
                   ? null
                   : (String conversationId, List<ChatContent> contents) =>
-                        widget.runtime!.resolveCachedMediaPaths(
-                          conversationId: conversationId,
-                          contents: contents,
-                        ),
-              onDownloadAttachment:
-                  widget.downloadAttachmentFactory?.call(
+                      widget.runtime!.resolveCachedMediaPaths(
+                        conversationId: conversationId,
+                        contents: contents,
+                      ),
+              onDownloadAttachment: widget.downloadAttachmentFactory?.call(
                     preview.peerCidNumber,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (String conversationId, String controlPlaintext) =>
-                            widget.runtime!.downloadAttachment(
-                              conversationId: conversationId,
-                              controlPlaintext: controlPlaintext,
-                            )),
-              onSync:
-                  widget.syncFactory?.call(preview.peerCidNumber) ??
+                          widget.runtime!.downloadAttachment(
+                            conversationId: conversationId,
+                            controlPlaintext: controlPlaintext,
+                          )),
+              onSync: widget.syncFactory?.call(preview.peerCidNumber) ??
                   (widget.runtime == null
                       ? null
                       : () => widget.runtime!.retryOutgoing(
-                          conversationId: preview.conversationId,
-                          recipientCidNumber: preview.peerCidNumber,
-                        )),
+                            conversationId: preview.conversationId,
+                            recipientCidNumber: preview.peerCidNumber,
+                          )),
               onStartRealtime: widget.runtime == null
                   ? null
                   : ({required onNotice, onDisconnected}) =>
-                        widget.runtime!.startRealtimeSync(
-                          onNotice: onNotice,
-                          onDisconnected: onDisconnected,
-                          retryOutgoingOnConnect: false,
-                        ),
+                      widget.runtime!.startRealtimeSync(
+                        onNotice: onNotice,
+                        onDisconnected: onDisconnected,
+                        retryOutgoingOnConnect: false,
+                      ),
               onDeleteConversation: () =>
                   _deleteConversationInBackground(preview.conversationId),
               onMarkRead: widget.runtime == null
@@ -1439,9 +1443,9 @@ class _ChatEntryMenu extends StatelessWidget {
                                               ),
                                               colorFilter:
                                                   const ColorFilter.mode(
-                                                    Colors.white,
-                                                    BlendMode.srcIn,
-                                                  ),
+                                                Colors.white,
+                                                BlendMode.srcIn,
+                                              ),
                                             )
                                           : Icon(
                                               item.icon,
@@ -1731,11 +1735,11 @@ class _ListTileShell extends StatelessWidget {
                       imagePath: profileMedia?.avatarPath,
                       imageUrl:
                           profile?.avatarObjectKey?.trim().isNotEmpty == true
-                          ? profileApi.mediaUrl(
-                              profile!.avatarObjectKey!,
-                              updatedAt: profile!.updatedAt,
-                            )
-                          : null,
+                              ? profileApi.mediaUrl(
+                                  profile!.avatarObjectKey!,
+                                  updatedAt: profile!.updatedAt,
+                                )
+                              : null,
                       imageHeaders: profileSession == null
                           ? null
                           : <String, String>{

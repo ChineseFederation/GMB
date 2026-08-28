@@ -194,6 +194,7 @@ export async function submitChatEnvelope(
   const body = await readJson<ChatEnvelopePayload>(request);
   assertExactChatEnvelopeFields(body);
   const envelopeId = assertChatEnvelopeId(body.envelope_id);
+  const conversationId = assertChatConversationId(body.conversation_id);
   const recipientCidNumber = assertChatCidNumber(
     body.recipient_cid_number,
     "invalid_recipient_cid_number",
@@ -241,6 +242,7 @@ export async function submitChatEnvelope(
     envelope_id: envelopeId,
     sender_cid_number: session.cid_number,
     recipient_cid_number: recipientCidNumber,
+    conversation_id: conversationId,
     envelope,
     created_at_millis: createdAtMillis,
     ttl_millis: ttlMillis,
@@ -253,6 +255,7 @@ export async function submitChatEnvelope(
       env,
       recipientCidNumber,
       session.cid_number,
+      conversationId,
       envelopeId,
     ).catch(() => {
         // 禁止输出 CID、Token、envelope_id 或上游响应正文。
@@ -294,6 +297,7 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
     throw new HttpError(400, "invalid_chat_envelope_fields", "Chat 信封字段不合法");
   }
   const expected = [
+    "conversation_id",
     "created_at_millis",
     "envelope",
     "envelope_id",
@@ -304,6 +308,18 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
   if (actual.length !== expected.length || actual.some((field, index) => field !== expected[index])) {
     throw new HttpError(400, "invalid_chat_envelope_fields", "Chat 信封字段不合法");
   }
+}
+
+function assertChatConversationId(value: unknown): string {
+  if (
+    typeof value !== "string"
+    || value.length < 1
+    || value.length > 512
+    || /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    throw new HttpError(400, "invalid_chat_conversation_id", "Chat 会话编号不合法");
+  }
+  return value;
 }
 
 function assertPushProvider(value: unknown): PushProvider {

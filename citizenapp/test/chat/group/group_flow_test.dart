@@ -1,8 +1,6 @@
-import 'dart:async';
 import 'dart:convert';
 
 import 'package:citizenapp/chat/chat_flow.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
 import 'package:citizenapp/chat/crypto/mls_boundary.dart';
@@ -135,14 +133,6 @@ const _cidA = 'CN220-CTZN2-100000003-2026';
 const _cidB = 'CN220-CTZN2-100000004-2026';
 const _cidC = 'CN220-CTZN2-100000005-2026';
 const _cidD = 'CN220-CTZN2-100000006-2026';
-
-ChatMediaDraft _mediaDraft(int byteSize) => ChatMediaDraft(
-      kind: ChatMessageKind.image,
-      fileName: 'g.jpg',
-      contentType: 'image/jpeg',
-      sourcePath: '/dev/null',
-      byteSize: byteSize,
-    );
 
 Future<ChatDeliveryResult> _okDeliverer(
   ChatEnvelope envelope,
@@ -572,8 +562,10 @@ void main() {
       );
 
       expect(events.first, 'stored');
-      expect(delivered.map((e) => e.recipientCidNumber).toSet(), {_cidB, _cidC});
-      expect(delivered.every((e) => e.ttlMillis == chatMailboxTtlMillis), isTrue);
+      expect(
+          delivered.map((e) => e.recipientCidNumber).toSet(), {_cidB, _cidC});
+      expect(
+          delivered.every((e) => e.ttlMillis == chatMailboxTtlMillis), isTrue);
       final messages = await store.readMessages(
         ownerCidNumber: _ownerCidNumber,
         currentAccountId: _accountA,

@@ -2110,7 +2110,7 @@ class ChatStore {
   ///
   /// 如果写事务开始前又有更新消息落库，则保留计数，等待页面展示更新快照后再次清零，
   /// 避免把用户尚未看到的消息错误标记为已读。
-  Future<void> markConversationRead({
+  Future<bool> markConversationRead({
     required ChatBindingFenceToken bindingToken,
     required String ownerCidNumber,
     required String conversationId,
@@ -2127,14 +2127,12 @@ class ChatStore {
       await _requireBindingTokenInTxn(isar, bindingToken);
       final conversation = await isar.chatConversationEntitys
           .getByOwnerCidNumberConversationId(ownerCidNumber, conversationId);
-      if (conversation == null ||
-          conversation.unreadCount == 0 ||
-          conversation.lastUpdatedAtMillis > readThroughMillis) {
-        return;
-      }
+      if (conversation == null || conversation.unreadCount == 0) return true;
+      if (conversation.lastUpdatedAtMillis > readThroughMillis) return false;
       conversation.unreadCount = 0;
       await isar.chatConversationEntitys
           .putByOwnerCidNumberConversationId(conversation);
+      return true;
     });
   }
 
@@ -2460,6 +2458,7 @@ class ChatStore {
               row.accountId == bindingToken.accountId &&
               row.direction == 'outgoing' &&
               row.envelopeId.startsWith('pending:') &&
+              row.deliveryState != ChatMessageDeliveryState.failed.name &&
               row.envelopeBytesHex.isEmpty &&
               (recipientCidNumber == null ||
                   row.recipientCidNumber == recipientCidNumber) &&
@@ -2501,6 +2500,31 @@ class ChatStore {
     } finally {
       session.dispose();
     }
+  }
+
+  /// 本机待发消息超过云端统一 7 天存活期后保留为失败历史，但不再进入补发队列。
+  Future<void> markPendingOutgoingFailed({
+    required ChatBindingFenceToken bindingToken,
+    required String ownerCidNumber,
+    required String localMessageId,
+  }) {
+    _requireWriterContext(
+      bindingToken: bindingToken,
+      ownerCidNumber: ownerCidNumber,
+    );
+    return _chatIsar.writeTxn((isar) async {
+      await _requireBindingTokenInTxn(isar, bindingToken);
+      final pending = await isar.chatMessageEntitys
+          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, localMessageId);
+      if (pending == null ||
+          pending.direction != 'outgoing' ||
+          !pending.envelopeId.startsWith('pending:') ||
+          pending.envelopeBytesHex.isNotEmpty) {
+        return;
+      }
+      pending.deliveryState = ChatMessageDeliveryState.failed.name;
+      await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(pending);
+    });
   }
 
   Future<void> saveOutgoingEnvelope({
@@ -2723,6 +2747,17 @@ class ChatStore {
       );
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
+        final existing =
+            await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
+          ownerCidNumber,
+          envelope.envelopeId,
+        );
+        // WSS 与七天邮箱可能送达同一 Envelope；重复项只由运行态继续 ACK，
+        // 不能再次推进会话未读数或覆盖最后消息时间。
+        if (existing != null) {
+          if (existing.direction == 'incoming') return;
+          throw StateError('Chat Envelope ID 与本机出站记录冲突');
+        }
         await _putConversationInTxn(
           isar: isar,
           ownerCidNumber: ownerCidNumber,
@@ -2767,12 +2802,10 @@ class ChatStore {
     );
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
-      final terminalEnvelopeFailure =
-          errorMessage == 'chat_envelope_expired' ||
-              errorMessage == 'chat_envelope_invalid';
-      final effectiveState = terminalEnvelopeFailure
-          ? ChatMessageDeliveryState.failed
-          : state;
+      final terminalEnvelopeFailure = errorMessage == 'chat_envelope_expired' ||
+          errorMessage == 'chat_envelope_invalid';
+      final effectiveState =
+          terminalEnvelopeFailure ? ChatMessageDeliveryState.failed : state;
       final queue = await isar.chatOutboundQueueEntitys
           .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
       if (queue != null) {
@@ -3319,6 +3352,7 @@ class ChatStore {
     required int createdAtMillis,
     required List<ChatEnvelope> envelopes,
     required Map<String, String> recipientCidByCidNumber,
+    String? pendingLocalMessageId,
   }) async {
     _requireWriterContext(
       bindingToken: bindingToken,
@@ -3351,6 +3385,27 @@ class ChatStore {
       );
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
+        if (pendingLocalMessageId != null) {
+          if (!pendingLocalMessageId.startsWith('pending:')) {
+            throw StateError('Chat 群待发送消息编号不合法');
+          }
+          final pending =
+              await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
+            ownerCidNumber,
+            pendingLocalMessageId,
+          );
+          if (pending == null ||
+              pending.bindingRevision != binding.bindingRevision ||
+              pending.accountId != binding.accountId ||
+              pending.direction != 'outgoing' ||
+              pending.conversationId != groupId ||
+              pending.recipientCidNumber != groupId ||
+              pending.messageKind != messageKind.name ||
+              pending.envelopeBytesHex.isNotEmpty) {
+            throw StateError('Chat 群待发送消息已变化或不存在');
+          }
+          await isar.chatMessageEntitys.delete(pending.id);
+        }
         await _touchGroupConversationInTxn(
           isar: isar,
           ownerCidNumber: ownerCidNumber,
@@ -3447,6 +3502,15 @@ class ChatStore {
       );
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
+        final existing =
+            await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
+          ownerCidNumber,
+          envelope.envelopeId,
+        );
+        if (existing != null) {
+          if (existing.direction == 'incoming') return;
+          throw StateError('Chat Envelope ID 与本机出站记录冲突');
+        }
         await _touchGroupConversationInTxn(
           isar: isar,
           ownerCidNumber: ownerCidNumber,

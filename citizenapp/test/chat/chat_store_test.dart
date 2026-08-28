@@ -102,12 +102,27 @@ void main() {
     expect(pending.single.envelopeId, 'env-store');
     expect(await store.pendingInboundCount(_ownerCidNumber), 0);
 
+    final incomingEnvelope = envelope.deepCopy()
+      ..envelopeId = 'env-store-incoming'
+      ..senderCidNumber = _bobCidNumber
+      ..recipientCidNumber = _ownerCidNumber;
+
     await store.saveIncomingEnvelope(
       bindingToken: bindingToken,
       ownerCidNumber: _ownerCidNumber,
       currentAccountId: _aliceAccountId,
-      envelope: envelope,
-      envelopeBytes: envelope.writeToBuffer(),
+      envelope: incomingEnvelope,
+      envelopeBytes: incomingEnvelope.writeToBuffer(),
+      messageKind: ChatMessageKind.text,
+      plaintext: _payload('hi back'),
+    );
+    // 同一 Envelope 可同时经 WSS 与七天邮箱到达；第二次只 ACK，未读不能累加。
+    await store.saveIncomingEnvelope(
+      bindingToken: bindingToken,
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _aliceAccountId,
+      envelope: incomingEnvelope,
+      envelopeBytes: incomingEnvelope.writeToBuffer(),
       messageKind: ChatMessageKind.text,
       plaintext: _payload('hi back'),
     );
@@ -129,7 +144,9 @@ void main() {
       (await store.readConversationPreviews(
         ownerCidNumber: _ownerCidNumber,
         currentAccountId: _aliceAccountId,
-      )).single.unreadCount,
+      ))
+          .single
+          .unreadCount,
       0,
     );
   });

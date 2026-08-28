@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:citizenapp/chat/chat_models.dart';
+import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/chat_page.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
 import 'package:citizenapp/chat/compose/sticker_panel.dart';
@@ -24,6 +25,21 @@ class _StubStore extends ChatStore {
       _messages
           .where((message) => message.conversationId == conversationId)
           .toList(growable: false);
+
+  @override
+  Future<ChatMessageDisplayBatch> readMessagesForDisplay({
+    required String ownerCidNumber,
+    required String currentAccountId,
+    required String conversationId,
+  }) async =>
+      ChatMessageDisplayBatch(
+        messages: await readMessages(
+          ownerCidNumber: ownerCidNumber,
+          currentAccountId: currentAccountId,
+          conversationId: conversationId,
+        ),
+        integrityFailureCount: 0,
+      );
 }
 
 ChatStoredMessage _stickerStored(
@@ -69,10 +85,22 @@ Future<void> _settleOpen(WidgetTester tester) async {
   // Chat 第一帧入树后，flutter_chat_ui 会安排 250ms 初始滚动；推进到该
   // 定时器完成但不 settle（贴纸/媒体的 Image.asset 异步解码可能持续排帧）。
   await tester.pump(const Duration(milliseconds: 100));
-  await tester.pump(const Duration(milliseconds: 300));
+  await tester.pump(const Duration(milliseconds: 800));
 }
 
 void main() {
+  const cidNumber = 'CN220-CTZN2-100000001-2026';
+
+  setUp(() {
+    ChatMediaLimits.applyMembershipLevel('freedom', cidNumber: cidNumber);
+    ChatMediaLimits.applyAuthorizedMembershipLevel(
+      'freedom',
+      cidNumber: cidNumber,
+    );
+  });
+
+  tearDown(() => ChatMediaLimits.markAuthorizationUnavailable(cidNumber));
+
   testWidgets('未知贴纸 id 渲染降级占位 [贴纸],绝不崩', (tester) async {
     await tester.pumpWidget(
       _host(store: _StubStore([_stickerStored('not_a_real_sticker')])),

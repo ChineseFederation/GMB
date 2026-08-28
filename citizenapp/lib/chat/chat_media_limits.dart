@@ -27,19 +27,56 @@ class ChatMediaLimits {
   static String? _currentCidNumber;
   static bool _resolved = false;
 
+  /// 当前登录会话最近一次由 CitizenServe 明确授权的聊天权益。展示快照只负责
+  /// 页面稳定显示，不能写入这组字段，更不能在断网后继续授权新的发送动作。
+  static int _authorizedMaxBytes = 0;
+  static String? _authorizedCidNumber;
+  static bool _authorizationResolved = false;
+
   /// 会员档 → 单个文件上限(纯函数,可测)。未知 / 无订阅一律禁止。
   static int maxBytesForLevel(String? level) => switch (level) {
-    'spark' => sparkMaxBytes,
-    'democracy' => democracyMaxBytes,
-    'freedom' => freedomMaxBytes,
-    _ => 0,
-  };
+        'spark' => sparkMaxBytes,
+        'democracy' => democracyMaxBytes,
+        'freedom' => freedomMaxBytes,
+        _ => 0,
+      };
 
   /// 会员状态载入后设置当前档上限；订阅失效或档位未知时统一关闭聊天权益。
   static void applyMembershipLevel(String? level, {String? cidNumber}) {
+    final normalized = cidNumber?.trim();
+    if (cidNumber == null) {
+      // 无 CID 调用只用于纯函数/Widget 测试；生产快照始终携带真实 CID。
+      _authorizedMaxBytes = maxBytesForLevel(level);
+      _authorizedCidNumber = null;
+      _authorizationResolved = true;
+    }
+    if (_authorizedCidNumber != null &&
+        normalized != null &&
+        _authorizedCidNumber != normalized) {
+      _authorizedMaxBytes = 0;
+      _authorizedCidNumber = normalized;
+      _authorizationResolved = false;
+    }
     _currentMaxBytes = maxBytesForLevel(level);
-    _currentCidNumber = cidNumber?.trim();
+    _currentCidNumber = normalized;
     _resolved = true;
+  }
+
+  /// CitizenServe 本次会话鉴权成功后推进授权缓存；无会员同样是已解析的 0 权益。
+  static void applyAuthorizedMembershipLevel(
+    String? level, {
+    required String cidNumber,
+  }) {
+    _authorizedMaxBytes = maxBytesForLevel(level);
+    _authorizedCidNumber = cidNumber.trim();
+    _authorizationResolved = true;
+  }
+
+  /// CitizenServe 鉴权失败时立即关闭发送授权；既有展示快照不受影响。
+  static void markAuthorizationUnavailable(String cidNumber) {
+    _authorizedMaxBytes = 0;
+    _authorizedCidNumber = cidNumber.trim();
+    _authorizationResolved = false;
   }
 
   /// 当前钱包是否具备有效聊天权益。
@@ -56,10 +93,26 @@ class ChatMediaLimits {
       _resolved &&
       (_currentCidNumber == null || _currentCidNumber == cidNumber.trim());
 
+  static bool chatAuthorizedFor(String cidNumber) =>
+      _authorizationResolved &&
+      _authorizedMaxBytes > 0 &&
+      (_authorizedCidNumber == null ||
+          _authorizedCidNumber == cidNumber.trim());
+
+  static bool authorizationResolvedFor(String cidNumber) =>
+      _authorizationResolved &&
+      (_authorizedCidNumber == null ||
+          _authorizedCidNumber == cidNumber.trim());
+
   /// 网络或会话失败不是“无会员”，但同样必须 fail-closed，后续允许重新读取。
   static void markUnresolved(String cidNumber) {
+    final normalized = cidNumber.trim();
+    if (_resolved &&
+        (_currentCidNumber == null || _currentCidNumber == normalized)) {
+      return;
+    }
     _currentMaxBytes = 0;
-    _currentCidNumber = cidNumber.trim();
+    _currentCidNumber = normalized;
     _resolved = false;
   }
 
@@ -75,15 +128,16 @@ class ChatMediaLimits {
 
   /// 按消息类型取上限。媒体(image/video/file/audio)= 当前档上限;text / sticker 无字节返回 0。
   static int forKind(ChatMessageKind kind) => switch (kind) {
-    ChatMessageKind.image ||
-    ChatMessageKind.video ||
-    ChatMessageKind.file ||
-    ChatMessageKind.audio => _currentMaxBytes,
-    ChatMessageKind.text || ChatMessageKind.sticker => 0,
-  };
+        ChatMessageKind.image ||
+        ChatMessageKind.video ||
+        ChatMessageKind.file ||
+        ChatMessageKind.audio =>
+          _authorizedMaxBytes,
+        ChatMessageKind.text || ChatMessageKind.sticker => 0,
+      };
 
   /// 按 MIME 取上限；媒体一律取当前有效会员档上限。
-  static int forMime(String mime) => _currentMaxBytes;
+  static int forMime(String mime) => _authorizedMaxBytes;
 
   /// 该类消息的 [byteSize] 是否超限。0 上限(text/sticker)一律视为不超限,
   /// 因为它们不携带媒体字节。

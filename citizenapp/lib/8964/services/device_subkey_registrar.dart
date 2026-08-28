@@ -13,6 +13,50 @@ typedef DeviceBindingSigner = Future<String> Function({
 });
 typedef TurnstileTokenProvider = Future<String?> Function();
 
+const _turnstileTokenMinLength = 20;
+const _turnstileTokenMaxLength = 2048;
+
+/// 等待根导航器进入可展示状态后，只展示一次设备绑定验证页。
+///
+/// 冷启动时会话握手可能早于 `MaterialApp` 首帧；此前直接返回空 token 会让正式
+/// Worker 必然以 `turnstile_required` 拒绝 iOS 新设备登记。这里仅等待前台 UI，
+/// 不重试验证、不在后台伪造 token，也不把取消当成功。
+Future<String> acquireDeviceBindingTurnstileToken({
+  required bool Function() isUiReady,
+  required TurnstileTokenProvider present,
+  Duration readyTimeout = const Duration(seconds: 15),
+  Duration pollInterval = const Duration(milliseconds: 50),
+  Future<void> Function(Duration duration)? delay,
+}) async {
+  final wait = delay ?? Future<void>.delayed;
+  final deadline = DateTime.now().add(readyTimeout);
+  while (!isUiReady()) {
+    if (!DateTime.now().isBefore(deadline)) {
+      throw const SquareApiException(
+        '设备安全验证界面尚未就绪，请稍后重试',
+        errorCode: 'turnstile_ui_unavailable',
+      );
+    }
+    await wait(pollInterval);
+  }
+
+  final token = await present();
+  if (token == null || token.isEmpty) {
+    throw const SquareApiException(
+      '设备安全验证已取消',
+      errorCode: 'turnstile_cancelled',
+    );
+  }
+  if (token.length < _turnstileTokenMinLength ||
+      token.length > _turnstileTokenMaxLength) {
+    throw const SquareApiException(
+      '设备安全验证结果不合法',
+      errorCode: 'turnstile_token_invalid',
+    );
+  }
+  return token;
+}
+
 /// 编排 P-256 设备子钥注册：取子钥公钥 → 构造 `signing_message(OP_SIGN_SQUARE_DEVICE_BIND)`
 /// 32B 摘要 → sr25519 主钥签摘要 → 上报后端。
 ///
@@ -64,7 +108,22 @@ class DeviceSubkeyRegistrar {
       devicePublicKey: publicKey,
       issuedAtMillis: issuedAt,
     );
-    final turnstileToken = await _turnstileToken?.call();
+    final tokenProvider = _turnstileToken;
+    if (tokenProvider == null) {
+      throw const SquareApiException(
+        '设备安全验证未配置',
+        errorCode: 'turnstile_ui_unavailable',
+      );
+    }
+    final turnstileToken = await tokenProvider();
+    if (turnstileToken == null ||
+        turnstileToken.length < _turnstileTokenMinLength ||
+        turnstileToken.length > _turnstileTokenMaxLength) {
+      throw const SquareApiException(
+        '设备安全验证未完成',
+        errorCode: 'turnstile_token_invalid',
+      );
+    }
     await _api.registerDeviceSubkey(
       accountId: accountId,
       p256PublicKeyHex: '0x$publicKey',

@@ -47,6 +47,33 @@ void main() {
     );
   });
 
+  test('瞬时鉴权失败不能抹掉同一 CID 已确认的会员快照', () {
+    const cidNumber = 'CN220-CTZN2-100000001-2026';
+    ChatMediaLimits.applyMembershipLevel('freedom', cidNumber: cidNumber);
+    ChatMediaLimits.markUnresolved(cidNumber);
+
+    expect(ChatMediaLimits.resolvedFor(cidNumber), isTrue);
+    expect(ChatMediaLimits.chatEnabledFor(cidNumber), isTrue);
+    expect(ChatMediaLimits.currentMaxBytes, 10 * mib);
+  });
+
+  test('展示快照不能替代当前 CitizenServe 会话授权', () {
+    const cidNumber = 'CN220-CTZN2-100000001-2026';
+    ChatMediaLimits.applyMembershipLevel('freedom', cidNumber: cidNumber);
+    ChatMediaLimits.markAuthorizationUnavailable(cidNumber);
+
+    expect(ChatMediaLimits.chatEnabledFor(cidNumber), isTrue);
+    expect(ChatMediaLimits.chatAuthorizedFor(cidNumber), isFalse);
+    expect(ChatMediaLimits.currentMaxBytes, 10 * mib);
+
+    ChatMediaLimits.applyAuthorizedMembershipLevel(
+      'freedom',
+      cidNumber: cidNumber,
+    );
+    expect(ChatMediaLimits.chatAuthorizedFor(cidNumber), isTrue);
+    expect(ChatMediaLimits.forKind(ChatMessageKind.image), 10 * mib);
+  });
+
   test('语音和视频消息统一为 3 分钟', () {
     expect(
       ChatMediaLimits.exceedsDurationForKind(

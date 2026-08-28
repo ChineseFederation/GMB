@@ -11,6 +11,7 @@ import UserNotifications
   private var deviceDataKeyVaultChannel: DeviceDataKeyVaultChannel?
   private var securityChannel: FlutterMethodChannel?
   private var permissionsChannel: FlutterMethodChannel?
+  private var chatNotificationsChannel: FlutterMethodChannel?
   private var squareMediaChannel: SquareMediaChannel?
   private var updateChannel: FlutterMethodChannel?
   private var emergencyWipeBackgroundTask: UIBackgroundTaskIdentifier = .invalid
@@ -200,6 +201,36 @@ import UserNotifications
     }
     self.permissionsChannel = permissionsChannel
 
+    let chatNotificationsChannel = FlutterMethodChannel(
+      name: "citizenapp/chat_notifications",
+      binaryMessenger: binaryMessenger
+    )
+    chatNotificationsChannel.setMethodCallHandler { call, result in
+      guard call.method == "clearConversationNotifications" else {
+        result(FlutterMethodNotImplemented)
+        return
+      }
+      guard
+        let arguments = call.arguments as? [String: Any],
+        let conversationId = arguments["conversationId"] as? String,
+        !conversationId.isEmpty
+      else {
+        result(
+          FlutterError(
+            code: "INVALID_CONVERSATION_ID",
+            message: "聊天通知缺少会话标识",
+            details: nil
+          )
+        )
+        return
+      }
+      Self.clearDeliveredChatNotifications(
+        conversationId: conversationId,
+        result: result
+      )
+    }
+    self.chatNotificationsChannel = chatNotificationsChannel
+
     let updateChannel = FlutterMethodChannel(
       name: "citizenapp/update",
       binaryMessenger: binaryMessenger
@@ -236,6 +267,27 @@ import UserNotifications
     guard emergencyWipeBackgroundTask != .invalid else { return }
     UIApplication.shared.endBackgroundTask(emergencyWipeBackgroundTask)
     emergencyWipeBackgroundTask = .invalid
+  }
+
+  /// APNs 使用既有 conversation_id 作为 threadIdentifier；查看会话后只删除该线程，
+  /// 不调用 removeAllDeliveredNotifications，避免误清其它聊天和广场通知。
+  private static func clearDeliveredChatNotifications(
+    conversationId: String,
+    result: @escaping FlutterResult
+  ) {
+    let center = UNUserNotificationCenter.current()
+    center.getDeliveredNotifications { notifications in
+      let identifiers = notifications.compactMap { notification -> String? in
+        let content = notification.request.content
+        let payloadConversation = content.userInfo["conversation_id"] as? String
+        return content.threadIdentifier == conversationId ||
+          payloadConversation == conversationId
+          ? notification.request.identifier
+          : nil
+      }
+      center.removeDeliveredNotifications(withIdentifiers: identifiers)
+      DispatchQueue.main.async { result(nil) }
+    }
   }
 
   static func currentApnsEnvironment(

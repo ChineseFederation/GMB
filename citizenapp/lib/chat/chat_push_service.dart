@@ -14,8 +14,7 @@ const _firebaseAndroidApiKey = 'AIzaSyBfXLIwqGoOX_h75MxZYcorJncT3uSZrm4';
 const _firebaseIosApiKey = 'AIzaSyBIVrjuAzf_TguwS88lf50PTeYXYlxTocU';
 const _firebaseProjectId = 'citizenapp-23542';
 const _firebaseSenderId = '124593150477';
-const _firebaseAndroidAppId =
-    '1:124593150477:android:436c372ca4779924ba1344';
+const _firebaseAndroidAppId = '1:124593150477:android:436c372ca4779924ba1344';
 const _firebaseIosAppId = '1:124593150477:ios:dcff6e612fb28795ba1344';
 
 FirebaseOptions _firebaseOptions() {
@@ -71,8 +70,7 @@ class ChatPushService {
   ChatPushService({
     MethodChannel? permissionsChannel,
     MethodChannel? notificationsChannel,
-  })
-      : _permissionsChannel =
+  })  : _permissionsChannel =
             permissionsChannel ?? const MethodChannel('citizenapp/permissions'),
         _notificationsChannel = notificationsChannel ??
             const MethodChannel('citizenapp/chat_notifications');
@@ -94,7 +92,8 @@ class ChatPushService {
     final token = await readToken(requestPermission: true);
     if (Platform.isIOS) {
       // APNs alert 在前台默认不展示；用户未关闭通知时明确启用横幅和声音。
-      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+      await FirebaseMessaging.instance
+          .setForegroundNotificationPresentationOptions(
         alert: true,
         badge: false,
         sound: true,
@@ -166,19 +165,44 @@ class ChatPushService {
     // Android 后台由 FCM notification 自动展示；前台只回调 onMessage，必须调用
     // 原生通知渠道。纯 data 的媒体信令唤醒没有 notification，绝不显示成新消息。
     if (Platform.isAndroid && message.notification != null) {
-      unawaited(_showAndroidAlert(message.messageId ?? sender));
+      final conversationId = notificationConversationFromData(message.data);
+      if (conversationId != null) {
+        unawaited(
+          _showAndroidAlert(
+            conversationId: conversationId,
+            envelopeId: message.messageId ?? sender,
+          ),
+        );
+      }
     }
   }
 
-  Future<void> _showAndroidAlert(String tag) async {
+  Future<void> _showAndroidAlert({
+    required String conversationId,
+    required String envelopeId,
+  }) async {
     try {
       await _notificationsChannel.invokeMethod<void>(
         'showChatNotification',
-        <String, String>{'tag': tag},
+        <String, String>{
+          'conversationId': conversationId,
+          'envelopeId': envelopeId,
+        },
       );
     } catch (_) {
       // 系统通知失败不阻断已经落入本机的端到端密文。
     }
+  }
+
+  /// 页面已读提交成功后只清理当前会话通知；Android 与 iOS 共用同一原生通道。
+  Future<void> clearConversationNotifications(String conversationId) async {
+    if ((!Platform.isAndroid && !Platform.isIOS) || conversationId.isEmpty) {
+      return;
+    }
+    await _notificationsChannel.invokeMethod<void>(
+      'clearConversationNotifications',
+      <String, String>{'conversationId': conversationId},
+    );
   }
 
   /// 推送正文只能识别无内容唤醒，不接受消息或附件字段。
@@ -186,9 +210,24 @@ class ChatPushService {
   /// 唤醒发件人以身份主键 CID 号（`sender_cid_number`）标识，与 Worker R5 对齐；
   /// 下游 peer_ready / 补发一律按 CID 语义寻址。
   static String? wakeSenderFromData(Map<String, dynamic> data) {
-    if (data['kind'] != 'chat_wake' || data.length != 2) return null;
+    if (data['kind'] != 'chat_wake' || (data.length != 2 && data.length != 3)) {
+      return null;
+    }
     final sender = data['sender_cid_number'];
-    return sender is String && sender.isNotEmpty ? sender : null;
+    if (sender is! String || sender.isEmpty) return null;
+    if (data.length == 3 && notificationConversationFromData(data) == null) {
+      return null;
+    }
+    return sender;
+  }
+
+  /// 可见通知额外携带既有 conversation_id，仅用于系统分组和已读清除。
+  static String? notificationConversationFromData(Map<String, dynamic> data) {
+    if (data['kind'] != 'chat_wake' || data.length != 3) return null;
+    final conversationId = data['conversation_id'];
+    return conversationId is String && conversationId.isNotEmpty
+        ? conversationId
+        : null;
   }
 
   Future<void> dispose() async {

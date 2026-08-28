@@ -1606,8 +1606,10 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 统一输入栏：键盘/语音两态，共用表达面板与 4+3 动作面板。
   Widget _buildComposer(BuildContext context) {
-    if (!ChatMediaLimits.chatEnabledFor(widget.ownerCidNumber)) {
-      final resolved =
+    if (!ChatMediaLimits.chatAuthorizedFor(widget.ownerCidNumber)) {
+      final resolved = ChatMediaLimits.authorizationResolvedFor(
+            widget.ownerCidNumber,
+          ) &&
           ChatMediaLimits.resolvedFor(widget.ownerCidNumber);
       return Container(
         key: const ValueKey('chat-membership-required'),
@@ -1618,9 +1620,7 @@ class _ChatPageState extends State<ChatPage> {
         ),
         color: AppTheme.surfaceCard,
         child: Text(
-          resolved
-              ? '尚未开通会员，订阅任一会员后即可使用聊天'
-              : '暂时无法验证会员状态，请稍后重试',
+          resolved ? '尚未开通会员，订阅任一会员后即可使用聊天' : '暂时无法验证会员状态，请稍后重试',
           textAlign: TextAlign.center,
           style: TextStyle(
             color: AppTheme.textSecondary,
@@ -1657,10 +1657,13 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   bool _requireChatEntitlement() {
-    if (ChatMediaLimits.chatEnabledFor(widget.ownerCidNumber)) return true;
+    if (ChatMediaLimits.chatAuthorizedFor(widget.ownerCidNumber)) return true;
     if (mounted) {
       setState(() {
-        _error = ChatMediaLimits.resolvedFor(widget.ownerCidNumber)
+        _error = ChatMediaLimits.authorizationResolvedFor(
+                  widget.ownerCidNumber,
+                ) &&
+                ChatMediaLimits.resolvedFor(widget.ownerCidNumber)
             ? '尚未开通会员，订阅任一会员后即可使用聊天'
             : '暂时无法验证会员状态，请稍后重试';
       });
@@ -1939,22 +1942,30 @@ class _ChatPageState extends State<ChatPage> {
                   )
                 : null,
           ),
-          if (_error != null)
-            Container(
-              width: double.infinity,
-              padding: EdgeInsets.symmetric(
-                horizontal: AppLayout.scaled(context, 16),
-                vertical: AppLayout.scaled(context, 10),
-              ),
-              color: Colors.red.withAlpha(20),
-              child: Text(
-                _error!,
-                style: TextStyle(
-                  color: Colors.red,
-                  fontSize: AppLayout.scaled(context, 12),
-                ),
-              ),
-            ),
+          // 错误状态使用固定高度槽位；异步鉴权、重连和恢复不能插入/删除组件，
+          // 从而避免消息列表每隔一段时间整体上下抖动。
+          SizedBox(
+            height: AppLayout.scaled(context, 36),
+            child: _error == null
+                ? const SizedBox.shrink()
+                : Container(
+                    width: double.infinity,
+                    alignment: Alignment.centerLeft,
+                    padding: EdgeInsets.symmetric(
+                      horizontal: AppLayout.scaled(context, 16),
+                    ),
+                    color: Colors.red.withAlpha(20),
+                    child: Text(
+                      _error!,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontSize: AppLayout.scaled(context, 12),
+                      ),
+                    ),
+                  ),
+          ),
           Expanded(
             child: Chat(
               currentUserId: widget.ownerCidNumber,
@@ -1974,11 +1985,11 @@ class _ChatPageState extends State<ChatPage> {
                 // 只有首读确认为空后才显示中文真空态。
                 emptyChatListBuilder: (context) =>
                     !shouldShowChatEmptyState(loading: _loading, error: _error)
-                    ? const SizedBox.shrink()
-                    : const Padding(
-                        padding: EdgeInsets.only(bottom: 120),
-                        child: Center(child: Text('暂无消息')),
-                      ),
+                        ? const SizedBox.shrink()
+                        : const Padding(
+                            padding: EdgeInsets.only(bottom: 120),
+                            child: Center(child: Text('暂无消息')),
+                          ),
               ),
               resolveUser: (id) async {
                 final isMe = id == widget.ownerCidNumber;

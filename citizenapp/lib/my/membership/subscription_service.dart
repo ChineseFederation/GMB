@@ -68,13 +68,12 @@ class SubscriptionService {
     DefaultAccountReader? defaultAccountReader,
     SquareSessionProvider? sessionProvider,
     SquareApiClient? api,
-  }) : _rpc = rpc ?? SubscriptionRpc(),
-       _wallet = walletManager ?? WalletManager(),
-       _defaultAccountReader =
-           defaultAccountReader ??
-           DefaultAccountService(walletManager: walletManager),
-       _session = sessionProvider ?? SquareSessionProvider.instance,
-       _api = api ?? SquareApiClient() {
+  })  : _rpc = rpc ?? SubscriptionRpc(),
+        _wallet = walletManager ?? WalletManager(),
+        _defaultAccountReader = defaultAccountReader ??
+            DefaultAccountService(walletManager: walletManager),
+        _session = sessionProvider ?? SquareSessionProvider.instance,
+        _api = api ?? SquareApiClient() {
     _walletAccountSigner = WalletAccountSigner(walletManager: _wallet);
     // App/会员服务重新建立时主动恢复 finalized 待同步交易；失败仍留在原 tx_hash 队列，
     // 后续状态刷新再次重试，不把恢复职责塞进广场发布流程。
@@ -135,6 +134,10 @@ class SubscriptionService {
   ) async {
     final state = await _api.fetchMembership(session);
     await _rememberServerState(session, state);
+    ChatMediaLimits.applyAuthorizedMembershipLevel(
+      state.active ? state.membershipLevel : null,
+      cidNumber: session.cidNumber,
+    );
     return state;
   }
 
@@ -171,13 +174,11 @@ class SubscriptionService {
       final snapshot = MembershipDisplaySnapshot(
         state: SquareMembershipState(
           active: decoded['active'] == true,
-          paidUntil: decoded['paid_until'] is int
-              ? decoded['paid_until'] as int
-              : 0,
+          paidUntil:
+              decoded['paid_until'] is int ? decoded['paid_until'] as int : 0,
           membershipLevel: membershipLevel is String ? membershipLevel : null,
-          subscriptionStatus: subscriptionStatus is String
-              ? subscriptionStatus
-              : null,
+          subscriptionStatus:
+              subscriptionStatus is String ? subscriptionStatus : null,
           subscriptionActive: decoded['subscription_active'] == true,
           lastChargedAt: decoded['last_charged_at'] is int
               ? decoded['last_charged_at'] as int
@@ -231,17 +232,17 @@ class SubscriptionService {
     final state = snapshot.state;
     final effectiveState =
         state.active && (state.paidUntil <= 0 || now >= state.paidUntil)
-        ? SquareMembershipState(
-            active: false,
-            paidUntil: state.paidUntil,
-            membershipLevel: state.membershipLevel,
-            subscriptionStatus: state.subscriptionStatus,
-            subscriptionActive: false,
-            lastChargedAt: state.lastChargedAt,
-            plans: state.plans,
-            usageState: state.usageState,
-          )
-        : state;
+            ? SquareMembershipState(
+                active: false,
+                paidUntil: state.paidUntil,
+                membershipLevel: state.membershipLevel,
+                subscriptionStatus: state.subscriptionStatus,
+                subscriptionActive: false,
+                lastChargedAt: state.lastChargedAt,
+                plans: state.plans,
+                usageState: state.usageState,
+              )
+            : state;
     final effective = identical(effectiveState, state)
         ? snapshot
         : MembershipDisplaySnapshot(
@@ -472,7 +473,8 @@ class SubscriptionService {
       }
       _mirrorSyncPending = (await _readList(
         _pendingKey(subscriberCidNumber),
-      )).isNotEmpty;
+      ))
+          .isNotEmpty;
     } on Exception {
       // 保留未完成证明；链上订阅与自动续费不依赖 Cloudflare。
     }
@@ -508,6 +510,10 @@ class SubscriptionService {
         blockHashHex: blockHashHex,
       );
       await _rememberServerState(session, confirmed);
+      ChatMediaLimits.applyAuthorizedMembershipLevel(
+        confirmed.active ? confirmed.membershipLevel : null,
+        cidNumber: session.cidNumber,
+      );
       _authorizations[subscriberCidNumber] = _MembershipAuthorization(
         _authorizationKey(session),
         Future<SquareMembershipState>.value(confirmed),
@@ -564,16 +570,17 @@ class SubscriptionService {
   }
 
   Future<String?> _readState(String key) => WalletIsar.instance.read(
-    (isar) async => (await isar.walletMembershipStateEntitys.getByStateKey(
-      key,
-    ))?.payloadJson,
-  );
+        (isar) async => (await isar.walletMembershipStateEntitys.getByStateKey(
+          key,
+        ))
+            ?.payloadJson,
+      );
 
   Future<void> _writeState(String key, String payloadJson) =>
       WalletIsar.instance.writeTxn((isar) async {
         final row =
             await isar.walletMembershipStateEntitys.getByStateKey(key) ??
-            WalletMembershipStateEntity();
+                WalletMembershipStateEntity();
         row
           ..stateKey = key
           ..payloadJson = payloadJson;

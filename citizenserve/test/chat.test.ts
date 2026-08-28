@@ -184,6 +184,7 @@ function envelopeRequest(extra: Record<string, unknown> = {}): Request {
     body: JSON.stringify({
       envelope_id: "envelope-12345678",
       recipient_cid_number: RECIPIENT_CID,
+      conversation_id: `dm:${SENDER_CID}:${RECIPIENT_CID}`,
       envelope: "AQID",
       created_at_millis: Date.now(),
       ttl_millis: 60_000,
