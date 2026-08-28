@@ -147,7 +147,7 @@ jobs:
               process.stdin.on("end", () => {
                 const pages = JSON.parse(source);
                 const rows = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])
-                  .filter((item) => item?.display_title === "GMB · 全仓统一")
+                  .filter((item) => item?.event === "push" || item?.display_title === "GMB · 全仓统一")
                   .sort((left, right) => Number(right?.id || 0) - Number(left?.id || 0));
                 const latest = rows[0];
                 if (!latest || latest.status !== "completed" || latest.conclusion !== "success") {
@@ -192,7 +192,7 @@ jobs:
             gh api --method DELETE "repos/${repository}/actions/runs/${run_id}"
           }
           rows="$(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and .display_title == \"GMB · 全仓统一\") | [.id, (.conclusion // \"failure\")] | @tsv")"
+            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and (.event == \"push\" or .display_title == \"GMB · 全仓统一\")) | [.id, (.conclusion // \"failure\")] | @tsv")"
           while IFS=$'\t' read -r previous conclusion; do
             [[ "$previous" =~ ^[1-9][0-9]*$ && "$previous" != "$current" ]] || continue
             if [[ "$conclusion" == success ]]; then
@@ -374,7 +374,7 @@ jobs:
             gh api --method DELETE "repos/${repository}/actions/runs/${run_id}"
           }
           rows="$(gh api --paginate "repos/${repository}/actions/workflows/${workflow_id}/runs?per_page=100" \
-            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and .display_title == \"GMB · 全仓统一\") | [.id, (.conclusion // \"failure\")] | @tsv")"
+            --jq ".workflow_runs[] | select(.id != ${current} and .status == \"completed\" and (.event == \"push\" or .display_title == \"GMB · 全仓统一\")) | [.id, (.conclusion // \"failure\")] | @tsv")"
           while IFS=$'\t' read -r previous conclusion; do
             [[ "$previous" =~ ^[1-9][0-9]*$ && "$previous" != "$current" ]] || continue
             if [[ "$result" == success && "$conclusion" != success ]] \
