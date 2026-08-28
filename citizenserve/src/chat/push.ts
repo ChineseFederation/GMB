@@ -18,6 +18,12 @@ interface WakePayload {
   sender_cid_number: string;
 }
 
+interface PushOutcome {
+  device: PushDeviceRow;
+  accepted: boolean;
+  invalid: boolean;
+}
+
 /** 同一次 Worker/Queue 调用内复用推送凭据，禁止每台设备重复签名或请求 OAuth。 */
 export interface PushAuth {
   apns_jwt?: Promise<string>;
@@ -70,6 +76,193 @@ export async function sendChatWake(
     (result.results ?? []).map((device) => sendDeviceWake(env, device, payload, auth)),
   );
   return outcomes.filter(Boolean).length;
+}
+
+/**
+ * 密文邮箱首次保存后的可见系统通知。通知正文固定且不含聊天内容；是否存在活动 WSS
+ * 不影响本通知。既有 envelope_id 只用作平台通知去重标识，不进入 data 载荷。
+ */
+export async function sendChatAlert(
+  env: Env,
+  recipientCidNumber: string,
+  senderCidNumber: string,
+  envelopeId: string,
+): Promise<number> {
+  const recipientIdentity = await readUserByCidNumber(env, recipientCidNumber);
+  if (!recipientIdentity || !recipientIdentity.account_id || recipientIdentity.binding_revision <= 0) {
+    return 0;
+  }
+  const result = await env.DB.prepare(
+    `SELECT push_provider, push_token, apns_environment
+       FROM chat_push_endpoints
+      WHERE cid_number = ?
+        AND binding_revision = ?
+        AND account_id = ?
+        AND expires_at > ?`,
+  ).bind(
+    recipientCidNumber,
+    recipientIdentity.binding_revision,
+    recipientIdentity.account_id,
+    nowMs(),
+  ).all<PushDeviceRow>();
+  const payload: WakePayload = {
+    kind: 'chat_wake',
+    sender_cid_number: senderCidNumber,
+  };
+  assertDeliverySize('push_wake', JSON.stringify(payload));
+  const auth = createPushAuth();
+  const outcomes = await Promise.all(
+    (result.results ?? []).map((device) =>
+      sendDeviceAlert(env, device, payload, envelopeId, auth),
+    ),
+  );
+  await Promise.all(
+    outcomes.filter((outcome) => outcome.invalid).map((outcome) =>
+      env.DB.prepare(
+        `DELETE FROM chat_push_endpoints
+          WHERE push_provider = ? AND push_token = ?`,
+      ).bind(outcome.device.push_provider, outcome.device.push_token).run()
+    ),
+  );
+  return outcomes.filter((outcome) => outcome.accepted).length;
+}
+
+async function sendDeviceAlert(
+  env: Env,
+  device: PushDeviceRow,
+  payload: WakePayload,
+  envelopeId: string,
+  auth: PushAuth,
+): Promise<PushOutcome> {
+  if (device.push_provider === 'apns') {
+    if (device.apns_environment === null) {
+      return { device, accepted: false, invalid: true };
+    }
+    return sendApnsChatAlert(
+      env,
+      device,
+      device.apns_environment,
+      payload,
+      envelopeId,
+      auth,
+    );
+  }
+  return sendFcmChatAlert(env, device, payload, envelopeId, auth);
+}
+
+async function sendApnsChatAlert(
+  env: Env,
+  device: PushDeviceRow,
+  environment: ApnsEnvironment,
+  payload: WakePayload,
+  envelopeId: string,
+  auth: PushAuth,
+): Promise<PushOutcome> {
+  if (!env.APNS_KEY || !env.APNS_KID || !env.APNS_TEAM || !env.APNS_TOPIC) {
+    return { device, accepted: false, invalid: false };
+  }
+  const jwt = await apnsJwt(env, auth);
+  const response = await fetchPush(() => fetch(
+    `https://${apnsHost(environment)}/3/device/${encodeURIComponent(device.push_token)}`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `bearer ${jwt}`,
+        'apns-push-type': 'alert',
+        'apns-priority': '10',
+        'apns-topic': env.APNS_TOPIC!,
+        'apns-collapse-id': envelopeId,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        aps: {
+          alert: { title: '公民', body: '你有一条新消息' },
+          sound: 'default',
+          'content-available': 1,
+        },
+        ...payload,
+      }),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    },
+  ));
+  const invalid = response.status === 410 || await hasPushError(response, [
+    'BadDeviceToken',
+    'DeviceTokenNotForTopic',
+    'Unregistered',
+  ]);
+  return { device, accepted: response.ok, invalid };
+}
+
+async function sendFcmChatAlert(
+  env: Env,
+  device: PushDeviceRow,
+  payload: WakePayload,
+  envelopeId: string,
+  auth: PushAuth,
+): Promise<PushOutcome> {
+  if (!env.FCM_PROJECT || !env.FCM_EMAIL || !env.FCM_KEY) {
+    return { device, accepted: false, invalid: false };
+  }
+  const accessToken = await fcmAccessToken(env, auth);
+  const response = await fetchPush(() => fetch(
+    `https://fcm.googleapis.com/v1/projects/${encodeURIComponent(env.FCM_PROJECT!)}/messages:send`,
+    {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: {
+          token: device.push_token,
+          notification: { title: '公民', body: '你有一条新消息' },
+          data: payload,
+          android: {
+            priority: 'high',
+            ttl: '604800s',
+            notification: {
+              channel_id: 'chat_messages',
+              sound: 'default',
+              tag: envelopeId,
+            },
+          },
+        },
+      }),
+      signal: AbortSignal.timeout(PUSH_TIMEOUT_MS),
+    },
+  ));
+  return {
+    device,
+    accepted: response.ok,
+    invalid: await hasPushError(response, ['UNREGISTERED']),
+  };
+}
+
+/** APNs/FCM 短时故障在同一 Worker 生命周期内只重试一次，避免消息提交被外部服务拖住。 */
+async function fetchPush(send: () => Promise<Response>): Promise<Response> {
+  let response: Response | undefined;
+  let failure: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      response = await send();
+      if (response.ok || (response.status !== 429 && response.status < 500)) {
+        return response;
+      }
+    } catch (error) {
+      failure = error;
+    }
+    if (attempt === 0) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+    }
+  }
+  if (response !== undefined) return response;
+  throw failure instanceof Error ? failure : new Error('chat_push_request_failed');
+}
+
+async function hasPushError(response: Response, reasons: string[]): Promise<boolean> {
+  if (response.ok) return false;
+  const body = await response.clone().text().catch(() => '');
+  return reasons.some((reason) => body.includes(reason));
 }
 
 async function sendDeviceWake(

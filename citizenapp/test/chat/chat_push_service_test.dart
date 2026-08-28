@@ -73,6 +73,22 @@ void main() {
     );
   });
 
+  test('双端可见聊天通知只展示固定无正文文案', () {
+    final push = File('../citizenserve/src/chat/push.ts').readAsStringSync();
+    final android = File(
+      'android/app/src/main/kotlin/com/crcfrcn/citizenapp/MainActivity.kt',
+    ).readAsStringSync();
+    final client = File('lib/chat/chat_push_service.dart').readAsStringSync();
+
+    expect(push, contains("'apns-push-type': 'alert'"));
+    expect(push, contains("notification: { title: '公民', body: '你有一条新消息' }"));
+    expect(push, contains("channel_id: 'chat_messages'"));
+    expect(android, contains('CHAT_NOTIFICATION_CHANNEL_ID = "chat_messages"'));
+    expect(android, contains('.setContentText("你有一条新消息")'));
+    expect(client, contains('setForegroundNotificationPresentationOptions'));
+    expect(client, contains('message.notification != null'));
+  });
+
   test('APNs 环境只接受原生签名映射后的两个固定值', () {
     expect(requireApnsEnvironment('sandbox'), 'sandbox');
     expect(requireApnsEnvironment('production'), 'production');

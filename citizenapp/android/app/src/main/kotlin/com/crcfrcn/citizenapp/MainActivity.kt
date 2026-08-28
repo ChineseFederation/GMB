@@ -1,6 +1,7 @@
 package com.crcfrcn.citizenapp
 
 import android.Manifest
+import android.app.PendingIntent
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.content.Intent
@@ -10,6 +11,8 @@ import android.os.Build
 import android.provider.Settings
 import android.view.WindowManager
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.ContextCompat
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -34,6 +37,8 @@ class MainActivity : FlutterFragmentActivity() {
     companion object {
         // 与 Cloudflare Worker FCM payload 的 android.notification.channel_id 一致。
         private const val SQUARE_POST_CHANNEL_ID = "square_posts"
+        private const val CHAT_NOTIFICATION_CHANNEL_ID = "chat_messages"
+        private const val CHAT_NOTIFICATION_METHOD_CHANNEL = "citizenapp/chat_notifications"
     }
 
     /**
@@ -56,6 +61,24 @@ class MainActivity : FlutterFragmentActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         ensureSquarePostNotificationChannel()
+        ensureChatNotificationChannel()
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            CHAT_NOTIFICATION_METHOD_CHANNEL,
+        ).setMethodCallHandler { call, result ->
+            if (call.method != "showChatNotification") {
+                result.notImplemented()
+                return@setMethodCallHandler
+            }
+            val tag = call.argument<String>("tag")?.takeIf { it.isNotBlank() }
+            if (tag == null) {
+                result.error("INVALID_NOTIFICATION_TAG", "聊天通知缺少唯一标识", null)
+                return@setMethodCallHandler
+            }
+            showChatNotification(tag)
+            result.success(null)
+        }
 
         squareMediaChannel = SquareMediaChannel(
             flutterEngine.dartExecutor.binaryMessenger,
@@ -288,6 +311,45 @@ class MainActivity : FlutterFragmentActivity() {
             // IMPORTANCE_HIGH 渠道默认带系统提示音，不覆盖 sound 即用默认铃声。
         }
         manager.createNotificationChannel(channel)
+    }
+
+    /// 聊天消息独立使用高优先级渠道；用户可以在系统设置中单独关闭，App 不绕过该选择。
+    private fun ensureChatNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        if (manager.getNotificationChannel(CHAT_NOTIFICATION_CHANNEL_ID) != null) return
+        val channel = NotificationChannel(
+            CHAT_NOTIFICATION_CHANNEL_ID,
+            "聊天消息",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply {
+            description = "收到新的端到端加密消息时通知"
+            enableVibration(true)
+        }
+        manager.createNotificationChannel(channel)
+    }
+
+    /// FCM 前台消息不会自动弹出通知；这里只展示固定无正文文案，不接收聊天内容。
+    private fun showChatNotification(tag: String) {
+        if (!isNotificationPermissionGranted()) return
+        val openApp = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            tag.hashCode(),
+            openApp,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, CHAT_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("公民")
+            .setContentText("你有一条新消息")
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+            .build()
+        NotificationManagerCompat.from(this).notify(tag, 1, notification)
     }
 
     private fun isNotificationPermissionGranted(): Boolean {

@@ -68,11 +68,17 @@ String requireApnsEnvironment(String? value) {
 
 /// 平台推送只负责唤醒本地重试，不承载消息、会话或附件内容。
 class ChatPushService {
-  ChatPushService({MethodChannel? permissionsChannel})
+  ChatPushService({
+    MethodChannel? permissionsChannel,
+    MethodChannel? notificationsChannel,
+  })
       : _permissionsChannel =
-            permissionsChannel ?? const MethodChannel('citizenapp/permissions');
+            permissionsChannel ?? const MethodChannel('citizenapp/permissions'),
+        _notificationsChannel = notificationsChannel ??
+            const MethodChannel('citizenapp/chat_notifications');
 
   final MethodChannel _permissionsChannel;
+  final MethodChannel _notificationsChannel;
 
   final StreamController<String> _wakeController =
       StreamController<String>.broadcast();
@@ -86,6 +92,14 @@ class ChatPushService {
 
   Future<ChatPushToken> initialize() async {
     final token = await readToken(requestPermission: true);
+    if (Platform.isIOS) {
+      // APNs alert 在前台默认不展示；用户未关闭通知时明确启用横幅和声音。
+      await FirebaseMessaging.instance.setForegroundNotificationPresentationOptions(
+        alert: true,
+        badge: false,
+        sound: true,
+      );
+    }
     _messageSubscription ??= FirebaseMessaging.onMessage.listen(_handleMessage);
     _tokenSubscription ??= FirebaseMessaging.instance.onTokenRefresh.listen((
       _,
@@ -147,7 +161,24 @@ class ChatPushService {
 
   void _handleMessage(RemoteMessage message) {
     final sender = wakeSenderFromData(message.data);
-    if (sender != null) _wakeController.add(sender);
+    if (sender == null) return;
+    _wakeController.add(sender);
+    // Android 后台由 FCM notification 自动展示；前台只回调 onMessage，必须调用
+    // 原生通知渠道。纯 data 的媒体信令唤醒没有 notification，绝不显示成新消息。
+    if (Platform.isAndroid && message.notification != null) {
+      unawaited(_showAndroidAlert(message.messageId ?? sender));
+    }
+  }
+
+  Future<void> _showAndroidAlert(String tag) async {
+    try {
+      await _notificationsChannel.invokeMethod<void>(
+        'showChatNotification',
+        <String, String>{'tag': tag},
+      );
+    } catch (_) {
+      // 系统通知失败不阻断已经落入本机的端到端密文。
+    }
   }
 
   /// 推送正文只能识别无内容唤醒，不接受消息或附件字段。

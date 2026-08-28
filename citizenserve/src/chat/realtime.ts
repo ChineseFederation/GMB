@@ -142,7 +142,11 @@ export class Chat implements DurableObject {
           payload.ttl_millis,
         );
       }
-      return jsonResponse({ ok: true, sent: this.deliverEnvelope(payload) });
+      return jsonResponse({
+        ok: true,
+        stored: !existing,
+        sent: this.deliverEnvelope(payload),
+      });
     }
     if (request.method === 'GET' && path === '/__messages') {
       this.deleteExpiredEnvelopes();
@@ -453,8 +457,16 @@ export async function relayAuthenticatedChatSignal(
   return sent > 0 ? 'sent' : 'unavailable';
 }
 
+export interface ChatMailboxDelivery {
+  stored: boolean;
+  sent: number;
+}
+
 /** 按接收 CID 写入唯一有界密文邮箱，并向该 CID 当前在线设备立即推送同一密文。 */
-export async function storeChatEnvelope(env: Env, item: ChatMailboxItem): Promise<number> {
+export async function storeChatEnvelope(
+  env: Env,
+  item: ChatMailboxItem,
+): Promise<ChatMailboxDelivery> {
   const binding = await readUserByCidNumber(env, item.recipient_cid_number);
   if (!binding || binding.binding_revision <= 0 || !binding.account_id) {
     throw new HttpError(404, 'chat_recipient_not_found', '接收方公民身份不存在');
@@ -471,6 +483,7 @@ export async function storeChatEnvelope(env: Env, item: ChatMailboxItem): Promis
       } satisfies RoutedChatMailboxItem),
     }));
   const body = await response.json() as {
+    stored?: boolean;
     sent?: number;
     error_code?: string;
     message?: string;
@@ -482,7 +495,10 @@ export async function storeChatEnvelope(env: Env, item: ChatMailboxItem): Promis
       body.message ?? 'Chat 临时密文写入失败',
     );
   }
-  return body.sent ?? 0;
+  return {
+    stored: body.stored === true,
+    sent: body.sent ?? 0,
+  };
 }
 
 export async function readChatMailbox(env: Env, cidNumber: string): Promise<ChatMailboxItem[]> {

@@ -66,6 +66,7 @@ import {
 export async function routeRequest(
   request: Request,
   env: Env,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = normalizeApiPath(url.pathname);
@@ -237,7 +238,7 @@ export async function routeRequest(
     return issueChatIce(request, env);
   }
   if (path === "/chat/messages") {
-    if (request.method === "POST") return submitChatEnvelope(request, env);
+    if (request.method === "POST") return submitChatEnvelope(request, env, ctx);
     if (request.method === "GET") return fetchChatEnvelopes(request, env);
   }
   if (request.method === "POST" && path === "/chat/messages/ack") {

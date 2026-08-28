@@ -36,9 +36,9 @@ async function runIndependentScheduledJobs(
   }
 }
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response> {
     try {
-      return applyCors(request, env, await routeRequest(request, env));
+      return applyCors(request, env, await routeRequest(request, env, ctx));
     } catch (error) {
       return applyCors(request, env, errorResponse(error));
     }

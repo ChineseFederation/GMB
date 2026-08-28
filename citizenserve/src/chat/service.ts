@@ -19,7 +19,7 @@ import {
   requireChatRealtimeNamespace,
   storeChatEnvelope,
 } from "./realtime";
-import { sendChatWake } from "./push";
+import { sendChatAlert } from "./push";
 import { resourceLimit } from "../limits/catalog";
 import { enforceEdgeRate } from "../security/request_guard";
 import { readUserByCidNumber } from "../account/user_repository";
@@ -185,7 +185,11 @@ export async function issueChatIce(request: Request, env: Env): Promise<Response
 }
 
 /** 写入一个已序列化的端到端加密 Envelope；HTTP 成功即表示密文已经持久保存。 */
-export async function submitChatEnvelope(request: Request, env: Env): Promise<Response> {
+export async function submitChatEnvelope(
+  request: Request,
+  env: Env,
+  ctx?: Pick<ExecutionContext, "waitUntil">,
+): Promise<Response> {
   const session = await requireSession(request, env);
   const body = await readJson<ChatEnvelopePayload>(request);
   assertExactChatEnvelopeFields(body);
@@ -241,9 +245,25 @@ export async function submitChatEnvelope(request: Request, env: Env): Promise<Re
     created_at_millis: createdAtMillis,
     ttl_millis: ttlMillis,
   };
-  const sent = await storeChatEnvelope(env, item);
-  if (sent === 0) {
-    await sendChatWake(env, recipientCidNumber, session.cid_number).catch(() => 0);
+  const delivery = await storeChatEnvelope(env, item);
+  if (delivery.stored) {
+    // 系统通知与 WSS 在线投递完全独立。密文首次持久化后立即返回发送成功，
+    // APNs/FCM 在 Worker 官方 waitUntil 生命周期内完成，不能拖慢消息提交。
+    const alertTask = sendChatAlert(
+      env,
+      recipientCidNumber,
+      session.cid_number,
+      envelopeId,
+    ).catch(() => {
+        // 禁止输出 CID、Token、envelope_id 或上游响应正文。
+        console.error("[chat-push] chat_alert_failed");
+      });
+    if (ctx == null) {
+      // 路由单元测试没有 Worker 生命周期；等待任务可保留完整错误边界。
+      await alertTask;
+    } else {
+      ctx.waitUntil(alertTask);
+    }
   }
   return jsonResponse({ ok: true });
 }

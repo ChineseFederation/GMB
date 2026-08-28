@@ -168,6 +168,7 @@ void main() {
 
   testWidgets('本地聊天记录未返回前不闪现空态，返回后直接显示历史消息', (tester) async {
     final store = _PendingMessagesStore();
+    final readThrough = <int>[];
     await tester.pumpWidget(
       MaterialApp(
         home: ChatPage(
@@ -178,6 +179,7 @@ void main() {
           peerUserId: _peerCidNumber,
           title: '张三',
           store: store,
+          onMarkRead: (millis) async => readThrough.add(millis),
         ),
       ),
     );
@@ -202,6 +204,7 @@ void main() {
     expect(find.text('No messages yet'), findsNothing);
     expect(find.text('暂无消息'), findsNothing);
     expect(find.text('历史消息'), findsOneWidget);
+    expect(readThrough, <int>[1000]);
     await tester.pump(const Duration(milliseconds: 300));
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -1148,14 +1151,14 @@ void main() {
           peerUserId: _peerCidNumber,
           title: '张三',
           store: store,
-          onSync: () async {},
+          onSync: () async => 0,
           onStartRealtime: ({required onNotice, onDisconnected}) async =>
               () async {},
         ),
       ),
     );
     await tester.pump(const Duration(milliseconds: 100));
-    final notice = find.text('部分本机历史消息完整性校验失败，损坏记录已隔离');
+    final notice = find.text('部分本机历史消息无法验证，其他记录已正常显示');
     final readable = find.text('仍然可见的消息');
     expect(notice, findsOneWidget);
     expect(readable, findsOneWidget);
@@ -1671,6 +1674,24 @@ class _FakeChatStore extends ChatStore {
     return _messages
         .where((message) => message.conversationId == conversationId)
         .toList(growable: false);
+  }
+
+  @override
+  Future<ChatMessageDisplayBatch> readMessagesForDisplay({
+    required String ownerCidNumber,
+    required String currentAccountId,
+    required String conversationId,
+  }) async {
+    // 测试替身必须走当前聊天窗口读取契约，同时保留子类对旧读取入口的可控 Future。
+    final messages = await readMessages(
+      ownerCidNumber: ownerCidNumber,
+      currentAccountId: currentAccountId,
+      conversationId: conversationId,
+    );
+    return ChatMessageDisplayBatch(
+      messages: messages,
+      integrityFailureCount: 0,
+    );
   }
 
   @override

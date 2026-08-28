@@ -66,6 +66,10 @@ Future<void> openGroupChat(
         ),
         onDeleteConversation: onDeleteConversation ??
             () => runtime.deleteLocalConversation(groupId),
+        onMarkRead: (readThroughMillis) => runtime.markConversationRead(
+          conversationId: groupId,
+          readThroughMillis: readThroughMillis,
+        ),
       ),
     ),
   );

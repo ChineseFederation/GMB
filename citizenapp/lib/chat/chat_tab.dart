@@ -1100,6 +1100,12 @@ class _ChatTabState extends State<ChatTab> {
                         ),
               onDeleteConversation: () =>
                   _deleteConversationInBackground(preview.conversationId),
+              onMarkRead: widget.runtime == null
+                  ? null
+                  : (readThroughMillis) => widget.runtime!.markConversationRead(
+                        conversationId: preview.conversationId,
+                        readThroughMillis: readThroughMillis,
+                      ),
               initialProfile: _peerProfiles[preview.peerCidNumber],
               initialProfileMedia: _peerProfileMedia[preview.peerCidNumber],
               profileApi: _profileApi,

@@ -66,6 +66,7 @@ typedef ChatResolveMediaPathsCallback = Future<Map<String, String>> Function(
   List<ChatContent> contents,
 );
 typedef ChatDeleteConversationCallback = Future<void> Function();
+typedef ChatMarkReadCallback = Future<void> Function(int readThroughMillis);
 typedef ChatResolvePeerAddressCallback = Future<String> Function(
   String peerCidNumber,
 );
@@ -94,6 +95,7 @@ class ChatPage extends StatefulWidget {
     this.onSync,
     this.onStartRealtime,
     this.onDeleteConversation,
+    this.onMarkRead,
     this.onStartCall,
     this.resolvePeerAddress,
     this.initialProfile,
@@ -122,6 +124,7 @@ class ChatPage extends StatefulWidget {
   final ChatSyncCallback? onSync;
   final ChatStartRealtimeCallback? onStartRealtime;
   final ChatDeleteConversationCallback? onDeleteConversation;
+  final ChatMarkReadCallback? onMarkRead;
   final ChatStartCallCallback? onStartCall;
   final ChatResolvePeerAddressCallback? resolvePeerAddress;
   final CitizenProfile? initialProfile;
@@ -354,11 +357,37 @@ class _ChatPageState extends State<ChatPage> {
         generation,
         batch.integrityFailureCount == 0
             ? null
-            : '部分本机历史消息完整性校验失败，损坏记录已隔离',
+            : batch.messages.isEmpty
+                ? '本机历史消息无法验证'
+                : '部分本机历史消息无法验证，其他记录已正常显示',
       );
+      // 已读归零不能阻塞聊天记录显示、输入和后续页面操作。
+      unawaited(_markRead(messages, generation));
     } catch (error) {
       _commitReloadState(generation, chatUserErrorMessage(error));
     }
+  }
+
+  Future<void> _markRead(
+    List<ChatStoredMessage> messages,
+    int generation,
+  ) async {
+    final markRead = widget.onMarkRead;
+    if (markRead == null ||
+        messages.isEmpty ||
+        !_appResumed ||
+        !(ModalRoute.of(context)?.isCurrent ?? false)) {
+      return;
+    }
+    final readThroughMillis = messages
+        .map((message) => message.createdAtMillis)
+        .reduce((left, right) => left > right ? left : right);
+    try {
+      await markRead(readThroughMillis);
+    } catch (_) {
+      // 未读写入失败时保留原计数；下一次当前页面重载会按最新快照重试。
+    }
+    if (!mounted || generation != _messageReloadGeneration) return;
   }
 
   void _commitReloadState(int generation, String? nextError) {
@@ -1943,7 +1972,8 @@ class _ChatPageState extends State<ChatPage> {
                 composerBuilder: _buildComposer,
                 // 本地记录尚未读完时禁止闪现组件默认英文空态；
                 // 只有首读确认为空后才显示中文真空态。
-                emptyChatListBuilder: (context) => _loading
+                emptyChatListBuilder: (context) =>
+                    !shouldShowChatEmptyState(loading: _loading, error: _error)
                     ? const SizedBox.shrink()
                     : const Padding(
                         padding: EdgeInsets.only(bottom: 120),
@@ -1968,6 +1998,14 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 }
+
+/// 只有本地首读已经成功且没有任何错误时，空控制器才代表真实空会话。
+/// 读取、解密或载荷验真失败时禁止再用“暂无消息”掩盖真实故障。
+bool shouldShowChatEmptyState({
+  required bool loading,
+  required String? error,
+}) =>
+    !loading && error == null;
 
 String _formatByteSize(int bytes) {
   if (bytes < 1024) return '$bytes B';

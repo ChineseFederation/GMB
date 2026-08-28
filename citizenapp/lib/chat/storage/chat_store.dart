@@ -9,6 +9,7 @@ import 'package:citizenapp/isar/chat_isar.dart';
 import '../../security/local_cipher.dart';
 import '../../security/local_data_key.dart';
 import '../chat_models.dart';
+import '../../log/app_log.dart';
 import '../chat_payload.dart';
 import '../group/group_model.dart';
 import '../proto/chat_envelope.pb.dart';
@@ -230,7 +231,6 @@ class ChatStore {
   /// 聊天本地密文的唯一加解密边界。加解密一律在 Isar 事务**之外**完成,
   /// 不让密码学运算占住写事务。
   final ChatCrypto _crypto;
-  final Set<String> _displayIntegrityFailureConversations = <String>{};
 
   final _ChatBindingMutationGate _bindingMutationGate;
 
@@ -1925,22 +1925,8 @@ class ChatStore {
     required String currentAccountId,
     required String conversationId,
   }) async {
-    final failureKey = '$ownerCidNumber|$currentAccountId|$conversationId';
-    if (!_displayIntegrityFailureConversations.contains(failureKey)) {
-      try {
-        return ChatMessageDisplayBatch(
-          messages: await readMessages(
-            ownerCidNumber: ownerCidNumber,
-            currentAccountId: currentAccountId,
-            conversationId: conversationId,
-          ),
-          integrityFailureCount: 0,
-        );
-      } on LocalCipherException {
-        _displayIntegrityFailureConversations.add(failureKey);
-      }
-    }
-
+    // 展示读取只复制一次当前会话快照、打开一次用途钥，再逐条验真。单条密文或
+    // 载荷异常不得触发第二次整批查询，也不得阻断同会话其余有效历史消息。
     final conversationRows = await _chatIsar.read((isar) async {
       final rows = await isar.chatMessageEntitys
           .where()
@@ -1951,7 +1937,6 @@ class ChatStore {
           .toList(growable: false);
     });
     if (conversationRows.isEmpty) {
-      _displayIntegrityFailureConversations.remove(failureKey);
       return const ChatMessageDisplayBatch(
         messages: <ChatStoredMessage>[],
         integrityFailureCount: 0,
@@ -1968,29 +1953,44 @@ class ChatStore {
             row.accountId == binding.accountId)
         .toList(growable: false)
       ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+    if (rows.isEmpty) {
+      return const ChatMessageDisplayBatch(
+        messages: <ChatStoredMessage>[],
+        integrityFailureCount: 0,
+      );
+    }
     final session = await _crypto.openCipherSession(
       ownerCidNumber: ownerCidNumber,
       currentAccountId: currentAccountId,
       binding: binding,
     );
     try {
-      final messages = <ChatStoredMessage>[];
+      final decrypted = <ChatStoredMessage>[];
       var integrityFailureCount = 0;
       for (final row in rows) {
         try {
-          messages.add(
+          decrypted.add(
             _messageFromEntity(row, await _openMessage(row, session)),
           );
-        } on LocalCipherException {
+        } on LocalCipherException catch (error) {
           integrityFailureCount += 1;
+          AppLog.d(
+            '[ChatStore] display_row_rejected envelope_id=${row.envelopeId} '
+            'stage=local_cipher error=${error.runtimeType}',
+          );
+        } on FormatException catch (error) {
+          // UTF-8、消息类型与投递状态都属于本机记录完整性边界；只隔离该行，
+          // 禁止把未知枚举或畸形正文降级成普通文本。
+          integrityFailureCount += 1;
+          AppLog.d(
+            '[ChatStore] display_row_rejected envelope_id=${row.envelopeId} '
+            'stage=stored_metadata error=${error.runtimeType}',
+          );
         }
       }
-      if (integrityFailureCount == 0) {
-        _displayIntegrityFailureConversations.remove(failureKey);
-      }
-      return ChatMessageDisplayBatch(
-        messages: List<ChatStoredMessage>.unmodifiable(messages),
-        integrityFailureCount: integrityFailureCount,
+      return filterChatMessagesForDisplay(
+        decrypted,
+        initialIntegrityFailureCount: integrityFailureCount,
       );
     } finally {
       session.dispose();
@@ -2104,6 +2104,38 @@ class ChatStore {
     } finally {
       session.dispose();
     }
+  }
+
+  /// 当前页面成功展示到 [readThroughMillis] 后原子清零该会话未读数。
+  ///
+  /// 如果写事务开始前又有更新消息落库，则保留计数，等待页面展示更新快照后再次清零，
+  /// 避免把用户尚未看到的消息错误标记为已读。
+  Future<void> markConversationRead({
+    required ChatBindingFenceToken bindingToken,
+    required String ownerCidNumber,
+    required String conversationId,
+    required int readThroughMillis,
+  }) {
+    if (readThroughMillis < 0) {
+      throw ArgumentError.value(readThroughMillis, 'readThroughMillis');
+    }
+    _requireWriterContext(
+      bindingToken: bindingToken,
+      ownerCidNumber: ownerCidNumber,
+    );
+    return _chatIsar.writeTxn((isar) async {
+      await _requireBindingTokenInTxn(isar, bindingToken);
+      final conversation = await isar.chatConversationEntitys
+          .getByOwnerCidNumberConversationId(ownerCidNumber, conversationId);
+      if (conversation == null ||
+          conversation.unreadCount == 0 ||
+          conversation.lastUpdatedAtMillis > readThroughMillis) {
+        return;
+      }
+      conversation.unreadCount = 0;
+      await isar.chatConversationEntitys
+          .putByOwnerCidNumberConversationId(conversation);
+    });
   }
 
   /// 彻底删除本机会话记录。
@@ -3543,6 +3575,39 @@ class ChatStore {
     await isar.chatConversationEntitys
         .putByOwnerCidNumberConversationId(entity);
   }
+}
+
+/// 对已经通过本机密文认证的正文继续执行目标载荷验真。严格协议不接受旧格式、
+/// 别名或额外字段；展示边界只隔离异常行，不迁移、不改写、更不删除原始密文。
+ChatMessageDisplayBatch filterChatMessagesForDisplay(
+  Iterable<ChatStoredMessage> messages, {
+  int initialIntegrityFailureCount = 0,
+}) {
+  final accepted = <ChatStoredMessage>[];
+  var integrityFailureCount = initialIntegrityFailureCount;
+  for (final message in messages) {
+    try {
+      final content = ChatPayloadCodec.decode(message.plaintext ?? '');
+      if (content.kind != message.messageKind) {
+        throw const FormatException('消息记录类型与端到端载荷类型不一致');
+      }
+      accepted.add(message);
+    } on FormatException catch (error) {
+      integrityFailureCount += 1;
+      AppLog.d(
+        '[ChatStore] display_row_rejected envelope_id=${message.envelopeId} '
+        'stage=payload error=${error.runtimeType}',
+      );
+    }
+  }
+  AppLog.d(
+    '[ChatStore] display_batch accepted=${accepted.length} '
+    'rejected=$integrityFailureCount',
+  );
+  return ChatMessageDisplayBatch(
+    messages: List<ChatStoredMessage>.unmodifiable(accepted),
+    integrityFailureCount: integrityFailureCount,
+  );
 }
 
 /// [lastMessage] 由 `ChatStore` 解密后传入——本函数不接触密钥。

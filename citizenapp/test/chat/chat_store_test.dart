@@ -117,6 +117,20 @@ void main() {
     );
     expect(conversations.single.unreadCount, 1);
     expect(conversations.single.lastMessage, 'hi back');
+
+    await store.markConversationRead(
+      bindingToken: bindingToken,
+      ownerCidNumber: _ownerCidNumber,
+      conversationId: 'conv-store',
+      readThroughMillis: 10,
+    );
+    expect(
+      (await store.readConversationPreviews(
+        ownerCidNumber: _ownerCidNumber,
+        currentAccountId: _aliceAccountId,
+      )).single.unreadCount,
+      0,
+    );
   });
 
   test('队列与待投递媒体动作读取拒绝 fence generation 推进前的旧 token', () async {

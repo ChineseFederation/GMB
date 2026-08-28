@@ -2521,6 +2521,19 @@ class ChatRuntime {
     );
   }
 
+  /// 页面成功展示当前会话后，经 finalized 绑定门禁清零当前设备的本地未读数。
+  Future<void> markConversationRead({
+    required String conversationId,
+    required int readThroughMillis,
+  }) {
+    return _runWithReadyBinding((context) => _store.markConversationRead(
+          bindingToken: context.bindingToken,
+          ownerCidNumber: context.account.cidNumber,
+          conversationId: conversationId,
+          readThroughMillis: readThroughMillis,
+        ));
+  }
+
   Future<String?> readAccountId() async {
     _ensureActive();
     return _currentUser.accountId();

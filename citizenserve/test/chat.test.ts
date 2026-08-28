@@ -135,6 +135,7 @@ function fakeEnv(
   sent = 1,
   onSignal?: (payload: unknown) => void,
   db = new ChatDb(),
+  stored = true,
 ): Env {
   return {
     DB: db as unknown as D1Database,
@@ -150,7 +151,7 @@ function fakeEnv(
             return Response.json({ ok: true, sent });
           }
           if (new URL(request.url).pathname === "/__message") {
-            return Response.json({ ok: true, sent });
+            return Response.json({ ok: true, stored, sent });
           }
           if (new URL(request.url).pathname === "/__messages") {
             return Response.json([]);
@@ -293,14 +294,45 @@ describe("device-only Chat control plane", () => {
   });
 
   it("stores one opaque encrypted envelope and treats durable storage as success", async () => {
-    const response = await submitChatEnvelope(envelopeRequest(), fakeEnv(0));
+    const tasks: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil: (task: Promise<unknown>) => tasks.push(task),
+    };
+    const response = await submitChatEnvelope(envelopeRequest(), fakeEnv(1), ctx);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true });
+    expect(tasks).toHaveLength(1);
+    await Promise.all(tasks);
+  });
+
+  it("notifies only the first mailbox insert and does not depend on WSS delivery", async () => {
+    const onlineTasks: Promise<unknown>[] = [];
+    const onlineCtx = {
+      waitUntil: (task: Promise<unknown>) => onlineTasks.push(task),
+    };
+    await submitChatEnvelope(envelopeRequest(), fakeEnv(1), onlineCtx);
+    expect(onlineTasks).toHaveLength(1);
+
+    const duplicateTasks: Promise<unknown>[] = [];
+    const duplicateCtx = {
+      waitUntil: (task: Promise<unknown>) => duplicateTasks.push(task),
+    };
+    await submitChatEnvelope(
+      envelopeRequest(),
+      fakeEnv(0, undefined, new ChatDb(), false),
+      duplicateCtx,
+    );
+    expect(duplicateTasks).toHaveLength(0);
+    await Promise.all(onlineTasks);
   });
 
   it("rejects plaintext or undeclared fields on the encrypted mailbox endpoint", async () => {
     await expect(
-      submitChatEnvelope(envelopeRequest({ text: "forbidden" }), fakeEnv()),
+      submitChatEnvelope(
+        envelopeRequest({ text: "forbidden" }),
+        fakeEnv(),
+        { waitUntil: () => undefined } as unknown as ExecutionContext,
+      ),
     ).rejects.toMatchObject({ code: "invalid_chat_envelope_fields" });
   });
 
