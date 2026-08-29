@@ -81,7 +81,8 @@ CitizenSDK 复用 GMB 唯一顶层 Workflow 和现有产品流程：
   `CitizenSDK-CI` 三件套。
 - Release 复核指定 CI 的 workflow、显示标题、产品 `citizensdk`、目标 `sdk`、成功状态和
   准确 `source_sha`，不读取、下载或比较 CI 资产；随后在隔离快照中重新执行依赖检查、测试、
-  原生构建与候选生成，并创建正式 GitHub Release。
+  原生构建与候选生成，并创建正式 GitHub Release。孤立 Tag 清理、主发布路径和响应中断恢复
+  三处都必须核验版本 Tag 精确锚定该成功 CI 的 `source_sha`。
 
 CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是来源绑定、独立重建与完整
 验证，不宣称不同 Runner、不同 run 的压缩包在所有环境下必然逐字节相同。

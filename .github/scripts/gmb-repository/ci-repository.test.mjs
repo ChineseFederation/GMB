@@ -1537,7 +1537,7 @@ test5("Release 公共工具禁止预建 Tag 并精确锚定成功 CI 源提交",
   assert5.match(source, /await client\.createDraft\(input\)[\s\S]*await client\.publish/);
   assert5.equal(
     [...source.matchAll(/versionTagCommit\(client, input\) === input\.sourceSHA/g)].length,
-    2,
+    3,
   );
   assert5.match(source, /async deleteTag/);
   assert5.match(source, /Tag 回滚失败/);

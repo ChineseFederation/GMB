@@ -58,13 +58,8 @@ final class BootstrapClient {
     if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
       throw ArgumentError.value(value, 'baseUrl', '必须是完整 URL');
     }
-    final localHttp =
-        uri.scheme == 'http' &&
-        (uri.host == '127.0.0.1' ||
-            uri.host == 'localhost' ||
-            uri.host == '::1');
-    if (uri.scheme != 'https' && !localHttp) {
-      throw ArgumentError.value(value, 'baseUrl', '只允许 HTTPS 或本机调试 HTTP');
+    if (uri.scheme != 'https') {
+      throw ArgumentError.value(value, 'baseUrl', '只允许 HTTPS');
     }
     return trimmed;
   }

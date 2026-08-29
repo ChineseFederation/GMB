@@ -25,7 +25,7 @@ void main() {
             )
             as Map<String, dynamic>;
     final client = BootstrapClient(
-      baseUrl: 'http://127.0.0.1:8787',
+      baseUrl: 'https://127.0.0.1:8787',
       httpClient: MockClient((request) async {
         expect(request.url.path, '/chain/citizensdk/bootstrap');
         return http.Response(jsonEncode(wireFixture), 200);
@@ -99,14 +99,14 @@ void main() {
     }
   });
 
-  test('BootstrapClient 只允许 HTTPS 或本机 HTTP', () {
+  test('BootstrapClient 只允许 HTTPS', () {
     expect(
       BootstrapClient(baseUrl: 'https://api.example/').baseUrl,
       'https://api.example',
     );
     expect(
-      BootstrapClient(baseUrl: 'http://127.0.0.1:8787/').baseUrl,
-      'http://127.0.0.1:8787',
+      BootstrapClient(baseUrl: 'https://127.0.0.1:8787/').baseUrl,
+      'https://127.0.0.1:8787',
     );
     expect(
       () => BootstrapClient(baseUrl: 'http://api.example'),

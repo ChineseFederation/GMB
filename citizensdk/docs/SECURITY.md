@@ -67,7 +67,8 @@ SDK 交给它的 child mini-secret。SDK 保证自身标准实现不上传秘密
 
 公民链状态由设备内 smoldot P2P 轻节点验证。Bootstrap 只能提供固定 schema 下的链身份与
 bootnode 建议；根对象及 `chain/light_client/p2p/security` 都必须精确匹配字段闭集，不能夹带
-聊天、广场、TUYU、宿主业务、远程 RPC 或链状态真源。SDK 不实现服务器签名或通用 RPC 代理。
+聊天、广场、TUYU、宿主业务、远程 RPC 或链状态真源。Bootstrap 地址只允许 HTTPS，本机
+回环地址也不允许使用明文 HTTP；SDK 不实现服务器签名或通用 RPC 代理。
 
 `author_submitExtrinsic` 返回 txHash、peer 广播、`inBlock` 和 `finalized` 都不能单独证明
 runtime 执行成功。SDK 必须按 txHash 定位同一 extrinsic index，并读取该 index 的
