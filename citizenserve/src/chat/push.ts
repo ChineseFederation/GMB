@@ -164,7 +164,6 @@ async function sendDeviceAlert(
       device,
       device.apns_environment,
       payload,
-      envelopeId,
       auth,
     );
   }
@@ -176,7 +175,6 @@ async function sendApnsChatAlert(
   device: PushDeviceRow,
   environment: ApnsEnvironment,
   payload: WakePayload,
-  envelopeId: string,
   auth: PushAuth,
 ): Promise<PushOutcome> {
   if (!env.APNS_KEY || !env.APNS_KID || !env.APNS_TEAM || !env.APNS_TOPIC) {
@@ -189,6 +187,8 @@ async function sendApnsChatAlert(
     };
   }
   const jwt = await apnsJwt(env, auth);
+  // 每条聊天消息都要独立通知，不能把内部 envelope_id 当 APNs collapse-id。
+  // collapse-id 只适合可被后续状态覆盖的通知；省略后由 APNs 为每条 alert 独立投递。
   const response = await fetchPush(() => fetch(
     `https://${apnsHost(environment)}/3/device/${encodeURIComponent(device.push_token)}`,
     {
@@ -198,7 +198,6 @@ async function sendApnsChatAlert(
         'apns-push-type': 'alert',
         'apns-priority': '10',
         'apns-topic': env.APNS_TOPIC!,
-        'apns-collapse-id': envelopeId,
         'content-type': 'application/json',
       },
       body: JSON.stringify({

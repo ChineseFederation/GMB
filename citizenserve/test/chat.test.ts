@@ -458,10 +458,14 @@ describe("device-only Chat control plane", () => {
         sign: vi.fn(async () => new Uint8Array([1, 2, 3]).buffer),
       },
     });
-    vi.stubGlobal("fetch", vi.fn(async () => Response.json(
-      { reason: "BadDeviceToken" },
-      { status: 400 },
-    )));
+    const capturedApnsRequests: Request[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (...args: Parameters<typeof fetch>) => {
+      capturedApnsRequests.push(new Request(args[0], args[1]));
+      return Response.json(
+        { reason: "BadDeviceToken" },
+        { status: 400 },
+      );
+    }));
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     expect(await sendChatAlert(
@@ -478,6 +482,8 @@ describe("device-only Chat control plane", () => {
     expect(diagnostic).toContain('\"reason\":\"BadDeviceToken\"');
     expect(diagnostic).not.toContain(RECIPIENT_CID);
     expect(diagnostic).not.toContain("rejected-device-token");
+    expect(capturedApnsRequests).toHaveLength(1);
+    expect(capturedApnsRequests[0].headers.get("apns-collapse-id")).toBeNull();
   });
 
   it("reports unavailable without storing an undelivered WSS signal", async () => {
