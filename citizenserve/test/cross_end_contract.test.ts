@@ -321,3 +321,13 @@ describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
   });
 });
 // CitizenServe 发布契约必须同时固定公开账户标识、机密访问凭据和正式附件桶，避免附件签名配置再次漏项。
+
+// 中文注释：Wrangler 配置新增公开绑定后必须同步生成类型，避免正式 CI 才发现绑定声明过期。
+describe("CitizenServe Worker 绑定类型保持同步", () => {
+  it("公开 R2 账户标识必须进入生成的 Worker 绑定类型", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const types = await readFile(resolve(process.cwd(), "worker-configuration.d.ts"), "utf8");
+    expect(types).toMatch(/\bCF_ACCOUNT_ID:/);
+  });
+});
