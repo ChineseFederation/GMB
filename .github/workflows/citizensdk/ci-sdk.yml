@@ -1,0 +1,134 @@
+name: 公民SDK · CI · SDK
+run-name: 公民SDK · CI · SDK
+
+# 中文注释：CitizenSDK 是单一产品和单一版本线；当前候选只交付已实现的 Android ARM64
+# 与 iOS ARM64 适配，宿主 dylib 仅供测试，聊天、广场及桌面平台不进入候选。
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: citizensdk-ci-sdk
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+
+env:
+  CI: true
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  GMB_SOURCE_SHA: ${{ github.sha }}
+
+jobs:
+  check:
+    name: SDK 源码、原生核心与候选检查
+    runs-on: macos-15
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+
+      - name: 校验代码来源与 CitizenSDK 依赖作用域
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/citizensdk/ci-sdk.mjs dependencies check --scope citizensdk
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: aarch64-linux-android,aarch64-apple-ios
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          value = json.loads(Path('.github/dependencies.json').read_text(encoding='utf-8'))
+          print(f"version={value['toolchains']['flutter']}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      - name: 安装 Java 17
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: 安装固定 Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: 安装锁定 Flutter 依赖
+        working-directory: citizensdk
+        run: flutter pub get --enforce-lockfile
+
+      - name: 执行 CitizenSDK 依赖安全审计
+        run: node .github/scripts/citizensdk/ci-sdk.mjs dependencies audit --scope citizensdk
+
+      - name: 检查 Dart 与 Flutter 源码
+        working-directory: citizensdk
+        run: |
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+
+      - name: 检查 Rust signer、FFI 与轻节点源码
+        run: |
+          cargo test --manifest-path citizensdk/Cargo.toml --workspace --all-targets --locked
+          cargo test --manifest-path citizensdk/native/smoldot/ffi/Cargo.toml --all-targets --locked
+          cargo test --manifest-path citizensdk/native/smoldot/pow/Cargo.toml --workspace --all-targets --locked
+
+      - name: 构建并核验移动原生核心
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          CITIZENSDK_WORK_DIR: ${{ runner.temp }}/citizensdk/work
+          CITIZENSDK_NATIVE_OUTPUT_DIR: ${{ runner.temp }}/citizensdk/native
+        run: citizensdk/scripts/build-native.sh all
+
+      - name: 运行 CitizenSDK Flutter 测试
+        working-directory: citizensdk
+        env:
+          DYLD_LIBRARY_PATH: ${{ runner.temp }}/citizensdk/native/host
+        run: flutter test
+
+      - name: 生成不可变 CitizenSDK 候选
+        run: |
+          sdk_version="$(sed -n 's/^version: //p' citizensdk/pubspec.yaml)"
+          node .github/scripts/citizensdk/ci-sdk.mjs citizensdk-release \
+            --source citizensdk \
+            --native "$RUNNER_TEMP/citizensdk/native" \
+            --output "$RUNNER_TEMP/citizensdk/candidate" \
+            --archive "$RUNNER_TEMP/citizensdk/citizensdk.tgz" \
+            --git-sha "$GMB_SOURCE_SHA" \
+            --software-version "$sdk_version"
+
+      - name: 上传 CitizenSDK 候选
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: CitizenSDK-CI
+          path: |
+            ${{ runner.temp }}/citizensdk/citizensdk.tgz
+            ${{ runner.temp }}/citizensdk/candidate/citizensdk-release.json
+            ${{ runner.temp }}/citizensdk/candidate/SHA256SUMS
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      - name: 签署 CitizenSDK 候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/citizensdk/citizensdk.tgz
+            ${{ runner.temp }}/citizensdk/candidate/citizensdk-release.json
+            ${{ runner.temp }}/citizensdk/candidate/SHA256SUMS

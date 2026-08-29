@@ -35,6 +35,7 @@ describe('Cloudflare 统一资源限制', () => {
     expect(assertKnownRoute('PUT', `/square/contacts/${'ab'.repeat(32)}`)).toBe('contact_ciphertext');
     expect(assertKnownRoute('GET', '/download/citizenapp/android')).toBe('api_json_small');
     expect(assertKnownRoute('GET', '/download/citizenchain/macos-arm64-updater')).toBe('api_json_small');
+    expect(assertKnownRoute('GET', '/chain/citizensdk/bootstrap')).toBe('api_json_small');
     expect(assertKnownRoute(
       'PUT', '/operations/citizenchain/download-publications/linux-arm',
     )).toBe('api_json_small');

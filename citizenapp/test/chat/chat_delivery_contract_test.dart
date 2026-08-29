@@ -39,4 +39,25 @@ void main() {
     expect(flow, contains('不存在等待 Welcome 后回放的状态'));
     expect(flow, isNot(contains('await _store.savePendingInbound(')));
   });
+
+  test('会员只在创建待发送消息时校验且可靠队列不重复读取可变缓存', () {
+    final source = File('lib/chat/chat_runtime.dart').readAsStringSync();
+    final saveStart = source.indexOf('Future<String> _savePendingDirectPayload');
+    final scheduleStart = source.indexOf('void _schedulePendingOutgoing');
+    final flushStart = source.indexOf('Future<bool> _flushPendingOutgoing');
+    final expireStart = source.indexOf('Future<void> _expirePendingOutgoing');
+
+    expect(saveStart, greaterThanOrEqualTo(0));
+    expect(scheduleStart, greaterThan(saveStart));
+    expect(flushStart, greaterThan(scheduleStart));
+    expect(expireStart, greaterThan(flushStart));
+    expect(
+      source.substring(saveStart, scheduleStart),
+      contains('ChatMediaLimits.chatAuthorizedFor(account.cidNumber)'),
+    );
+    expect(
+      source.substring(flushStart, expireStart),
+      isNot(contains('ChatMediaLimits.chatAuthorizedFor')),
+    );
+  });
 }

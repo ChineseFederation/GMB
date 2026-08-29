@@ -1,0 +1,63 @@
+group = 'org.citizen.sdk'
+version = '0.1.0'
+
+buildscript {
+    ext.kotlin_version = '2.2.20'
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.11.1'
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+android {
+    namespace = 'org.citizen.sdk'
+    compileSdk = 36
+
+    def consoleNativeAndroidDir = System.getenv('CONSOLE_NATIVE_ANDROID_DIR')
+    if (consoleNativeAndroidDir != null && !consoleNativeAndroidDir.trim().isEmpty()) {
+        sourceSets {
+            main {
+                jniLibs.srcDirs = [consoleNativeAndroidDir]
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17.toString()
+    }
+    defaultConfig {
+        minSdk = 24
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+    packagingOptions {
+        jniLibs {
+            excludes += ['lib/armeabi*/**', 'lib/x86/**', 'lib/x86_64/**']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'androidx.core:core:1.13.1'
+    testImplementation 'junit:junit:4.13.2'
+}

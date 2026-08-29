@@ -213,6 +213,7 @@ const routeLimits: readonly RouteLimit[] = [
   route('GET', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),
   route('PUT', /^\/operations\/citizenchain\/download-publications\/(?:linux-arm|linux-amd|macos|windows)$/),
   route('GET', /^\/chain\/bootstrap$/),
+  route('GET', /^\/chain\/citizensdk\/bootstrap$/),
   route('GET', /^\/constitution$/),
   route('GET', /^\/security\/(turnstile|config)$/),
   route('POST', /^\/chain\/extrinsics\/relay$/, 'chain_extrinsic_json'),

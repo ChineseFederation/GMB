@@ -10,6 +10,7 @@ exclude = [
     "citizenchain/**",
     "citizenapp/**",
     "citizenwallet/**",
+    "citizensdk/**",
 ]
 resolver = "2"      # 使用 Cargo 新版依赖解析器，减少 feature 冲突
 

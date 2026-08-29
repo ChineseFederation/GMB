@@ -6,6 +6,7 @@
     "flutter": "3.44.4",
     "java": "17",
     "gradle": "8.14",
+    "androidNdk": "28.2.13676358",
     "cargoAudit": "0.22.2"
   },
   "tauri": {
@@ -140,6 +141,30 @@
         ".github/scripts/citizenapp/ci-android.mjs"
       ]
     },
+    "citizensdk": {
+      "workflows": [
+        ".github/workflows/citizensdk/ci-sdk.yml",
+        ".github/workflows/citizensdk/release-sdk.yml"
+      ],
+      "requiredFiles": [
+        "citizensdk/pubspec.yaml",
+        "citizensdk/pubspec.lock",
+        "citizensdk/Cargo.toml",
+        "citizensdk/Cargo.lock",
+        "citizensdk/native/signer/Cargo.toml",
+        "citizensdk/native/smoldot/ffi/Cargo.toml",
+        "citizensdk/native/smoldot/ffi/Cargo.lock",
+        "citizensdk/native/smoldot/ffi/rust-toolchain.toml",
+        "citizensdk/native/smoldot/pow/Cargo.toml",
+        "citizensdk/native/smoldot/pow/Cargo.lock",
+        "citizensdk/android/build.gradle",
+        "citizensdk/ios/citizen_sdk.podspec",
+        "citizensdk/scripts/build-native.sh",
+        "citizensdk/scripts/release.mjs",
+        ".github/scripts/citizensdk/ci-sdk.mjs",
+        ".github/scripts/citizensdk/release-sdk.mjs"
+      ]
+    },
     "citizenserve": {
       "workflows": [
         ".github/workflows/citizenserve/ci-cloudflare.yml",
@@ -203,6 +228,7 @@
   "dartApplications": [
     "citizenapp",
     "citizenapp/smoldot/dart",
+    "citizensdk",
     "citizenwallet",
     "shared/hardware-secretvault",
     "shared/wallet-password"
@@ -212,9 +238,13 @@
     "citizenchain",
     "citizenapp/smoldot/ffi",
     "citizenapp/smoldot/pow",
+    "citizensdk",
+    "citizensdk/native/smoldot/ffi",
+    "citizensdk/native/smoldot/pow",
     "citizenwallet/rust"
   ],
   "auditedScopes": [
+    "citizensdk",
     "citizenserve",
     "citizenwallet",
     "citizenweb"

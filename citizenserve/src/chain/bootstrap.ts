@@ -53,6 +53,18 @@ export interface ChainBootstrapResponse {
   };
 }
 
+/** CitizenSDK 只接收轻节点启动事实；宿主产品服务地址不属于 SDK。 */
+export interface CitizenSdkBootstrapResponse {
+  ok: true;
+  schema: 'citizensdk.chain.bootstrap';
+  generated_at: ChainBootstrapResponse['generated_at'];
+  cache_ttl_seconds: ChainBootstrapResponse['cache_ttl_seconds'];
+  chain: ChainBootstrapResponse['chain'];
+  light_client: ChainBootstrapResponse['light_client'];
+  p2p: ChainBootstrapResponse['p2p'];
+  security: ChainBootstrapResponse['security'];
+}
+
 export function chainBootstrapRoute(request: Request, env: Env): Response {
   const response = buildChainBootstrapResponse(request, env);
   return jsonResponse(response, {
@@ -60,6 +72,32 @@ export function chainBootstrapRoute(request: Request, env: Env): Response {
       'cache-control': `public, max-age=${response.cache_ttl_seconds}`
     }
   });
+}
+
+export function citizenSdkBootstrapRoute(request: Request, env: Env): Response {
+  const response = buildCitizenSdkBootstrapResponse(request, env);
+  return jsonResponse(response, {
+    headers: {
+      'cache-control': `public, max-age=${response.cache_ttl_seconds}`
+    }
+  });
+}
+
+export function buildCitizenSdkBootstrapResponse(
+  request: Request,
+  env: Env
+): CitizenSdkBootstrapResponse {
+  const current = buildChainBootstrapResponse(request, env);
+  return {
+    ok: true,
+    schema: 'citizensdk.chain.bootstrap',
+    generated_at: current.generated_at,
+    cache_ttl_seconds: current.cache_ttl_seconds,
+    chain: current.chain,
+    light_client: current.light_client,
+    p2p: current.p2p,
+    security: current.security,
+  };
 }
 
 export function buildChainBootstrapResponse(

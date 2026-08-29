@@ -563,6 +563,7 @@ const releaseScriptPaths2 = [
   ".github/scripts/citizenchain/release-node-windows.mjs",
   ".github/scripts/citizenchain/release-runtime-wasm.mjs",
   ".github/scripts/citizenserve/release-cloudflare.mjs",
+  ".github/scripts/citizensdk/release-sdk.mjs",
   ".github/scripts/citizenweb/release-web.mjs",
 ];
 
@@ -660,8 +661,8 @@ function client2(options = {}) {
   };
 }
 
-// 中文注释：11 个直接文件必须内嵌完全相同的事务，禁止产品例外、公共运行文件或旧双提交模型。
-test2("11 个独立 Release 动作使用完全相同的原子 Tag 事务", () => {
+// 中文注释：12 个直接文件必须内嵌完全相同的事务，禁止产品例外、公共运行文件或旧双提交模型。
+test2("12 个独立 Release 动作使用完全相同的原子 Tag 事务", () => {
   for (const [index, source] of releaseSources2.entries()) {
     assert2.equal(source, releaseSource2, `${releaseScriptPaths2[index]} 的 Release 事务发生漂移`);
   }
@@ -1103,12 +1104,13 @@ test5("\u5168\u90E8 CI \u53EA\u9A8C\u8BC1\u6784\u5EFA\uFF0C\u4E0D\u521B\u5EFA Ta
     ["../../workflows/", ""],
     ["../../workflows/citizenapp/", "citizenapp/"],
     ["../../workflows/citizenwallet/", "citizenwallet/"],
+    ["../../workflows/citizensdk/", "citizensdk/"],
     ["../../workflows/citizenweb/", "citizenweb/"],
     ["../../workflows/citizenserve/", "citizenserve/"],
     ["../../workflows/citizenchain/", "citizenchain/"]
   ];
   const ciFiles = workflowDirs.flatMap(([directory, prefix]) => readdirSync(new URL(directory, import.meta.url)).map((value2) => `${prefix}${value2}`)).filter((value2) => /(?:^|\/)ci-[^/]+\.ya?ml$/.test(value2));
-  assert5.equal(ciFiles.length, 11);
+  assert5.equal(ciFiles.length, 12);
   for (const workflow of ciFiles) {
     const source = readFileSync7(new URL(workflow, workflowsUrl), "utf8");
     assert5.doesNotMatch(source, /finalize-version-tag|finalize-semantic-ci|finalize-runtime-ci/);
@@ -1133,6 +1135,7 @@ test5("\u6BCF\u4E2A Release \u7528\u6210\u529F ci_run_id \u590D\u6838\u6765\u6E9
     ["citizenwallet/release-ios", "citizenwallet-ios-v", "citizenwallet", "ios", "citizenwallet/ci-ios.yml"],
     ["citizenwallet/release-android", "citizenwallet-android-v", "citizenwallet", "android", "citizenwallet/ci-android.yml"],
     ["citizenserve/release-cloudflare", "citizenserve-cloudflare-v", "citizenserve", "cloudflare", "citizenserve/ci-cloudflare.yml"],
+    ["citizensdk/release-sdk", "citizensdk-v", "citizensdk", "sdk", "citizensdk/ci-sdk.yml"],
     ["citizenweb/release-web", "citizenweb-v", "citizenweb", "web", "citizenweb/ci-web.yml"],
     ["citizenchain/release-node-linux-arm", "citizenchain-node-linux-arm-v", "citizenchain-node", "linux-arm", "citizenchain/ci-node-linux-arm.yaml"],
     ["citizenchain/release-node-linux-amd", "citizenchain-node-linux-amd-v", "citizenchain-node", "linux-amd", "citizenchain/ci-node-linux-amd.yml"],
@@ -1164,13 +1167,13 @@ test5("Release 公共工具禁止预建 Tag 与双提交模型", () => {
   assert5.match(source, /async deleteTag/);
   assert5.match(source, /Tag 回滚失败/);
 });
-test5("GitHub \u53EA\u4FDD\u7559 22 \u6761 CI/Release workflow\uFF0C\u4E0D\u5B58\u5728\u8FDC\u7A0B\u53D1\u5E03\u5165\u53E3", () => {
+test5("GitHub \u53EA\u4FDD\u7559 24 \u6761 CI/Release workflow\uFF0C\u4E0D\u5B58\u5728\u8FDC\u7A0B\u53D1\u5E03\u5165\u53E3", () => {
   const repositoryRoot = new URL("../../../", import.meta.url);
   const contract = JSON.parse(readFileSync7(new URL(".github/dependencies.json", repositoryRoot), "utf8"));
   const productWorkflows = Object.entries(contract.scopes)
     .filter(([name]) => name !== "repository")
     .flatMap(([, scope]) => scope.workflows);
-  assert5.equal(productWorkflows.length, 22);
+  assert5.equal(productWorkflows.length, 24);
   assert5.ok(productWorkflows.every((workflow) => /\/(?:ci|release)-[^/]+\.ya?ml$/.test(workflow)));
   for (const path of [
     ".github/workflows/citizenapp/publish-android.yml",
@@ -1179,6 +1182,7 @@ test5("GitHub \u53EA\u4FDD\u7559 22 \u6761 CI/Release workflow\uFF0C\u4E0D\u5B58
     ".github/workflows/citizenwallet/publish-ios.yml",
     ".github/workflows/citizenserve/publish-cloudflare.yml",
     ".github/workflows/citizenweb/publish-web.yml",
+    ".github/workflows/citizensdk/publish-sdk.yml",
   ]) assert5.equal(existsSync7(new URL(path, repositoryRoot)), false, `\u65E7 GitHub \u53D1\u5E03\u5165\u53E3\u4ECD\u5B58\u5728\uFF1A${path}`);
 });
 test5("Android Release \u63A5\u53D7\u81EA\u7B7E\u540D\u4E0A\u4F20\u8BC1\u4E66\u4E14\u4E0D\u4EA7\u751F detached v4 \u6587\u4EF6", () => {
@@ -1212,7 +1216,7 @@ test5("iOS Release \u4E0D\u4F9D\u8D56 runner \u94A5\u5319\u4E32\u89E3\u5305\u63C
     assert5.doesNotMatch(source, /security cms -D/);
   }
 });
-test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\u95E8\u7981\u5E76\u8DEF\u7531 22 \u6761\u5206\u7EC4\u4EA7\u54C1\u6D41\u6C34\u7EBF", () => {
+test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\u95E8\u7981\u5E76\u8DEF\u7531 24 \u6761\u5206\u7EC4\u4EA7\u54C1\u6D41\u6C34\u7EBF", () => {
   const workflowsUrl = new URL("../../workflows/", import.meta.url);
   const repositoryWorkflow = "gmb-repository.yml";
   const repositorySource = readFileSync7(new URL(repositoryWorkflow, workflowsUrl), "utf8");
@@ -1264,7 +1268,7 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   const productWorkflows = Object.entries(contract.scopes)
     .filter(([name]) => name !== "repository")
     .flatMap(([, scope]) => scope.workflows);
-  assert5.equal(productWorkflows.length, 22);
+  assert5.equal(productWorkflows.length, 24);
   for (const workflow of productWorkflows) {
     assert5.ok(repositorySource.includes(`inputs.pipeline == '${workflow}'`), `\u7EDF\u4E00\u5165\u53E3\u7F3A\u5C11\u8DEF\u7531\uFF1A${workflow}`);
   }
@@ -1326,6 +1330,45 @@ test5("\u79FB\u52A8\u7AEF CI\u3001Release \u4E0E\u672C\u5730\u6784\u5EFA\u90FD\u
     }
   }
 });
+test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4EA7\u7269\u4E0D\u56DE\u5199\u6E90\u7801\u6811", () => {
+  const ci = readFileSync7(new URL("../../workflows/citizensdk/ci-sdk.yml", import.meta.url), "utf8");
+  const release = readFileSync7(new URL("../../workflows/citizensdk/release-sdk.yml", import.meta.url), "utf8");
+  const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
+  const nativeBuild = readFileSync7(new URL("../../../citizensdk/scripts/build-native.sh", import.meta.url), "utf8");
+  const releaseTool = readFileSync7(new URL("../../../citizensdk/scripts/release.mjs", import.meta.url), "utf8");
+  for (const source of [ci, release]) {
+    assert5.match(source, /CITIZENSDK_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/work/);
+    assert5.match(source, /CITIZENSDK_NATIVE_OUTPUT_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/native/);
+    assert5.match(source, /citizensdk\/citizensdk\.tgz/);
+    assert5.doesNotMatch(source, /citizensdk\/(?:target|build|\.dart_tool)\//);
+  }
+  assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/ci-sdk\.yml'/);
+  assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/release-sdk\.yml'/);
+  assert5.match(nativeBuild, /CITIZENSDK_WORK_DIR/);
+  assert5.match(nativeBuild, /CITIZENSDK_NATIVE_OUTPUT_DIR/);
+  assert5.match(nativeBuild, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
+  assert5.match(nativeBuild, /cargo build[^\n]+--locked/);
+  assert5.match(nativeBuild, /citizen_sr25519_derive_hard/);
+  assert5.match(nativeBuild, /\^\(citizen_chat_mls_\|account_crypto_\)/);
+  assert5.match(releaseTool, /android\/src\/main\/jniLibs\/arm64-v8a\/libsmoldot\.so/);
+  assert5.match(releaseTool, /ios\/libsmoldot\.a/);
+  assert5.match(releaseTool, /citizensdk-release\.json/);
+  assert5.match(releaseTool, /assertOutsideSource/);
+  assert5.match(releaseTool, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
+  const prefix2 = "const implementations = Object.freeze(";
+  const repositoryAction = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
+  const repositoryLine = repositoryAction.split("\n").find((candidate) => candidate.startsWith(prefix2));
+  const guardrails = JSON.parse(repositoryLine.slice(prefix2.length, -2)).guardrails;
+  assert5.match(guardrails, /citizensdk\/native\/smoldot\/pow\/\*/);
+  assert5.match(guardrails, /citizen_sdk\.smoldot\.database\.v1/);
+  assert5.match(guardrails, /citizensdk-v\[0-9\]\+/);
+  for (const action of ["ci-sdk.mjs", "release-sdk.mjs"]) {
+    const wrapper = readFileSync7(new URL(`../citizensdk/${action}`, import.meta.url), "utf8");
+    const line = wrapper.split("\n").find((candidate) => candidate.startsWith(prefix2));
+    assert5.ok(line?.endsWith(");"));
+    assert5.equal(JSON.parse(line.slice(prefix2.length, -2))["citizensdk-release"], releaseTool);
+  }
+});
 // 中文注释：中央原生产物可以位于仓库外，但 CocoaPods 文件模式必须始终保持相对路径。
 test5("CitizenApp iOS 本机中央原生库使用 CocoaPods 合法相对文件模式", () => {
   const podspec = readFileSync7(new URL("../../../citizenapp/ios/smoldot/smoldot_ffi.podspec", import.meta.url), "utf8");
@@ -1377,7 +1420,7 @@ test5("仓库中文注释门禁使用跨平台 Unicode 汉字检测", () => {
   assert5.doesNotMatch(source, /一-龥/);
 });
 
-test5("11 个独立 Release 动作锚定成功 CI 源码且首次版本不递增", () => {
+test5("12 个独立 Release 动作锚定成功 CI 源码且首次版本不递增", () => {
   const actions = [
     "citizenapp/release-ios.mjs",
     "citizenapp/release-android.mjs",
@@ -1389,6 +1432,7 @@ test5("11 个独立 Release 动作锚定成功 CI 源码且首次版本不递增
     "citizenchain/release-node-windows.mjs",
     "citizenchain/release-runtime-wasm.mjs",
     "citizenserve/release-cloudflare.mjs",
+    "citizensdk/release-sdk.mjs",
     "citizenweb/release-web.mjs",
   ];
   for (const action of actions) {
@@ -1420,8 +1464,8 @@ test5("节点 Release 前置验证与正式构建统一使用隔离工具", () =
   }
 });
 
-// 中文注释：仓库级 Latest 不能表达产品、端、动作的独立最新版本，11 个 Release 必须统一禁用该标记。
-test5("11 个 Release 分组真源与登记入口统一禁用仓库级 Latest", () => {
+// 中文注释：仓库级 Latest 不能表达产品、端、动作的独立最新版本，12 个 Release 必须统一禁用该标记。
+test5("12 个 Release 分组真源与登记入口统一禁用仓库级 Latest", () => {
   const workflows = [
     "citizenapp/release-ios.yml",
     "citizenapp/release-android.yml",
@@ -1433,6 +1477,7 @@ test5("11 个 Release 分组真源与登记入口统一禁用仓库级 Latest", 
     "citizenchain/release-node-windows.yml",
     "citizenchain/release-runtime-wasm.yml",
     "citizenserve/release-cloudflare.yml",
+    "citizensdk/release-sdk.yml",
     "citizenweb/release-web.yml",
   ];
   for (const workflow of workflows) {
@@ -1441,12 +1486,12 @@ test5("11 个 Release 分组真源与登记入口统一禁用仓库级 Latest", 
     assert5.doesNotMatch(source, /--latest true/);
   }
   const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
-  assert5.equal((registered.match(/--latest false/g) ?? []).length, 11);
+  assert5.equal((registered.match(/--latest false/g) ?? []).length, 12);
   assert5.doesNotMatch(registered, /--latest true/);
 });
 
 // 中文注释：动作必须继续自包含，但依赖门禁载荷必须逐字一致，防止单个产品再次保留过期构建命令。
-test5("23 个独立动作的 Tauri 依赖契约完全一致", () => {
+test5("25 个独立动作的 Tauri 依赖契约完全一致", () => {
   const actions = [
     "citizenapp/ci-android.mjs",
     "citizenapp/ci-ios.mjs",
@@ -1464,6 +1509,8 @@ test5("23 个独立动作的 Tauri 依赖契约完全一致", () => {
     "citizenchain/release-runtime-wasm.mjs",
     "citizenserve/ci-cloudflare.mjs",
     "citizenserve/release-cloudflare.mjs",
+    "citizensdk/ci-sdk.mjs",
+    "citizensdk/release-sdk.mjs",
     "citizenwallet/ci-android.mjs",
     "citizenwallet/ci-ios.mjs",
     "citizenwallet/release-android.mjs",
@@ -1472,7 +1519,7 @@ test5("23 个独立动作的 Tauri 依赖契约完全一致", () => {
     "citizenweb/release-web.mjs",
     "gmb-repository/ci-repository.mjs",
   ];
-  assert5.equal(actions.length, 23);
+  assert5.equal(actions.length, 25);
   const prefix = "const implementations = Object.freeze(";
   const dependencies = actions.map((action) => {
     const source = readFileSync7(new URL(`../${action}`, import.meta.url), "utf8");
@@ -1487,5 +1534,5 @@ test5("23 个独立动作的 Tauri 依赖契约完全一致", () => {
     assert5.doesNotMatch(implementation, /\$\{cli\} bundle --bundles app --ci/);
     return implementation;
   });
-  assert5.equal(new Set(dependencies).size, 1, "23 个动作的 dependencies 实现发生漂移");
+  assert5.equal(new Set(dependencies).size, 1, "25 个动作的 dependencies 实现发生漂移");
 });

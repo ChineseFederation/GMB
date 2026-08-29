@@ -4,7 +4,7 @@ import {
   inspectCachedUserProjectionHealth,
 } from "./account/user_projection";
 import { createLoginChallenge, createSession, registerDeviceSubkey } from "./auth/service";
-import { chainBootstrapRoute } from "./chain/bootstrap";
+import { chainBootstrapRoute, citizenSdkBootstrapRoute } from "./chain/bootstrap";
 import { constitutionRoute } from "./chain/constitution";
 import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
 import { deleteContactRoute, listContactsRoute, putContactRoute } from "./contacts/service";
@@ -109,6 +109,9 @@ export async function routeRequest(
 
   if (request.method === "GET" && path === "/chain/bootstrap") {
     return chainBootstrapRoute(request, env);
+  }
+  if (request.method === "GET" && path === "/chain/citizensdk/bootstrap") {
+    return citizenSdkBootstrapRoute(request, env);
   }
   if (request.method === "GET" && path === "/constitution") {
     return constitutionRoute(request, env);

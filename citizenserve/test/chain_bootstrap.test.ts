@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildChainBootstrapResponse } from '../src/chain/bootstrap';
+import {
+  buildChainBootstrapResponse,
+  buildCitizenSdkBootstrapResponse,
+} from '../src/chain/bootstrap';
 import { routeRequest } from '../src/routes';
 import type { Env } from '../src/types';
 
@@ -125,6 +128,28 @@ describe('chain bootstrap manifest', () => {
     expect(body).toMatchObject({
       ok: true,
       schema: 'citizenapp.chain.bootstrap'
+    });
+  });
+
+  it('routes an SDK-only bootstrap without host product services', async () => {
+    const direct = buildCitizenSdkBootstrapResponse(
+      new Request('https://api.onchina.org/api/chain/citizensdk/bootstrap'),
+      env({ BOOT_TTL_SECONDS: '45' }),
+    );
+    expect(direct.schema).toBe('citizensdk.chain.bootstrap');
+    expect(direct.light_client.mode).toBe('smoldot');
+    expect(direct).not.toHaveProperty('services');
+    expect(direct).not.toHaveProperty('degradation');
+
+    const response = await routeRequest(
+      new Request('https://api.onchina.org/api/chain/citizensdk/bootstrap'),
+      env({ BOOT_TTL_SECONDS: '45' }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('cache-control')).toBe('public, max-age=45');
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      schema: 'citizensdk.chain.bootstrap',
     });
   });
 

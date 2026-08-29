@@ -92,13 +92,18 @@ build_android() {
   mkdir -p "$arm64_dest"
   cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/libsmoldot.so" "$arm64_dest/"
   echo "Android arm64-v8a: $arm64_dest/libsmoldot.so ($(wc -c < "$arm64_dest/libsmoldot.so" | tr -d ' ') bytes)"
-  local account_crypto_count
+  local account_crypto_count device_identity_count
   account_crypto_count="$("$toolchain/bin/llvm-nm" -D "$arm64_dest/libsmoldot.so" 2>/dev/null | grep -c 'account_crypto_' || true)"
+  device_identity_count="$("$toolchain/bin/llvm-nm" -D "$arm64_dest/libsmoldot.so" 2>/dev/null | grep -c ' citizen_chat_device_identity_json$' || true)"
   if [ "$account_crypto_count" != "4" ]; then
     echo "错误: Android libsmoldot.so 的 account_crypto_* 符号为 $account_crypto_count 个（应为 4）"
     return 1
   fi
-  echo "    符号检查通过：account_crypto_*=4"
+  if [ "$device_identity_count" != "1" ]; then
+    echo "错误: Android libsmoldot.so 必须准确导出 citizen_chat_device_identity_json"
+    return 1
+  fi
+  echo "    符号检查通过：account_crypto_*=4 citizen_chat_device_identity_json=1"
 }
 
 build_ios() {
@@ -123,21 +128,22 @@ build_ios() {
   local nm
   nm="$(xcrun --find llvm-nm)"
   # llvm-nm 对 .a 里个别无符号表的对象会报警且以非零退出,但符号输出本身完整;
-  # 在 pipefail 下必须吞掉它的退出码,真正的完整性由下方四族计数把关。
+  # 在 pipefail 下必须吞掉它的退出码,真正的完整性由下方族计数和设备身份精确门禁把关。
   ("$nm" -g --defined-only "$dest/libsmoldot.a" 2>/dev/null || true) \
     | awk '$2 == "T" { print $3 }' \
-    | grep -E '^_(smoldot_|citizen_sr25519_|citizen_chat_mls_|account_crypto_)' \
+    | grep -E '^_(smoldot_|citizen_sr25519_|citizen_chat_device_|citizen_chat_mls_|account_crypto_)' \
     | sort -u > "$dest/exported_symbols.txt"
 
-  local n_smoldot n_signer n_mls n_account_crypto
+  local n_smoldot n_signer n_device_identity n_mls n_account_crypto
   n_smoldot=$(grep -c '^_smoldot_' "$dest/exported_symbols.txt" || true)
   n_signer=$(grep -c '^_citizen_sr25519_' "$dest/exported_symbols.txt" || true)
+  n_device_identity=$(grep -c '^_citizen_chat_device_identity_json$' "$dest/exported_symbols.txt" || true)
   n_mls=$(grep -c '^_citizen_chat_mls_' "$dest/exported_symbols.txt" || true)
   n_account_crypto=$(grep -c '^_account_crypto_' "$dest/exported_symbols.txt" || true)
   echo "iOS arm64: $dest/libsmoldot.a ($(wc -c < "$dest/libsmoldot.a" | tr -d ' ') bytes)"
-  echo "符号清单: smoldot_=$n_smoldot citizen_sr25519_=$n_signer citizen_chat_mls_=$n_mls account_crypto_=$n_account_crypto"
-  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_mls" -eq 0 ] || [ "$n_account_crypto" -ne 4 ]; then
-    echo "错误: 符号清单不完整（account_crypto_* 必须正好 4 个，其余族必须非空）。"
+  echo "符号清单: smoldot_=$n_smoldot citizen_sr25519_=$n_signer citizen_chat_device_identity_json=$n_device_identity citizen_chat_mls_=$n_mls account_crypto_=$n_account_crypto"
+  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_device_identity" -ne 1 ] || [ "$n_mls" -eq 0 ] || [ "$n_account_crypto" -ne 4 ]; then
+    echo "错误: 符号清单不完整（设备身份与 account_crypto_* 必须精确，其余族必须非空）。"
     return 1
   fi
 }
@@ -173,7 +179,7 @@ build_host() {
           "$nm" -gU "$host_library" 2>/dev/null \
             | awk '{ print $NF }' \
             | sed 's/^_//' \
-            | grep -E '^(smoldot_|citizen_sr25519_|citizen_chat_mls_|account_crypto_)' \
+            | grep -E '^(smoldot_|citizen_sr25519_|citizen_chat_device_|citizen_chat_mls_|account_crypto_)' \
             | sort -u
         ) || true
       )"
@@ -183,7 +189,7 @@ build_host() {
         (
           nm -D --defined-only "$host_library" 2>/dev/null \
             | awk '{ print $NF }' \
-            | grep -E '^(smoldot_|citizen_sr25519_|citizen_chat_mls_|account_crypto_)' \
+            | grep -E '^(smoldot_|citizen_sr25519_|citizen_chat_device_|citizen_chat_mls_|account_crypto_)' \
             | sort -u
         ) || true
       )"
@@ -203,15 +209,20 @@ build_host() {
       return 1
     fi
   done
+  if ! grep -qx 'citizen_chat_device_identity_json' <<<"$host_symbols"; then
+    echo "错误: 宿主 libsmoldot 缺少 citizen_chat_device_identity_json" >&2
+    return 1
+  fi
 
-  local n_smoldot n_signer n_mls n_account_crypto
+  local n_smoldot n_signer n_device_identity n_mls n_account_crypto
   n_smoldot="$(grep -c '^smoldot_' <<<"$host_symbols" || true)"
   n_signer="$(grep -c '^citizen_sr25519_' <<<"$host_symbols" || true)"
+  n_device_identity="$(grep -c '^citizen_chat_device_identity_json$' <<<"$host_symbols" || true)"
   n_mls="$(grep -c '^citizen_chat_mls_' <<<"$host_symbols" || true)"
   n_account_crypto="$(grep -c '^account_crypto_' <<<"$host_symbols" || true)"
-  echo "宿主符号清单: smoldot_=$n_smoldot citizen_sr25519_=$n_signer citizen_chat_mls_=$n_mls account_crypto_=$n_account_crypto"
-  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_mls" -eq 0 ] || [ "$n_account_crypto" -ne 4 ]; then
-    echo "错误: 宿主符号清单不完整（account_crypto_* 必须正好 4 个，其余族必须非空）。" >&2
+  echo "宿主符号清单: smoldot_=$n_smoldot citizen_sr25519_=$n_signer citizen_chat_device_identity_json=$n_device_identity citizen_chat_mls_=$n_mls account_crypto_=$n_account_crypto"
+  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_device_identity" -ne 1 ] || [ "$n_mls" -eq 0 ] || [ "$n_account_crypto" -ne 4 ]; then
+    echo "错误: 宿主符号清单不完整（设备身份与 account_crypto_* 必须精确，其余族必须非空）。" >&2
     return 1
   fi
 }
@@ -246,6 +257,9 @@ verify_android_package() {
       rm -rf "$temporary"; echo "错误: Android 包内 libsmoldot 缺少 $family 符号。"; return 1;
     }
   done
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^citizen_chat_device_identity_json$' || true)" = "1" ]] || {
+    rm -rf "$temporary"; echo "错误: Android 包内必须准确导出 citizen_chat_device_identity_json。"; return 1;
+  }
   [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
     rm -rf "$temporary"; echo "错误: Android 包内 account_crypto_* 符号必须正好 4 个。"; return 1;
   }
@@ -270,6 +284,9 @@ verify_ios_package() {
       echo "错误: iOS Runner 缺少 $family 导出符号。"; return 1;
     }
   done
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^citizen_chat_device_identity_json$' || true)" = "1" ]] || {
+    echo "错误: iOS Runner 必须准确导出 citizen_chat_device_identity_json。"; return 1;
+  }
   [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
     echo "错误: iOS Runner 的 account_crypto_* 符号必须正好 4 个。"; return 1;
   }

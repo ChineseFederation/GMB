@@ -4492,9 +4492,6 @@ class ChatRuntime {
     String? recipientCidNumber,
     String? conversationId,
   }) async {
-    if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) {
-      return true;
-    }
     final pending = await _store.readPendingOutgoingMessages(
       bindingToken: context.bindingToken,
       ownerCidNumber: context.account.cidNumber,

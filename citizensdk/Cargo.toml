@@ -1,0 +1,23 @@
+[workspace]
+members = [
+    "native/signer",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "1.0.0"
+authors = ["voyager_rhett <chinanation@icloud.com>"]
+repository = "https://github.com/ChineseFederation/GMB"
+homepage = "https://github.com/ChineseFederation/GMB"
+license = "MIT"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+dbg_macro = "warn"
+todo = "warn"
