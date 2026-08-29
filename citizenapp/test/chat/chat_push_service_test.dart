@@ -194,7 +194,7 @@ void main() {
     expect(fcm.registrationCacheValue, isNot(sandbox.registrationCacheValue));
   });
 
-  test('启动恢复先补拉邮箱且Token更新保持统一有界重试', () {
+  test('启动恢复先建立WSS再补拉邮箱且Token更新保持统一有界重试', () {
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
     final socketConnect = runtime.indexOf('connectRealtime(');
     final tokenListener = runtime.indexOf('session.attachTokenSubscription');
@@ -208,7 +208,9 @@ void main() {
       contains('for (var attempt = 0; attempt < 3; attempt += 1)'),
     );
     expect(mailboxFetch, greaterThanOrEqualTo(0));
-    expect(socketConnect, greaterThan(mailboxFetch));
+    // 先建立 WSS 再补拉邮箱，禁止留下“补拉结束、实时连接尚未建立”的消息丢失窗口。
+    expect(socketConnect, greaterThanOrEqualTo(0));
+    expect(mailboxFetch, greaterThan(socketConnect));
     expect(tokenListener, greaterThanOrEqualTo(0));
     expect(runtime, isNot(contains("'peer_ready'")));
   });

@@ -135,13 +135,10 @@ class ChatOutboundQueueEntity {
   late int updatedAtMillis;
 }
 
-/// Chat 待设备投递的媒体字节(离线补发用)。
+/// Chat 逐收件人附件控制投递事实。
 ///
-/// 媒体字节走 WebRTC 设备直连;对方离线时字节发不出,控制消息已入队,发送方在此
-/// 登记"待投递"并把字节留在本机缓存。恢复网络、启动或收到推送时**由 conversationId /
-/// attachmentId / fileName 用当前 Documents 目录重算缓存路径**重发字节(不持久化
-/// 绝对路径,避免容器 UUID 变更后误判丢失);WebRTC ack 到达后删除本行。App 重启后
-/// 仍在,恢复即补发。
+/// 附件密文统一经 HTTPS 上传私有 R2，WebRTC 只用于实时语音/视频通话。本行只保存
+/// 稳定标识和元数据，不保存容器绝对路径；当前收件人的附件投递完成后删除。
 @collection
 class ChatOutgoingMediaEntity {
   Id id = Isar.autoIncrement;
@@ -157,7 +154,7 @@ class ChatOutgoingMediaEntity {
   @Index()
   late String attachmentId;
 
-  /// 收件人身份主键 CID 号（WebRTC 补发按 CID 路由信令）。
+  /// 收件人身份主键 CID 号，用于约束附件访问与控制信封投递。
   @Index()
   late String recipientCidNumber;
 

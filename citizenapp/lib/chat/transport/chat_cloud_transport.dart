@@ -346,7 +346,7 @@ class ChatCloudTransport implements ChatTransport {
       'recipient_cid_numbers': recipientCidNumbers,
       'cipher_byte_size': cipherByteSize,
       'cipher_sha256': cipherSha256,
-    });
+    }).timeout(const Duration(seconds: 15));
     if (plan['upload_state'] == 'ready') return;
     final rawParts = plan['parts'];
     if (rawParts is! List<dynamic> || rawParts.isEmpty) {
@@ -379,8 +379,12 @@ class ChatCloudTransport implements ChatTransport {
           ..headers.addAll(
             uploadHeaders.map((key, value) => MapEntry(key, value.toString())),
           );
-        final sending =
-            _httpClient.send(request).timeout(const Duration(hours: 6));
+        // 小附件不得沿用 6 小时固定等待；大附件按最低 64 KiB/s 给出与大小成比例的上限。
+        final transferSeconds =
+            (((byteSize + 65535) ~/ 65536) + 60).clamp(120, 21600).toInt();
+        final sending = _httpClient
+            .send(request)
+            .timeout(Duration(seconds: transferSeconds));
         await request.sink.addStream(
           cipherFile.openRead(offset, offset + byteSize),
         );
@@ -399,7 +403,7 @@ class ChatCloudTransport implements ChatTransport {
       await _postMap('/chat/attachments/complete', {
         'attachment_id': attachmentId,
         'etags': etags,
-      });
+      }).timeout(const Duration(seconds: 15));
     } catch (_) {
       await abortAttachment(attachmentId).catchError((Object _) {});
       rethrow;
@@ -415,7 +419,7 @@ class ChatCloudTransport implements ChatTransport {
   }) async {
     final plan = await _postMap('/chat/attachments/download', {
       'attachment_id': attachmentId,
-    });
+    }).timeout(const Duration(seconds: 15));
     if (plan['cipher_byte_size'] != expectedByteSize ||
         plan['cipher_sha256'] != expectedSha256) {
       throw const FormatException('Chat 附件密文索引与 OpenMLS 控制消息不一致');
@@ -430,13 +434,15 @@ class ChatCloudTransport implements ChatTransport {
     if (await target.exists()) await target.delete();
     final response = await _httpClient
         .send(http.Request('GET', uri))
-        .timeout(const Duration(hours: 6));
+        .timeout(const Duration(seconds: 30));
     if (response.statusCode != 200) {
       throw StateError('chat_attachment_download_failed');
     }
     final sink = target.openWrite();
     try {
-      await sink.addStream(response.stream);
+      // 已建连后连续 60 秒没有任何密文字节即判定失败；持续有进度的大文件不被误杀。
+      await sink
+          .addStream(response.stream.timeout(const Duration(seconds: 60)));
     } finally {
       await sink.close();
     }

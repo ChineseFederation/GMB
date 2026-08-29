@@ -3,6 +3,7 @@
 // 本层不实现密码学;核心可注入 fake 单测。
 // 群消息流程由本模块测试固定。
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
@@ -43,7 +44,7 @@ class ChatGroupFlow {
     required String currentAccountId,
     required String localDeviceId,
     this.deliveryScheduler,
-    this.beforeIncomingStore,
+    this.afterIncomingStore,
     this.defaultTtlMillis = chatMailboxTtlMillis,
   })  : _crypto = crypto,
         _store = store,
@@ -66,7 +67,9 @@ class ChatGroupFlow {
   final String _currentAccountId;
   final String _localDeviceId;
   final ChatEnvelopeDeliveryScheduler? deliveryScheduler;
-  final ChatIncomingContentHandler? beforeIncomingStore;
+
+  /// 群消息已经落库后的独立附件任务；不得阻塞群 epoch 与后续消息。
+  final ChatIncomingContentHandler? afterIncomingStore;
   final int defaultTtlMillis;
 
   /// 建群:创建者为唯一成员(admin),可选带初始邀请。
@@ -552,9 +555,6 @@ class ChatGroupFlow {
           return replayedEnvelopes;
         }
         final content = ChatPayloadCodec.decode(plaintext);
-        if (beforeIncomingStore != null) {
-          await beforeIncomingStore!(envelope, content);
-        }
         await _store.saveIncomingGroupMessage(
           bindingToken: _bindingToken,
           ownerCidNumber: _ownerCidNumber,
@@ -564,6 +564,11 @@ class ChatGroupFlow {
           messageKind: content.kind,
           plaintext: plaintext,
         );
+        final postStore = afterIncomingStore?.call(envelope, content);
+        if (postStore != null) {
+          // 群附件失败只影响该附件；控制消息已落库，后续群 epoch 必须继续推进。
+          unawaited(postStore.catchError((Object _) {}));
+        }
       case GroupInboundKind.unknown:
         break;
     }

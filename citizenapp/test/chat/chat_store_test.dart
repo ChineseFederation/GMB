@@ -415,7 +415,7 @@ void main() {
     );
   });
 
-  test('待设备投递媒体队列:登记 / 按对端读 / 删 / 会话删连带清理', () async {
+  test('附件控制投递事实:登记 / 按对端读 / 删 / 会话删连带清理', () async {
     final store = ChatStore();
     final bindingToken = await store.activateBindingFence(_testBinding);
     await store.recordOutgoingMedia(
@@ -455,10 +455,10 @@ void main() {
       'att-1',
       _bobCidNumber,
       bindingToken: bindingToken,
-    ); // 收到 ack 后删除
+    ); // 当前收件人的附件投递完成后删除
     expect(await store.outgoingMediaCount(_ownerCidNumber), 1);
 
-    // 删会话 conv-b 连带清理其待投递媒体,不留孤儿。
+    // 删会话 conv-b 连带清理其附件投递事实，不留孤儿。
     await store.deleteConversation(
       _ownerCidNumber,
       'conv-b',
@@ -487,7 +487,7 @@ void main() {
       );
     }
     expect(await store.outgoingMediaCount(_ownerCidNumber), 3);
-    // 仅 c 收到 ack → 删 c 的行,b/d 待投递保留。
+    // 仅 c 完成附件投递：删 c 的行，b/d 待投递事实保留。
     await store.deleteOutgoingMedia(
       _ownerCidNumber,
       'att-grp',
@@ -503,7 +503,7 @@ void main() {
     expect(forB.single.attachmentId, 'att-grp');
   });
 
-  test('clearAllForCidNumber 连带清理该 CID 会话的待投递媒体', () async {
+  test('clearAllForCidNumber 连带清理该 CID 会话的附件投递事实', () async {
     final store = ChatStore();
     final bindingToken = await store.activateBindingFence(_testBinding);
     // 以出站信封建立 owner CID 的会话行(conversationId=conv-own)。

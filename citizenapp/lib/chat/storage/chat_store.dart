@@ -91,8 +91,10 @@ class ChatPendingOutgoingMessage {
   final String payload;
 }
 
-/// 待设备投递的媒体(离线补发)。缓存路径在补发时由 conversationId/attachmentId/
-/// fileName 用当前 Documents 目录重算,不持久化绝对路径。
+/// 按收件人登记的附件控制投递事实。
+///
+/// 附件密文字节统一经 HTTPS 上传私有 R2；这里只保存稳定标识与元数据，不持久化
+/// 容器绝对路径，也不通过 WebRTC 传输附件。
 class ChatPendingMedia {
   const ChatPendingMedia({
     required this.attachmentId,
@@ -105,7 +107,7 @@ class ChatPendingMedia {
 
   final String attachmentId;
 
-  /// 收件人身份主键 CID 号（WebRTC 补发按 CID 路由信令）。
+  /// 收件人身份主键 CID 号，用于约束附件访问与控制信封投递。
   final String recipientCidNumber;
   final String conversationId;
   final String fileName;
@@ -2671,8 +2673,8 @@ class ChatStore {
               pendingMedia.byteSize <= 0) {
             throw StateError('Chat 待投递媒体与正式 Envelope 上下文不一致');
           }
-          // 媒体控制消息、待发送 Envelope、待补发字节事实与旧 pending 删除
-          // 必须原子成立。掉电后不能只剩媒体气泡却没有任何字节补发记录。
+          // 媒体控制消息、待发送 Envelope、附件投递事实与旧 pending 删除必须
+          // 原子成立。掉电后不能只剩媒体气泡却没有对应附件投递事实。
           await isar.chatOutgoingMediaEntitys.putByOwnerCidNumberPendingKey(
             ChatOutgoingMediaEntity()
               ..ownerCidNumber = ownerCidNumber
@@ -2990,7 +2992,7 @@ class ChatStore {
     });
   }
 
-  /// 登记一条待设备投递的媒体(字节未送达对方设备,留待上线补发)。
+  /// 登记一条逐收件人附件控制投递事实。
   Future<void> recordOutgoingMedia({
     required ChatBindingFenceToken bindingToken,
     required String ownerCidNumber,
@@ -3022,7 +3024,7 @@ class ChatStore {
     });
   }
 
-  /// 字节已送达某成员设备(收到 WebRTC ack)后删除该 (媒体, 成员) 待投递行。
+  /// 当前收件人的附件投递完成后删除该 (媒体, 成员) 事实。
   Future<void> deleteOutgoingMedia(
     String ownerCidNumber,
     String attachmentId,
@@ -3042,7 +3044,7 @@ class ChatStore {
     });
   }
 
-  /// 读取待设备投递的媒体(可按对端过滤),供上线补发。
+  /// 读取待完成的附件控制投递事实，可按收件人过滤。
   Future<List<ChatPendingMedia>> readPendingOutgoingMedia({
     required ChatBindingFenceToken bindingToken,
     required String ownerCidNumber,

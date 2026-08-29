@@ -1262,6 +1262,8 @@ class _ChatPageState extends State<ChatPage> {
   }) {
     final maxWidth = MediaQuery.of(context).size.width * 0.62;
     final hasFile = message.source.isNotEmpty;
+    final control =
+        message.metadata?['attachment_control_plaintext']?.toString() ?? '';
     final ratio = _mediaAspectRatio(message.width, message.height);
     final cacheWidth =
         (maxWidth * MediaQuery.of(context).devicePixelRatio).round();
@@ -1278,7 +1280,15 @@ class _ChatPageState extends State<ChatPage> {
               ),
             ),
           )
-        : _blurhashOrPlaceholder(message.blurhash, '接收中…');
+        : GestureDetector(
+            onTap: control.isEmpty
+                ? null
+                : () async {
+                    await _downloadMedia(control);
+                    await _reloadMessages();
+                  },
+            child: _blurhashOrPlaceholder(message.blurhash, '接收中…'),
+          );
     return _mediaAligned(
       isSentByMe,
       ClipRRect(
@@ -1303,12 +1313,21 @@ class _ChatPageState extends State<ChatPage> {
   }) {
     final maxWidth = MediaQuery.of(context).size.width * 0.62;
     final hasFile = message.source.isNotEmpty;
+    final control =
+        message.metadata?['attachment_control_plaintext']?.toString() ?? '';
     final hash = message.metadata?['blurhash']?.toString();
     final ratio = _mediaAspectRatio(message.width, message.height);
     return _mediaAligned(
       isSentByMe,
       GestureDetector(
-        onTap: hasFile ? () => _openVideoPlayer(message) : null,
+        onTap: hasFile
+            ? () => _openVideoPlayer(message)
+            : control.isEmpty
+                ? null
+                : () async {
+                    await _downloadMedia(control);
+                    await _reloadMessages();
+                  },
         child: ClipRRect(
           borderRadius: BorderRadius.circular(AppLayout.scaledValue(14)),
           child: SizedBox(

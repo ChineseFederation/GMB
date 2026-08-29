@@ -766,6 +766,57 @@ void main() {
       isTrue,
     );
   });
+
+  test('入站后置附件任务失败不撤销已落库消息', () async {
+    final receiverStore = ChatStore();
+    final receiverBinding =
+        await _activateBinding(receiverStore, _aliceAccountId);
+    final payload = ChatPayloadCodec.encode(
+      ChatContent.text('附件后置失败也必须保留的消息'),
+    );
+    final application = MlsWireMessage(
+      wireBytes: utf8.encode(payload),
+      cipherSuite: 'HPKE_BASE_X25519_HKDF_SHA256_AES128GCM',
+      conversationId: 'conv-after-store',
+      messageKind: MlsMessageKind.application,
+    ).toEnvelope(
+      envelopeId: 'env-after-store',
+      senderCidNumber: _bobCidNumber,
+      recipientCidNumber: _ownerCidNumber,
+      senderDeviceId: 'bob-phone',
+      createdAtMillis: 2,
+      ttlMillis: 60000,
+    );
+
+    final hookCalled = Completer<void>();
+    final receiver = ChatFlow(
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _aliceAccountId,
+      crypto: _FakeMlsCrypto(),
+      store: receiverStore,
+      bindingToken: receiverBinding,
+      deliverer: (envelope, _, __) async => ChatDeliveryResult(
+        envelopeId: envelope.envelopeId,
+        transportType: ChatTransportType.mailbox,
+        state: ChatMessageDeliveryState.sent,
+      ),
+      afterIncomingStore: (_, __) async {
+        hookCalled.complete();
+        throw StateError('模拟附件下载失败');
+      },
+    );
+
+    final result = await receiver
+        .processIncomingEnvelopeBytes(application.writeToBuffer());
+    await hookCalled.future;
+    expect(result.accepted, isTrue);
+    final messages = await receiverStore.readMessages(
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _aliceAccountId,
+      conversationId: 'conv-after-store',
+    );
+    expect(messages.single.plaintext, contains('附件后置失败也必须保留的消息'));
+  });
 }
 
 class _FakeMlsCrypto implements MlsCrypto {

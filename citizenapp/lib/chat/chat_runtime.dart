@@ -1583,6 +1583,10 @@ class ChatRuntime {
   /// 启动、恢复前台或推送触发的补发不得对在途媒体再整块重传。
   final Set<String> _mediaBytesInFlight = {};
 
+  /// 正在下载的入站 R2 密文附件。相同账户、会话和 attachmentId 共用一个 Future，
+  /// WSS、邮箱补拉、页面恢复和用户点击不得并发重复下载整块密文。
+  final Map<String, Future<void>> _incomingAttachmentDownloads = {};
+
   /// WSS 在线帧与连接后补拉可能命中同一密文；进程内先按既有 envelope_id 去重，
   /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
@@ -2102,6 +2106,7 @@ class ChatRuntime {
     _readyFlights.clear();
     _accountContextKeys.clear();
     _mediaBytesInFlight.clear();
+    _incomingAttachmentDownloads.clear();
     _mailboxEnvelopeReceipts.clear();
     _outgoingRetryInFlight.clear();
     _groupKeyPackagePublications.clear();
@@ -4291,8 +4296,12 @@ class ChatRuntime {
       localDeviceId: context.deviceId,
       deliveryScheduler: (conversationId, delivery) =>
           _scheduleOutboundDelivery(context, conversationId, delivery),
-      beforeIncomingStore: (envelope, content) =>
-          _cacheIncomingCloudAttachment(context, envelope, content),
+      afterIncomingStore: (envelope, content) async =>
+          _scheduleIncomingCloudAttachment(
+        context,
+        envelope.conversationId,
+        content,
+      ),
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
           transport: context.transport,
@@ -4312,8 +4321,9 @@ class ChatRuntime {
     if (contents.isEmpty) return const <String, String>{};
     try {
       final account = await _readAccount();
-      final bindingToken = await _convergeBindingFence(account);
-      return await _runBindingFileMutation(bindingToken, () async {
+      final context = await _readyContext(account);
+      final bindingToken = context.bindingToken;
+      final paths = await _runBindingFileMutation(bindingToken, () async {
         final cacheDirectory = await _attachmentDirectoryForToken(bindingToken);
         final plainDirectory = await _plainDirectoryForBinding(bindingToken);
         final attachmentKey = await _attachmentKeyForBinding(bindingToken);
@@ -4345,6 +4355,16 @@ class ChatRuntime {
           attachmentKey.fillRange(0, attachmentKey.length, 0);
         }
       });
+      // 控制消息已经是本机真值；缓存缺失的附件在独立任务中补取，不能挡住本次文字首屏。
+      for (final content in contents) {
+        final attachmentId = content.attachmentId ?? '';
+        if (content.isMedia &&
+            attachmentId.isNotEmpty &&
+            !paths.containsKey(attachmentId)) {
+          _scheduleIncomingCloudAttachment(context, conversationId, content);
+        }
+      }
+      return paths;
     } catch (_) {
       return const <String, String>{};
     }
@@ -4366,6 +4386,14 @@ class ChatRuntime {
     String controlPlaintext,
   ) async {
     final bindingToken = context.bindingToken;
+    final content = ChatPayloadCodec.decode(controlPlaintext);
+    if (content.isMedia) {
+      await _downloadIncomingCloudAttachment(
+        context,
+        conversationId,
+        content,
+      );
+    }
     final cacheDirectory = await _attachmentDirectoryForToken(bindingToken);
     return ChatFlow.downloadAttachment(
       conversationId: conversationId,
@@ -4473,9 +4501,10 @@ class ChatRuntime {
     );
   }
 
-  /// 重试发送设备本机队列中的密文,并补发待设备投递的媒体字节。
-  /// 应用密文只有收到接收设备“已成功处理”确认后才删队列项；Worker 的 socket
-  /// 写入结果只更新内部尝试状态。媒体密文完成 R2 上传后才删除待投递行。
+  /// 重试设备本机队列中的消息与附件上传。
+  ///
+  /// 媒体先完成私有 R2 密文上传，再发送端到端加密控制信封；附件网络失败只保留
+  /// 当前本机 pending，不得越过同会话顺序或阻塞其它会话。
   Future<int> retryOutgoing({
     String? recipientCidNumber,
     String? conversationId,
@@ -5730,14 +5759,77 @@ class ChatRuntime {
           recipientCidNumber: recipientCidNumber,
         );
       },
-      beforeIncomingStore: (envelope, content) =>
-          _cacheIncomingCloudAttachment(context, envelope, content),
+      afterIncomingStore: (envelope, content) async =>
+          _scheduleIncomingCloudAttachment(
+        context,
+        envelope.conversationId,
+        content,
+      ),
     );
+  }
+
+  void _scheduleIncomingCloudAttachment(
+    _ChatAccountContext context,
+    String conversationId,
+    ChatContent content,
+  ) {
+    if (!content.isMedia || (content.attachmentId ?? '').isEmpty) return;
+    unawaited(
+      _downloadIncomingCloudAttachment(context, conversationId, content)
+          .catchError((Object _) {
+        // 四次有界重试仍失败后保留本地控制消息；页面恢复或用户点击会再次补取。
+      }),
+    );
+  }
+
+  Future<void> _downloadIncomingCloudAttachment(
+    _ChatAccountContext context,
+    String conversationId,
+    ChatContent content,
+  ) {
+    final attachmentId = content.attachmentId ?? '';
+    final key = '${context.account.accountId}|$conversationId|$attachmentId';
+    final existing = _incomingAttachmentDownloads[key];
+    if (existing != null) return existing;
+
+    late final Future<void> task;
+    task = _runRuntimeOperation(() async {
+      Object? lastError;
+      for (var attempt = 0; attempt <= 4; attempt += 1) {
+        if (attempt > 0) {
+          await Future<void>.delayed(_outboundRetryDelays[attempt - 1]);
+        }
+        try {
+          await _cacheIncomingCloudAttachment(
+            context,
+            conversationId,
+            content,
+          );
+          final hub = _realtimeHubs[context.account.accountId];
+          if (hub != null && !hub.closed) {
+            await _notifyRealtimeHub(hub, disconnected: false);
+          }
+          return;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      Error.throwWithStackTrace(
+        lastError ?? StateError('chat_attachment_download_failed'),
+        StackTrace.current,
+      );
+    }).whenComplete(() {
+      if (identical(_incomingAttachmentDownloads[key], task)) {
+        _incomingAttachmentDownloads.remove(key);
+      }
+    });
+    _incomingAttachmentDownloads[key] = task;
+    return task;
   }
 
   Future<void> _cacheIncomingCloudAttachment(
     _ChatAccountContext context,
-    ChatEnvelope envelope,
+    String conversationId,
     ChatContent content,
   ) async {
     if (!content.isMedia) return;
@@ -5747,7 +5839,7 @@ class ChatRuntime {
     );
     final cachePath = ChatFlow.attachmentCachePath(
       cacheDirectory: cacheDirectory,
-      conversationId: envelope.conversationId,
+      conversationId: conversationId,
       attachmentId: attachmentId,
       fileName: content.fileName ?? 'attachment.bin',
     );
@@ -5790,7 +5882,7 @@ class ChatRuntime {
       }
       await _saveReceivedAttachmentToCacheMutation(
         bindingToken: context.bindingToken,
-        conversationId: envelope.conversationId,
+        conversationId: conversationId,
         attachmentId: attachmentId,
         fileName: content.fileName ?? 'attachment.bin',
         contentType: content.mime ?? 'application/octet-stream',

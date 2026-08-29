@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -134,7 +135,7 @@ class ChatFlow {
     required String ownerCidNumber,
     required String currentAccountId,
     this.deliveryScheduler,
-    this.beforeIncomingStore,
+    this.afterIncomingStore,
     this.defaultTtlMillis = chatMailboxTtlMillis,
   })  : _crypto = crypto,
         _store = store,
@@ -150,7 +151,9 @@ class ChatFlow {
   final String _ownerCidNumber;
   final String _currentAccountId;
   final ChatEnvelopeDeliveryScheduler? deliveryScheduler;
-  final ChatIncomingContentHandler? beforeIncomingStore;
+
+  /// 应用消息已经安全落库后的独立后置任务。附件下载失败不得撤销消息或阻塞邮箱 ACK。
+  final ChatIncomingContentHandler? afterIncomingStore;
   final int defaultTtlMillis;
 
   Future<List<ChatDeliveryResult>> sendText({
@@ -420,7 +423,6 @@ class ChatFlow {
 
       final plaintext = utf8.decode(inbound.plaintext ?? const []);
       final content = ChatPayloadCodec.decode(plaintext);
-      await beforeIncomingStore?.call(envelope, content);
       await _store.saveIncomingEnvelope(
         bindingToken: _bindingToken,
         ownerCidNumber: _ownerCidNumber,
@@ -430,6 +432,18 @@ class ChatFlow {
         messageKind: content.kind,
         plaintext: plaintext,
       );
+      final postStore = afterIncomingStore?.call(envelope, content);
+      if (postStore != null) {
+        unawaited(
+          postStore.catchError((Object error) {
+            // 附件是消息落库后的独立资源；失败只保留附件待重试，不能反向毒化邮箱。
+            AppLog.d(
+              '[ChatTrace] attachment.receive_deferred_failed '
+              'id=${envelope.envelopeId} code=${_safeTraceError(error)}',
+            );
+          }),
+        );
+      }
       AppLog.d(
         '[ChatTrace] envelope.received id=${envelope.envelopeId} '
         'kind=${content.kind.name}',
@@ -443,7 +457,7 @@ class ChatFlow {
       );
     } catch (error) {
       // 一对一 Application 是独立 HPKE 密文，不存在等待 Welcome 后回放的状态。
-      // 解密、载荷校验、附件落盘或 ChatIsar 写入任一步失败都必须上抛，让邮箱
+      // 解密、载荷校验或 ChatIsar 写入任一步失败都必须上抛，让邮箱
       // 保留原 Envelope；禁止沿用旧 MLS 缓冲语义后被上层误 ACK 永久删除。
       AppLog.d(
         '[ChatTrace] envelope.receive_failed '
