@@ -1347,7 +1347,8 @@ test5("CitizenApp \u5BBF\u4E3B\u6D4B\u8BD5\u53EA\u4ECE smoldot/ffi \u65B0\u76EE\
   const testEntry = readFileSync7(new URL("../../../citizenapp/scripts/citizenapp-test.sh", import.meta.url), "utf8");
   assert5.ok(platform.includes("'smoldot',\n        'ffi',\n        'target',\n        'release'"));
   assert5.ok(platform.includes("'..', 'ffi', 'target', 'release'"));
-  assert5.ok(mls.includes("'smoldot',\n        'ffi',\n        'target',\n        'release'"));
+  // 中文注释：只锁定目录段顺序，不把 Dart 格式化后的换行方式误当成目录变更。
+  assert5.match(mls, /'smoldot',\s*'ffi',\s*'target',\s*'release'/u);
   assert5.doesNotMatch(`${platform}\n${mls}`, /(?:'native'|'rust'),\s*'target'/u);
   assert5.match(testEntry, /build-smoldot-native\.sh" host[\s\S]*FLUTTER_BIN" test/u);
 });

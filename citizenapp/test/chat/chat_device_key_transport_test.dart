@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
+// 中文注释：私信只通过 HTTPS 登记和解析稳定 HPKE 设备公钥，禁止回退到 WebRTC 或 KeyPackage。
 void main() {
   const cid = 'CN220-CTZN2-198805200-2026';
   const peer = 'CN220-CTZN2-199001010-2026';

@@ -272,6 +272,7 @@ describe("device-only Chat control plane", () => {
     expect(sql).not.toContain("device_public_key");
   });
 
+  // 中文注释：令牌和绑定未变化且有效期充足时必须零写返回，防止每次启动放大 D1 写入量。
   it("returns an unchanged push endpoint without any D1 write", async () => {
     const expiresAt = Date.now() + 80 * 86_400_000;
     const db = new ChatDb([], {

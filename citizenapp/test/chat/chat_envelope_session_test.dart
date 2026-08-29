@@ -48,6 +48,7 @@ Future<ChatBindingFenceToken> _activateBinding(
 void main() {
   useIsolatedIsar();
 
+  // 中文注释：一对一私信始终只生成一个 HPKE Application 信封，失败重试复用同一待发送消息。
   test('端到端密文 wire message 只写入目标 ChatEnvelope 字段', () {
     const wire = MlsWireMessage(
       wireBytes: [0x01, 0x02],

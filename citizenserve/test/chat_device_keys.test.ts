@@ -108,6 +108,7 @@ function jsonRequest(path: string, method: string, body: object): Request {
   });
 }
 
+// 中文注释：设备公钥目录只保存稳定公开钥，解析操作不消费、不轮转，也不写入 D1。
 describe("Chat HPKE device key directory", () => {
   it("publishes exactly one stable public key for the authenticated device", async () => {
     let internalBody: unknown;
@@ -159,6 +160,7 @@ describe("Chat HPKE device key directory", () => {
   });
 });
 
+// 中文注释：OpenMLS 只保留群聊所需的单个 last-resort 包，不参与一对一私信投递。
 describe("OpenMLS group last-resort package", () => {
   it("publishes one group-only package for the authenticated device", async () => {
     const response = await publishChatGroupKeyPackage(

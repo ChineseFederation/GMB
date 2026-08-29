@@ -237,6 +237,7 @@ export async function routeRequest(
   if (request.method === "GET" && path === "/chat/signals") {
     return openChatSignal(request, env);
   }
+  // 中文注释：私信设备公钥与群聊 last-resort 包使用独立 HTTPS 路由，禁止恢复旧 KeyPackage 池。
   if (request.method === "PUT" && path === "/chat/device-key") {
     return publishChatDeviceKey(request, env);
   }
