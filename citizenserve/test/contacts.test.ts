@@ -50,6 +50,7 @@ describe('端到端加密通讯录 API', () => {
     ).rejects.toMatchObject({ code: 'device_time_invalid' });
   });
 
+  // 设备证明必须只读完成验签；任何 nonce D1 SQL 都会重新引入按请求写入放大。
   it('有效设备证明只验签且不为请求 nonce 写 D1', async () => {
     const context = await buildContext();
 
