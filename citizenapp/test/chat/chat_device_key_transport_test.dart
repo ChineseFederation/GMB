@@ -13,7 +13,7 @@ void main() {
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
   test('幂等登记当前设备HPKE公开钥且只使用HTTPS接口', () async {
-    late Map<String, dynamic> body;
+    final bodies = <Map<String, dynamic>>[];
     final transport = ChatCloudTransport(
       accountId: 'account',
       localCidNumber: cid,
@@ -23,16 +23,25 @@ void main() {
       httpClient: MockClient((request) async {
         expect(request.method, 'PUT');
         expect(request.url.path, '/api/chat/device-key');
-        body = jsonDecode(request.body) as Map<String, dynamic>;
+        bodies.add(jsonDecode(request.body) as Map<String, dynamic>);
         return http.Response(jsonEncode(<String, Object?>{'ok': true}), 200);
       }),
     );
 
     await transport.publishDeviceKey(publicKey);
-    expect(body, <String, Object?>{
-      'device_id': 'alice-phone',
-      'device_public_key_hex': publicKey,
-    });
+    // 首次上线和 WSS 物理重连共用同一幂等登记，不创建第二套密钥语义，
+    // 也不允许回退到 WebRTC 交换。
+    await transport.publishDeviceKey(publicKey);
+    expect(bodies, <Map<String, Object?>>[
+      <String, Object?>{
+        'device_id': 'alice-phone',
+        'device_public_key_hex': publicKey,
+      },
+      <String, Object?>{
+        'device_id': 'alice-phone',
+        'device_public_key_hex': publicKey,
+      },
+    ]);
   });
 
   test('首次私信只读取稳定设备公开钥且不建立WebRTC', () async {

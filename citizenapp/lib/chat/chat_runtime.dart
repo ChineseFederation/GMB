@@ -5045,6 +5045,10 @@ class ChatRuntime {
     var handedOff = false;
     ChatCloudTransport? looseSignalTransport;
     try {
+      // 接收消息同样依赖本机 HPKE 公开钥。禁止把公开钥登记延迟到本机主动
+      // 发送；否则服务端状态为空时两端会同时解析不到对方公开钥而永久互锁。
+      // 新上下文在构建时登记一次，缓存上下文在每次物理重连前幂等自愈一次。
+      await _readyContext(account, republishDeviceKey: true);
       final signalContext = await _buildSignalContext(account);
       looseSignalTransport = signalContext.transport;
       _ensureActive();
@@ -5343,7 +5347,10 @@ class ChatRuntime {
     await retryOutgoing(recipientCidNumber: senderCidNumber);
   }
 
-  Future<_ChatAccountContext> _readyContext(_ChatAccount account) async {
+  Future<_ChatAccountContext> _readyContext(
+    _ChatAccount account, {
+    bool republishDeviceKey = false,
+  }) async {
     _ensureActive();
     if (_blockedAccountIds.contains(account.accountId)) {
       return Future<_ChatAccountContext>.error(
@@ -5353,13 +5360,21 @@ class ChatRuntime {
     final knownKey = _accountContextKeys[account.accountId];
     final cached = knownKey == null ? null : _readyContexts[knownKey];
     if (cached != null && cached.isUsable) {
+      if (republishDeviceKey) {
+        // 本机上下文可用不能证明 CitizenServe 仍保留公开钥。每次账户级 WSS
+        // 物理重连前执行同值幂等登记，解除双方都等待对方公开钥的首次消息互锁。
+        await cached.transport.publishDeviceKey(cached.devicePublicKey);
+      }
       return cached;
     }
     if (knownKey != null) {
       // session 过期也必须走完整失效屏障：停实时回调、排空旧 CID action、关闭
       // crypto 后才允许同一 MlsStateStore 建立新上下文。
       await _invalidateAccountContext(account.accountId, keepBlocked: false);
-      return _readyContext(account);
+      return _readyContext(
+        account,
+        republishDeviceKey: republishDeviceKey,
+      );
     }
 
     final flightKey =
