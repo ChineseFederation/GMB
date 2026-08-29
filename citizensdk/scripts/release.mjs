@@ -82,7 +82,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
-  'test/node/bootstrap_client_test.dart': 'bce35fec9a26d1cd3f2e86146fec947b046d6aeb67aa6b543288684abf1b2b9e',
+  'test/node/bootstrap_client_test.dart': '6222fc540b079ebb5fa97bb196400f7dc64aaf3ae8866604970bdf69af88c59b',
   'test/node/chain_assets_test.dart': '655039fe80c27a703e4325dc17780b7bfa7ba1a84c243f16fcdb6d23d2fff99c',
   'test/node/citizensdk_bootstrap_manifest.json': '33bd8e2c7407abea376f21a7adf7c9df644aedb7a9e985211075bba6cde28a00',
   'test/node/light_client_lifecycle_test.dart': '9773d47459f688e4f95f8e1b93499ce96c11fbf7ab02c58d2888e5831a15bd8e',
