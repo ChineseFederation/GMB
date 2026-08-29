@@ -320,3 +320,4 @@ describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
     expect(source).not.toContain("ctx.waitUntil(job.catch");
   });
 });
+// CitizenServe 发布契约必须同时固定公开账户标识、机密访问凭据和正式附件桶，避免附件签名配置再次漏项。
