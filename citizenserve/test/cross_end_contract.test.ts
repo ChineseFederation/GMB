@@ -11,6 +11,10 @@ import { join } from "node:path";
 // 只锁**跨端 JSON 键名**,不锁实现细节;新增跨端字段时在此补一条。
 
 const FLUTTER_ROOT = join(import.meta.dirname, "../../citizenapp");
+const WRANGLER_CONFIGURATION = readFileSync(
+  join(import.meta.dirname, "../wrangler.toml"),
+  "utf8",
+);
 
 function readFlutter(relativePath: string): string {
   return readFileSync(join(FLUTTER_ROOT, relativePath), "utf8");
@@ -278,6 +282,17 @@ describe("Cloudflare Workers Paid 成本硬边界", () => {
     expect(media).toContain("const CACHE_PURGE_URL_BATCH = 100");
     expect(cleanup).toContain("const MAX_IDENTITIES_PER_SWEEP = 3");
     expect(cleanup).toContain("const MAX_CONTENT_ITEMS_PER_SWEEP = 4");
+  });
+
+  it("正式 Release 声明完整的 R2 HTTPS 预签名绑定", () => {
+    expect(WRANGLER_CONFIGURATION).toMatch(
+      /\[vars\][\s\S]*CF_ACCOUNT_ID = "[0-9a-f]{32}"/u,
+    );
+    expect(WRANGLER_CONFIGURATION).toMatch(
+      /\[secrets\][\s\S]*required = \[[\s\S]*"R2_KEY", "R2_SECRET"[\s\S]*\]/u,
+    );
+    expect(WRANGLER_CONFIGURATION).toContain('binding = "SQUARE_PRIVATE"');
+    expect(WRANGLER_CONFIGURATION).toContain('bucket_name = "citizenapp-private"');
   });
 });
 
