@@ -38,7 +38,7 @@ class ChatCloudException implements Exception {
   String toString() => errorCode;
 }
 
-/// CitizenServe 邮箱返回的一条端到端密文；本类不解析 OpenMLS 正文。
+/// CitizenServe 邮箱返回的一条端到端密文；只解析 Envelope 路由，不解析密文正文。
 class ChatMailboxEnvelope {
   const ChatMailboxEnvelope({
     required this.envelopeId,
@@ -68,7 +68,6 @@ class ChatMailboxEnvelope {
             'type',
             'envelope_id',
             'sender_cid_number',
-            'conversation_id',
             'envelope',
             'created_at_millis',
             'ttl_millis',
@@ -77,7 +76,6 @@ class ChatMailboxEnvelope {
             'envelope_id',
             'sender_cid_number',
             'recipient_cid_number',
-            'conversation_id',
             'envelope',
             'created_at_millis',
             'ttl_millis',
@@ -91,7 +89,6 @@ class ChatMailboxEnvelope {
     final senderCidNumber = value['sender_cid_number'];
     final recipientCidNumber =
         realtime ? localCidNumber : value['recipient_cid_number'];
-    final conversationId = value['conversation_id'];
     final envelope = value['envelope'];
     final createdAtMillis = value['created_at_millis'];
     final ttlMillis = value['ttl_millis'];
@@ -100,8 +97,6 @@ class ChatMailboxEnvelope {
         senderCidNumber is! String ||
         senderCidNumber.isEmpty ||
         recipientCidNumber != localCidNumber ||
-        conversationId is! String ||
-        conversationId.isEmpty ||
         envelope is! String ||
         envelope.isEmpty ||
         createdAtMillis is! int ||
@@ -121,11 +116,27 @@ class ChatMailboxEnvelope {
     if (envelopeBytes.isEmpty) {
       throw const FormatException('Chat 邮箱密文不能为空');
     }
+    late final ChatEnvelope decodedEnvelope;
+    try {
+      decodedEnvelope = ChatEnvelope.fromBuffer(envelopeBytes);
+    } catch (_) {
+      throw const FormatException('Chat Envelope 路由无法解析');
+    }
+    // conversation_id 的唯一接收真值在已序列化 Envelope 内。邮箱与 WSS
+    // 不重复传输这个字段，避免在线和离线路径因存储字段不一致而静默丢消息。
+    if (decodedEnvelope.envelopeId != envelopeId ||
+        decodedEnvelope.senderCidNumber != senderCidNumber ||
+        decodedEnvelope.recipientCidNumber != localCidNumber ||
+        decodedEnvelope.conversationId.isEmpty ||
+        decodedEnvelope.createdAtMillis.toInt() != createdAtMillis ||
+        decodedEnvelope.ttlMillis.toInt() != ttlMillis) {
+      throw const FormatException('Chat Envelope 与邮箱路由不一致');
+    }
     return ChatMailboxEnvelope(
       envelopeId: envelopeId,
       senderCidNumber: senderCidNumber,
       recipientCidNumber: localCidNumber,
-      conversationId: conversationId,
+      conversationId: decodedEnvelope.conversationId,
       envelopeBytes: envelopeBytes,
       createdAtMillis: createdAtMillis,
       ttlMillis: ttlMillis,

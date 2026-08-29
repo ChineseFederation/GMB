@@ -43,8 +43,8 @@ void main() {
     expect(flow, isNot(contains('await _store.savePendingInbound(')));
   });
 
-  // 中文注释：锁定邮箱补拉发生在实时 socket 之前，并禁止旧在线探测信令回流。
-  test('普通消息补拉邮箱不依赖WSS、WebRTC或对端在线', () {
+  // 中文注释：先建立实时收件再补拉邮箱，锁死两步之间不得出现消息滞留窗口。
+  test('普通消息先建立WSS再补拉可靠邮箱且不依赖WebRTC', () {
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
     final mailboxFetch = runtime.indexOf(
       'await signalContext.transport.fetchMailbox()',
@@ -52,7 +52,8 @@ void main() {
     final socketConnect = runtime.indexOf('connectRealtime(');
 
     expect(mailboxFetch, greaterThanOrEqualTo(0));
-    expect(socketConnect, greaterThan(mailboxFetch));
+    expect(socketConnect, greaterThanOrEqualTo(0));
+    expect(mailboxFetch, greaterThan(socketConnect));
     expect(runtime, isNot(contains('peer_ready')));
     expect(runtime, contains('_scheduleOutgoingRetry'));
   });

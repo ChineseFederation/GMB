@@ -93,6 +93,13 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
     expect(runtime).not.toContain("RTCPeerConnection");
   });
 
+  it("在线与离线收件都从序列化 Envelope 读取唯一会话路由", () => {
+    expect(workerRealtime).not.toContain("conversation_id: payload.conversation_id");
+    expect(transport).toContain("ChatEnvelope.fromBuffer(envelopeBytes)");
+    expect(transport).toContain("decodedEnvelope.conversationId");
+    expect(transport).toContain("decodedEnvelope.recipientCidNumber != localCidNumber");
+  });
+
   it("推送唤醒发件人按 sender_cid_number", () => {
     const workerPush = readFileSync(
       join(import.meta.dirname, "../src/chat/push.ts"),

@@ -139,23 +139,26 @@ void main() {
   });
 
   test('邮箱补拉严格解析密文并以原 envelope_id 数组确认', () async {
-    final envelope = _envelope();
-    final encoded = base64Url.encode(envelope.writeToBuffer());
     // 一次邮箱拉取中的有效信封必须整批处理、整批确认，避免逐条确认造成漏收或重复消费。
-    final envelopeIds = <String>[envelope.envelopeId, 'env-mailbox-2'];
+    final envelopes = <dynamic>[
+      _incomingEnvelope('env-mailbox-1'),
+      _incomingEnvelope('env-mailbox-2'),
+    ];
+    final envelopeIds = envelopes
+        .map<String>((envelope) => envelope.envelopeId as String)
+        .toList(growable: false);
     var calls = 0;
     final transport = _transport((request) async {
       calls += 1;
       if (request.method == 'GET') {
         expect(request.url.path, '/api/chat/messages');
         return _json([
-          for (final envelopeId in envelopeIds)
+          for (final envelope in envelopes)
             {
-              'envelope_id': envelopeId,
+              'envelope_id': envelope.envelopeId,
               'sender_cid_number': _bobCidNumber,
               'recipient_cid_number': _aliceCidNumber,
-              'conversation_id': envelope.conversationId,
-              'envelope': encoded,
+              'envelope': base64Url.encode(envelope.writeToBuffer()),
               'created_at_millis': 1000,
               'ttl_millis': 60000,
             },
@@ -175,6 +178,21 @@ void main() {
       items.map((item) => item.envelopeId).toList(growable: false),
     );
     expect(calls, 2);
+  });
+
+  test('WSS与离线邮箱统一从序列化Envelope读取会话路由', () {
+    final envelope = _incomingEnvelope('env-realtime-1');
+    final item = ChatMailboxEnvelope.fromJson({
+      'type': 'citizen_chat_envelope',
+      'envelope_id': envelope.envelopeId,
+      'sender_cid_number': _bobCidNumber,
+      'envelope': base64Url.encode(envelope.writeToBuffer()),
+      'created_at_millis': 1000,
+      'ttl_millis': 60000,
+    }, localCidNumber: _aliceCidNumber, realtime: true);
+
+    expect(item.conversationId, envelope.conversationId);
+    expect(item.recipientCidNumber, _aliceCidNumber);
   });
 
   test('邮箱逐条隔离处理并在整批结束后只确认一次', () {
@@ -299,6 +317,20 @@ dynamic _envelope() => const MlsWireMessage(
       senderCidNumber: _aliceCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
+      createdAtMillis: 1000,
+      ttlMillis: 60000,
+    );
+
+dynamic _incomingEnvelope(String envelopeId) => const MlsWireMessage(
+      wireBytes: [1, 2, 3],
+      cipherSuite: 'MLS_128',
+      conversationId: 'conv-mailbox',
+      messageKind: MlsMessageKind.application,
+    ).toEnvelope(
+      envelopeId: envelopeId,
+      senderCidNumber: _bobCidNumber,
+      recipientCidNumber: _aliceCidNumber,
+      senderDeviceId: 'bob-phone',
       createdAtMillis: 1000,
       ttlMillis: 60000,
     );

@@ -5096,16 +5096,6 @@ class ChatRuntime {
         });
       }
 
-      session.ensureOpen();
-      // 普通消息的可靠真源是 CitizenServe 密文邮箱。必须在建立 WSS 之前补拉，
-      // 保证 WSS、WebRTC 或对端离线都不会阻塞通知对应的正文落库。
-      await _consumeMailboxBatch(
-        account,
-        signalContext.transport,
-        await signalContext.transport.fetchMailbox(),
-      );
-      _ensureActive();
-      session.ensureOpen();
       // 注册长寿命 socket callback 时不能处于 CID Zone；每次 callback 由 session
       // registry 跟踪，并在其内部显式取得 binding lease。
       final stopSocket = await signalContext.transport.connectRealtime(
@@ -5124,6 +5114,17 @@ class ChatRuntime {
       });
       looseSignalTransport = null;
       onTransportChanged(signalTransport);
+      _ensureActive();
+      session.ensureOpen();
+
+      // 必须先完成 WSS ready，再补拉可靠密文邮箱。建连后的新消息由 WSS
+      // 立即交付，建连前的消息由本次补拉收敛，两者重叠时由 envelope_id
+      // 和本机落库幂等去重；禁止留下“补拉结束、WSS 尚未建立”的丢失窗口。
+      await _consumeMailboxBatch(
+        account,
+        signalContext.transport,
+        await signalContext.transport.fetchMailbox(),
+      );
       _ensureActive();
       session.ensureOpen();
 

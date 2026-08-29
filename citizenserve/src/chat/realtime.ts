@@ -395,6 +395,8 @@ export class Chat implements DurableObject {
   }
 
   private deliverEnvelope(payload: RoutedChatMailboxItem): number {
+    // conversation_id 已存在于序列化 Envelope；WSS 与离线邮箱统一只交付
+    // 同一份 Envelope，禁止增加未持久化的重复路由字段造成两条路径漂移。
     const text = JSON.stringify({
       type: CHAT_WS_ENVELOPE_TYPE,
       envelope_id: payload.envelope_id,
