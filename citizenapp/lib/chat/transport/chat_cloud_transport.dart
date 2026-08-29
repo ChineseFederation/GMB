@@ -290,7 +290,9 @@ class ChatCloudTransport implements ChatTransport {
         envelopeId: envelopeId,
         transportType: type,
         state: ChatMessageDeliveryState.queued,
-        errorMessage: error.toString(),
+        // 本机可靠队列只保存稳定阶段码；禁止把 URL、CID、响应正文或系统异常
+        // 原文写进消息状态。失败仍保留同一 Envelope 等待有界退避重试。
+        errorMessage: _deliveryErrorCode(error),
       );
     }
   }
@@ -893,6 +895,14 @@ Object? _decodeResponse(http.Response response) {
   }
   return decoded;
 }
+
+String _deliveryErrorCode(Object error) => switch (error) {
+      ChatCloudException(:final errorCode) => errorCode,
+      TimeoutException() => 'chat_request_timeout',
+      SocketException() => 'chat_request_network_unavailable',
+      FormatException() => 'chat_response_invalid',
+      _ => 'chat_delivery_failed',
+    };
 
 List<String> _iceUrls(Object? value, Set<String> schemes) {
   if (value is! List<dynamic>) throw const FormatException('Chat ICE URL 不合法');

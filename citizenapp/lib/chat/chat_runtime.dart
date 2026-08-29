@@ -1499,6 +1499,15 @@ class ChatRuntime {
   static const _pushEndpointTtl = Duration(days: 90);
   static const _pushEndpointRefreshSkewMillis = 24 * 60 * 60 * 1000;
   static const _sessionRefreshSkewMillis = 60 * 1000;
+  // 单会话只执行五次有界低频重试；之后由现有 WSS 重连、系统唤醒、前台恢复
+  // 或下一条发送再次收敛，避免服务故障时无限请求 CitizenServe/D1 会员读。
+  static const _outboundRetryDelays = <Duration>[
+    Duration(seconds: 2),
+    Duration(seconds: 5),
+    Duration(seconds: 15),
+    Duration(seconds: 30),
+    Duration(seconds: 60),
+  ];
   static const String _fileHandoverMacDomain =
       'citizenapp.local/chat-file-handover|';
 
@@ -1579,6 +1588,8 @@ class ChatRuntime {
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
   final Set<String> _incomingConvergenceInFlight = <String>{};
   final Set<String> _groupKeyPackagePublications = <String>{};
+  final Map<String, Timer> _outboundRetryTimers = <String, Timer>{};
+  final Map<String, int> _outboundRetryAttempts = <String, int>{};
 
   /// 同一账户/设备只允许一条初始化链。成功上下文复用到 session 临近过期；
   /// 失败只释放命中的 future，不得误删后来创建的新初始化。
@@ -2045,6 +2056,11 @@ class ChatRuntime {
 
   Future<void> _closeForWipe() async {
     _closedForWipe = true;
+    for (final timer in _outboundRetryTimers.values) {
+      timer.cancel();
+    }
+    _outboundRetryTimers.clear();
+    _outboundRetryAttempts.clear();
     final accountIds = <String>{
       ..._accountGenerations.keys,
       ..._accountContextKeys.keys,
@@ -3850,10 +3866,13 @@ class ChatRuntime {
   /// 本地消息；实时重连、轮询、网络恢复或推送唤醒都会再次进入同一收敛入口。
   void _schedulePendingOutgoing({
     required _ChatAccount account,
-    required String recipientCidNumber,
+    String? recipientCidNumber,
     required String conversationId,
+    bool resetBackoff = true,
   }) {
     final key = '${account.accountId}|$conversationId';
+    _outboundRetryTimers.remove(key)?.cancel();
+    if (resetBackoff) _outboundRetryAttempts.remove(key);
     unawaited(
       _runRuntimeOperation(
         () => _outboundDeliveryGate.run(key, () async {
@@ -3861,21 +3880,58 @@ class ChatRuntime {
             expectedAccountId: account.accountId,
           );
           final context = await _readyContext(current);
-          await _flushPendingOutgoing(
+          final pendingConversionFailed = await _flushPendingOutgoing(
             context,
             recipientCidNumber: recipientCidNumber,
             conversationId: conversationId,
           );
-          await _retryQueuedEnvelopes(
+          final delivery = await _retryQueuedEnvelopes(
             context,
             recipientCidNumber: recipientCidNumber,
             conversationId: conversationId,
           );
+          if (pendingConversionFailed || delivery.retryNeeded) {
+            throw StateError('chat_outbound_retry_required');
+          }
+          _outboundRetryAttempts.remove(key);
         }),
       ).catchError((Object _) {
-        // 本地密文行是可靠真值；任何网络或初始化失败只等待下次统一补发。
+        // 失败原因已经以稳定阶段码保存在出站行；这里不输出账户、CID、URL 或异常原文。
+        _schedulePendingOutgoingRetry(
+          key: key,
+          account: account,
+          recipientCidNumber: recipientCidNumber,
+          conversationId: conversationId,
+        );
       }),
     );
+  }
+
+  void _schedulePendingOutgoingRetry({
+    required String key,
+    required _ChatAccount account,
+    required String? recipientCidNumber,
+    required String conversationId,
+  }) {
+    if (_closedForWipe || _processWipeRequested) return;
+    final attempt = _outboundRetryAttempts[key] ?? 0;
+    if (attempt >= _outboundRetryDelays.length ||
+        _outboundRetryTimers.containsKey(key)) {
+      return;
+    }
+    _outboundRetryAttempts[key] = attempt + 1;
+    late final Timer timer;
+    timer = Timer(_outboundRetryDelays[attempt], () {
+      if (!identical(_outboundRetryTimers[key], timer)) return;
+      _outboundRetryTimers.remove(key);
+      _schedulePendingOutgoing(
+        account: account,
+        recipientCidNumber: recipientCidNumber,
+        conversationId: conversationId,
+        resetBackoff: false,
+      );
+    });
+    _outboundRetryTimers[key] = timer;
   }
 
   Future<List<ChatDeliveryResult>> sendMedia({
@@ -4420,23 +4476,25 @@ class ChatRuntime {
         recipientCidNumber: recipientCidNumber,
         conversationId: conversationId,
       );
-      final sent = await _retryQueuedEnvelopes(
+      final delivery = await _retryQueuedEnvelopes(
         context,
         recipientCidNumber: recipientCidNumber,
         conversationId: conversationId,
       );
-      return sent;
+      return delivery.sent;
     });
   }
 
   /// 把本机用途钥密文待发送行按会话顺序转换为正式 MLS Envelope。某条失败时
   /// 立即停止该批，禁止后一条越过它推进 ratchet；原行保留到下一次补发。
-  Future<void> _flushPendingOutgoing(
+  Future<bool> _flushPendingOutgoing(
     _ChatAccountContext context, {
     String? recipientCidNumber,
     String? conversationId,
   }) async {
-    if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) return;
+    if (!ChatMediaLimits.chatAuthorizedFor(context.account.cidNumber)) {
+      return true;
+    }
     final pending = await _store.readPendingOutgoingMessages(
       bindingToken: context.bindingToken,
       ownerCidNumber: context.account.cidNumber,
@@ -4453,9 +4511,10 @@ class ChatRuntime {
       try {
         await _sendPendingOutgoing(context, item);
       } catch (_) {
-        break;
+        return true;
       }
     }
+    return false;
   }
 
   Future<void> _expirePendingOutgoing(
@@ -4682,7 +4741,7 @@ class ChatRuntime {
     if (await uploaded.exists()) await uploaded.delete();
   }
 
-  Future<int> _retryQueuedEnvelopes(
+  Future<({int sent, bool retryNeeded})> _retryQueuedEnvelopes(
     _ChatAccountContext context, {
     String? recipientCidNumber,
     String? conversationId,
@@ -4694,6 +4753,7 @@ class ChatRuntime {
       conversationId: conversationId,
     );
     var sent = 0;
+    var retryNeeded = false;
     final nowMillis = DateTime.now().millisecondsSinceEpoch;
     for (final item in queued) {
       ChatEnvelope envelope;
@@ -4734,9 +4794,13 @@ class ChatRuntime {
         state: result.state,
         errorMessage: result.errorMessage,
       );
-      if (result.state == ChatMessageDeliveryState.sent) sent += 1;
+      if (result.state == ChatMessageDeliveryState.sent) {
+        sent += 1;
+      } else {
+        retryNeeded = true;
+      }
     }
-    return sent;
+    return (sent: sent, retryNeeded: retryNeeded);
   }
 
   /// 接收端下载、验哈希和解密成功后，把明文重新写入账户绑定的本机加密缓存。
@@ -5222,13 +5286,8 @@ class ChatRuntime {
         }
       } catch (error) {
         _mailboxEnvelopeReceipts.remove(receiptKey);
-        if (error is FormatException || error is ArgumentError) {
-          // 服务端只保存不透明密文；本机已经确认不可解析或身份不一致时直接确认删除，
-          // 避免永久坏信封占住每批第一项。不得记录信封、CID 或底层异常文本。
-          transport.lastRealtimeDiagnosticCode =
-              'chat_mailbox_envelope_rejected';
-          return true;
-        }
+        // ACK 的唯一条件是密文已经成功验密并写入本机。格式、身份、HPKE、附件或
+        // ChatIsar 任一失败都保留服务端副本到后续重试/七天 TTL；禁止永久丢消息。
         transport.lastRealtimeDiagnosticCode = 'chat_mailbox_envelope_retry';
         return false;
       }

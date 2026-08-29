@@ -355,6 +355,46 @@ void main() {
     );
   });
 
+  // 中文注释：私信不存在 Welcome 回放，HPKE 失败必须保留云端信封而不是进入旧缓冲后误 ACK。
+  test('私信HPKE解密失败必须上抛且不得进入旧Welcome待处理区', () async {
+    final store = ChatStore();
+    final bindingToken = await _activateBinding(store, _bobAccountId);
+    final flow = ChatFlow(
+      ownerCidNumber: _ownerCidNumber,
+      currentAccountId: _bobAccountId,
+      crypto: _RejectIncomingMlsCrypto(),
+      store: store,
+      bindingToken: bindingToken,
+      deliverer: (_, __, ___) => throw StateError('接收端不得重新投递'),
+    );
+    final application = const MlsWireMessage(
+      wireBytes: [1, 2, 3],
+      cipherSuite: 'HPKE_BASE_X25519_HKDF_SHA256_AES128GCM',
+      conversationId: 'dm:alice:bob:reject',
+      messageKind: MlsMessageKind.application,
+    ).toEnvelope(
+      envelopeId: 'env-hpke-reject',
+      senderCidNumber: _ownerCidNumber,
+      recipientCidNumber: _bobCidNumber,
+      senderDeviceId: 'alice-phone',
+      createdAtMillis: 2,
+      ttlMillis: 60000,
+    );
+
+    await expectLater(
+      flow.processIncomingEnvelopeBytes(application.writeToBuffer()),
+      throwsStateError,
+    );
+    expect(
+      await store.takePendingInbound(
+        _ownerCidNumber,
+        application.conversationId,
+        bindingToken: bindingToken,
+      ),
+      isEmpty,
+    );
+  });
+
   test('两个独立用户可双向发送、接收并在各自本机安全落盘', () async {
     const conversationId = 'dm:alice:bob:bidirectional';
     final aliceStore = ChatStore();
@@ -818,6 +858,13 @@ class _FailFirstApplicationStore extends ChatStore {
       pendingLocalMessageId: pendingLocalMessageId,
       pendingMedia: pendingMedia,
     );
+  }
+}
+
+class _RejectIncomingMlsCrypto extends _FakeMlsCrypto {
+  @override
+  Future<MlsInboundMessage> processIncoming(MlsWireMessage message) async {
+    throw StateError('模拟 HPKE 解密失败');
   }
 }
 

@@ -24,4 +24,19 @@ void main() {
     expect(
         source, isNot(contains('Future<ChatContent> _uploadEncryptedMedia')));
   });
+
+  // 中文注释：源码合同锁定成功落库才 ACK 与有限退避，防止再次出现静默丢消息或无限请求。
+  test('私信只在本机成功落库后ACK且失败执行有界低频退避', () {
+    final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
+    final flow = File('lib/chat/chat_flow.dart').readAsStringSync();
+
+    expect(runtime, contains('static const _outboundRetryDelays'));
+    expect(runtime, contains('Duration(seconds: 60)'));
+    expect(runtime, contains('attempt >= _outboundRetryDelays.length'));
+    expect(runtime,
+        contains("lastRealtimeDiagnosticCode = 'chat_mailbox_envelope_retry'"));
+    expect(runtime, isNot(contains("'chat_mailbox_envelope_rejected'")));
+    expect(flow, contains('不存在等待 Welcome 后回放的状态'));
+    expect(flow, isNot(contains('await _store.savePendingInbound(')));
+  });
 }

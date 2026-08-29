@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:citizenapp/chat/crypto/mls_boundary.dart';
+import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/transport/chat_cloud_transport.dart';
 import 'package:citizenapp/chat/transport/chat_transport.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,6 +115,29 @@ void main() {
     expect(result.state.name, 'sent');
   });
 
+  // 中文注释：服务端拒绝不得泄露响应原文，也不得把尚未持久化的密文伪装成发送成功。
+  test('邮箱提交失败只返回稳定错误码并保留本机重试状态', () async {
+    final envelope = _envelope();
+    final transport = _transport((_) async => http.Response(
+          jsonEncode({
+            'ok': false,
+            'error_code': 'chat_mailbox_write_failed',
+            'message': 'server-details-must-not-leak',
+          }),
+          503,
+        ));
+
+    final result = await transport.sendEncryptedEnvelope(
+      envelopeId: envelope.envelopeId,
+      envelopeBytes: envelope.writeToBuffer(),
+      recipientCidNumber: _bobCidNumber,
+    );
+
+    expect(result.state, ChatMessageDeliveryState.queued);
+    expect(result.errorMessage, 'chat_mailbox_write_failed');
+    expect(result.errorMessage, isNot(contains('server-details')));
+  });
+
   test('邮箱补拉严格解析密文并以原 envelope_id 数组确认', () async {
     final envelope = _envelope();
     final encoded = base64Url.encode(envelope.writeToBuffer());
@@ -125,15 +149,16 @@ void main() {
       if (request.method == 'GET') {
         expect(request.url.path, '/api/chat/messages');
         return _json([
-          for (final envelopeId in envelopeIds) {
-            'envelope_id': envelopeId,
-            'sender_cid_number': _bobCidNumber,
-            'recipient_cid_number': _aliceCidNumber,
-            'conversation_id': envelope.conversationId,
-            'envelope': encoded,
-            'created_at_millis': 1000,
-            'ttl_millis': 60000,
-          },
+          for (final envelopeId in envelopeIds)
+            {
+              'envelope_id': envelopeId,
+              'sender_cid_number': _bobCidNumber,
+              'recipient_cid_number': _aliceCidNumber,
+              'conversation_id': envelope.conversationId,
+              'envelope': encoded,
+              'created_at_millis': 1000,
+              'ttl_millis': 60000,
+            },
         ]);
       }
       expect(request.method, 'POST');
@@ -144,7 +169,8 @@ void main() {
 
     final items = await transport.fetchMailbox();
     expect(items, hasLength(2));
-    expect(items.every((item) => item.senderCidNumber == _bobCidNumber), isTrue);
+    expect(
+        items.every((item) => item.senderCidNumber == _bobCidNumber), isTrue);
     await transport.acknowledgeMailbox(
       items.map((item) => item.envelopeId).toList(growable: false),
     );
@@ -157,7 +183,10 @@ void main() {
 
     expect(runtime, contains('for (final item in items)'));
     expect(runtime, contains('acknowledgeMailbox(acknowledgedEnvelopeIds)'));
-    expect(runtime, contains('error is FormatException || error is ArgumentError'));
+    expect(runtime,
+        isNot(contains('error is FormatException || error is ArgumentError')));
+    expect(runtime,
+        contains("lastRealtimeDiagnosticCode = 'chat_mailbox_envelope_retry'"));
     expect(
       runtime,
       isNot(contains('acknowledgeMailbox(<String>[item.envelopeId])')),

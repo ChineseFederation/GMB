@@ -13,23 +13,22 @@ import 'transport/chat_transport.dart';
 /// 投递一个密文 Envelope。[recipientCidNumber] 是收件人唯一身份主键和路由键。
 import '../log/app_log.dart';
 
-typedef ChatEnvelopeDeliverer =
-    Future<ChatDeliveryResult> Function(
-      ChatEnvelope envelope,
-      List<int> envelopeBytes,
-      String recipientCidNumber,
-    );
+typedef ChatEnvelopeDeliverer = Future<ChatDeliveryResult> Function(
+  ChatEnvelope envelope,
+  List<int> envelopeBytes,
+  String recipientCidNumber,
+);
 
 /// 本地可靠队列落盘后，把网络投递交给按会话保序的后台执行器。调用方不得
 /// 在执行器内重新处理 MLS 或改写附件，只允许投递已持久化的密文信封并回写状态。
-typedef ChatEnvelopeDeliveryScheduler =
-    void Function(String conversationId, Future<void> Function() delivery);
+typedef ChatEnvelopeDeliveryScheduler = void Function(
+    String conversationId, Future<void> Function() delivery);
 
 /// 媒体控制消息和发送方本地附件均已安全落盘，可以立即刷新本机聊天气泡。
 typedef ChatMediaLocalCommitNotifier = Future<void> Function();
 
-typedef ChatIncomingContentHandler =
-    Future<void> Function(ChatEnvelope envelope, ChatContent content);
+typedef ChatIncomingContentHandler = Future<void> Function(
+    ChatEnvelope envelope, ChatContent content);
 
 /// 待发送的本机明文媒体(图片 / 视频 / 文件 / 语音)。
 ///
@@ -137,12 +136,12 @@ class ChatFlow {
     this.deliveryScheduler,
     this.beforeIncomingStore,
     this.defaultTtlMillis = chatMailboxTtlMillis,
-  }) : _crypto = crypto,
-       _store = store,
-       _deliverer = deliverer,
-       _bindingToken = bindingToken,
-       _ownerCidNumber = ownerCidNumber,
-       _currentAccountId = currentAccountId;
+  })  : _crypto = crypto,
+        _store = store,
+        _deliverer = deliverer,
+        _bindingToken = bindingToken,
+        _ownerCidNumber = ownerCidNumber,
+        _currentAccountId = currentAccountId;
 
   final MlsCrypto _crypto;
   final ChatStore _store;
@@ -443,20 +442,13 @@ class ChatFlow {
         acceptedEnvelopes: <ChatEnvelope>[envelope],
       );
     } catch (error) {
-      if (wireMessage.messageKind == MlsMessageKind.application) {
-        await _store.savePendingInbound(
-          bindingToken: _bindingToken,
-          ownerCidNumber: _ownerCidNumber,
-          envelope: envelope,
-          envelopeBytes: envelopeBytes,
-          reason: error.toString(),
-        );
-        return ChatIncomingProcessResult(
-          envelopeId: envelope.envelopeId,
-          accepted: false,
-          queuedPending: true,
-        );
-      }
+      // 一对一 Application 是独立 HPKE 密文，不存在等待 Welcome 后回放的状态。
+      // 解密、载荷校验、附件落盘或 ChatIsar 写入任一步失败都必须上抛，让邮箱
+      // 保留原 Envelope；禁止沿用旧 MLS 缓冲语义后被上层误 ACK 永久删除。
+      AppLog.d(
+        '[ChatTrace] envelope.receive_failed '
+        'id=${envelope.envelopeId} code=${_safeTraceError(error)}',
+      );
       rethrow;
     }
   }
