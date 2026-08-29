@@ -138,7 +138,7 @@ class ChatOutboundQueueEntity {
 /// Chat 待设备投递的媒体字节(离线补发用)。
 ///
 /// 媒体字节走 WebRTC 设备直连;对方离线时字节发不出,控制消息已入队,发送方在此
-/// 登记"待投递"并把字节留在本机缓存。对方上线(peer_ready)时**由 conversationId /
+/// 登记"待投递"并把字节留在本机缓存。恢复网络、启动或收到推送时**由 conversationId /
 /// attachmentId / fileName 用当前 Documents 目录重算缓存路径**重发字节(不持久化
 /// 绝对路径,避免容器 UUID 变更后误判丢失);WebRTC ack 到达后删除本行。App 重启后
 /// 仍在,恢复即补发。

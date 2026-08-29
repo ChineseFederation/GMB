@@ -9,7 +9,6 @@ const CONNECTION_ID_PATTERN = /^[A-Za-z0-9_.:-]{3,220}$/;
 export const CHAT_SIGNAL_TYPE = "citizen_chat_signal" as const;
 
 export type ChatSignalKind =
-  | "peer_ready"
   | "offer"
   | "answer"
   | "ice"
@@ -105,11 +104,6 @@ export function assertChatSignalFrame(value: unknown): ChatSignalFrame {
     recipient_device_id: recipientDeviceId,
     signal_kind: signalKind,
   };
-  if (signalKind === "peer_ready") {
-    requireExactKeys(signal, baseKeys);
-    return normalized;
-  }
-
   const connectionId = assertConnectionId(signal.connection_id);
   normalized.connection_id = connectionId;
   if (signalKind === "offer" || signalKind === "answer") {
@@ -153,8 +147,7 @@ export function assertChatSignalFrame(value: unknown): ChatSignalFrame {
 
 function assertSignalKind(value: unknown): ChatSignalKind {
   if (
-    value === "peer_ready"
-    || value === "offer"
+    value === "offer"
     || value === "answer"
     || value === "ice"
     || value === "hangup"

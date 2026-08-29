@@ -4,7 +4,7 @@ import 'package:citizenapp/chat/chat_push_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 唤醒载荷按发件人身份主键 CID 号标识（Worker R5 口径）；下游 peer_ready / 补发
+/// 唤醒载荷按发件人身份主键 CID 号标识（Worker R5 口径）；下游邮箱补拉与补发
 /// 一律按 CID 寻址，钱包账户 account_id 不进推送。
 const _senderCidNumber = 'CN220-CTZN2-100000001-2026';
 const _otherCidNumber = 'CN220-CTZN2-100000002-2026';
@@ -56,7 +56,8 @@ void main() {
       }),
       _senderCidNumber,
     );
-    const conversationId = 'dm:CN220-CTZN2-100000001-2026:CN220-CTZN2-100000002-2026';
+    const conversationId =
+        'dm:CN220-CTZN2-100000001-2026:CN220-CTZN2-100000002-2026';
     expect(
       ChatPushService.wakeSenderFromData(const {
         'kind': 'chat_wake',
@@ -153,8 +154,9 @@ void main() {
   });
 
   test('双端系统备份都排除设备侧聊天内容', () {
-    final androidManifest =
-        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    final androidManifest = File(
+      'android/app/src/main/AndroidManifest.xml',
+    ).readAsStringSync();
     final iosDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
     final chatIsar = File('lib/isar/chat_isar.dart').readAsStringSync();
 
@@ -164,7 +166,9 @@ void main() {
     expect(iosDelegate, contains('hasPrefix("citizenapp_chat")'));
     expect(iosDelegate, contains('case "excludeChatDataFromBackup"'));
     expect(
-        chatIsar, contains("invokeMethod<void>('excludeChatDataFromBackup')"));
+      chatIsar,
+      contains("invokeMethod<void>('excludeChatDataFromBackup')"),
+    );
   });
 
   test('推送端点缓存同时绑定服务类型、APNs 环境和 Token', () {
@@ -190,16 +194,23 @@ void main() {
     expect(fcm.registrationCacheValue, isNot(sandbox.registrationCacheValue));
   });
 
-  test('启动恢复和Token更新统一有界重试且先于邮箱补拉登记监听', () {
-    // 先监听 Token 更新再补拉邮箱，保证启动窗口内发生的端点变化不会丢失。
+  test('启动恢复先补拉邮箱且Token更新保持统一有界重试', () {
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
+    final socketConnect = runtime.indexOf('connectRealtime(');
     final tokenListener = runtime.indexOf('session.attachTokenSubscription');
-    final mailboxFetch = runtime.indexOf('await signalTransport.fetchMailbox()');
+    final mailboxFetch = runtime.indexOf(
+      'await signalContext.transport.fetchMailbox()',
+    );
 
     expect(runtime, contains('_ensurePushEndpointWithRetry'));
-    expect(runtime, contains('for (var attempt = 0; attempt < 3; attempt += 1)'));
+    expect(
+      runtime,
+      contains('for (var attempt = 0; attempt < 3; attempt += 1)'),
+    );
+    expect(mailboxFetch, greaterThanOrEqualTo(0));
+    expect(socketConnect, greaterThan(mailboxFetch));
     expect(tokenListener, greaterThanOrEqualTo(0));
-    expect(mailboxFetch, greaterThan(tokenListener));
+    expect(runtime, isNot(contains("'peer_ready'")));
   });
 
   test('后台连续唤醒会去重保存全部发送方', () async {

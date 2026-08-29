@@ -89,8 +89,9 @@ class ChatMailboxEnvelope {
     }
     final envelopeId = value['envelope_id'];
     final senderCidNumber = value['sender_cid_number'];
-    final recipientCidNumber =
-        realtime ? localCidNumber : value['recipient_cid_number'];
+    final recipientCidNumber = realtime
+        ? localCidNumber
+        : value['recipient_cid_number'];
     final conversationId = value['conversation_id'];
     final envelope = value['envelope'];
     final createdAtMillis = value['created_at_millis'];
@@ -243,7 +244,8 @@ class ChatCloudTransport implements ChatTransport {
 
   /// 读取被邀请设备的群聊公开包；读取不消费、不旋转，也不建立 WebRTC。
   Future<MlsKeyPackage> resolveGroupKeyPackage(
-      String recipientCidNumber) async {
+    String recipientCidNumber,
+  ) async {
     final response = await _postMap('/chat/groups/key-package/resolve', {
       'recipient_cid_number': recipientCidNumber,
     });
@@ -303,16 +305,18 @@ class ChatCloudTransport implements ChatTransport {
     if (value is! List<dynamic>) {
       throw const FormatException('Chat 邮箱响应不是数组');
     }
-    return value.map((item) {
-      if (item is! Map<String, dynamic>) {
-        throw const FormatException('Chat 邮箱条目不是对象');
-      }
-      return ChatMailboxEnvelope.fromJson(
-        item,
-        localCidNumber: localCidNumber,
-        realtime: false,
-      );
-    }).toList(growable: false);
+    return value
+        .map((item) {
+          if (item is! Map<String, dynamic>) {
+            throw const FormatException('Chat 邮箱条目不是对象');
+          }
+          return ChatMailboxEnvelope.fromJson(
+            item,
+            localCidNumber: localCidNumber,
+            realtime: false,
+          );
+        })
+        .toList(growable: false);
   }
 
   /// 只有密文已完成 OpenMLS 处理并写入本机数据库后才调用。
@@ -367,8 +371,9 @@ class ChatCloudTransport implements ChatTransport {
           ..headers.addAll(
             uploadHeaders.map((key, value) => MapEntry(key, value.toString())),
           );
-        final sending =
-            _httpClient.send(request).timeout(const Duration(hours: 6));
+        final sending = _httpClient
+            .send(request)
+            .timeout(const Duration(hours: 6));
         await request.sink.addStream(
           cipherFile.openRead(offset, offset + byteSize),
         );
@@ -601,8 +606,9 @@ class ChatCloudTransport implements ChatTransport {
     subscription = socket.listen(
       (event) {
         try {
-          final text =
-              event is List<int> ? utf8.decode(event) : event.toString();
+          final text = event is List<int>
+              ? utf8.decode(event)
+              : event.toString();
           final decoded = jsonDecode(text);
           if (decoded is! Map<String, dynamic>) {
             _recordRealtimeDiagnostic('chat_signal_message_invalid');
@@ -690,8 +696,9 @@ class ChatCloudTransport implements ChatTransport {
       var errorCode = '-';
       try {
         final decoded = jsonDecode(response.body);
-        final candidate =
-            decoded is Map<String, dynamic> ? decoded['error_code'] : null;
+        final candidate = decoded is Map<String, dynamic>
+            ? decoded['error_code']
+            : null;
         if (candidate is String &&
             RegExp(r'^[a-z0-9_]{1,64}$').hasMatch(candidate)) {
           errorCode = candidate;
@@ -802,8 +809,9 @@ Map<String, dynamic> _keyPackageToJson(MlsKeyPackage keyPackage) =>
       'device_id': keyPackage.deviceId,
       'device_public_key_hex': keyPackage.devicePublicKey,
       'key_package_id': keyPackage.keyPackageId,
-      'key_package':
-          base64Url.encode(keyPackage.keyPackageBytes).replaceAll('=', ''),
+      'key_package': base64Url
+          .encode(keyPackage.keyPackageBytes)
+          .replaceAll('=', ''),
       'cipher_suite': keyPackage.cipherSuite,
       'not_before': keyPackage.notBeforeMillis,
       'not_after': keyPackage.notAfterMillis,
@@ -878,8 +886,9 @@ Object? _decodeResponse(http.Response response) {
     throw const FormatException('CitizenServe 响应不是 JSON');
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
-    final error =
-        decoded is Map<String, dynamic> ? decoded : const <String, dynamic>{};
+    final error = decoded is Map<String, dynamic>
+        ? decoded
+        : const <String, dynamic>{};
     throw ChatCloudException(
       statusCode: response.statusCode,
       errorCode: (error['error_code'] ?? 'chat_request_failed').toString(),
@@ -897,12 +906,12 @@ Object? _decodeResponse(http.Response response) {
 }
 
 String _deliveryErrorCode(Object error) => switch (error) {
-      ChatCloudException(:final errorCode) => errorCode,
-      TimeoutException() => 'chat_request_timeout',
-      SocketException() => 'chat_request_network_unavailable',
-      FormatException() => 'chat_response_invalid',
-      _ => 'chat_delivery_failed',
-    };
+  ChatCloudException(:final errorCode) => errorCode,
+  TimeoutException() => 'chat_request_timeout',
+  SocketException() => 'chat_request_network_unavailable',
+  FormatException() => 'chat_response_invalid',
+  _ => 'chat_delivery_failed',
+};
 
 List<String> _iceUrls(Object? value, Set<String> schemes) {
   if (value is! List<dynamic>) throw const FormatException('Chat ICE URL 不合法');
@@ -922,8 +931,6 @@ void _validateSignal(Map<String, Object?> signal) {
   final signalKind = signal['signal_kind'];
   final expected = <String>{'signal_kind'};
   switch (signalKind) {
-    case 'peer_ready':
-      break;
     case 'offer':
     case 'answer':
       expected.addAll(const {'connection_id', 'sdp', 'sdp_type'});

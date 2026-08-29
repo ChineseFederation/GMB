@@ -357,7 +357,7 @@ describe("device-only Chat control plane", () => {
     expect(() => assertChatSignalFrame({
       type: CHAT_SIGNAL_TYPE,
       recipient_cid_number: RECIPIENT_CID,
-      signal: { kind: "peer_ready" },
+      signal: { kind: "offer" },
     })).toThrow("信令类型不合法");
   });
 
@@ -487,7 +487,8 @@ describe("device-only Chat control plane", () => {
       assertChatSignalFrame({
         type: CHAT_SIGNAL_TYPE,
         recipient_cid_number: RECIPIENT_CID,
-        signal_kind: "peer_ready",
+        signal_kind: "hangup",
+        connection_id: "media-12345678",
       }),
     );
     expect(state).toBe("unavailable");
@@ -538,7 +539,8 @@ describe("device-only Chat control plane", () => {
       recipient_cid_number: RECIPIENT_CID,
       recipient_device_id: null,
       sender_device_id: "alice-phone",
-      signal_kind: "peer_ready",
+      signal_kind: "hangup",
+      connection_id: "media-12345678",
     });
     expect(sent).toBe(1);
     expect(routedName).toBe(RECIPIENT_CID);

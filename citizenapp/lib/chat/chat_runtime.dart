@@ -55,10 +55,10 @@ typedef MlsStateStoreFactory = Future<MlsStateStore> Function(
 /// Documents 根下持久擦除门闩的启动态。
 enum ChatPersistentWipeState { none, pending, complete }
 
-/// 系统推送唤醒后的短时后台收发窗口。
+/// 系统推送唤醒后的短时后台收件窗口。
 ///
-/// Cloudflare 不代存消息，因此接收设备被唤醒后必须主动建立瞬时连接。若发送设备
-/// 此刻离线，`peer_ready` 会反向唤醒发送设备，由其本机队列继续投递。
+/// CitizenServe 已持久保存端到端加密信封；推送只提示本机立即补拉邮箱。普通消息
+/// 禁止等待 WSS、WebRTC 或发送设备在线，失败信封保留到后续补拉或原七天 TTL。
 @pragma('vm:entry-point')
 Future<void> chatRuntimeBackgroundHandler(RemoteMessage message) async {
   final sender = ChatPushService.wakeSenderFromData(message.data);
@@ -1580,13 +1580,13 @@ class ChatRuntime {
   final Future<Directory> Function() _documentsDirectoryProvider;
 
   /// 正在经 HTTPS 上传 R2 密文的媒体 attachmentId（初始发送或补发中），用于去重：
-  /// peer_ready 触发的补发不得对在途媒体再整块重传。
+  /// 启动、恢复前台或推送触发的补发不得对在途媒体再整块重传。
   final Set<String> _mediaBytesInFlight = {};
 
   /// WSS 在线帧与连接后补拉可能命中同一密文；进程内先按既有 envelope_id 去重，
   /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
-  final Set<String> _incomingConvergenceInFlight = <String>{};
+  final Set<String> _outgoingRetryInFlight = <String>{};
   final Set<String> _groupKeyPackagePublications = <String>{};
   final Map<String, Timer> _outboundRetryTimers = <String, Timer>{};
   final Map<String, int> _outboundRetryAttempts = <String, int>{};
@@ -2093,7 +2093,7 @@ class ChatRuntime {
     _accountContextKeys.clear();
     _mediaBytesInFlight.clear();
     _mailboxEnvelopeReceipts.clear();
-    _incomingConvergenceInFlight.clear();
+    _outgoingRetryInFlight.clear();
     _groupKeyPackagePublications.clear();
 
     final failures = <String>[];
@@ -4897,11 +4897,17 @@ class ChatRuntime {
     };
   }
 
-  /// 系统点击通知时直接收敛发送方；失败由AppShell持久保存，等待下一次WSS重连。
+  /// 系统点击通知时立即补拉密文邮箱；待发重试独立执行，不能阻塞收件。
   Future<void> handleWakeSender(String senderCidNumber) async {
     if (senderCidNumber.isEmpty) return;
-    final context = await _readyContext(await _readAccount());
-    await _convergeWithWakeSender(context, senderCidNumber);
+    final account = await _readAccount();
+    final context = await _readyContext(account);
+    await _consumeMailboxBatch(
+      account,
+      context.transport,
+      await context.transport.fetchMailbox(),
+    );
+    _scheduleOutgoingRetry(account, senderCidNumber);
   }
 
   Future<bool> _ensureRealtimeHubConnected(_ChatRealtimeHub hub) {
@@ -5056,16 +5062,7 @@ class ChatRuntime {
           try {
             await _runRuntimeOperation(() async {
               final type = message['type'];
-              if (type == 'citizen_chat_signal') {
-                final senderCidNumber = message['sender_cid_number'];
-                if (senderCidNumber is! String || senderCidNumber.isEmpty) {
-                  return;
-                }
-                await _readyContext(account);
-                if (message['signal_kind'] == 'peer_ready') {
-                  await retryOutgoing(recipientCidNumber: senderCidNumber);
-                }
-              } else if (type == 'citizen_chat_envelope') {
+              if (type == 'citizen_chat_envelope') {
                 await _consumeMailboxBatch(
                   account,
                   signalContext.transport,
@@ -5100,6 +5097,15 @@ class ChatRuntime {
       }
 
       session.ensureOpen();
+      // 普通消息的可靠真源是 CitizenServe 密文邮箱。必须在建立 WSS 之前补拉，
+      // 保证 WSS、WebRTC 或对端离线都不会阻塞通知对应的正文落库。
+      await _consumeMailboxBatch(
+        account,
+        signalContext.transport,
+        await signalContext.transport.fetchMailbox(),
+      );
+      _ensureActive();
+      session.ensureOpen();
       // 注册长寿命 socket callback 时不能处于 CID Zone；每次 callback 由 session
       // registry 跟踪，并在其内部显式取得 binding lease。
       final stopSocket = await signalContext.transport.connectRealtime(
@@ -5121,15 +5127,20 @@ class ChatRuntime {
       _ensureActive();
       session.ensureOpen();
 
-      Future<void> notifySenderReadyFromCallback(String sender) async {
+      Future<void> refreshMailboxFromCallback(String sender) async {
         await session.runCallback(() async {
           try {
             await _runRuntimeOperation(() async {
               final context = await _readyContext(account);
-              await _convergeWithWakeSender(context, sender);
+              await _consumeMailboxBatch(
+                account,
+                context.transport,
+                await context.transport.fetchMailbox(),
+              );
+              _scheduleOutgoingRetry(account, sender);
             });
           } catch (_) {
-            // 该 sender 仍由本机待发队列/下次推送驱动重试。
+            // 未 ACK 密文仍在 CitizenServe；下次推送、启动或恢复前台继续补拉。
           }
         });
       }
@@ -5152,27 +5163,18 @@ class ChatRuntime {
       }
 
       final pushSubscription = _pushService.wakeSenders.listen(
-        (sender) => unawaited(notifySenderReadyFromCallback(sender)),
+        (sender) => unawaited(refreshMailboxFromCallback(sender)),
       );
       session.attachWakeSubscription(pushSubscription.cancel);
       final pendingSenders = await _pushService.takePendingWakeSenders();
       _ensureActive();
       for (final sender in pendingSenders) {
-        final context = await _readyContext(account);
-        await _convergeWithWakeSender(context, sender);
-        _ensureActive();
+        _scheduleOutgoingRetry(account, sender);
       }
       final tokenSubscription = _pushService.tokenChanges.listen(
         (_) => unawaited(refreshPushFromCallback()),
       );
       session.attachTokenSubscription(tokenSubscription.cancel);
-      // Token 更新监听必须先于邮箱补拉登记；即使某条历史密文处理失败，iOS/Android
-      // 的新平台 Token 仍能立即重登，不能被邮箱积压阻断。
-      await _consumeMailboxBatch(
-        account,
-        signalTransport,
-        await signalTransport.fetchMailbox(),
-      );
       // Chat Tab 与后台唤醒保留账户级补发；具体聊天窗口已经按 conversationId
       // 独立重试，建连时不得再次串行扫描并发送整个账户的队列。
       if (retryOutgoingOnConnect) {
@@ -5223,29 +5225,6 @@ class ChatRuntime {
     );
   }
 
-  Future<bool> _sendRealtimeSignal(
-    _ChatAccount account, {
-    required String recipientCidNumber,
-    required Map<String, Object?> signal,
-  }) async {
-    final hub = _realtimeHubs[account.accountId];
-    if (hub == null ||
-        hub.closed ||
-        hub.account.cidNumber != account.cidNumber ||
-        hub.account.bindingRevision != account.bindingRevision) {
-      throw StateError('Chat 账户级 WSS 尚未启动');
-    }
-    if (hub.transport == null && hub.listeners.isNotEmpty) {
-      await _ensureRealtimeHubConnected(hub);
-    }
-    final transport = hub.transport;
-    if (transport == null) throw StateError('Chat 账户级 WSS 尚未连接');
-    return transport.sendSignal(
-      recipientCidNumber: recipientCidNumber,
-      signal: signal,
-    );
-  }
-
   Future<void> _consumeMailboxBatch(
     _ChatAccount account,
     ChatCloudTransport transport,
@@ -5293,55 +5272,26 @@ class ChatRuntime {
         return false;
       }
     }
-    if (processedNow) {
-      _scheduleIncomingConvergence(account, item.senderCidNumber);
-    }
+    if (processedNow) _scheduleOutgoingRetry(account, item.senderCidNumber);
     return true;
   }
 
-  /// 新密文完成本机验密落盘后，按发送方合并一次反向收敛。该任务不阻塞邮箱 ACK；
-  /// 重复 Envelope 只确认删除云端副本，不再次触发发送或形成 peer_ready 风暴。
-  void _scheduleIncomingConvergence(
-    _ChatAccount account,
-    String senderCidNumber,
-  ) {
+  /// 新密文落盘后仅按发送方合并重试本机待发队列。普通消息不发送实时信令，
+  /// 该任务不阻塞邮箱 ACK，重复 Envelope 只确认删除云端副本。
+  void _scheduleOutgoingRetry(_ChatAccount account, String senderCidNumber) {
     if (senderCidNumber.isEmpty) return;
     final key = '${account.accountId}|$senderCidNumber';
-    if (!_incomingConvergenceInFlight.add(key)) return;
+    if (!_outgoingRetryInFlight.add(key)) return;
     unawaited(
       _runRuntimeOperation(() async {
-        final current = await _readAccount(
-          expectedAccountId: account.accountId,
-        );
-        final context = await _readyContext(current);
-        await _convergeWithWakeSender(context, senderCidNumber);
+        await _readAccount(expectedAccountId: account.accountId);
+        await retryOutgoing(recipientCidNumber: senderCidNumber);
       }).catchError((Object _) {
-        // 本机可靠队列保留到下一次 WSS、推送或心跳收敛。
+        // 本机可靠队列保留到下一次推送、启动、恢复前台或发送调度。
       }).whenComplete(() {
-        _incomingConvergenceInFlight.remove(key);
+        _outgoingRetryInFlight.remove(key);
       }),
     );
-  }
-
-  /// 任一端收到无内容唤醒，都先发送peer_ready，再检查本机待发队列。
-  Future<void> _convergeWithWakeSender(
-    _ChatAccountContext context,
-    String senderCidNumber,
-  ) async {
-    if (senderCidNumber.isEmpty) return;
-    try {
-      await _runBindingFileMutation(
-        context.bindingToken,
-        () => _sendRealtimeSignal(
-          context.account,
-          recipientCidNumber: senderCidNumber,
-          signal: const <String, Object?>{'signal_kind': 'peer_ready'},
-        ),
-      );
-    } catch (_) {
-      // 反向信令失败仍检查本机队列，自己的Offer也可能直接连通对端。
-    }
-    await retryOutgoing(recipientCidNumber: senderCidNumber);
   }
 
   Future<_ChatAccountContext> _readyContext(
@@ -5368,10 +5318,7 @@ class ChatRuntime {
       // session 过期也必须走完整失效屏障：停实时回调、排空旧 CID action、关闭
       // crypto 后才允许同一 MlsStateStore 建立新上下文。
       await _invalidateAccountContext(account.accountId, keepBlocked: false);
-      return _readyContext(
-        account,
-        republishDeviceKey: republishDeviceKey,
-      );
+      return _readyContext(account, republishDeviceKey: republishDeviceKey);
     }
 
     final flightKey =

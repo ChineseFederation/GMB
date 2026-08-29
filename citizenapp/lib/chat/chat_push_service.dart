@@ -65,15 +65,16 @@ String requireApnsEnvironment(String? value) {
   throw StateError('iOS 应用签名缺少有效 APNs 环境');
 }
 
-/// 平台推送只负责唤醒本地重试，不承载消息、会话或附件内容。
+/// 平台推送只负责唤醒本机补拉密文邮箱，不承载消息、会话或附件内容。
 class ChatPushService {
   ChatPushService({
     MethodChannel? permissionsChannel,
     MethodChannel? notificationsChannel,
-  })  : _permissionsChannel =
-            permissionsChannel ?? const MethodChannel('citizenapp/permissions'),
-        _notificationsChannel = notificationsChannel ??
-            const MethodChannel('citizenapp/chat_notifications');
+  }) : _permissionsChannel =
+           permissionsChannel ?? const MethodChannel('citizenapp/permissions'),
+       _notificationsChannel =
+           notificationsChannel ??
+           const MethodChannel('citizenapp/chat_notifications');
 
   final MethodChannel _permissionsChannel;
   final MethodChannel _notificationsChannel;
@@ -94,10 +95,10 @@ class ChatPushService {
       // APNs alert 在前台默认不展示；用户未关闭通知时明确启用横幅和声音。
       await FirebaseMessaging.instance
           .setForegroundNotificationPresentationOptions(
-        alert: true,
-        badge: false,
-        sound: true,
-      );
+            alert: true,
+            badge: false,
+            sound: true,
+          );
     }
     _messageSubscription ??= FirebaseMessaging.onMessage.listen(_handleMessage);
     _tokenSubscription ??= FirebaseMessaging.instance.onTokenRefresh.listen((
@@ -208,7 +209,7 @@ class ChatPushService {
   /// 推送正文只能识别无内容唤醒，不接受消息或附件字段。
   ///
   /// 唤醒发件人以身份主键 CID 号（`sender_cid_number`）标识，与 Worker R5 对齐；
-  /// 下游 peer_ready / 补发一律按 CID 语义寻址。
+  /// 下游邮箱补拉与待发重试一律按 CID 语义寻址。
   static String? wakeSenderFromData(Map<String, dynamic> data) {
     if (data['kind'] != 'chat_wake' || (data.length != 2 && data.length != 3)) {
       return null;
