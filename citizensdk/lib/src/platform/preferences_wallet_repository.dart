@@ -7,7 +7,7 @@ import '../wallet/models.dart';
 import '../wallet/wallet_error.dart';
 import '../wallet/wallet_repository.dart';
 
-/// Minimal string preferences contract used by persistence adapters and tests.
+/// 持久化适配与测试使用的最小字符串 preferences 合同。
 abstract interface class PreferencesDataStore {
   Future<String?> getString(String key);
 
@@ -33,10 +33,12 @@ final class SharedPreferencesDataStore implements PreferencesDataStore {
   Future<void> remove(String key) => _preferences.remove(key);
 }
 
-/// Persists only wallet public facts and the crash-recovery cleanup plan.
+/// 只持久化钱包公开事实和崩溃恢复清理计划。
 ///
-/// Mutations across repository instances in the same Dart isolate are
-/// serialized and use the persisted revision as compare-and-swap.
+/// 同一 Dart isolate 内的所有仓储实例通过静态队列串行变更，并以
+/// 持久 revision 执行 compare-and-swap。SharedPreferences 不提供
+/// 跨 isolate 的 CAS；需要该范围的调用方必须注入具备更强原子合同
+/// 的数据存储。
 final class PreferencesWalletRepository implements WalletRepository {
   PreferencesWalletRepository({PreferencesDataStore? preferences})
     : _preferences = preferences ?? SharedPreferencesDataStore();
@@ -69,8 +71,40 @@ final class PreferencesWalletRepository implements WalletRepository {
       profile: profile,
       cleanup: cleanup,
     );
-    await _preferences.setString(storageKey, _encode(next));
-    return next;
+    final encoded = _encode(next);
+    Object? writeError;
+    StackTrace? writeStackTrace;
+    try {
+      await _preferences.setString(storageKey, encoded);
+    } on Object catch (error, stackTrace) {
+      // SharedPreferences 或平台通道可能先完成写入再报告错误；
+      // 最终结果只能由持久事实决定，不能由调用返回路径决定。
+      writeError = error;
+      writeStackTrace = stackTrace;
+    }
+
+    String? persistedRaw;
+    try {
+      persistedRaw = await _preferences.getString(storageKey);
+    } on Object catch (readError, readStackTrace) {
+      if (writeError != null) {
+        Error.throwWithStackTrace(writeError, writeStackTrace!);
+      }
+      Error.throwWithStackTrace(readError, readStackTrace);
+    }
+
+    if (persistedRaw != encoded) {
+      if (writeError != null) {
+        Error.throwWithStackTrace(writeError, writeStackTrace!);
+      }
+      // 写调用正常返回但完整回读不同，说明其它写者胜出或后端
+      // 违反写后可读合同。
+      throw const WalletRepositoryConflict();
+    }
+
+    // 返回精确持久字节的解码结果，而不是内存候选，禁止确认
+    // 畸形或截断写入。
+    return _decode(persistedRaw!);
   });
 
   Future<T> _serialize<T>(Future<T> Function() operation) {
@@ -80,7 +114,7 @@ final class PreferencesWalletRepository implements WalletRepository {
       try {
         await previous;
       } on Object {
-        // A prior operation must not permanently poison the queue.
+        // 前一次失败不能永久污染后续变更队列。
       }
       try {
         completer.complete(await operation());

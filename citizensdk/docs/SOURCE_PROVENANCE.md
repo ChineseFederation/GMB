@@ -1,5 +1,13 @@
 # 源码来源与同步策略
 
+## 当前复核状态
+
+2026-08-28 全面复核已经确认：轻节点 Dart 行为、交易执行结果、Cargo 锁文件和测试来源仍有
+未对齐项。除文末“第 10.1 步”钱包表已经按当前字节重新计算外，本文此前各阶段的目标哈希与
+“逐字节”描述只记录当时执行基线，不得解释为当前 CitizenSDK 已与 CitizenApp 完整一致，
+也不得作为当前构建通过证明。后续每个获准步骤必须重新计算对应来源与目标哈希，并在关闭
+该步骤时替换其历史表；在全部缺口关闭前，CitizenApp 仍保持不变。
+
 ## sr25519 初始基线
 
 本阶段从现有稳定实现逐字节导入以下文件：
@@ -15,7 +23,7 @@
 
 从本基线开始，`citizensdk/native/signer` 是 CitizenSDK 后续开发的内部权威来源；现有
 CitizenApp 与 CitizenWallet 仍继续使用 `shared/citizen-signer`，直到 SDK 稳定并另行批准
-迁移。过渡期不做自动双向同步，任何必须回补现有产品的安全修复都要单独列出文件、
+切换。当前不做自动双向同步，任何必须回补现有产品的安全修复都要单独列出文件、
 向用户申请许可，并用相同向量交叉验收。
 
 CitizenApp 正式切换 CitizenSDK 后，才可另行设计旧共享路径的退役步骤；本阶段不删除、
@@ -323,7 +331,7 @@ CitizenSDK 移动轻节点使用 `finalized_serialize` 的紧凑 finalized datab
 | `lib/wallet/core/native_sr25519.dart` `a5cd6943ba8cecb9191d0e4e2951910c41ec183680a8f2523632848713b3091b` | `lib/src/crypto/native_sr25519.dart` `2d38dccb8ad61c7f8dfea76d778fcf3ac21454ea85785284bd76e648eabce4eb` | 仅改内部 smoldot import、来源说明和格式 |
 | `shared/wallet-password/lib/wallet_mini_secret.dart` `0f57539411e42b6d3c57d960a01c2eb4121d8c0d181c50e8ec9a69ac864f55cf` | `lib/src/crypto/wallet_mini_secret.dart` `0ffed1efd9b91350895ef0830c5c69e6ed89afa617e8dc38d3f35e31584653d8` | 保留 substrate_bip39 实现，只清理“两款 App”注释 |
 | `shared/wallet-password/lib/wallet_password.dart` `17eb2a119068228f9463a86f31e6a6918f8a4bcaf95369ab94627aaf74ecaf64` | `lib/src/crypto/wallet_password.dart` `6e36f405a62829244f8550d848cb683c96a31eb23adaac0c776328eaebb7fa0a` | 只提取 password 校验/NFKD 核心，不迁入 Flutter 输入框和弹窗 |
-| `lib/wallet/core/secure_seed_store.dart` `5110f2fa4b18ede02ac5ba929a39fe3f01940861351cdff17cf5b49a69fb96f4` | `lib/src/wallet/secure_seed_store.dart` `28d0e0346a95a75bcde5849f9a9426a6054ee81f5549433374d282344701db79` | 保留 ROOTLESS 接口，补充幂等清理契约 |
+| `lib/wallet/core/secure_seed_store.dart` `5110f2fa4b18ede02ac5ba929a39fe3f01940861351cdff17cf5b49a69fb96f4` | `lib/src/wallet/secure_seed_store.dart` `44fbcc808eb3f074b25a72ec3d846e2d812378af6ea0c1820b78609a3f2c9aae` | 保留 ROOTLESS 接口，补充写后回读和幂等清理契约 |
 
 以下是行为提炼而非逐字节复制。来源文件同时包含 CitizenApp 单例、Isar、日志、身份、广场、
 聊天或服务端中继，因此不得整体迁入：
@@ -332,7 +340,7 @@ CitizenSDK 移动轻节点使用 `finalized_serialize` 的紧凑 finalized datab
 |---|---|
 | `lib/rpc/smoldot_client.dart` `8fb89f2facfd6f02b3086801e540149a61bea937cfd4bacec3afa2a5a52f772b` | `lib/src/node/light_client.dart` `351958b518ff7d6914fa62fde441cab87cc7dd0a9f1b8bab22388b48986cfd4c` |
 | `lib/rpc/chain_bootstrap_api.dart` `61a3f422cf8ae7fcada20d5f2f08e0857155b75c8fd69856fd8fba864d8be0bb` | `bootstrap_manifest.dart` `648cd16313e89b07a5abbd3492f5c5aebd68d7b3f860d4e11e0120a70fc9c09e`、`bootstrap_client.dart` `2bd2172ac2af63ad7f51df0eb12cd9f5303654ca57b1935ee7aa30755bbf0284`、`chain_assets.dart` `d2390c2b37dcbf9392d28c53c0752116ebb2f19b24ecaeda3788afe9c18f5086` |
-| `lib/wallet/core/wallet_manager.dart` `ec0e6fa1f0f97047ad54e37a6ac34c65e3626e405e557356a7ab43d0a2970f6c` | `lib/src/wallet/wallet_service.dart` `43234532103709ee0ec6f4d102547f76f928901eab78b2f3f0bc82cd3c6c8456` |
+| `lib/wallet/core/wallet_manager.dart` `ec0e6fa1f0f97047ad54e37a6ac34c65e3626e405e557356a7ab43d0a2970f6c` | `lib/src/wallet/wallet_service.dart` `ea6a0351bd622d7f2609ccf4742c5a4b01de4ac223b0b499a7597062322a9198` |
 | `lib/rpc/chain_rpc.dart` `0784269cb147bf482f8ae5f1460189f10bdb51c3ddfaa646561ae2d43c77c083` | `lib/src/transaction/chain_rpc.dart` `05b909f8625addfd98fbccce4811d0f8fa5049a3fa2b928f8fc62567d3f63b75` |
 | `lib/rpc/signed_extrinsic_builder.dart` `f9ab8664f37d065492458ac707c36abe8bec44f56ccc22c56ef34fc21ab3cba6` | `lib/src/transaction/signed_extrinsic_builder.dart` `f7b17c2371ecfc8814a313110ffa90de4a304055af3a954de878ea7560cd367a` |
 | `lib/rpc/transfer_rpc.dart` `f6be0c87763a68c24fbf0de8541f06997742b3c309784cfff386ab92f261c1cc` | `lib/src/transaction/transfer_service.dart` `173d7071affa6dc851ba6f47e438bb22754d9e209e244ff64ed85072c1b65e1e` |
@@ -354,23 +362,23 @@ revision CAS 仓储和可恢复清理计划，不迁入 Isar、公民身份、CI
 | `shared/hardware-secretvault/android/src/main/kotlin/org/gmb/hardware_secretvault/HardwareSecretvaultPlugin.kt` | `504d459cc3aef95c8a5b01023fed9c1b83325da540c7343d7b23c73a1b4bb321` | 保留 RSA-OAEP、AES-256-GCM、v1 信封、StrongBox/TEE 和逐次强生物识别 |
 | `shared/hardware-secretvault/android/src/test/kotlin/org/gmb/hardware_secretvault/HardwareSecretvaultPluginTest.kt` | `4467439ac571c374a898142ae87e29aecad95fc2d39be47b1b62ce53905ca58b` | 拆分为别名隔离与信封解析测试源码 |
 | `shared/hardware-secretvault/ios/Classes/HardwareSecretvaultPlugin.swift` | `9a04dd07ea72f2384debea4b6385a2bbd1e2e13ea837cee1eec7b6154c80c0a5` | 保留 Secure Enclave、ECIES、v1 信封和 `biometryCurrentSet + privateKeyUsage` |
-| `citizenapp/lib/wallet/core/hardware_bound_seed_vault.dart` | `56878e867c34e39bdeffe6329e1a0313731b4d0b5ff49cc2cee6b78226c4432d` | 保留 child-only 金库与错误映射，密文键和硬件产品固定为 SDK；不迁入旧产品兼容行为 |
+| `citizenapp/lib/wallet/core/hardware_bound_seed_vault.dart` | `56878e867c34e39bdeffe6329e1a0313731b4d0b5ff49cc2cee6b78226c4432d` | 保留 child-only 金库与错误映射，密文键和硬件产品固定为 SDK；不保留旧产品入口 |
 | `citizenapp/android/app/build.gradle.kts` | `7cfdd26e4f9b7743c168da339f692368db6da0bc1a4f76f4ac66c88ae3f4ae3b` | 继承 `CONSOLE_NATIVE_ANDROID_DIR` 与 ARM64-only 原生产物注入边界 |
 | `citizenapp/ios/smoldot/smoldot_ffi.podspec` | `b0fbaa7dd56235aa0ed1d56df5d92a703d602f7d69f90097f908c39f84692132` | 继承 `CONSOLE_NATIVE_IOS_DIR`、实抽符号清单、`-force_load` 和逐符号 `-u` |
 
 适配不是逐字节副本：Flutter 插件注册与安全实现被拆分，通道改为
 `citizen/sdk/hardware_secretvault`，硬件别名前缀、AAD 产品和原生命名空间都固定为
-`citizensdk`。CitizenSDK 不包含旧产品别名查询、解密、迁移或删除分支；宿主迁移必须在
-宿主切换步骤中独立完成。
+`citizensdk`。CitizenSDK 不包含旧产品别名查询、解密、转换或删除分支；宿主切换必须在
+该宿主步骤中独立完成。
 
-CitizenSDK 最终移动适配源码哈希如下：
+CitizenSDK 第 8 步关闭时记录的移动适配源码哈希如下（历史基线，非当前字节）：
 
 | CitizenSDK 文件 | SHA-256 |
 |---|---|
 | `lib/src/platform/hardware_secret_vault.dart` | `fe7b8d9d933f8763ee72cb645962dd0741e5626541407eae3f6b57b1b3ad10d7` |
-| `lib/src/platform/hardware_bound_seed_store.dart` | `c00625a3a3e11044c96c92547518c87dd6aa1f0d46a79a8d69f2498f4d77057a` |
+| `lib/src/platform/hardware_bound_seed_store.dart` | `b2a3c6111281e8fd11f9cd5a414992bd582475b9c24229da5a9b8afcb94b42a1` |
 | `lib/src/platform/secure_blob_store.dart` | `b9e1400f0652b9075974ab13b6de0a8014271d1178cce3dfc0e6c833e71948a8` |
-| `lib/src/platform/preferences_wallet_repository.dart` | `fd991ce9eee3d6045aae9b0ab0bb3dc8a8dc8793e35454f6cc89f4a074003e9d` |
+| `lib/src/platform/preferences_wallet_repository.dart` | `f41ff76d2f105c8e1d3e69168892e8dbcfe4d7763c7b04f5ec8193699f6dfa36` |
 | `lib/src/platform/preferences_chain_database_store.dart` | `dfd51e5089826708d3823e8f393c49b846d33509cd1eab979ca4f5bde5fe505e` |
 | `lib/src/platform/mobile_citizen_sdk.dart` | `b9b5b3913177ee258d09ea2346bf5191696773d35cc1fa72452497c99bc40220` |
 | `android/build.gradle` | `9776ede84feed4c064fa8f07c19a19a6d97e72218d111fd2920d9cc1dc5db8ea` |
@@ -387,15 +395,58 @@ CitizenSDK 最终移动适配源码哈希如下：
 ## 第 9.1 步：单一产品身份、Bootstrap 与依赖锁
 
 - Dart 金库上下文不再接收产品名，Android/iOS 不再接收除 `citizensdk` 之外的原生命名空间。
-- 删除 SDK 内旧金库迁移源码和测试；SDK 不读取、移动或删除任何宿主产品数据。
+- 删除 SDK 内旧金库源码和测试；SDK 不读取、移动或删除任何宿主产品数据。
 - SDK 只接受 `/chain/citizensdk/bootstrap` 返回的 `citizensdk.chain.bootstrap`，清单排除
   广场、聊天、媒体和宿主交易中继字段；现有宿主 bootstrap 保持独立。
 - GMB 根 Cargo workspace 明确排除 `citizensdk/**`，SDK 的 signer、FFI、PoW 三个 Rust
   workspace 和 Flutter 包分别保存独立锁文件。
 
-| 依赖锁文件 | SHA-256 |
+| 第 9.1 步关闭时的依赖锁文件（历史基线，非当前字节） | SHA-256 |
 |---|---|
 | `pubspec.lock` | `d71a06a3c9b899872e8f1ea28c4a871da02707e2f3ccb0a47a140d33d8465e06` |
 | `Cargo.lock` | `62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670` |
 | `native/smoldot/ffi/Cargo.lock` | `5b1500c074f6a0f1532fce665c1c95bb023f52d1e63206f36d80430c02e083a4` |
 | `native/smoldot/pow/Cargo.lock` | `f97e8c350e08d565623974d13dc34ad97a7a8e03a93508898873c78a8765895d` |
+
+## 第 10.1 步：钱包公开事实与本机秘密一致性
+
+本步骤没有修改 CitizenApp。CitizenSDK 继续以当前 CitizenApp 的稳定钱包行为为基线，精确
+复核并落实以下代码区域：
+
+- `citizenapp/lib/wallet/core/wallet_manager.dart:3015-3121`：创建热钱包先原子提交公开事实，
+  再写账户0 child，并在失败时进入完整回滚。
+- `citizenapp/lib/wallet/core/wallet_manager.dart:3240-3330`：写后复核公开事实、账户密文和
+  钱包 KEK；先逐项清除并回读秘密，全部确认不存在后才删除公开事实。
+- `citizenapp/lib/wallet/core/wallet_manager.dart:1198-1255`：追加账户在调用 `putAccountKey`
+  前登记当前 attempted AccountId，失败时清除本批秘密，清理失败则保留公开事实。
+- `citizenapp/lib/wallet/core/wallet_manager.dart:193-208`、`1872-1983`、`2043-2090`：聚合
+  清理错误、持久清理计划重放、继续尝试全部账户与钱包级秘密，并对每项删除回读。
+
+上述 CitizenApp 来源文件 SHA-256 仍为
+`ec0e6fa1f0f97047ad54e37a6ac34c65e3626e405e557356a7ab43d0a2970f6c`。
+CitizenSDK 没有复制 CitizenApp 的 Isar、CID、冷钱包、设备数据钥、广场、聊天或业务状态；
+它在既有 `WalletRepository` 与 `SecureSeedStore` 边界内落实同一钱包顺序与失败语义，因此
+这些 Dart 服务文件是行为对齐，不声明整文件逐字节相同。
+
+当前生产源码 SHA-256：
+
+| CitizenSDK 文件 | SHA-256 |
+|---|---|
+| `lib/src/wallet/wallet_service.dart` | `ea6a0351bd622d7f2609ccf4742c5a4b01de4ac223b0b499a7597062322a9198` |
+| `lib/src/wallet/wallet_error.dart` | `58afeaf234b1c6b7c18a75cf2c5a86f8206f1a51348965ce4d88ceb43247217b` |
+| `lib/src/wallet/wallet_repository.dart` | `6b11f013cd84cc218c588481c5e889269eefca31834172e042786f5bd8e89589` |
+| `lib/src/wallet/secure_seed_store.dart` | `44fbcc808eb3f074b25a72ec3d846e2d812378af6ea0c1820b78609a3f2c9aae` |
+| `lib/src/platform/preferences_wallet_repository.dart` | `f41ff76d2f105c8e1d3e69168892e8dbcfe4d7763c7b04f5ec8193699f6dfa36` |
+| `lib/src/platform/hardware_bound_seed_store.dart` | `b2a3c6111281e8fd11f9cd5a414992bd582475b9c24229da5a9b8afcb94b42a1` |
+
+当前测试源码 SHA-256：
+
+| CitizenSDK 文件 | SHA-256 |
+|---|---|
+| `test/wallet/wallet_service_test.dart` | `6cd2a5bc32ee2eeebc4c9707a875f2f805679d48cef5f9f13110b58c67b9db31` |
+| `test/wallet/secure_seed_store_contract_test.dart` | `1376d2addd8081566f454f7d211333ba80829b9231262c002df71f542fb8ebc7` |
+| `test/platform/preferences_wallet_repository_test.dart` | `adb689c3032dd3f5c2c4c401f2ca60ed6d42c99a71de9e7e597b7fd168d528a8` |
+| `test/platform/hardware_bound_seed_store_test.dart` | `054d2f47823aaa2fc8b7f427eae88e2804fd432be3158d87e3c574078c6b69c8` |
+
+本步骤只完成源码、注释、测试源码和文档的静态复核；依用户限制没有运行测试、编译、CI、
+Release 或 Git。上表哈希记录当前字节，不构成运行通过证明。

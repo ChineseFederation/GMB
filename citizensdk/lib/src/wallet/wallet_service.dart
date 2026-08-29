@@ -28,7 +28,7 @@ final class WalletService {
   final WalletRepository _repository;
   final SecureSeedStore _seedStore;
   final DateTime Function() _clock;
-  Future<void> _mutationTail = Future<void>.value();
+  static Future<void> _mutationTail = Future<void>.value();
 
   Future<WalletProfile?> get profile async {
     final state = await _repository.load();
@@ -58,20 +58,30 @@ final class WalletService {
         derived.account,
         WalletOrigin.created,
       );
+      state = await _commitFacts(
+        expectedRevision: state.revision,
+        profile: profile,
+        cleanup: null,
+      );
+      final attemptedIds = <String>[derived.account.accountId];
       try {
         await _seedStore.putAccountKey(
           walletIndex: walletIndex,
           accountId: derived.account.accountId,
           childMiniSecret: derived.child,
         );
-        state = await _repository.commit(
-          expectedRevision: state.revision,
-          profile: profile,
-          cleanup: null,
+        await _verifyProvisionedFactsAndSecrets(
+          state,
+          attemptedIds,
         );
-      } on Object {
-        await _rollbackCreatedKeys(<String>[derived.account.accountId]);
-        rethrow;
+      } on Object catch (error, stackTrace) {
+        await _rollbackProvisioning(
+          committedState: state,
+          previousProfile: null,
+          attemptedAccountIds: attemptedIds,
+          deleteWalletKey: true,
+        );
+        Error.throwWithStackTrace(error, stackTrace);
       }
       return WalletCreationResult(profile: state.profile!, mnemonic: mnemonic);
     } finally {
@@ -91,20 +101,30 @@ final class WalletService {
             derived.account,
             WalletOrigin.imported,
           );
+          state = await _commitFacts(
+            expectedRevision: state.revision,
+            profile: profile,
+            cleanup: null,
+          );
+          final attemptedIds = <String>[derived.account.accountId];
           try {
             await _seedStore.putAccountKey(
               walletIndex: walletIndex,
               accountId: derived.account.accountId,
               childMiniSecret: derived.child,
             );
-            state = await _repository.commit(
-              expectedRevision: state.revision,
-              profile: profile,
-              cleanup: null,
+            await _verifyProvisionedFactsAndSecrets(
+              state,
+              attemptedIds,
             );
-          } on Object {
-            await _rollbackCreatedKeys(<String>[derived.account.accountId]);
-            rethrow;
+          } on Object catch (error, stackTrace) {
+            await _rollbackProvisioning(
+              committedState: state,
+              previousProfile: null,
+              attemptedAccountIds: attemptedIds,
+              deleteWalletKey: true,
+            );
+            Error.throwWithStackTrace(error, stackTrace);
           }
           return state.profile!;
         } finally {
@@ -145,32 +165,44 @@ final class WalletService {
     }
     final sorted = seen.toList()..sort();
     final derived = <_DerivedAccount>[];
-    final storedIds = <String>[];
     try {
       derived.addAll(await _deriveAccounts(normalized, password, sorted));
+      final added = derived
+          .map((entry) => entry.account)
+          .toList(growable: false);
+      final expandedProfile = profile.copyWith(
+        accounts: <WalletAccount>[...profile.accounts, ...added],
+      );
+      state = await _commitFacts(
+        expectedRevision: state.revision,
+        profile: expandedProfile,
+        cleanup: null,
+      );
+      final attemptedIds = <String>[];
       try {
         for (final item in derived) {
+          // 安全存储后端可能已写入密文才抛错；必须在调用前登记
+          // 当前账户。
+          attemptedIds.add(item.account.accountId);
           await _seedStore.putAccountKey(
             walletIndex: walletIndex,
             accountId: item.account.accountId,
             childMiniSecret: item.child,
           );
-          storedIds.add(item.account.accountId);
         }
-        final added = derived
-            .map((entry) => entry.account)
-            .toList(growable: false);
-        state = await _repository.commit(
-          expectedRevision: state.revision,
-          profile: profile.copyWith(
-            accounts: <WalletAccount>[...profile.accounts, ...added],
-          ),
-          cleanup: null,
+        await _verifyProvisionedFactsAndSecrets(
+          state,
+          attemptedIds,
         );
         return List<WalletAccount>.unmodifiable(added);
-      } on Object {
-        await _rollbackCreatedKeys(storedIds, deleteWalletKey: false);
-        rethrow;
+      } on Object catch (error, stackTrace) {
+        await _rollbackProvisioning(
+          committedState: state,
+          previousProfile: profile,
+          attemptedAccountIds: attemptedIds,
+          deleteWalletKey: false,
+        );
+        Error.throwWithStackTrace(error, stackTrace);
       }
     } finally {
       for (final item in derived) {
@@ -186,14 +218,15 @@ final class WalletService {
     if (profile.accountById(accountId) == null) {
       throw const WalletNotFound('未找到指定账户');
     }
-    await _repository.commit(
+    await _commitFacts(
       expectedRevision: state.revision,
       profile: profile.copyWith(activeAccountId: accountId),
       cleanup: null,
     );
   });
 
-  /// 用指定账户在本机签名任意协议载荷；TUYU v1 等上层协议可以复用此入口。
+  /// 用指定账户在本机签名任意协议载荷；TUYU v1 等上层协议可以
+  /// 复用此入口。
   Future<Uint8List> sign(String accountId, Uint8List payload) async {
     final state = await _repository.load();
     _validateState(state);
@@ -226,7 +259,9 @@ final class WalletService {
     if (account == null) throw const WalletNotFound('未找到指定账户');
     if (account.index == 0) {
       if (profile.accounts.length > 1) {
-        throw const WalletInvariantViolation('账户0 是钱包锚点，存在其它账户时不能单独删除');
+        throw const WalletInvariantViolation(
+          '账户0 是钱包锚点，存在其它账户时不能单独删除',
+        );
       }
       await _deleteWalletState(state, profile);
       return;
@@ -242,7 +277,7 @@ final class WalletService {
       accountIds: <String>[accountId],
       deleteWalletKey: false,
     );
-    state = await _repository.commit(
+    state = await _commitFacts(
       expectedRevision: state.revision,
       profile: profile.copyWith(
         activeAccountId: nextActive,
@@ -275,7 +310,7 @@ final class WalletService {
           .toList(growable: false),
       deleteWalletKey: true,
     );
-    final committed = await _repository.commit(
+    final committed = await _commitFacts(
       expectedRevision: state.revision,
       profile: null,
       cleanup: cleanup,
@@ -291,24 +326,38 @@ final class WalletService {
   }
 
   Future<WalletState> _finishCleanup(WalletState state) async {
-    final cleanup = state.cleanup;
-    if (cleanup == null) return state;
-    for (final accountId in cleanup.accountIds) {
-      await _seedStore.deleteAccountKey(
-        walletIndex: cleanup.walletIndex,
-        accountId: accountId,
-      );
+    final latest = await _repository.load();
+    _validateState(latest);
+    final cleanup = latest.cleanup;
+    if (cleanup == null) {
+      // 另一个执行者可能已经完成同一计划；只有删除后的公开事实
+      // 仍完全一致时才能收敛成功，禁止把随后创建或修改的钱包
+      // 误当成本次清理结果。
+      if (latest.revision > state.revision &&
+          _sameProfile(latest.profile, state.profile)) {
+        return latest;
+      }
+      throw const WalletRepositoryConflict();
     }
-    if (cleanup.deleteWalletKey) {
-      await _seedStore.deleteWalletKey(walletIndex: cleanup.walletIndex);
+    if (!_sameCleanup(cleanup, state.cleanup) ||
+        !_sameProfile(latest.profile, state.profile)) {
+      throw const WalletRepositoryConflict();
     }
-    final committed = await _repository.commit(
-      expectedRevision: state.revision,
-      profile: state.profile,
+
+    final failures = await _cleanupSecrets(
+      accountIds: cleanup.accountIds,
+      deleteWalletKey: cleanup.deleteWalletKey,
+    );
+    if (failures.isNotEmpty) {
+      // 删除后的公开事实与 cleanup plan 保持原样，供新实例幂等重放。
+      throw WalletLocalCleanupException(failures);
+    }
+
+    return _commitFacts(
+      expectedRevision: latest.revision,
+      profile: latest.profile,
       cleanup: null,
     );
-    _validateState(committed);
-    return committed;
   }
 
   Future<void> _requireSecureDevice() async {
@@ -411,8 +460,24 @@ final class WalletService {
     if (cleanup != null && cleanup.walletIndex != walletIndex) {
       throw const WalletInvariantViolation('钱包清理计划的 walletIndex 无效');
     }
+    if (cleanup != null) {
+      final cleanupAccountIds = <String>{};
+      if (cleanup.accountIds.isEmpty ||
+          cleanup.accountIds.any(
+            (accountId) =>
+                !isCitizenAccountId(accountId) ||
+                !cleanupAccountIds.add(accountId),
+          )) {
+        throw const WalletInvariantViolation('钱包清理计划账户无效或重复');
+      }
+    }
     final profile = state.profile;
-    if (profile == null) return;
+    if (profile == null) {
+      if (cleanup != null && !cleanup.deleteWalletKey) {
+        throw const WalletInvariantViolation('整钱包删除计划必须清理钱包硬件密钥');
+      }
+      return;
+    }
     if (profile.walletIndex != walletIndex || profile.accounts.isEmpty) {
       throw const WalletInvariantViolation('热钱包公开资料结构无效');
     }
@@ -436,32 +501,218 @@ final class WalletService {
     if (!accountIds.contains(profile.activeAccountId)) {
       throw const WalletInvariantViolation('钱包 activeAccountId 不存在');
     }
+    if (cleanup != null &&
+        (cleanup.deleteWalletKey || cleanup.accountIds.any(accountIds.contains))) {
+      throw const WalletInvariantViolation('钱包清理计划仍指向现存公开账户');
+    }
   }
 
-  Future<void> _rollbackCreatedKeys(
-    List<String> accountIds, {
-    bool deleteWalletKey = true,
-  }) async {
+  Future<void> _verifyProvisionedFactsAndSecrets(
+    WalletState expected,
+    List<String> accountIds,
+  ) async {
+    final persisted = await _repository.load();
+    _validateState(persisted);
+    if (persisted.revision != expected.revision ||
+        !_sameProfile(persisted.profile, expected.profile) ||
+        !_sameCleanup(persisted.cleanup, expected.cleanup)) {
+      throw const WalletRepositoryConflict();
+    }
     for (final accountId in accountIds) {
-      await _seedStore.deleteAccountKey(
-        walletIndex: walletIndex,
-        accountId: accountId,
+      if (!await _seedStore.hasAccountKey(accountId)) {
+        throw WalletInvariantViolation('账户私钥写入后复核失败：$accountId');
+      }
+    }
+    if (!await _seedStore.hasWalletKey(walletIndex: walletIndex)) {
+      throw const WalletInvariantViolation('钱包硬件密钥写入后复核失败');
+    }
+  }
+
+  Future<void> _rollbackProvisioning({
+    required WalletState committedState,
+    required WalletProfile? previousProfile,
+    required List<String> attemptedAccountIds,
+    required bool deleteWalletKey,
+  }) async {
+    final failures = await _cleanupSecrets(
+      accountIds: attemptedAccountIds,
+      deleteWalletKey: deleteWalletKey,
+    );
+    if (failures.isNotEmpty) {
+      // 只有秘密全部确认不存在后才允许删除公开事实；否则保留
+      // 精确账户索引。
+      throw WalletLocalCleanupException(failures);
+    }
+
+    final persisted = await _repository.load();
+    _validateState(persisted);
+    if (persisted.revision != committedState.revision ||
+        !_sameProfile(persisted.profile, committedState.profile) ||
+        !_sameCleanup(persisted.cleanup, committedState.cleanup)) {
+      throw const WalletRepositoryConflict();
+    }
+    await _commitFacts(
+      expectedRevision: persisted.revision,
+      profile: previousProfile,
+      cleanup: null,
+    );
+  }
+
+  Future<List<String>> _cleanupSecrets({
+    required Iterable<String> accountIds,
+    required bool deleteWalletKey,
+  }) async {
+    final failures = <String>[];
+    for (final accountId in accountIds) {
+      await _attemptCleanup(
+        failures,
+        '账户私钥($accountId)',
+        () => _seedStore.deleteAccountKey(
+          walletIndex: walletIndex,
+          accountId: accountId,
+        ),
+      );
+      await _attemptCleanup(
+        failures,
+        '账户私钥删除复核($accountId)',
+        () async {
+          if (await _seedStore.hasAccountKey(accountId)) {
+            throw StateError('密文仍存在');
+          }
+        },
       );
     }
     if (deleteWalletKey) {
-      await _seedStore.deleteWalletKey(walletIndex: walletIndex);
+      await _attemptCleanup(
+        failures,
+        '钱包硬件密钥($walletIndex)',
+        () => _seedStore.deleteWalletKey(walletIndex: walletIndex),
+      );
+      await _attemptCleanup(
+        failures,
+        '钱包硬件密钥删除复核($walletIndex)',
+        () async {
+          if (await _seedStore.hasWalletKey(walletIndex: walletIndex)) {
+            throw StateError('硬件密钥仍存在');
+          }
+        },
+      );
     }
+    return failures;
+  }
+
+  Future<void> _attemptCleanup(
+    List<String> failures,
+    String label,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } on Object catch (error) {
+      failures.add('$label：$error');
+    }
+  }
+
+  Future<WalletState> _commitFacts({
+    required int expectedRevision,
+    required WalletProfile? profile,
+    required WalletCleanupPlan? cleanup,
+  }) async {
+    Object? commitError;
+    StackTrace? commitStackTrace;
+    try {
+      await _repository.commit(
+        expectedRevision: expectedRevision,
+        profile: profile,
+        cleanup: cleanup,
+      );
+    } on Object catch (error, stackTrace) {
+      commitError = error;
+      commitStackTrace = stackTrace;
+    }
+
+    Object? readError;
+    StackTrace? readStackTrace;
+    WalletState? observed;
+    try {
+      observed = await _repository.load();
+      _validateState(observed);
+    } on Object catch (error, stackTrace) {
+      readError = error;
+      readStackTrace = stackTrace;
+    }
+    if (observed != null &&
+        observed.revision == expectedRevision + 1 &&
+        _sameProfile(observed.profile, profile) &&
+        _sameCleanup(observed.cleanup, cleanup)) {
+      // commit 正常返回与“真实写入后抛错”都只能由持久事实
+      // 精确回读确认。
+      return observed;
+    }
+
+    if (commitError != null) {
+      Error.throwWithStackTrace(commitError, commitStackTrace!);
+    }
+    if (readError != null) {
+      Error.throwWithStackTrace(readError, readStackTrace!);
+    }
+    throw const WalletInvariantViolation('钱包公开事实写入后复核失败');
+  }
+
+  bool _sameCleanup(WalletCleanupPlan? left, WalletCleanupPlan? right) {
+    if (identical(left, right)) return true;
+    if (left == null || right == null) return false;
+    if (left.walletIndex != right.walletIndex ||
+        left.deleteWalletKey != right.deleteWalletKey ||
+        left.accountIds.length != right.accountIds.length) {
+      return false;
+    }
+    for (var index = 0; index < left.accountIds.length; index++) {
+      if (left.accountIds[index] != right.accountIds[index]) return false;
+    }
+    return true;
+  }
+
+  bool _sameProfile(WalletProfile? left, WalletProfile? right) {
+    if (identical(left, right)) return true;
+    if (left == null || right == null) return false;
+    if (left.walletIndex != right.walletIndex ||
+        left.masterAccountId != right.masterAccountId ||
+        left.origin != right.origin ||
+        left.createdAtMillis != right.createdAtMillis ||
+        left.activeAccountId != right.activeAccountId ||
+        left.accounts.length != right.accounts.length) {
+      return false;
+    }
+    for (var index = 0; index < left.accounts.length; index++) {
+      final leftAccount = left.accounts[index];
+      final rightAccount = right.accounts[index];
+      if (leftAccount.index != rightAccount.index ||
+          leftAccount.accountId != rightAccount.accountId ||
+          leftAccount.ss58Address != rightAccount.ss58Address ||
+          leftAccount.name != rightAccount.name ||
+          leftAccount.createdAtMillis != rightAccount.createdAtMillis) {
+        return false;
+      }
+    }
+    return true;
   }
 
   Future<T> _serialize<T>(Future<T> Function() action) {
     final completer = Completer<T>();
-    _mutationTail = _mutationTail.then((_) async {
+    final previous = _mutationTail;
+    _mutationTail = () async {
+      try {
+        await previous;
+      } on Object {
+        // 先前失败不能永久污染全实例钱包变更队列。
+      }
       try {
         completer.complete(await action());
       } on Object catch (error, stackTrace) {
         completer.completeError(error, stackTrace);
       }
-    });
+    }();
     return completer.future;
   }
 }

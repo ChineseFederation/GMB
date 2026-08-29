@@ -23,15 +23,18 @@ Android 继续使用硬件 RSA-OAEP KEK 包装随机 AES-256-GCM DEK，KEK 必�
 ECIES，访问控制固定为 `biometryCurrentSet + privateKeyUsage` 和
 `WhenUnlockedThisDeviceOnly`。两个平台都只通过 Flutter 通道传输字节数组。
 
-硬件金库不存在旧产品兼容入口。Dart 不接收宿主产品名或密钥命名空间；Android/iOS 原生层
-只接受 `citizensdk`，硬件别名和 AAD 都由 SDK 固定生成。SDK 不读取、迁移或删除其它产品的
-密文和硬件密钥，未来任何产品迁移都必须在该产品切换步骤中单独设计和批准。
+硬件金库不存在旧产品入口。Dart 不接收宿主产品名或密钥命名空间；Android/iOS 原生层
+只接受 `citizensdk`，硬件别名和 AAD 都由 SDK 固定生成。SDK 不读取、转换或删除其它产品的
+密文和硬件密钥，未来任何产品切换都必须在该产品步骤中单独设计和批准。
 
 ## 当前阶段限制
 
-当前已形成 sr25519、轻节点编排、链头/共识验证、状态 trie、runtime、轻数据库、
-JSON-RPC、libp2p、网络、同步、交易池、Dart 公共层和无根钱包源码闭包，并已生成固定
-Dart/Rust 锁文件；尚未获准编译或运行测试，不能声明构建可用。
+当前目录已包含 sr25519、轻节点核心、Dart 编排、交易与无根钱包源码及锁文件，但全面复核
+已经确认：Dart 轻节点行为、交易执行结果、锁文件依赖闭包和测试来源仍未完成与 CitizenApp
+稳定实现的逐项对齐，必须按后续步骤继续修复，不能把当前目录描述成完整源码闭包。
+2026-08-28 的历史基线曾完成本机构建和已有测试；第 10.1 步又修改了钱包服务、仓储、安全
+存储及测试源码，依用户限制未运行测试或编译。因此历史结果既不证明与 CitizenApp 完整
+一致，也不证明当前字节已经通过，本轮不得声明完成构建验收。
 全节点 `identity` keystore、seed phrase 解析和 `author` 出块模块明确排除；保留的
 `identity::ss58` 只处理公开公钥地址，不接触私钥。SQLite 完整数据库保持上游源码和特性
 门控，移动轻节点使用 finalized database 序列化，不把它作为钱包存储。
@@ -46,14 +49,18 @@ libp2p Noise 私钥只用于单条连接的传输握手：由平台随机源按�
 - `WalletRepository` 只保存公开账户资料、revision 和待清理计划，禁止出现秘密字段。
 - `SecureSeedStore` 只保存 `//index` child mini-secret，读取必须由平台认证保护。
 - 创建返回的助记词不持久化；恢复和追加账户时只在派生作用域短暂使用。
-- 删除采用可恢复清理计划，安全金库删除接口必须幂等。
+- 创建、导入和追加先提交并回读公开事实，只有 CAS 胜者写秘密；写后必须回读账户密文和
+  钱包 KEK，失败时只有秘密全部确认不存在后才回滚公开事实。
+- 删除采用持久清理计划，安全金库删除接口必须幂等；全部账户 child 和钱包 KEK 都要尝试，
+  每项删除后回读，任一失败都保留计划。
+- 默认变更串行范围是同一 Dart isolate；SharedPreferences 不提供跨 isolate 或进程 CAS。
 - `WalletService.sign` 是任意协议载荷的唯一账户签名入口；调用方拿不到 child 私钥。
 - 公民链 extrinsic 固定实时 runtime nonce 与 immortal era，不提供远程 RPC 或服务器签名。
 
-Android/iOS 硬件金库源码已经迁入，但尚未编译、运行测试或完成签名 Release 真机验收，
-因此仍不能声明生产可用。SharedPreferences 只允许保存公开钱包事实与公开 finalized
-database；私钥材料只能保存为硬件金库密文，禁止用内存、普通文件、SharedPreferences
-或产品数据库模拟生产私钥存储。
+Android/iOS 硬件金库历史基线曾完成本机构建与合同测试，但尚未完成签名 Release 真机安全
+验收；第 10.1 步当前钱包字节也尚未重新执行测试或编译，因此仍不能声明生产可用。
+SharedPreferences 只允许保存公开钱包事实与公开 finalized database；私钥材料只能保存为
+硬件金库密文，禁止用内存、普通文件、SharedPreferences 或产品数据库模拟生产私钥存储。
 
 ## 构建与分发安全
 
