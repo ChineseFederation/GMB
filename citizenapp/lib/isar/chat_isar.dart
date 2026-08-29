@@ -10,7 +10,7 @@ part 'chat_isar.g.dart';
 
 /// Chat 会话本地索引。
 ///
-/// 聊天密文只允许在公民手机本地保存；Cloudflare 不接收 Envelope，WebRTC 与近场
+/// 永久聊天历史只允许在公民手机本地保存；CitizenServe 只接收七天 HPKE Envelope，WebRTC 与近场
 /// transport 只在设备间承载密文。本表负责会话列表首屏，不参与链上状态。
 @collection
 class ChatConversationEntity {
@@ -403,18 +403,18 @@ class ChatIsar {
   /// Chat 域的唯一 schema 清单；正常打开与终态擦除必须使用同一真源。
   static const List<CollectionSchema<dynamic>> _schemas =
       <CollectionSchema<dynamic>>[
-    ChatConversationEntitySchema,
-    ChatMessageEntitySchema,
-    ChatOutboundQueueEntitySchema,
-    ChatOutgoingMediaEntitySchema,
-    ChatPendingInboundEntitySchema,
-    ChatRouteCacheEntitySchema,
-    ChatGroupEntitySchema,
-    ChatGroupMemberEntitySchema,
-    ChatGroupPendingCommitEntitySchema,
-    ChatAccountHandoverEntitySchema,
-    ChatBindingFenceEntitySchema,
-  ];
+        ChatConversationEntitySchema,
+        ChatMessageEntitySchema,
+        ChatOutboundQueueEntitySchema,
+        ChatOutgoingMediaEntitySchema,
+        ChatPendingInboundEntitySchema,
+        ChatRouteCacheEntitySchema,
+        ChatGroupEntitySchema,
+        ChatGroupMemberEntitySchema,
+        ChatGroupPendingCommitEntitySchema,
+        ChatAccountHandoverEntitySchema,
+        ChatBindingFenceEntitySchema,
+      ];
 
   bool get hasActiveOperation => _operationActive;
 
@@ -469,9 +469,7 @@ class ChatIsar {
 
   Future<T> _enqueue<T>(Future<T> Function() action) {
     if (identical(Zone.current[_operationZoneKey], this)) {
-      throw StateError(
-        '禁止在 ChatIsar 操作回调内再次进入 ChatIsar；请先返回快照，再执行后续工作。',
-      );
+      throw StateError('禁止在 ChatIsar 操作回调内再次进入 ChatIsar；请先返回快照，再执行后续工作。');
     }
 
     _ensureActive();
@@ -544,8 +542,9 @@ class ChatIsar {
     }
 
     try {
-      final deleted =
-          await _deleteInstance(opened).timeout(_forcedDeleteTimeout);
+      final deleted = await _deleteInstance(
+        opened,
+      ).timeout(_forcedDeleteTimeout);
       if (!deleted) {
         throw StateError('Chat 数据库仍被其它实例持有，未实际关闭并删除。');
       }
@@ -616,8 +615,9 @@ class ChatIsar {
     }
   }
 
-  static const MethodChannel _securityChannel =
-      MethodChannel('citizenapp/security');
+  static const MethodChannel _securityChannel = MethodChannel(
+    'citizenapp/security',
+  );
 
   static Future<void> _excludeIosChatFilesFromBackup() async {
     if (!Platform.isIOS || IsarCoreBootstrap.isFlutterTest) return;
@@ -697,8 +697,9 @@ class ChatIsar {
       if (!candidate.isOpen) continue;
       deleteWasAttempted = true;
       try {
-        final deleted =
-            await _deleteInstance(candidate).timeout(_forcedDeleteTimeout);
+        final deleted = await _deleteInstance(
+          candidate,
+        ).timeout(_forcedDeleteTimeout);
         if (!deleted) {
           failures.add('Chat 数据库仍被其它实例持有，未实际关闭并删除。');
         }

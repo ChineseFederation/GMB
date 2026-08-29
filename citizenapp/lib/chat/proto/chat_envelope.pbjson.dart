@@ -117,32 +117,3 @@ final $typed_data.Uint8List chatEnvelopeDescriptor = $convert.base64Decode(
     'JGChBtbHNfbWVzc2FnZV9raW5kGAsgASgOMhwuZ21iLmNoYXQuTWxzV2lyZU1lc3NhZ2VLaW5k'
     'Ug5tbHNNZXNzYWdlS2luZBIhCgxyYXRjaGV0X3RyZWUYDCABKAxSC3JhdGNoZXRUcmVlSgQIAR'
     'AC');
-
-@$core.Deprecated('Use chatKeyPackageDescriptor instead')
-const ChatKeyPackage$json = {
-  '1': 'ChatKeyPackage',
-  '2': [
-    {'1': 'cid_number', '3': 2, '4': 1, '5': 9, '10': 'cidNumber'},
-    {'1': 'device_id', '3': 3, '4': 1, '5': 9, '10': 'deviceId'},
-    {'1': 'device_public_key', '3': 4, '4': 1, '5': 9, '10': 'devicePublicKey'},
-    {'1': 'key_package_id', '3': 5, '4': 1, '5': 9, '10': 'keyPackageId'},
-    {'1': 'key_package', '3': 6, '4': 1, '5': 12, '10': 'keyPackage'},
-    {'1': 'cipher_suite', '3': 7, '4': 1, '5': 9, '10': 'cipherSuite'},
-    {'1': 'not_before_millis', '3': 8, '4': 1, '5': 4, '10': 'notBeforeMillis'},
-    {'1': 'not_after_millis', '3': 9, '4': 1, '5': 4, '10': 'notAfterMillis'},
-    {'1': 'last_resort', '3': 10, '4': 1, '5': 8, '10': 'lastResort'},
-  ],
-  '9': [
-    {'1': 1, '2': 2},
-  ],
-};
-
-/// Descriptor for `ChatKeyPackage`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List chatKeyPackageDescriptor = $convert.base64Decode(
-    'Cg5DaGF0S2V5UGFja2FnZRIdCgpjaWRfbnVtYmVyGAIgASgJUgljaWROdW1iZXISGwoJZGV2aW'
-    'NlX2lkGAMgASgJUghkZXZpY2VJZBIqChFkZXZpY2VfcHVibGljX2tleRgEIAEoCVIPZGV2aWNl'
-    'UHVibGljS2V5EiQKDmtleV9wYWNrYWdlX2lkGAUgASgJUgxrZXlQYWNrYWdlSWQSHwoLa2V5X3'
-    'BhY2thZ2UYBiABKAxSCmtleVBhY2thZ2USIQoMY2lwaGVyX3N1aXRlGAcgASgJUgtjaXBoZXJT'
-    'dWl0ZRIqChFub3RfYmVmb3JlX21pbGxpcxgIIAEoBFIPbm90QmVmb3JlTWlsbGlzEigKEG5vdF'
-    '9hZnRlcl9taWxsaXMYCSABKARSDm5vdEFmdGVyTWlsbGlzEh8KC2xhc3RfcmVzb3J0GAogASgI'
-    'UgpsYXN0UmVzb3J0SgQIARAC');

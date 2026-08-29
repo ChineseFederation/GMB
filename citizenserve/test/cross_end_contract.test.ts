@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 // 跨端契约锁。
 //
-// Worker 承载系统唤醒、音视频通话信令、OpenMLS 公开 KeyPackage 和有界端到端密文邮箱。
+// Worker 承载系统唤醒、音视频通话信令、HPKE 设备公开钥和有界端到端密文邮箱。
 // 本文件直接读 Flutter 源码文本，锁住两端共享的控制字段，并确保明文、私钥与附件字节
 // 没有云端消息入口。
 //
@@ -19,7 +19,7 @@ function readFlutter(relativePath: string): string {
 describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
   const transport = readFlutter("lib/chat/transport/chat_cloud_transport.dart");
   const runtime = readFlutter("lib/chat/chat_runtime.dart");
-  const removedWebrtcKeyPackageTransport = join(
+  const removedWebrtcMessageTransport = join(
     FLUTTER_ROOT,
     "lib/chat/transport/chat_webrtc_transport.dart",
   );
@@ -48,12 +48,16 @@ describe("跨端 JSON 契约(Worker ⇔ Flutter 键名一致)", () => {
     expect(workerChat).toContain("assertEncodedChatEnvelope");
   });
 
-  it("OpenMLS 公开 KeyPackage 只经 HTTPS 发布和领取", () => {
-    expect(transport).toContain("'/chat/key-packages'");
-    expect(transport).toContain("'/chat/key-packages/claim'");
-    expect(runtime).toContain("context.transport.claimKeyPackage(targetCidNumber)");
-    expect(runtime).not.toContain("context.webrtc.requestKeyPackage");
-    expect(existsSync(removedWebrtcKeyPackageTransport)).toBe(false);
+  it("HPKE 设备公开钥只经 HTTPS 幂等登记和读取", () => {
+    expect(transport).toContain("'/chat/device-key'");
+    expect(transport).toContain("'/chat/device-key/resolve'");
+    expect(runtime).toContain("context.transport.resolveDeviceKey(");
+    expect(runtime).not.toContain("context.webrtc.requestMessageKey");
+    expect(runtime).not.toContain("claimKeyPackage(");
+    expect(transport).not.toContain("'/chat/key-packages");
+    expect(transport).toContain("'/chat/groups/key-package'");
+    expect(transport).toContain("'/chat/groups/key-package/resolve'");
+    expect(existsSync(removedWebrtcMessageTransport)).toBe(false);
   });
 
   it("WebRTC 信令按身份主键 recipient_cid_number 寻址", () => {
@@ -187,8 +191,8 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
     expect(routeCatalog).toContain("^\\/square\\/contacts$");
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
     expect(routeCatalog).toContain("^\\/chat\\/signals$");
-    expect(routeCatalog).toContain("^\\/chat\\/key-packages$");
-    expect(routeCatalog).toContain("^\\/chat\\/key-packages\\/claim$");
+    expect(routeCatalog).toContain("^\\/chat\\/device-key$");
+    expect(routeCatalog).toContain("^\\/chat\\/device-key\\/resolve$");
     expect(routeCatalog).toContain("^\\/chat\\/ice$");
     expect(routeCatalog).toContain("^\\/chat\\/messages$");
     expect(workerRoutes).not.toContain('request.method === "POST" && path === "/chat/signals"');

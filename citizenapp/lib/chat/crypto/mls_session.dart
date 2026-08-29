@@ -57,8 +57,8 @@ class MlsWireMessage {
 
   /// 转为 ChatEnvelope 外层信封。
   ///
-  /// OpenMLS wire bytes 和 ratchet tree 都是密文/协议字节，
-  /// Cloudflare 只在当前请求中转发，不解析也不保存其中内容。
+  /// 私信 HPKE wire bytes 与群聊 OpenMLS wire bytes 都是密文/协议字节，
+  /// CitizenServe 只保存七天密文邮箱，不解析其中内容。
   ChatEnvelope toEnvelope({
     required String envelopeId,
     required String senderCidNumber,
@@ -86,7 +86,7 @@ class MlsWireMessage {
 
 /// 一次发送产生的 MLS 输出。
 ///
-/// 首次会话会同时返回 Welcome 和 application；已有会话只返回 application。
+/// 私信始终只返回一个 HPKE application；群聊 OpenMLS 操作可另带 Welcome。
 class MlsOutboundMessage {
   const MlsOutboundMessage({
     required this.conversationId,

@@ -377,6 +377,11 @@ int smoldot_get_finalized_storage_values_async(SmoldotChainHandle chain_handle,
 char *citizen_chat_mls_create_key_package_json(const char *request_json, char **error_out);
 
 /**
+ * 读取或首次创建当前 CID/设备的 RFC 9180 HPKE 身份。
+ */
+char *citizen_chat_device_identity_json(const char *request_json, char **error_out);
+
+/**
  * 执行真实 OpenMLS 双人组 round-trip smoke。
  *
  * # Safety

@@ -62,6 +62,14 @@ class ChatDb {
       push_token: string;
       apns_environment: "sandbox" | "production" | null;
     }> = [],
+    readonly existingPushEndpoint: {
+      binding_revision: number;
+      account_id: string;
+      push_provider: "apns" | "fcm";
+      push_token: string;
+      apns_environment: "sandbox" | "production" | null;
+      expires_at: number;
+    } | null = null,
   ) {}
 
   prepare(sql: string): ChatStmt {
@@ -84,6 +92,12 @@ class ChatStmt {
   }
 
   async first<T>(): Promise<T | null> {
+    if (
+      this.sql.includes("SELECT binding_revision") &&
+      this.sql.includes("FROM chat_push_endpoints")
+    ) {
+      return this.db.existingPushEndpoint as T | null;
+    }
     if (this.sql.includes("FROM square_memberships")) {
       return {
         cid_number: this.values[0] as string,
@@ -256,6 +270,38 @@ describe("device-only Chat control plane", () => {
     expect(sql).toContain("COUNT(");
     expect(sql).not.toContain("chat_devices");
     expect(sql).not.toContain("device_public_key");
+  });
+
+  it("returns an unchanged push endpoint without any D1 write", async () => {
+    const expiresAt = Date.now() + 80 * 86_400_000;
+    const db = new ChatDb([], {
+      binding_revision: 1,
+      account_id: ACCOUNT_ID,
+      push_provider: "fcm",
+      push_token: "fcm-token-123456",
+      apns_environment: null,
+      expires_at: expiresAt,
+    });
+    const response = await registerChatPushEndpoint(
+      new Request("https://worker.test/chat/push-endpoint", {
+        method: "PUT",
+        headers: {
+          authorization: "Bearer test-session",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          device_id: "alice-phone",
+          push_provider: "fcm",
+          push_token: "fcm-token-123456",
+          expires_at: expiresAt,
+        }),
+      }),
+      fakeEnv(1, undefined, db),
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, expires_at: expiresAt });
+    expect(db.sql.some((sql) => /\b(?:DELETE|INSERT|UPDATE|REPLACE)\b/.test(sql))).toBe(false);
   });
 
   it("rejects a push endpoint lifetime longer than the unified 90 day limit", async () => {

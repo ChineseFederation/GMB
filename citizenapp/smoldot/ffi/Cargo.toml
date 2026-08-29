@@ -34,6 +34,8 @@ openmls_memory_storage = { version = "0.5.0", features = ["persistence"] }
 # MLS 本地状态(设备签名私钥 + 群 ratchet 秘密)落盘信封加密。
 # 用 RustCrypto 官方实现，禁止自造 AEAD。
 aes-gcm = "0.10"
+hpke-rs = { version = "0.6.1", features = ["rustcrypto", "std"] }
+hpke-rs-rust-crypto = { version = "0.6.1", features = ["std"] }
 base64 = "0.22"
 # sr25519 原生签名：全仓单一真源，与 CitizenWallet 冷端共用同一份源码。
 # 禁止在本 crate 内另写 sr25519 实现。

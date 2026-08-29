@@ -15,12 +15,15 @@ import {
 } from "./codec";
 import {
   acknowledgeChatEnvelopes,
-  claimStoredChatKeyPackage,
   readChatMailbox,
+  readStoredChatGroupKeyPackage,
+  readStoredChatDeviceKey,
   requireChatRealtimeNamespace,
-  storeChatKeyPackages,
+  storeChatDeviceKey,
+  storeChatGroupKeyPackage,
   storeChatEnvelope,
-  type ChatPublishedKeyPackage,
+  type ChatGroupKeyPackage,
+  type ChatPublishedDeviceKey,
 } from "./realtime";
 import { sendChatAlert } from "./push";
 import { resourceLimit } from "../limits/catalog";
@@ -39,51 +42,55 @@ interface RegisterPushEndpointRequest {
   expires_at?: unknown;
 }
 
-interface PublishChatKeyPackagesRequest {
-  normal?: unknown;
-  last_resort?: unknown;
+interface PublishChatDeviceKeyRequest {
+  device_id?: unknown;
+  device_public_key_hex?: unknown;
 }
 
-interface ClaimChatKeyPackageRequest {
+interface ResolveChatDeviceKeyRequest {
   recipient_cid_number?: unknown;
 }
 
-/** 上传当前设备一个普通包和一个 last-resort 包；两者都只有公开 wire bytes。 */
-export async function publishChatKeyPackages(
+interface PublishChatGroupKeyPackageRequest {
+  key_package?: unknown;
+}
+
+interface ResolveChatGroupKeyPackageRequest {
+  recipient_cid_number?: unknown;
+}
+
+/** 幂等登记当前认证设备唯一的 RFC 9180 HPKE 公开加密钥。 */
+export async function publishChatDeviceKey(
   request: Request,
   env: Env,
 ): Promise<Response> {
   const session = await requireSession(request, env);
   await requireActiveMembership(env, session.cid_number, session.account_id);
-  const body = await readJson<PublishChatKeyPackagesRequest>(request);
+  const body = await readJson<PublishChatDeviceKeyRequest>(request);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_key_package_fields", "Chat 公开密钥包字段不合法");
+    throw new HttpError(400, "invalid_chat_device_key_fields", "Chat 设备公开加密钥字段不合法");
   }
-  assertExactFields(body, ["last_resort", "normal"], "invalid_chat_key_package_fields");
-  const normal = assertPublishedKeyPackage(body.normal, false, session.cid_number);
-  const lastResort = assertPublishedKeyPackage(body.last_resort, true, session.cid_number);
-  if (
-    normal.device_id !== lastResort.device_id
-    || normal.device_public_key_hex !== lastResort.device_public_key_hex
-    || normal.key_package_id === lastResort.key_package_id
-  ) {
-    throw new HttpError(400, "chat_key_package_pair_invalid", "Chat 公开密钥包设备身份不一致");
-  }
-  await storeChatKeyPackages(env, session.cid_number, normal, lastResort);
+  assertExactFields(body, ["device_id", "device_public_key_hex"], "invalid_chat_device_key_fields");
+  const deviceKey: ChatPublishedDeviceKey = {
+    cid_number: session.cid_number,
+    device_id: assertDeviceId(body.device_id),
+    device_public_key_hex: assertDevicePublicKey(body.device_public_key_hex),
+  };
+  await storeChatDeviceKey(env, session.cid_number, deviceKey);
   return jsonResponse({ ok: true });
 }
 
-/** 领取接收设备公开包；发送方和接收方都必须具有当前有效会员。 */
-export async function claimChatKeyPackage(
+/** 读取接收 CID 当前认证设备公开加密钥；读取不消费、不旋转任何状态。 */
+export async function resolveChatDeviceKey(
   request: Request,
   env: Env,
 ): Promise<Response> {
   const session = await requireSession(request, env);
-  const body = await readJson<ClaimChatKeyPackageRequest>(request);
+  const body = await readJson<ResolveChatDeviceKeyRequest>(request);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_key_package_claim", "Chat 公开密钥包领取字段不合法");
+    throw new HttpError(400, "invalid_chat_device_key_resolve", "Chat 设备公开加密钥查询字段不合法");
   }
-  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_key_package_claim");
+  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_device_key_resolve");
   const recipientCidNumber = assertChatCidNumber(
     body.recipient_cid_number,
     "invalid_recipient_cid_number",
@@ -100,14 +107,62 @@ export async function claimChatKeyPackage(
   }
   return jsonResponse({
     ok: true,
-    key_package: await claimStoredChatKeyPackage(env, recipientCidNumber),
+    ...(await readStoredChatDeviceKey(env, recipientCidNumber)),
+  });
+}
+
+/** 发布一枚仅供 OpenMLS 群成员加入的 last-resort 公开包。 */
+export async function publishChatGroupKeyPackage(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const session = await requireSession(request, env);
+  await requireActiveMembership(env, session.cid_number, session.account_id);
+  const body = await readJson<PublishChatGroupKeyPackageRequest>(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "invalid_chat_group_key_package_fields", "群聊公开包字段不合法");
+  }
+  assertExactFields(body, ["key_package"], "invalid_chat_group_key_package_fields");
+  const keyPackage = assertGroupKeyPackage(body.key_package, session.cid_number);
+  await storeChatGroupKeyPackage(env, session.cid_number, keyPackage);
+  return jsonResponse({ ok: true });
+}
+
+/** 读取接收 CID 的群聊公开包；私聊链路不调用本接口。 */
+export async function resolveChatGroupKeyPackage(
+  request: Request,
+  env: Env,
+): Promise<Response> {
+  const session = await requireSession(request, env);
+  const body = await readJson<ResolveChatGroupKeyPackageRequest>(request);
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new HttpError(400, "invalid_chat_group_key_package_resolve", "群聊公开包查询字段不合法");
+  }
+  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_group_key_package_resolve");
+  const recipientCidNumber = assertChatCidNumber(
+    body.recipient_cid_number,
+    "invalid_recipient_cid_number",
+  );
+  await requireActiveMembership(env, session.cid_number, session.account_id);
+  const recipient = await readUserByCidNumber(env, recipientCidNumber);
+  if (!recipient) {
+    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法加入群聊");
+  }
+  try {
+    await requireActiveMembership(env, recipient.cid_number, recipient.account_id);
+  } catch {
+    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法加入群聊");
+  }
+  return jsonResponse({
+    ok: true,
+    key_package: await readStoredChatGroupKeyPackage(env, recipientCidNumber),
   });
 }
 
 /**
  * 幂等登记当前签名会话的操作系统推送端点。
  *
- * 推送端点不是聊天身份，也不保存 OpenMLS 公钥、KeyPackage 或消息信息。同一设备
+ * 推送端点不是聊天身份，也不保存聊天加密钥或消息信息。同一设备
  * Token 变化时直接覆盖；单 CID 设备数与有效期均由统一资源目录限制，禁止无界累积。
  */
 export async function registerChatPushEndpoint(
@@ -140,6 +195,40 @@ export async function registerChatPushEndpoint(
       "push_endpoint_ttl_exceeded",
       "Chat 推送端点有效期超过上限",
     );
+  }
+
+  const existing = await env.DB.prepare(
+    `SELECT binding_revision, account_id, push_provider, push_token,
+            apns_environment, expires_at
+       FROM chat_push_endpoints
+      WHERE cid_number = ? AND device_id = ?`,
+  )
+    .bind(session.cid_number, deviceId)
+    .first<{
+      binding_revision: number;
+      account_id: string;
+      push_provider: string;
+      push_token: string;
+      apns_environment: string | null;
+      expires_at: number;
+    }>();
+  const refreshFloor = current + Math.floor((endpointLimit.ttl_seconds ?? 1) * 1000 / 3);
+  if (
+    existing?.binding_revision === session.binding_revision
+    && existing.account_id === session.account_id
+    && existing.push_provider === pushProvider
+    && existing.push_token === pushToken
+    && existing.apns_environment === apnsEnvironment
+    && existing.expires_at > refreshFloor
+  ) {
+    return jsonResponse({
+      ok: true,
+      cid_number: session.cid_number,
+      device_id: deviceId,
+      push_provider: pushProvider,
+      apns_environment: apnsEnvironment,
+      expires_at: existing.expires_at,
+    });
   }
 
   const active = await env.DB.prepare(
@@ -378,67 +467,65 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
   }
 }
 
-function assertPublishedKeyPackage(
+function assertGroupKeyPackage(
   value: unknown,
-  expectedLastResort: boolean,
   expectedCidNumber: string,
-): ChatPublishedKeyPackage {
+): ChatGroupKeyPackage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "invalid_chat_key_package", "Chat 公开密钥包不合法");
+    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包不合法");
   }
   const raw = value as Record<string, unknown>;
   assertExactFields(raw, [
     "cid_number",
-    "cipher_suite",
     "device_id",
     "device_public_key_hex",
-    "key_package",
     "key_package_id",
-    "last_resort",
-    "not_after",
+    "key_package",
+    "cipher_suite",
     "not_before",
-  ], "invalid_chat_key_package");
-  const cidNumber = assertChatCidNumber(raw.cid_number, "invalid_chat_key_package_cid");
-  const deviceId = assertDeviceId(raw.device_id);
-  const devicePublicKey = raw.device_public_key_hex;
-  const keyPackageId = raw.key_package_id;
-  const keyPackage = raw.key_package;
-  const cipherSuite = raw.cipher_suite;
-  const notBefore = raw.not_before;
-  const notAfter = raw.not_after;
+    "not_after",
+    "last_resort",
+  ], "invalid_chat_group_key_package");
+  const cidNumber = assertChatCidNumber(raw.cid_number, "invalid_chat_group_key_package");
+  if (cidNumber !== expectedCidNumber) {
+    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包 CID 与当前会话不一致");
+  }
   if (
-    cidNumber !== expectedCidNumber
-    || typeof devicePublicKey !== "string"
-    || !/^[0-9a-fA-F]{64,512}$/.test(devicePublicKey)
-    || typeof keyPackageId !== "string"
-    || keyPackageId.length < 8
-    || keyPackageId.length > 256
-    || /[\u0000-\u001f\u007f]/.test(keyPackageId)
-    || typeof keyPackage !== "string"
-    || keyPackage.length < 4
-    || keyPackage.length > 48 * 1024
-    || !/^[A-Za-z0-9_-]+$/.test(keyPackage)
-    || typeof cipherSuite !== "string"
-    || !/^[A-Za-z0-9_]{8,128}$/.test(cipherSuite)
-    || !Number.isSafeInteger(notBefore)
-    || !Number.isSafeInteger(notAfter)
-    || (notBefore as number) >= nowMs()
-    || (notAfter as number) <= nowMs()
-    || raw.last_resort !== expectedLastResort
+    typeof raw.key_package_id !== "string"
+    || !/^kp-[0-9a-f]{24}$/.test(raw.key_package_id)
+    || typeof raw.key_package !== "string"
+    || raw.key_package.length === 0
+    || raw.key_package.length > 131_072
+    || !/^[A-Za-z0-9_-]+$/.test(raw.key_package)
+    || typeof raw.cipher_suite !== "string"
+    || raw.cipher_suite.length === 0
+    || raw.cipher_suite.length > 128
+    || !Number.isSafeInteger(raw.not_before)
+    || !Number.isSafeInteger(raw.not_after)
+    || (raw.not_before as number) >= (raw.not_after as number)
+    || (raw.not_after as number) <= nowMs()
+    || raw.last_resort !== true
   ) {
-    throw new HttpError(400, "invalid_chat_key_package", "Chat 公开密钥包不合法");
+    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包不合法");
   }
   return {
     cid_number: cidNumber,
-    device_id: deviceId,
-    device_public_key_hex: devicePublicKey,
-    key_package_id: keyPackageId,
-    key_package: keyPackage,
-    cipher_suite: cipherSuite,
-    not_before: notBefore as number,
-    not_after: notAfter as number,
-    last_resort: expectedLastResort,
+    device_id: assertDeviceId(raw.device_id),
+    device_public_key_hex: assertDevicePublicKey(raw.device_public_key_hex),
+    key_package_id: raw.key_package_id,
+    key_package: raw.key_package,
+    cipher_suite: raw.cipher_suite,
+    not_before: raw.not_before as number,
+    not_after: raw.not_after as number,
+    last_resort: true,
   };
+}
+
+function assertDevicePublicKey(value: unknown): string {
+  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
+    throw new HttpError(400, "invalid_chat_device_key", "Chat 设备公开加密钥不合法");
+  }
+  return value;
 }
 
 function assertExactFields(

@@ -3161,6 +3161,8 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
+ "hpke-rs",
+ "hpke-rs-rust-crypto",
  "jni",
  "libc",
  "log",

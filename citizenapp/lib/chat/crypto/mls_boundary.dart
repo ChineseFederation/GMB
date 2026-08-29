@@ -1,4 +1,4 @@
-// 公民 Chat 的 OpenMLS 边界模型。
+// 公民 Chat 的端到端加密边界模型。
 //
 // 本文件只定义 Dart 侧可测试的数据边界。真正的 OpenMLS 加解密由
 // Rust OpenMLS native 边界实现；这里禁止自研密码学。
@@ -10,7 +10,7 @@ import 'mls_session.dart';
 /// 本机 Chat 设备身份。
 ///
 /// `cidNumber` 是 Chat 永久身份主键；钱包账户只负责外层会话授权。
-/// Chat 设备私钥必须由 OpenMLS/安全存储独立生成并保存在本机。
+/// 私信 HPKE 私钥由本机按 CID/设备隔离的状态钥派生，不通过网络或单独落盘。
 class ChatDevice {
   const ChatDevice({
     required this.cidNumber,
@@ -84,15 +84,15 @@ class MlsKeyPackage {
   /// OpenMLS Lifetime 的 not_after，Unix 毫秒。
   final int notAfterMillis;
 
-  /// 是否含 RFC 9420 LastResort 扩展；当前设备直连按需交换使用普通包，
-  /// 不建立云端普通包/兜底包库存。
+  /// 是否含 RFC 9420 LastResort 扩展；仅供 OpenMLS 群成员加入。
+  /// 一对一聊天使用 HPKE 设备公钥，不使用 KeyPackage。
   final bool lastResort;
 
   /// OpenMLS FFI 使用的 KeyPackage 十六进制编码。
   String get keyPackageHex => _bytesToHex(keyPackageBytes);
 }
 
-/// OpenMLS FFI 边界接口。
+/// 私信使用设备静态公开加密钥和 RFC 9180 HPKE；群聊继续由 OpenMLS FFI 实现。
 ///
 /// 后续实现必须调用成熟 OpenMLS 库，不允许在 Dart 中自研加密协议。
 abstract class MlsCrypto {
@@ -110,7 +110,7 @@ abstract class MlsCrypto {
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
     required String recipientCidNumber,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required List<int> plaintext,
   });
 
@@ -140,7 +140,7 @@ class UnsupportedMlsCrypto implements MlsCrypto {
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
     required String recipientCidNumber,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) async {
     throw UnimplementedError('OpenMLS native 实现未注入');

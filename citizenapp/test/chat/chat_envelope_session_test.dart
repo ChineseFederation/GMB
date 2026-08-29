@@ -48,7 +48,7 @@ Future<ChatBindingFenceToken> _activateBinding(
 void main() {
   useIsolatedIsar();
 
-  test('MLS wire message 只写入目标 ChatEnvelope 字段', () {
+  test('端到端密文 wire message 只写入目标 ChatEnvelope 字段', () {
     const wire = MlsWireMessage(
       wireBytes: [0x01, 0x02],
       cipherSuite: 'MLS_128',
@@ -98,7 +98,7 @@ void main() {
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: 'hello bob',
     );
 
@@ -106,8 +106,11 @@ void main() {
       ownerCidNumber: _ownerCidNumber,
       bindingToken: bindingToken,
     );
-    expect(queued, hasLength(2));
-    expect(delivered.every((item) => item.ttlMillis == chatMailboxTtlMillis), isTrue);
+    expect(queued, hasLength(1));
+    expect(
+      delivered.every((item) => item.ttlMillis == chatMailboxTtlMillis),
+      isTrue,
+    );
     expect(
       queued.every((item) => item.recipientCidNumber == _bobCidNumber),
       isTrue,
@@ -154,7 +157,7 @@ void main() {
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: '本地先显示',
     );
 
@@ -169,15 +172,15 @@ void main() {
     expect(stored.single.plaintext, contains('本地先显示'));
 
     await scheduledDelivery!.call();
-    expect(deliveryCalls, 2, reason: 'Welcome 与 Application 仍按原顺序投递');
+    expect(deliveryCalls, 1, reason: '私信只投递一个 HPKE Application');
   });
 
-  test('首次会话只保存 Welcome 后重试，Application 不覆盖握手信封', () async {
+  test('HPKE Application 落库失败后重试复用同一待发送消息', () async {
     final store = _FailFirstApplicationStore();
     final bindingToken = await _activateBinding(store, _aliceAccountId);
-    const conversationId = 'conv-recover-after-welcome';
+    const conversationId = 'conv-recover-after-persist-failure';
     const pendingLocalMessageId =
-        'pending:conv-recover-after-welcome:1000:nonce';
+        'pending:conv-recover-after-persist-failure:1000:nonce';
     final payload = ChatPayloadCodec.encode(ChatContent.text('崩溃恢复'));
     await store.savePendingOutgoingMessage(
       bindingToken: bindingToken,
@@ -209,7 +212,7 @@ void main() {
         senderCidNumber: _ownerCidNumber,
         recipientCidNumber: _bobCidNumber,
         senderDeviceId: 'alice-phone',
-        recipientKeyPackage: _dummyKeyPackage(),
+        recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
         text: '崩溃恢复',
         pendingLocalMessageId: pendingLocalMessageId,
         createdAtMillis: 1000,
@@ -221,19 +224,14 @@ void main() {
       ownerCidNumber: _ownerCidNumber,
       conversationId: conversationId,
     );
-    expect(queued, hasLength(1));
-    expect(
-      imMlsWireMessageFromEnvelope(
-        ChatEnvelope.fromBuffer(queued.single.envelopeBytes),
-      ).messageKind,
-      MlsMessageKind.welcome,
-    );
+    expect(queued, isEmpty);
 
     await flow.sendText(
       conversationId: conversationId,
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: '崩溃恢复',
       pendingLocalMessageId: pendingLocalMessageId,
       createdAtMillis: 1000,
@@ -244,18 +242,16 @@ void main() {
       ownerCidNumber: _ownerCidNumber,
       conversationId: conversationId,
     );
-    expect(queued, hasLength(2));
-    expect(queued.map((item) => item.envelopeId).toSet(), hasLength(2));
+    expect(queued, hasLength(1));
     expect(
       queued
-          .map((item) => imMlsWireMessageFromEnvelope(
-                ChatEnvelope.fromBuffer(item.envelopeBytes),
-              ).messageKind)
+          .map(
+            (item) => imMlsWireMessageFromEnvelope(
+              ChatEnvelope.fromBuffer(item.envelopeBytes),
+            ).messageKind,
+          )
           .toList(),
-      <MlsMessageKind>[
-        MlsMessageKind.welcome,
-        MlsMessageKind.application,
-      ],
+      <MlsMessageKind>[MlsMessageKind.application],
     );
     expect(
       await store.readPendingOutgoingMessages(
@@ -268,14 +264,14 @@ void main() {
     );
   });
 
-  test('实时 callback 严格串行，Welcome 未完成前 Application 不会开始', () async {
-    final releaseWelcome = Completer<void>();
+  test('实时 callback 严格串行，前一密文未完成前后一密文不会开始', () async {
+    final releaseFirst = Completer<void>();
     final events = <String>[];
     final running =
         ChatRuntime.debugRunRealtimeCallbacksForTest(<Future<void> Function()>[
       () async {
         events.add('welcome-start');
-        await releaseWelcome.future;
+        await releaseFirst.future;
         events.add('welcome-end');
       },
       () async {
@@ -285,7 +281,7 @@ void main() {
 
     await Future<void>.delayed(Duration.zero);
     expect(events, <String>['welcome-start']);
-    releaseWelcome.complete();
+    releaseFirst.complete();
     await running;
     expect(events, <String>['welcome-start', 'welcome-end', 'application']);
   });
@@ -308,7 +304,7 @@ void main() {
       messageKind: MlsMessageKind.welcome,
       ratchetTreeBytes: [0x02],
     ).toEnvelope(
-      envelopeId: 'env-welcome',
+      envelopeId: 'env-first',
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
@@ -336,21 +332,16 @@ void main() {
       application.writeToBuffer(),
     );
 
-    expect(
-      ChatPayloadCodec.decode(result.plaintext!).text,
-      '设备直收',
-    );
-    expect(result.acceptedEnvelopes.map((item) => item.envelopeId),
-        <String>['env-app']);
+    expect(ChatPayloadCodec.decode(result.plaintext!).text, '设备直收');
+    expect(result.acceptedEnvelopes.map((item) => item.envelopeId), <String>[
+      'env-app',
+    ]);
     final messages = await ChatStore().readMessages(
       ownerCidNumber: _ownerCidNumber,
       currentAccountId: _bobAccountId,
       conversationId: 'conv-incoming',
     );
-    expect(
-      ChatPayloadCodec.decode(messages.single.plaintext!).text,
-      '设备直收',
-    );
+    expect(ChatPayloadCodec.decode(messages.single.plaintext!).text, '设备直收');
     expect(messages.single.direction, 'incoming');
     expect(
       await store.hasIncomingEnvelope(
@@ -425,10 +416,10 @@ void main() {
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: 'A 到 B',
     );
-    expect(toBob, hasLength(2), reason: '首次私聊必须按 Welcome、Application 顺序到达');
+    expect(toBob, hasLength(1), reason: '私信始终只生成一个 HPKE application 信封');
     for (final bytes in toBob) {
       await bobFlow.processIncomingEnvelopeBytes(bytes);
     }
@@ -438,9 +429,10 @@ void main() {
       senderCidNumber: _bobCidNumber,
       recipientCidNumber: _ownerCidNumber,
       senderDeviceId: 'bob-phone',
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: 'B 到 A',
     );
-    expect(toAlice, hasLength(1), reason: '已有 MLS 会话回复只产生 Application');
+    expect(toAlice, hasLength(1), reason: '回复同样只产生一个 HPKE Application');
     await aliceFlow.processIncomingEnvelopeBytes(toAlice.single);
 
     final aliceMessages = await aliceStore.readMessages(
@@ -454,40 +446,43 @@ void main() {
       conversationId: conversationId,
     );
     expect(
-      aliceMessages
-          .map((message) => ChatPayloadCodec.decode(message.plaintext!).text),
+      aliceMessages.map(
+        (message) => ChatPayloadCodec.decode(message.plaintext!).text,
+      ),
       ['A 到 B', 'B 到 A'],
     );
+    expect(aliceMessages.map((message) => message.direction), [
+      'outgoing',
+      'incoming',
+    ]);
     expect(
-      aliceMessages.map((message) => message.direction),
-      ['outgoing', 'incoming'],
-    );
-    expect(
-      bobMessages
-          .map((message) => ChatPayloadCodec.decode(message.plaintext!).text),
+      bobMessages.map(
+        (message) => ChatPayloadCodec.decode(message.plaintext!).text,
+      ),
       ['A 到 B', 'B 到 A'],
     );
-    expect(
-      bobMessages.map((message) => message.direction),
-      ['incoming', 'outgoing'],
-    );
+    expect(bobMessages.map((message) => message.direction), [
+      'incoming',
+      'outgoing',
+    ]);
   });
 
-test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
-  final content = ChatContent.media(
-    kind: ChatMessageKind.file,
-    attachmentId: 'attachment-cloud-1234',
-    fileName: 'note.txt',
-    mime: 'text/plain',
-    byteSize: 4,
-    cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    cipherByteSize: 24,
-    cipherSha256: '0000000000000000000000000000000000000000000000000000000000000000',
-  );
-  final decoded = ChatPayloadCodec.decode(ChatPayloadCodec.encode(content));
-  expect(decoded.attachmentId, 'attachment-cloud-1234');
-  expect(decoded.cipherByteSize, 24);
-});
+  test('普通媒体控制必须携带端到端密文内的 R2 解密信息', () {
+    final content = ChatContent.media(
+      kind: ChatMessageKind.file,
+      attachmentId: 'attachment-cloud-1234',
+      fileName: 'note.txt',
+      mime: 'text/plain',
+      byteSize: 4,
+      cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      cipherByteSize: 24,
+      cipherSha256:
+          '0000000000000000000000000000000000000000000000000000000000000000',
+    );
+    final decoded = ChatPayloadCodec.decode(ChatPayloadCodec.encode(content));
+    expect(decoded.attachmentId, 'attachment-cloud-1234');
+    expect(decoded.cipherByteSize, 24);
+  });
 
   test('downloadAttachment 拒绝非媒体控制消息', () async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-neg-');
@@ -523,7 +518,8 @@ test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
         byteSize: 10,
         cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         cipherByteSize: 30,
-        cipherSha256: '1111111111111111111111111111111111111111111111111111111111111111',
+        cipherSha256:
+            '1111111111111111111111111111111111111111111111111111111111111111',
       ),
     );
 
@@ -592,7 +588,8 @@ test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
         byteSize: 10,
         cipherKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
         cipherByteSize: 30,
-        cipherSha256: '2222222222222222222222222222222222222222222222222222222222222222',
+        cipherSha256:
+            '2222222222222222222222222222222222222222222222222222222222222222',
       ),
     );
 
@@ -692,14 +689,14 @@ test('普通媒体控制必须携带 OpenMLS 内的 R2 密文解密信息', () {
       senderCidNumber: _ownerCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
-      recipientKeyPackage: _dummyKeyPackage(),
+      recipientDevicePublicKey: _dummyRecipientDevicePublicKey,
       text: '不会继续重试的旧消息',
     );
     final queued = await store.readQueuedEnvelopes(
       bindingToken: bindingToken,
       ownerCidNumber: _ownerCidNumber,
     );
-    expect(queued, hasLength(2));
+    expect(queued, hasLength(1));
     for (final item in queued) {
       await store.markOutgoingDelivery(
         bindingToken: bindingToken,
@@ -748,32 +745,13 @@ class _FakeMlsCrypto implements MlsCrypto {
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
     required String recipientCidNumber,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) async {
-    if (!_ready.add(conversationId) && recipientKeyPackage == null) {
-      return MlsOutboundMessage(
-        conversationId: conversationId,
-        applicationMessage: MlsWireMessage(
-          wireBytes: plaintext,
-          cipherSuite: 'MLS_128',
-          conversationId: conversationId,
-          messageKind: MlsMessageKind.application,
-        ),
-      );
-    }
-    if (recipientKeyPackage == null) {
-      throw StateError('首次 MLS 会话必须提供对方 KeyPackage');
-    }
+    _ready.add(conversationId);
+    if (recipientDevicePublicKey.isEmpty) throw StateError('接收设备公钥不能为空');
     return MlsOutboundMessage(
       conversationId: conversationId,
-      welcomeMessage: MlsWireMessage(
-        wireBytes: const [1],
-        cipherSuite: 'MLS_128',
-        conversationId: conversationId,
-        messageKind: MlsMessageKind.welcome,
-        ratchetTreeBytes: const [2],
-      ),
       applicationMessage: MlsWireMessage(
         wireBytes: plaintext,
         cipherSuite: 'MLS_128',
@@ -796,9 +774,7 @@ class _FakeMlsCrypto implements MlsCrypto {
         messageKind: message.messageKind,
       );
     }
-    if (!_ready.contains(message.conversationId)) {
-      throw StateError('MLS group missing');
-    }
+    _ready.add(message.conversationId);
     return MlsInboundMessage(
       conversationId: message.conversationId,
       messageKind: message.messageKind,
@@ -826,7 +802,7 @@ class _FailFirstApplicationStore extends ChatStore {
   }) {
     if (_failNextApplication) {
       _failNextApplication = false;
-      throw StateError('模拟 Welcome 已落盘后 Application 写入中断');
+      throw StateError('模拟前一密文已落盘后后一密文写入中断');
     }
     return super.saveOutgoingEnvelope(
       bindingToken: bindingToken,
@@ -843,6 +819,9 @@ class _FailFirstApplicationStore extends ChatStore {
     );
   }
 }
+
+const String _dummyRecipientDevicePublicKey =
+    'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 MlsKeyPackage _dummyKeyPackage() => const MlsKeyPackage(
       cidNumber: _bobCidNumber,

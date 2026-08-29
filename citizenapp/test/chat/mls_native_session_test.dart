@@ -35,7 +35,7 @@ void main() {
 
   final skip = smoldotNativeSkipReason();
 
-  test('native 设备公钥以当前 CID 加密状态为唯一真源且不生成 KeyPackage', () async {
+  test('native HPKE 设备公钥以当前 CID 加密状态为唯一真源', () async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-identity-');
     addTearDown(() => root.delete(recursive: true));
     final store = MlsStateStore(
@@ -73,7 +73,7 @@ void main() {
   }, skip: skip);
 
   test(
-    'native OpenMLS creates, persists, and resumes a two-party session',
+    'native HPKE uses the recipient device key for every direct message',
     () async {
       final root = await Directory.systemTemp.createTemp('gmb-chat-native-');
       addTearDown(() => root.delete(recursive: true));
@@ -98,7 +98,7 @@ void main() {
         devicePublicKey: 'ddeeff',
       );
       final bobCrypto = NativeMlsCrypto(identity: bob, stateStore: bobStore);
-      final bobKeyPackage = await bobCrypto.createKeyPackage(bob);
+      final bobDevicePublicKey = await bobCrypto.readDevicePublicKey(bob);
       final aliceCrypto = NativeMlsCrypto(
         identity: alice,
         stateStore: aliceStore,
@@ -106,7 +106,7 @@ void main() {
       final first = await aliceCrypto.encrypt(
         conversationId: 'conv-alice-bob',
         recipientCidNumber: _bobCidNumber,
-        recipientKeyPackage: bobKeyPackage,
+        recipientDevicePublicKey: bobDevicePublicKey,
         plaintext: utf8.encode('第一条消息'),
       );
 
@@ -114,7 +114,7 @@ void main() {
         identity: bob,
         stateStore: bobStore,
       );
-      await bobAfterRestart.processIncoming(first.welcomeMessage!);
+      expect(first.welcomeMessage, isNull);
       expect(
         utf8.decode(await bobAfterRestart.decrypt(first.applicationMessage)),
         '第一条消息',
@@ -127,6 +127,7 @@ void main() {
       final second = await aliceAfterRestart.encrypt(
         conversationId: 'conv-alice-bob',
         recipientCidNumber: _bobCidNumber,
+        recipientDevicePublicKey: bobDevicePublicKey,
         plaintext: utf8.encode('重启后的第二条消息'),
       );
       expect(second.createdNewSession, isFalse);
@@ -138,7 +139,7 @@ void main() {
     skip: skip,
   );
 
-  test('native OpenMLS 密文经设备直连边界到达接收设备并落本机', () async {
+  test('native HPKE 密文经邮箱边界到达接收设备并落本机', () async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-direct-');
     addTearDown(() => root.delete(recursive: true));
     const alice = ChatDevice(
@@ -167,7 +168,7 @@ void main() {
         stateKey: _testStateKey,
       ),
     );
-    final keyPackage = await bobCrypto.createKeyPackage(bob);
+    final bobDevicePublicKey = await bobCrypto.readDevicePublicKey(bob);
     final relayed = <List<int>>[];
     final senderStore = ChatStore();
     final senderBindingToken = await senderStore.activateBindingFence(
@@ -199,10 +200,10 @@ void main() {
       senderCidNumber: _aliceCidNumber,
       recipientCidNumber: _bobCidNumber,
       senderDeviceId: 'alice-phone',
-      recipientKeyPackage: keyPackage,
+      recipientDevicePublicKey: bobDevicePublicKey,
       text: '瞬时直达',
     );
-    expect(relayed, hasLength(2));
+    expect(relayed, hasLength(1));
 
     await ChatIsar.instance.resetForTest();
     final receiverStore = ChatStore();

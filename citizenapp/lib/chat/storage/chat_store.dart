@@ -70,7 +70,7 @@ class ChatQueuedEnvelope {
 ///
 /// 它复用 [ChatMessageEntity] 的本机密文行，不增加第二套正文结构：
 /// `localMessageId` 以 `pending:` 开头、`envelopeBytesHex` 为空。取得
-/// KeyPackage 并生成正式 Envelope 后，Store 在写入正式消息的同一事务中删除本行。
+/// 解析接收设备公开钥并生成正式 HPKE Envelope 后，Store 在写入正式消息的同一事务中删除本行。
 class ChatPendingOutgoingMessage {
   const ChatPendingOutgoingMessage({
     required this.localMessageId,
@@ -195,22 +195,20 @@ class _ChatBindingMutationGate {
 /// 本仓库只保存手机本地状态。Cloudflare 瞬时转发和近场 transport 只拿到完整
 /// Protobuf envelope bytes，不会接触 [plaintext]。
 class ChatStore {
-  ChatStore({
-    ChatIsar? chatIsar,
-    ChatCrypto? crypto,
-  }) : this._(
-          chatIsar: chatIsar ?? ChatIsar.instance,
-          crypto: crypto ?? ChatCrypto(),
-          bindingMutationGate: _processBindingMutationGate,
-        );
+  ChatStore({ChatIsar? chatIsar, ChatCrypto? crypto})
+    : this._(
+        chatIsar: chatIsar ?? ChatIsar.instance,
+        crypto: crypto ?? ChatCrypto(),
+        bindingMutationGate: _processBindingMutationGate,
+      );
 
   ChatStore._({
     required ChatIsar chatIsar,
     required ChatCrypto crypto,
     required _ChatBindingMutationGate bindingMutationGate,
-  })  : _chatIsar = chatIsar,
-        _crypto = crypto,
-        _bindingMutationGate = bindingMutationGate;
+  }) : _chatIsar = chatIsar,
+       _crypto = crypto,
+       _bindingMutationGate = bindingMutationGate;
 
   /// 在同一 Flutter 测试 isolate 内模拟另一 isolate 的独立静态 gate。
   /// 两个 Store 仍共享 ChatIsar，底层事务顺序与生产环境保持一致。
@@ -254,8 +252,7 @@ class ChatStore {
   Future<T> _serializeBindingMutation<T>(
     String cidNumber,
     Future<T> Function() action,
-  ) =>
-      _bindingMutationGate.run(cidNumber, action);
+  ) => _bindingMutationGate.run(cidNumber, action);
 
   /// 首次激活一个 CID 的 Chat 写入门闩。
   ///
@@ -267,8 +264,9 @@ class ChatStore {
     binding.validate();
     return _serializeBindingMutation(binding.cidNumber, () {
       return _chatIsar.writeTxn((isar) async {
-        final existing = await isar.chatBindingFenceEntitys
-            .getByOwnerCidNumber(binding.cidNumber);
+        final existing = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+          binding.cidNumber,
+        );
         if (existing == null) {
           final row = ChatBindingFenceEntity()
             ..ownerCidNumber = binding.cidNumber
@@ -303,8 +301,9 @@ class ChatStore {
     current.validate();
     return _serializeBindingMutation(current.cidNumber, () {
       return _chatIsar.writeTxn((isar) async {
-        final row = await isar.chatBindingFenceEntitys
-            .getByOwnerCidNumber(current.cidNumber);
+        final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+          current.cidNumber,
+        );
         if (row == null) {
           final created = ChatBindingFenceEntity()
             ..ownerCidNumber = current.cidNumber
@@ -356,8 +355,9 @@ class ChatStore {
   ) async {
     binding.validate();
     return _chatIsar.read((isar) async {
-      final row = await isar.chatBindingFenceEntitys
-          .getByOwnerCidNumber(binding.cidNumber);
+      final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+        binding.cidNumber,
+      );
       if (row == null) {
         throw StateError('Chat 写入门闩尚未显式激活');
       }
@@ -370,9 +370,7 @@ class ChatStore {
   }
 
   /// 文件与 OpenMLS 边界在进入/退出跨 isolate 临界区时复核同一持久 token。
-  Future<void> validateBindingFenceToken(
-    ChatBindingFenceToken bindingToken,
-  ) {
+  Future<void> validateBindingFenceToken(ChatBindingFenceToken bindingToken) {
     return _chatIsar.read((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
     });
@@ -430,8 +428,9 @@ class ChatStore {
   }) async {
     _validateHandover(source, target);
     return _chatIsar.read((isar) async {
-      final row = await isar.chatBindingFenceEntitys
-          .getByOwnerCidNumber(target.cidNumber);
+      final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+        target.cidNumber,
+      );
       if (row == null) throw StateError('Chat 持久写入门闩缺失');
       _validateFence(row);
       if (!_isActiveCurrentFence(row, target) ||
@@ -452,8 +451,9 @@ class ChatStore {
     required bool requireNoPending,
   }) {
     return _chatIsar.read((isar) async {
-      final row = await isar.chatBindingFenceEntitys
-          .getByOwnerCidNumber(binding.cidNumber);
+      final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+        binding.cidNumber,
+      );
       if (row == null) throw StateError('Chat 持久写入门闩缺失');
       _validateFence(row);
       if (!_isActiveCurrentFence(row, binding) ||
@@ -469,8 +469,9 @@ class ChatStore {
     required AccountDataBinding target,
   }) {
     return _chatIsar.read((isar) async {
-      final row = await isar.chatBindingFenceEntitys
-          .getByOwnerCidNumber(source.cidNumber);
+      final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+        source.cidNumber,
+      );
       if (row == null) throw StateError('Chat 持久写入门闩缺失');
       _validateFence(row);
       if (!_isActiveCurrentFence(row, source) ||
@@ -484,14 +485,13 @@ class ChatStore {
   static ChatBindingFenceToken _tokenFromFence(
     ChatBindingFenceEntity row,
     AccountDataBinding binding,
-  ) =>
-      ChatBindingFenceToken(
-        ownerCidNumber: binding.cidNumber,
-        bindingRevision: binding.bindingRevision,
-        accountId: binding.accountId,
-        genesisHash: binding.genesisHash,
-        generation: row.generation,
-      );
+  ) => ChatBindingFenceToken(
+    ownerCidNumber: binding.cidNumber,
+    bindingRevision: binding.bindingRevision,
+    accountId: binding.accountId,
+    genesisHash: binding.genesisHash,
+    generation: row.generation,
+  );
 
   static int _nextFenceGeneration(int generation) {
     if (generation <= 0 || generation >= _maxFenceGeneration) {
@@ -548,8 +548,7 @@ class ChatStore {
   static bool _isActiveCurrentFence(
     ChatBindingFenceEntity row,
     AccountDataBinding binding,
-  ) =>
-      row.fenceState == _fenceActive && _isCurrentFenceBinding(row, binding);
+  ) => row.fenceState == _fenceActive && _isCurrentFenceBinding(row, binding);
 
   static void _validateFence(ChatBindingFenceEntity row) {
     final hasCurrentRevision = row.bindingRevision != null;
@@ -567,8 +566,9 @@ class ChatStore {
       row.completedTargetGenesisHash,
       row.completedGeneration,
     ];
-    final completedFieldCount =
-        completedFields.where((value) => value != null).length;
+    final completedFieldCount = completedFields
+        .where((value) => value != null)
+        .length;
     if (row.ownerCidNumber.isEmpty ||
         row.generation <= 0 ||
         row.generation > _maxFenceGeneration ||
@@ -599,10 +599,12 @@ class ChatStore {
                 row.completedTargetGenesisHash != row.genesisHash ||
                 row.completedSourceGenesisHash !=
                     row.completedTargetGenesisHash ||
-                !_genesisHashPattern
-                    .hasMatch(row.completedSourceGenesisHash!) ||
-                !_genesisHashPattern
-                    .hasMatch(row.completedTargetGenesisHash!) ||
+                !_genesisHashPattern.hasMatch(
+                  row.completedSourceGenesisHash!,
+                ) ||
+                !_genesisHashPattern.hasMatch(
+                  row.completedTargetGenesisHash!,
+                ) ||
                 row.completedTargetBindingRevision! <=
                     row.completedSourceBindingRevision! ||
                 row.completedGeneration != row.generation))) {
@@ -614,17 +616,19 @@ class ChatStore {
     Isar isar,
     ChatBindingFenceToken token,
   ) async {
-    final row = await isar.chatBindingFenceEntitys
-        .getByOwnerCidNumber(token.ownerCidNumber);
+    final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+      token.ownerCidNumber,
+    );
     if (row == null) throw StateError('Chat 持久写入门闩缺失');
     _validateFence(row);
-    final matchesCurrent = row.bindingRevision == token.bindingRevision &&
+    final matchesCurrent =
+        row.bindingRevision == token.bindingRevision &&
         row.accountId == token.accountId &&
         row.genesisHash == token.genesisHash;
     final matchesPending =
         row.pendingBindingRevision == token.bindingRevision &&
-            row.pendingAccountId == token.accountId &&
-            row.pendingGenesisHash == token.genesisHash;
+        row.pendingAccountId == token.accountId &&
+        row.pendingGenesisHash == token.genesisHash;
     if (row.fenceState != _fenceActive ||
         row.generation != token.generation ||
         _hasPendingFence(row) ||
@@ -641,8 +645,9 @@ class ChatStore {
     bool allowPending = false,
   }) async {
     final row = allowPending
-        ? await isar.chatBindingFenceEntitys
-            .getByOwnerCidNumber(token.ownerCidNumber)
+        ? await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+            token.ownerCidNumber,
+          )
         : await _requireBindingTokenInTxn(isar, token);
     if (row == null) throw StateError('Chat 持久写入门闩缺失');
     _validateFence(row);
@@ -662,8 +667,9 @@ class ChatStore {
     required AccountDataBinding source,
     required AccountDataBinding target,
   }) async {
-    final row = await isar.chatBindingFenceEntitys
-        .getByOwnerCidNumber(sourceToken.ownerCidNumber);
+    final row = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+      sourceToken.ownerCidNumber,
+    );
     if (row == null) throw StateError('Chat 持久写入门闩缺失');
     _validateFence(row);
     if (!_isActiveCurrentFence(row, source) ||
@@ -759,14 +765,13 @@ class ChatStore {
     required String conversationId,
     required String? plaintext,
     required ChatCipherBinding binding,
-  }) =>
-      _crypto.encryptText(
-        ownerCidNumber: ownerCidNumber,
-        currentAccountId: currentAccountId,
-        recordId: conversationId,
-        plaintext: _messageSummary(plaintext),
-        binding: binding,
-      );
+  }) => _crypto.encryptText(
+    ownerCidNumber: ownerCidNumber,
+    currentAccountId: currentAccountId,
+    recordId: conversationId,
+    plaintext: _messageSummary(plaintext),
+    binding: binding,
+  );
 
   /// 换绑交易提交前，把全部聊天正文、会话摘要和搜索索引预演成目标账户密文。
   ///
@@ -816,7 +821,7 @@ class ChatStore {
             }
             final row =
                 await isar.chatAccountHandoverEntitys.getByHandoverKey(key) ??
-                    ChatAccountHandoverEntity();
+                ChatAccountHandoverEntity();
             row
               ..handoverKey = key
               ..ownerCidNumber = target.cidNumber
@@ -855,9 +860,11 @@ class ChatStore {
       try {
         final targetKeys = await _crypto.handoverKeys(target);
         try {
-          for (var attempt = 0;
-              attempt < _handoverCommitMaxAttempts;
-              attempt += 1) {
+          for (
+            var attempt = 0;
+            attempt < _handoverCommitMaxAttempts;
+            attempt += 1
+          ) {
             final manifest = await _readValidatedHandoverManifest(
               key: key,
               source: source,
@@ -889,11 +896,13 @@ class ChatStore {
                   source: source,
                   target: target,
                 );
-                final currentManifest =
-                    await isar.chatAccountHandoverEntitys.getByHandoverKey(key);
+                final currentManifest = await isar.chatAccountHandoverEntitys
+                    .getByHandoverKey(key);
                 if (currentManifest != null) return false;
-                final currentSnapshot =
-                    await _readHandoverBindingSnapshotInTxn(isar, source);
+                final currentSnapshot = await _readHandoverBindingSnapshotInTxn(
+                  isar,
+                  source,
+                );
                 final currentTargetSnapshot =
                     await _readHandoverBindingSnapshotInTxn(isar, target);
                 return _isEmptyHandoverBindingSnapshot(currentSnapshot) &&
@@ -939,13 +948,15 @@ class ChatStore {
                 source: source,
                 target: target,
               );
-              final currentManifest =
-                  await isar.chatAccountHandoverEntitys.getByHandoverKey(key);
+              final currentManifest = await isar.chatAccountHandoverEntitys
+                  .getByHandoverKey(key);
               if (!_sameHandoverManifestRecord(currentManifest, manifest)) {
                 return false;
               }
-              final currentSnapshot =
-                  await _readHandoverBindingSnapshotInTxn(isar, source);
+              final currentSnapshot = await _readHandoverBindingSnapshotInTxn(
+                isar,
+                source,
+              );
               final currentTargetSnapshot =
                   await _readHandoverBindingSnapshotInTxn(isar, target);
               if (!_sameHandoverBindingSnapshot(snapshot, currentSnapshot) ||
@@ -965,21 +976,26 @@ class ChatStore {
               final conversationsToCommit =
                   <({ChatConversationEntity row, String targetCipher})>[];
               for (final item in prepared.conversations) {
-                final row =
-                    await isar.chatConversationEntitys.get(item.source.id);
+                final row = await isar.chatConversationEntitys.get(
+                  item.source.id,
+                );
                 if (row == null ||
                     !_sameConversationSource(item.source, row, source)) {
                   return false;
                 }
-                conversationsToCommit.add(
-                  (row: row, targetCipher: item.targetCipher),
-                );
+                conversationsToCommit.add((
+                  row: row,
+                  targetCipher: item.targetCipher,
+                ));
               }
-              final messagesToCommit = <({
-                ChatMessageEntity row,
-                String? targetCipher,
-                List<String> targetTokens,
-              })>[];
+              final messagesToCommit =
+                  <
+                    ({
+                      ChatMessageEntity row,
+                      String? targetCipher,
+                      List<String> targetTokens,
+                    })
+                  >[];
               for (final item in prepared.messages) {
                 final row = await isar.chatMessageEntitys.get(item.source.id);
                 if (row == null ||
@@ -1008,8 +1024,9 @@ class ChatStore {
                   ..accountId = target.accountId
                   ..plaintextCipher = item.targetCipher
                   ..searchTokens = item.targetTokens;
-                await isar.chatMessageEntitys
-                    .putByOwnerCidNumberEnvelopeId(item.row);
+                await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(
+                  item.row,
+                );
               }
               final completedGeneration = _nextFenceGeneration(
                 fence.generation,
@@ -1051,8 +1068,9 @@ class ChatStore {
     await _serializeBindingMutation(target.cidNumber, () async {
       final key = _handoverKey(target);
       await _chatIsar.writeTxn((isar) async {
-        final fence = await isar.chatBindingFenceEntitys
-            .getByOwnerCidNumber(target.cidNumber);
+        final fence = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+          target.cidNumber,
+        );
         if (fence == null) throw StateError('Chat 持久写入门闩缺失');
         _validateFence(fence);
         final row = await isar.chatAccountHandoverEntitys.getByHandoverKey(key);
@@ -1079,54 +1097,61 @@ class ChatStore {
 
   Future<_HandoverBindingSnapshot> _readHandoverBindingSnapshot(
     AccountDataBinding binding,
-  ) =>
-      _chatIsar.read(
-        (isar) => _readHandoverBindingSnapshotInTxn(isar, binding),
-      );
+  ) => _chatIsar.read(
+    (isar) => _readHandoverBindingSnapshotInTxn(isar, binding),
+  );
 
   static Future<_HandoverBindingSnapshot> _readHandoverBindingSnapshotInTxn(
     Isar isar,
     AccountDataBinding binding,
   ) async {
-    final conversationRows = (await isar.chatConversationEntitys
-            .filter()
-            .idGreaterThan(0, include: true)
-            .findAll())
-        .where((row) =>
-            row.ownerCidNumber == binding.cidNumber &&
-            row.bindingRevision == binding.bindingRevision &&
-            row.accountId == binding.accountId)
-        .toList(growable: false);
-    final messageRows = (await isar.chatMessageEntitys
-            .filter()
-            .idGreaterThan(0, include: true)
-            .findAll())
-        .where((row) =>
-            row.ownerCidNumber == binding.cidNumber &&
-            row.bindingRevision == binding.bindingRevision &&
-            row.accountId == binding.accountId)
-        .toList(growable: false);
-    final conversations = conversationRows
-        .map(
-          (row) => _HandoverConversationSource(
-            id: row.id,
-            conversationId: row.conversationId,
-            cipher: row.lastMessageCipher,
-          ),
-        )
-        .toList(growable: false)
-      ..sort((left, right) => left.id.compareTo(right.id));
-    final messages = messageRows
-        .map(
-          (row) => _HandoverMessageSource(
-            id: row.id,
-            envelopeId: row.envelopeId,
-            cipher: row.plaintextCipher,
-            tokens: List<String>.unmodifiable(row.searchTokens),
-          ),
-        )
-        .toList(growable: false)
-      ..sort((left, right) => left.id.compareTo(right.id));
+    final conversationRows =
+        (await isar.chatConversationEntitys
+                .filter()
+                .idGreaterThan(0, include: true)
+                .findAll())
+            .where(
+              (row) =>
+                  row.ownerCidNumber == binding.cidNumber &&
+                  row.bindingRevision == binding.bindingRevision &&
+                  row.accountId == binding.accountId,
+            )
+            .toList(growable: false);
+    final messageRows =
+        (await isar.chatMessageEntitys
+                .filter()
+                .idGreaterThan(0, include: true)
+                .findAll())
+            .where(
+              (row) =>
+                  row.ownerCidNumber == binding.cidNumber &&
+                  row.bindingRevision == binding.bindingRevision &&
+                  row.accountId == binding.accountId,
+            )
+            .toList(growable: false);
+    final conversations =
+        conversationRows
+            .map(
+              (row) => _HandoverConversationSource(
+                id: row.id,
+                conversationId: row.conversationId,
+                cipher: row.lastMessageCipher,
+              ),
+            )
+            .toList(growable: false)
+          ..sort((left, right) => left.id.compareTo(right.id));
+    final messages =
+        messageRows
+            .map(
+              (row) => _HandoverMessageSource(
+                id: row.id,
+                envelopeId: row.envelopeId,
+                cipher: row.plaintextCipher,
+                tokens: List<String>.unmodifiable(row.searchTokens),
+              ),
+            )
+            .toList(growable: false)
+          ..sort((left, right) => left.id.compareTo(right.id));
     return _HandoverBindingSnapshot(
       conversations: List<_HandoverConversationSource>.unmodifiable(
         conversations,
@@ -1137,8 +1162,7 @@ class ChatStore {
 
   static bool _isEmptyHandoverBindingSnapshot(
     _HandoverBindingSnapshot snapshot,
-  ) =>
-      snapshot.conversations.isEmpty && snapshot.messages.isEmpty;
+  ) => snapshot.conversations.isEmpty && snapshot.messages.isEmpty;
 
   /// 清单覆盖的旧行按 Isar 主键验真，不能只按当前 source/target 过滤结果判断。
   ///
@@ -1154,11 +1178,11 @@ class ChatStore {
   }) async {
     for (final identity in manifest.conversations) {
       var row = await isar.chatConversationEntitys.get(identity.id);
-      row ??=
-          await isar.chatConversationEntitys.getByOwnerCidNumberConversationId(
-        source.cidNumber,
-        identity.conversationId,
-      );
+      row ??= await isar.chatConversationEntitys
+          .getByOwnerCidNumberConversationId(
+            source.cidNumber,
+            identity.conversationId,
+          );
       if (row == null) continue;
       if (row.conversationId != identity.conversationId) {
         throw const FormatException('聊天换绑清单会话主键与稳定键不一致');
@@ -1226,10 +1250,7 @@ class ChatStore {
         throw StateError('聊天会话摘要新账户密文回读不一致');
       }
       conversations.add(
-        _PreparedHandoverConversation(
-          source: row,
-          targetCipher: targetCipher,
-        ),
+        _PreparedHandoverConversation(source: row, targetCipher: targetCipher),
       );
     }
 
@@ -1413,10 +1434,7 @@ class ChatStore {
   }) {
     final outer = jsonDecode(raw);
     if (outer is! Map<String, dynamic> ||
-        !_hasExactKeys(
-          outer,
-          const <String>{'payload_json', 'mac'},
-        )) {
+        !_hasExactKeys(outer, const <String>{'payload_json', 'mac'})) {
       throw const FormatException('聊天换绑交接清单顶层结构损坏');
     }
     final payloadJson = outer['payload_json'];
@@ -1430,10 +1448,12 @@ class ChatStore {
     }
     final value = jsonDecode(payloadJson);
     if (value is! Map<String, dynamic> ||
-        !_hasExactKeys(
-          value,
-          const <String>{'source', 'target', 'conversations', 'messages'},
-        )) {
+        !_hasExactKeys(value, const <String>{
+          'source',
+          'target',
+          'conversations',
+          'messages',
+        })) {
       throw const FormatException('聊天换绑交接清单载荷结构损坏');
     }
     final sourceValue = value['source'];
@@ -1467,15 +1487,12 @@ class ChatStore {
     final conversations = <_HandoverManifestConversationIdentity>[];
     for (final item in conversationValues) {
       if (item is! Map<String, dynamic> ||
-          !_hasExactKeys(
-            item,
-            const <String>{
-              'id',
-              'conversation_id',
-              'source_fingerprint',
-              'source_has_cipher',
-            },
-          )) {
+          !_hasExactKeys(item, const <String>{
+            'id',
+            'conversation_id',
+            'source_fingerprint',
+            'source_has_cipher',
+          })) {
         throw const FormatException('聊天会话交接项结构损坏');
       }
       final id = item['id'];
@@ -1519,15 +1536,12 @@ class ChatStore {
     final messages = <_HandoverManifestMessageIdentity>[];
     for (final item in messageValues) {
       if (item is! Map<String, dynamic> ||
-          !_hasExactKeys(
-            item,
-            const <String>{
-              'id',
-              'envelope_id',
-              'source_fingerprint',
-              'source_has_cipher',
-            },
-          )) {
+          !_hasExactKeys(item, const <String>{
+            'id',
+            'envelope_id',
+            'source_fingerprint',
+            'source_has_cipher',
+          })) {
         throw const FormatException('聊天消息交接项结构损坏');
       }
       final id = item['id'];
@@ -1581,28 +1595,32 @@ class ChatStore {
 
   static String _conversationSourceFingerprint(
     _HandoverConversationSource row,
-  ) =>
-      crypto.sha256
-          .convert(
-            utf8.encode(jsonEncode(<String, Object>{
-              'conversation_id': row.conversationId,
-              'cipher': row.cipher,
-            })),
-          )
-          .toString();
+  ) => crypto.sha256
+      .convert(
+        utf8.encode(
+          jsonEncode(<String, Object>{
+            'conversation_id': row.conversationId,
+            'cipher': row.cipher,
+          }),
+        ),
+      )
+      .toString();
 
-  static String _messageSourceFingerprint(_HandoverMessageSource row) =>
-      crypto.sha256
-          .convert(
-            utf8.encode(jsonEncode(<String, Object?>{
-              'envelope_id': row.envelopeId,
-              // null 与空串都是“无正文”，清单只保留一份规范化缺席指纹。
-              'cipher':
-                  row.cipher == null || row.cipher!.isEmpty ? null : row.cipher,
-              'tokens': row.tokens,
-            })),
-          )
-          .toString();
+  static String _messageSourceFingerprint(_HandoverMessageSource row) => crypto
+      .sha256
+      .convert(
+        utf8.encode(
+          jsonEncode(<String, Object?>{
+            'envelope_id': row.envelopeId,
+            // null 与空串都是“无正文”，清单只保留一份规范化缺席指纹。
+            'cipher': row.cipher == null || row.cipher!.isEmpty
+                ? null
+                : row.cipher,
+            'tokens': row.tokens,
+          }),
+        ),
+      )
+      .toString();
 
   static bool _constantTimeEquals(String left, String right) {
     if (left.length != right.length) return false;
@@ -1613,10 +1631,7 @@ class ChatStore {
     return difference == 0;
   }
 
-  static bool _hasExactKeys(
-    Map<String, dynamic> value,
-    Set<String> expected,
-  ) =>
+  static bool _hasExactKeys(Map<String, dynamic> value, Set<String> expected) =>
       value.length == expected.length &&
       value.keys.toSet().containsAll(expected);
 
@@ -1742,20 +1757,16 @@ class ChatStore {
   ) async {
     final cipher = row.plaintextCipher;
     if (cipher == null || cipher.isEmpty) return null;
-    return session.decryptText(
-      recordId: row.envelopeId,
-      blob: cipher,
-    );
+    return session.decryptText(recordId: row.envelopeId, blob: cipher);
   }
 
   Future<String> _openSummary(
     ChatConversationEntity row,
     ChatCipherSession session,
-  ) =>
-      session.decryptText(
-        recordId: row.conversationId,
-        blob: row.lastMessageCipher,
-      );
+  ) => session.decryptText(
+    recordId: row.conversationId,
+    blob: row.lastMessageCipher,
+  );
 
   Future<List<ChatConversationPreview>> readConversationPreviews({
     required String ownerCidNumber,
@@ -1780,9 +1791,11 @@ class ChatStore {
       currentAccountId: currentAccountId,
     );
     final rows = candidates
-        .where((row) =>
-            row.bindingRevision == binding.bindingRevision &&
-            row.accountId == binding.accountId)
+        .where(
+          (row) =>
+              row.bindingRevision == binding.bindingRevision &&
+              row.accountId == binding.accountId,
+        )
         .toList(growable: false);
     if (rows.isEmpty) {
       return const <ChatConversationPreview>[];
@@ -1796,10 +1809,9 @@ class ChatStore {
     try {
       final out = <ChatConversationPreview>[];
       for (final row in rows) {
-        out.add(_conversationPreviewFromEntity(
-          row,
-          await _openSummary(row, session),
-        ));
+        out.add(
+          _conversationPreviewFromEntity(row, await _openSummary(row, session)),
+        );
       }
       return List<ChatConversationPreview>.unmodifiable(out);
     } finally {
@@ -1813,10 +1825,11 @@ class ChatStore {
           .filter()
           .idGreaterThan(0, include: true)
           .findAll();
-      final owned = rows
-          .where((row) => row.ownerCidNumber == ownerCidNumber)
-          .toList(growable: false)
-        ..sort((a, b) => a.routeDisplayName.compareTo(b.routeDisplayName));
+      final owned =
+          rows
+              .where((row) => row.ownerCidNumber == ownerCidNumber)
+              .toList(growable: false)
+            ..sort((a, b) => a.routeDisplayName.compareTo(b.routeDisplayName));
       return owned.map(_routeFromEntity).toList(growable: false);
     });
   }
@@ -1826,11 +1839,8 @@ class ChatStore {
     String peerCidNumber,
   ) {
     return _chatIsar.read((isar) async {
-      final row =
-          await isar.chatRouteCacheEntitys.getByOwnerCidNumberPeerCidNumber(
-        ownerCidNumber,
-        peerCidNumber,
-      );
+      final row = await isar.chatRouteCacheEntitys
+          .getByOwnerCidNumberPeerCidNumber(ownerCidNumber, peerCidNumber);
       return row == null ? null : _routeFromEntity(row);
     });
   }
@@ -1847,11 +1857,11 @@ class ChatStore {
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
       final now = DateTime.now().millisecondsSinceEpoch;
-      final existing =
-          await isar.chatRouteCacheEntitys.getByOwnerCidNumberPeerCidNumber(
-        ownerCidNumber,
-        route.peerCidNumber,
-      );
+      final existing = await isar.chatRouteCacheEntitys
+          .getByOwnerCidNumberPeerCidNumber(
+            ownerCidNumber,
+            route.peerCidNumber,
+          );
       final entity = existing ?? ChatRouteCacheEntity();
       entity
         ..ownerCidNumber = ownerCidNumber
@@ -1891,12 +1901,15 @@ class ChatStore {
       ownerCidNumber: ownerCidNumber,
       currentAccountId: currentAccountId,
     );
-    final rows = conversationRows
-        .where((row) =>
-            row.bindingRevision == binding.bindingRevision &&
-            row.accountId == binding.accountId)
-        .toList(growable: false)
-      ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+    final rows =
+        conversationRows
+            .where(
+              (row) =>
+                  row.bindingRevision == binding.bindingRevision &&
+                  row.accountId == binding.accountId,
+            )
+            .toList(growable: false)
+          ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
     if (rows.isEmpty) return const <ChatStoredMessage>[];
 
     final session = await _crypto.openCipherSession(
@@ -1907,10 +1920,7 @@ class ChatStore {
     try {
       final out = <ChatStoredMessage>[];
       for (final row in rows) {
-        out.add(_messageFromEntity(
-          row,
-          await _openMessage(row, session),
-        ));
+        out.add(_messageFromEntity(row, await _openMessage(row, session)));
       }
       return List<ChatStoredMessage>.unmodifiable(out);
     } finally {
@@ -1947,12 +1957,15 @@ class ChatStore {
       ownerCidNumber: ownerCidNumber,
       currentAccountId: currentAccountId,
     );
-    final rows = conversationRows
-        .where((row) =>
-            row.bindingRevision == binding.bindingRevision &&
-            row.accountId == binding.accountId)
-        .toList(growable: false)
-      ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+    final rows =
+        conversationRows
+            .where(
+              (row) =>
+                  row.bindingRevision == binding.bindingRevision &&
+                  row.accountId == binding.accountId,
+            )
+            .toList(growable: false)
+          ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
     if (rows.isEmpty) {
       return const ChatMessageDisplayBatch(
         messages: <ChatStoredMessage>[],
@@ -2011,8 +2024,10 @@ class ChatStore {
     );
     return _chatIsar.read((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
-      final row = await isar.chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
+      final row = await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
+        ownerCidNumber,
+        envelopeId,
+      );
       return row != null &&
           row.bindingRevision == bindingToken.bindingRevision &&
           row.accountId == bindingToken.accountId &&
@@ -2080,9 +2095,11 @@ class ChatStore {
       }
       candidates.sort((a, b) => b.createdAtMillis.compareTo(a.createdAtMillis));
       return candidates
-          .where((row) =>
-              row.bindingRevision == binding.bindingRevision &&
-              row.accountId == binding.accountId)
+          .where(
+            (row) =>
+                row.bindingRevision == binding.bindingRevision &&
+                row.accountId == binding.accountId,
+          )
           .toList(growable: false);
     });
     final session = await _crypto.openCipherSession(
@@ -2130,8 +2147,9 @@ class ChatStore {
       if (conversation == null || conversation.unreadCount == 0) return true;
       if (conversation.lastUpdatedAtMillis > readThroughMillis) return false;
       conversation.unreadCount = 0;
-      await isar.chatConversationEntitys
-          .putByOwnerCidNumberConversationId(conversation);
+      await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+        conversation,
+      );
       return true;
     });
   }
@@ -2161,10 +2179,7 @@ class ChatStore {
           .deleteAll();
       await isar.chatConversationEntitys
           .where()
-          .ownerCidNumberConversationIdEqualTo(
-            ownerCidNumber,
-            conversationId,
-          )
+          .ownerCidNumberConversationIdEqualTo(ownerCidNumber, conversationId)
           .deleteAll();
       await isar.chatOutboundQueueEntitys
           .where()
@@ -2194,8 +2209,9 @@ class ChatStore {
     return _serializeBindingMutation(cidNumber, () async {
       await _chatIsar.writeTxn((isar) async {
         await _clearAllChatStateInTxn(isar, cidNumber);
-        final existing =
-            await isar.chatBindingFenceEntitys.getByOwnerCidNumber(cidNumber);
+        final existing = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+          cidNumber,
+        );
         if (existing == null) {
           await isar.chatBindingFenceEntitys.putByOwnerCidNumber(
             ChatBindingFenceEntity()
@@ -2236,8 +2252,9 @@ class ChatStore {
     _validateHandover(previous, current);
     return _serializeBindingMutation(previous.cidNumber, () async {
       await _chatIsar.writeTxn((isar) async {
-        final fence = await isar.chatBindingFenceEntitys
-            .getByOwnerCidNumber(previous.cidNumber);
+        final fence = await isar.chatBindingFenceEntitys.getByOwnerCidNumber(
+          previous.cidNumber,
+        );
         if (fence == null) throw StateError('Chat 持久写入门闩缺失');
         _validateFence(fence);
         if (fence.fenceState == _fenceCleared) return;
@@ -2347,7 +2364,7 @@ class ChatStore {
     }
   }
 
-  /// 先把用户操作保存为本机密文消息，再异步取得会话、唤醒端点和直连 KeyPackage。
+  /// 先把用户操作保存为本机密文消息，再异步取得接收设备公开钥并生成 HPKE 信封。
   ///
   /// 本行已经是会话与消息列表的真值，不是 UI 临时气泡。`envelopeBytesHex` 为空
   /// 明确表示“尚未转换为 MLS Envelope”；正文继续使用现有 chat/chatIndex 用途钥，
@@ -2453,19 +2470,24 @@ class ChatStore {
           .ownerCidNumberEqualTo(ownerCidNumber)
           .findAll();
       return candidates
-          .where((row) =>
-              row.bindingRevision == bindingToken.bindingRevision &&
-              row.accountId == bindingToken.accountId &&
-              row.direction == 'outgoing' &&
-              row.envelopeId.startsWith('pending:') &&
-              row.deliveryState != ChatMessageDeliveryState.failed.name &&
-              row.envelopeBytesHex.isEmpty &&
-              (recipientCidNumber == null ||
-                  row.recipientCidNumber == recipientCidNumber) &&
-              (conversationId == null || row.conversationId == conversationId))
+          .where(
+            (row) =>
+                row.bindingRevision == bindingToken.bindingRevision &&
+                row.accountId == bindingToken.accountId &&
+                row.direction == 'outgoing' &&
+                row.envelopeId.startsWith('pending:') &&
+                row.deliveryState != ChatMessageDeliveryState.failed.name &&
+                row.envelopeBytesHex.isEmpty &&
+                (recipientCidNumber == null ||
+                    row.recipientCidNumber == recipientCidNumber) &&
+                (conversationId == null ||
+                    row.conversationId == conversationId),
+          )
           .toList(growable: false)
-        ..sort((left, right) =>
-            left.createdAtMillis.compareTo(right.createdAtMillis));
+        ..sort(
+          (left, right) =>
+              left.createdAtMillis.compareTo(right.createdAtMillis),
+        );
     });
     if (rows.isEmpty) return const <ChatPendingOutgoingMessage>[];
     final binding = await _crypto.resolveCipherBinding(
@@ -2487,14 +2509,16 @@ class ChatStore {
           throw StateError('Chat 本地待发送消息正文缺失');
         }
         ChatPayloadCodec.decode(payload);
-        pending.add(ChatPendingOutgoingMessage(
-          localMessageId: row.envelopeId,
-          conversationId: row.conversationId,
-          recipientCidNumber: row.recipientCidNumber,
-          messageKind: _messageKindFromName(row.messageKind),
-          createdAtMillis: row.createdAtMillis,
-          payload: payload,
-        ));
+        pending.add(
+          ChatPendingOutgoingMessage(
+            localMessageId: row.envelopeId,
+            conversationId: row.conversationId,
+            recipientCidNumber: row.recipientCidNumber,
+            messageKind: _messageKindFromName(row.messageKind),
+            createdAtMillis: row.createdAtMillis,
+            payload: payload,
+          ),
+        );
       }
       return List<ChatPendingOutgoingMessage>.unmodifiable(pending);
     } finally {
@@ -2551,10 +2575,7 @@ class ChatStore {
         currentAccountId: currentAccountId,
         expectedGenesisHash: bindingToken.genesisHash,
       );
-      _requireResolvedBinding(
-        bindingToken: bindingToken,
-        binding: binding,
-      );
+      _requireResolvedBinding(bindingToken: bindingToken, binding: binding);
       // 加解密在事务外完成，避免密码学运算占住 Isar 写事务。
       final sealed = await _sealMessage(
         ownerCidNumber: ownerCidNumber,
@@ -2577,11 +2598,11 @@ class ChatStore {
           if (!pendingLocalMessageId.startsWith('pending:')) {
             throw const FormatException('Chat 待转换消息 ID 不合法');
           }
-          final pending =
-              await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-            ownerCidNumber,
-            pendingLocalMessageId,
-          );
+          final pending = await isar.chatMessageEntitys
+              .getByOwnerCidNumberEnvelopeId(
+                ownerCidNumber,
+                pendingLocalMessageId,
+              );
           if (pending == null ||
               pending.bindingRevision != binding.bindingRevision ||
               pending.accountId != binding.accountId ||
@@ -2638,8 +2659,7 @@ class ChatStore {
             ChatMessageKind.image ||
             ChatMessageKind.video ||
             ChatMessageKind.file ||
-            ChatMessageKind.audio =>
-              true,
+            ChatMessageKind.audio => true,
             ChatMessageKind.text || ChatMessageKind.sticker => false,
           };
           if (!isMediaMessage ||
@@ -2727,10 +2747,7 @@ class ChatStore {
         currentAccountId: currentAccountId,
         expectedGenesisHash: bindingToken.genesisHash,
       );
-      _requireResolvedBinding(
-        bindingToken: bindingToken,
-        binding: binding,
-      );
+      _requireResolvedBinding(bindingToken: bindingToken, binding: binding);
       final sealed = await _sealMessage(
         ownerCidNumber: ownerCidNumber,
         currentAccountId: currentAccountId,
@@ -2747,11 +2764,8 @@ class ChatStore {
       );
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
-        final existing =
-            await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-          ownerCidNumber,
-          envelope.envelopeId,
-        );
+        final existing = await isar.chatMessageEntitys
+            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelope.envelopeId);
         // WSS 与七天邮箱可能送达同一 Envelope；重复项只由运行态继续 ACK，
         // 不能再次推进会话未读数或覆盖最后消息时间。
         if (existing != null) {
@@ -2802,10 +2816,12 @@ class ChatStore {
     );
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
-      final terminalEnvelopeFailure = errorMessage == 'chat_envelope_expired' ||
+      final terminalEnvelopeFailure =
+          errorMessage == 'chat_envelope_expired' ||
           errorMessage == 'chat_envelope_invalid';
-      final effectiveState =
-          terminalEnvelopeFailure ? ChatMessageDeliveryState.failed : state;
+      final effectiveState = terminalEnvelopeFailure
+          ? ChatMessageDeliveryState.failed
+          : state;
       final queue = await isar.chatOutboundQueueEntitys
           .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
       if (queue != null) {
@@ -2819,8 +2835,9 @@ class ChatStore {
             ..attemptCount = queue.attemptCount + 1
             ..lastError = errorMessage
             ..updatedAtMillis = DateTime.now().millisecondsSinceEpoch;
-          await isar.chatOutboundQueueEntitys
-              .putByOwnerCidNumberEnvelopeId(queue);
+          await isar.chatOutboundQueueEntitys.putByOwnerCidNumberEnvelopeId(
+            queue,
+          );
         }
       }
       final message = await isar.chatMessageEntitys
@@ -2830,13 +2847,14 @@ class ChatStore {
         await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(message);
         final conversation = await isar.chatConversationEntitys
             .getByOwnerCidNumberConversationId(
-          ownerCidNumber,
-          message.conversationId,
-        );
+              ownerCidNumber,
+              message.conversationId,
+            );
         if (conversation != null) {
           conversation.lastDeliveryState = effectiveState.name;
-          await isar.chatConversationEntitys
-              .putByOwnerCidNumberConversationId(conversation);
+          await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+            conversation,
+          );
         }
       }
     });
@@ -2882,18 +2900,22 @@ class ChatStore {
           .filter()
           .idGreaterThan(0, include: true)
           .findAll();
-      final matched = rows
-          .where((row) =>
-              row.ownerCidNumber == ownerCidNumber &&
-              row.conversationId == conversationId)
-          .toList(growable: false)
-        ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
+      final matched =
+          rows
+              .where(
+                (row) =>
+                    row.ownerCidNumber == ownerCidNumber &&
+                    row.conversationId == conversationId,
+              )
+              .toList(growable: false)
+            ..sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
       for (final row in matched) {
         await isar.chatPendingInboundEntitys.delete(row.id);
       }
       return matched
-          .map((row) =>
-              ChatEnvelope.fromBuffer(_hexToBytes(row.envelopeBytesHex)))
+          .map(
+            (row) => ChatEnvelope.fromBuffer(_hexToBytes(row.envelopeBytesHex)),
+          )
           .toList(growable: false);
     });
   }
@@ -2935,23 +2957,25 @@ class ChatStore {
       // 过滤时才遍历本账户队列，避免打开一个窗口就驱动无关会话的网络副作用。
       final rows = conversationId == null
           ? await isar.chatOutboundQueueEntitys
-              .filter()
-              .idGreaterThan(0, include: true)
-              .findAll()
+                .filter()
+                .idGreaterThan(0, include: true)
+                .findAll()
           : await isar.chatOutboundQueueEntitys
-              .where()
-              .conversationIdEqualTo(conversationId)
-              .findAll();
-      final owned =
-          rows.where((row) => row.ownerCidNumber == ownerCidNumber).toList();
+                .where()
+                .conversationIdEqualTo(conversationId)
+                .findAll();
+      final owned = rows
+          .where((row) => row.ownerCidNumber == ownerCidNumber)
+          .toList();
       final matched = recipientCidNumber == null
           ? owned
           : owned
-              .where((row) => row.recipientCidNumber == recipientCidNumber)
-              .toList(growable: false);
+                .where((row) => row.recipientCidNumber == recipientCidNumber)
+                .toList(growable: false);
       matched.sort((a, b) {
-        final byCreatedAt =
-            _queuedEnvelopeCreatedAt(a).compareTo(_queuedEnvelopeCreatedAt(b));
+        final byCreatedAt = _queuedEnvelopeCreatedAt(
+          a,
+        ).compareTo(_queuedEnvelopeCreatedAt(b));
         return byCreatedAt != 0 ? byCreatedAt : a.id.compareTo(b.id);
       });
       return matched
@@ -3034,13 +3058,14 @@ class ChatStore {
           .filter()
           .idGreaterThan(0, include: true)
           .findAll();
-      final owned =
-          rows.where((row) => row.ownerCidNumber == ownerCidNumber).toList();
+      final owned = rows
+          .where((row) => row.ownerCidNumber == ownerCidNumber)
+          .toList();
       final matched = recipientCidNumber == null
           ? owned
           : owned
-              .where((row) => row.recipientCidNumber == recipientCidNumber)
-              .toList(growable: false);
+                .where((row) => row.recipientCidNumber == recipientCidNumber)
+                .toList(growable: false);
       matched.sort((a, b) => a.createdAtMillis.compareTo(b.createdAtMillis));
       return matched
           .map(
@@ -3090,15 +3115,14 @@ class ChatStore {
         currentAccountId: currentAccountId,
         expectedGenesisHash: bindingToken.genesisHash,
       );
-      _requireResolvedBinding(
-        bindingToken: bindingToken,
-        binding: binding,
-      );
+      _requireResolvedBinding(bindingToken: bindingToken, binding: binding);
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
         final now = DateTime.now().millisecondsSinceEpoch;
-        final existing = await isar.chatGroupEntitys
-            .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+        final existing = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+          ownerCidNumber,
+          groupId,
+        );
         final entity = existing ?? ChatGroupEntity();
         entity
           ..ownerCidNumber = ownerCidNumber
@@ -3126,10 +3150,12 @@ class ChatStore {
           ..lastMessageCipher = conversation?.lastMessageCipher ?? ''
           ..lastUpdatedAtMillis = conversation?.lastUpdatedAtMillis ?? now
           ..unreadCount = conversation?.unreadCount ?? 0
-          ..lastDeliveryState = conversation?.lastDeliveryState ??
+          ..lastDeliveryState =
+              conversation?.lastDeliveryState ??
               ChatMessageDeliveryState.queued.name;
-        await isar.chatConversationEntitys
-            .putByOwnerCidNumberConversationId(shell);
+        await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+          shell,
+        );
       });
     });
   }
@@ -3172,8 +3198,10 @@ class ChatStore {
             ..joinedAtMillis = joinedAt[entry.key] ?? now,
         );
       }
-      final group = await isar.chatGroupEntitys
-          .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+      final group = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+        ownerCidNumber,
+        groupId,
+      );
       if (group != null) {
         group
           ..epoch = epoch
@@ -3186,8 +3214,10 @@ class ChatStore {
 
   Future<ChatGroup?> readGroup(String ownerCidNumber, String groupId) {
     return _chatIsar.read((isar) async {
-      final group = await isar.chatGroupEntitys
-          .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+      final group = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+        ownerCidNumber,
+        groupId,
+      );
       if (group == null) return null;
       final members = await isar.chatGroupMemberEntitys
           .filter()
@@ -3234,8 +3264,10 @@ class ChatStore {
     );
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
-      final group = await isar.chatGroupEntitys
-          .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+      final group = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+        ownerCidNumber,
+        groupId,
+      );
       if (group != null) {
         group
           ..leftLocally = true
@@ -3263,8 +3295,10 @@ class ChatStore {
     return _chatIsar.writeTxn((isar) async {
       await _requireBindingTokenInTxn(isar, bindingToken);
       final now = DateTime.now().millisecondsSinceEpoch;
-      final group = await isar.chatGroupEntitys
-          .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+      final group = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+        ownerCidNumber,
+        groupId,
+      );
       if (group != null) {
         group
           ..groupName = trimmed
@@ -3275,8 +3309,9 @@ class ChatStore {
           .getByOwnerCidNumberConversationId(ownerCidNumber, groupId);
       if (conversation != null) {
         conversation.title = trimmed;
-        await isar.chatConversationEntitys
-            .putByOwnerCidNumberConversationId(conversation);
+        await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+          conversation,
+        );
       }
     });
   }
@@ -3365,10 +3400,7 @@ class ChatStore {
         currentAccountId: currentAccountId,
         expectedGenesisHash: bindingToken.genesisHash,
       );
-      _requireResolvedBinding(
-        bindingToken: bindingToken,
-        binding: binding,
-      );
+      _requireResolvedBinding(bindingToken: bindingToken, binding: binding);
       final sealed = await _sealMessage(
         ownerCidNumber: ownerCidNumber,
         currentAccountId: currentAccountId,
@@ -3389,11 +3421,11 @@ class ChatStore {
           if (!pendingLocalMessageId.startsWith('pending:')) {
             throw StateError('Chat 群待发送消息编号不合法');
           }
-          final pending =
-              await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-            ownerCidNumber,
-            pendingLocalMessageId,
-          );
+          final pending = await isar.chatMessageEntitys
+              .getByOwnerCidNumberEnvelopeId(
+                ownerCidNumber,
+                pendingLocalMessageId,
+              );
           if (pending == null ||
               pending.bindingRevision != binding.bindingRevision ||
               pending.accountId != binding.accountId ||
@@ -3442,7 +3474,8 @@ class ChatStore {
               recipientCidByCidNumber[envelope.recipientCidNumber];
           if (recipientCidNumber == null || recipientCidNumber.isEmpty) {
             throw StateError(
-                '群出站队列缺少收件人 CID 映射: ${envelope.recipientCidNumber}');
+              '群出站队列缺少收件人 CID 映射: ${envelope.recipientCidNumber}',
+            );
           }
           await isar.chatOutboundQueueEntitys.putByOwnerCidNumberEnvelopeId(
             ChatOutboundQueueEntity()
@@ -3482,10 +3515,7 @@ class ChatStore {
         currentAccountId: currentAccountId,
         expectedGenesisHash: bindingToken.genesisHash,
       );
-      _requireResolvedBinding(
-        bindingToken: bindingToken,
-        binding: binding,
-      );
+      _requireResolvedBinding(bindingToken: bindingToken, binding: binding);
       final sealed = await _sealMessage(
         ownerCidNumber: ownerCidNumber,
         currentAccountId: currentAccountId,
@@ -3502,11 +3532,8 @@ class ChatStore {
       );
       await _chatIsar.writeTxn((isar) async {
         await _requireBindingTokenInTxn(isar, bindingToken);
-        final existing =
-            await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-          ownerCidNumber,
-          envelope.envelopeId,
-        );
+        final existing = await isar.chatMessageEntitys
+            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelope.envelopeId);
         if (existing != null) {
           if (existing.direction == 'incoming') return;
           throw StateError('Chat Envelope ID 与本机出站记录冲突');
@@ -3554,8 +3581,10 @@ class ChatStore {
   }) async {
     final existing = await isar.chatConversationEntitys
         .getByOwnerCidNumberConversationId(ownerCidNumber, groupId);
-    final group = await isar.chatGroupEntitys
-        .getByOwnerCidNumberGroupId(ownerCidNumber, groupId);
+    final group = await isar.chatGroupEntitys.getByOwnerCidNumberGroupId(
+      ownerCidNumber,
+      groupId,
+    );
     final entity = existing ?? ChatConversationEntity();
     final replacesLatest =
         existing == null || lastUpdatedAtMillis >= existing.lastUpdatedAtMillis;
@@ -3568,15 +3597,19 @@ class ChatStore {
           existing?.peerCidNumber ?? (group?.creatorCidNumber ?? '')
       ..title = group?.groupName ?? existing?.title ?? groupId
       ..conversationKind = 'group'
-      ..lastMessageCipher =
-          replacesLatest ? lastMessageCipher : existing.lastMessageCipher
-      ..lastUpdatedAtMillis =
-          replacesLatest ? lastUpdatedAtMillis : existing.lastUpdatedAtMillis
+      ..lastMessageCipher = replacesLatest
+          ? lastMessageCipher
+          : existing.lastMessageCipher
+      ..lastUpdatedAtMillis = replacesLatest
+          ? lastUpdatedAtMillis
+          : existing.lastUpdatedAtMillis
       ..unreadCount = (existing?.unreadCount ?? 0) + unreadDelta
-      ..lastDeliveryState =
-          replacesLatest ? deliveryState.name : existing.lastDeliveryState;
-    await isar.chatConversationEntitys
-        .putByOwnerCidNumberConversationId(entity);
+      ..lastDeliveryState = replacesLatest
+          ? deliveryState.name
+          : existing.lastDeliveryState;
+    await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+      entity,
+    );
   }
 
   ChatGroup _groupFromEntities(
@@ -3590,10 +3623,12 @@ class ChatStore {
       epoch: group.epoch,
       leftLocally: group.leftLocally,
       roster: members
-          .map((row) => GroupMember(
-                cidNumber: row.memberCidNumber,
-                role: GroupMemberRole.fromName(row.role),
-              ))
+          .map(
+            (row) => GroupMember(
+              cidNumber: row.memberCidNumber,
+              role: GroupMemberRole.fromName(row.role),
+            ),
+          )
           .toList(growable: false),
     );
   }
@@ -3611,11 +3646,8 @@ class ChatStore {
     required int unreadDelta,
     required ChatMessageDeliveryState deliveryState,
   }) async {
-    final existing =
-        await isar.chatConversationEntitys.getByOwnerCidNumberConversationId(
-      ownerCidNumber,
-      conversationId,
-    );
+    final existing = await isar.chatConversationEntitys
+        .getByOwnerCidNumberConversationId(ownerCidNumber, conversationId);
     final entity = existing ?? ChatConversationEntity();
     // 待发送行按创建顺序转换为正式 Envelope。转换较早消息时，不能把已经由
     // 后续待发送消息推进的会话摘要和排序时间回退，否则下一条暂时失败会让列表
@@ -3629,15 +3661,19 @@ class ChatStore {
       ..conversationId = conversationId
       ..peerCidNumber = peerCidNumber
       ..title = title
-      ..lastMessageCipher =
-          replacesLatest ? lastMessageCipher : existing.lastMessageCipher
-      ..lastUpdatedAtMillis =
-          replacesLatest ? lastUpdatedAtMillis : existing.lastUpdatedAtMillis
+      ..lastMessageCipher = replacesLatest
+          ? lastMessageCipher
+          : existing.lastMessageCipher
+      ..lastUpdatedAtMillis = replacesLatest
+          ? lastUpdatedAtMillis
+          : existing.lastUpdatedAtMillis
       ..unreadCount = (existing?.unreadCount ?? 0) + unreadDelta
-      ..lastDeliveryState =
-          replacesLatest ? deliveryState.name : existing.lastDeliveryState;
-    await isar.chatConversationEntitys
-        .putByOwnerCidNumberConversationId(entity);
+      ..lastDeliveryState = replacesLatest
+          ? deliveryState.name
+          : existing.lastDeliveryState;
+    await isar.chatConversationEntitys.putByOwnerCidNumberConversationId(
+      entity,
+    );
   }
 }
 
@@ -3676,7 +3712,9 @@ ChatMessageDisplayBatch filterChatMessagesForDisplay(
 
 /// [lastMessage] 由 `ChatStore` 解密后传入——本函数不接触密钥。
 ChatConversationPreview _conversationPreviewFromEntity(
-    ChatConversationEntity row, String lastMessage) {
+  ChatConversationEntity row,
+  String lastMessage,
+) {
   return ChatConversationPreview(
     conversationId: row.conversationId,
     title: row.title,
@@ -3708,9 +3746,9 @@ ChatStoredMessage _messageFromEntity(ChatMessageEntity row, String? plaintext) {
 /// Application；`updatedAtMillis` 会在每次尝试时变化，不能承担 MLS 排序。
 int _queuedEnvelopeCreatedAt(ChatOutboundQueueEntity row) {
   try {
-    return ChatEnvelope.fromBuffer(_hexToBytes(row.envelopeBytesHex))
-        .createdAtMillis
-        .toInt();
+    return ChatEnvelope.fromBuffer(
+      _hexToBytes(row.envelopeBytesHex),
+    ).createdAtMillis.toInt();
   } on Exception {
     return row.updatedAtMillis;
   }

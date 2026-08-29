@@ -76,13 +76,11 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
         '读取 Chat 设备公钥必须提供 MLS stateStore',
       );
     }
-    final response = _bindings.callJson(_bindings.createKeyPackage, {
+    final response = _bindings.callJson(_bindings.deviceIdentity, {
       'cid_number': identity.cidNumber,
       'device_id': identity.deviceId,
       'state_store_dir': _stateStore.path,
       'state_key_hex': _stateStore.stateKeyHex,
-      // 复用现有 FFI 入口只读取/首次创建设备签名者，不生成多余 KeyPackage。
-      'identity_only': true,
     });
     return _requireField(response, 'device_public_key_hex');
   }
@@ -131,7 +129,7 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
     required String recipientCidNumber,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) async {
     final identity = _requireIdentity();
@@ -145,8 +143,7 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
       'conversation_id': conversationId,
       'recipient_cid_number': recipientCidNumber,
       'plaintext_hex': _bytesToHex(plaintext),
-      if (recipientKeyPackage != null)
-        'recipient_key_package_hex': recipientKeyPackage.keyPackageHex,
+      'recipient_device_public_key_hex': recipientDevicePublicKey,
     });
     final cipherSuite = (response['cipher_suite'] ?? '').toString();
     final welcomeHex = response['welcome_wire_message_hex']?.toString();
@@ -195,8 +192,6 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
       'device_id': identity.deviceId,
       'conversation_id': message.conversationId,
       'wire_message_hex': message.wireHex,
-      if (message.ratchetTreeHex != null)
-        'ratchet_tree_hex': message.ratchetTreeHex,
     });
     final plaintextHex = response['plaintext_hex']?.toString();
     return MlsInboundMessage(
@@ -435,6 +430,7 @@ typedef MlsFreeStringDart = void Function(Pointer<Utf8> ptr);
 /// Chat MLS native bindings。
 class MlsNativeBindings {
   MlsNativeBindings._({
+    required this.deviceIdentity,
     required this.createKeyPackage,
     required this.twoPartySmoke,
     required this.encrypt,
@@ -449,6 +445,7 @@ class MlsNativeBindings {
     required MlsFreeStringDart freeString,
   }) : _freeString = freeString;
 
+  final MlsJsonDart deviceIdentity;
   final MlsJsonDart createKeyPackage;
   final MlsJsonDart twoPartySmoke;
   final MlsJsonDart encrypt;
@@ -465,6 +462,9 @@ class MlsNativeBindings {
   static MlsNativeBindings load() {
     final library = _loadSmoldotLibrary();
     return MlsNativeBindings._(
+      deviceIdentity: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
+        'citizen_chat_device_identity_json',
+      ),
       createKeyPackage: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
         'citizen_chat_mls_create_key_package_json',
       ),
@@ -562,38 +562,17 @@ DynamicLibrary _loadSmoldotLibrary() {
   final cwd = Directory.current.path;
   if (Platform.isMacOS) {
     candidates.addAll([
-      path.join(
-        cwd,
-        'smoldot',
-        'ffi',
-        'target',
-        'release',
-        'libsmoldot.dylib',
-      ),
+      path.join(cwd, 'smoldot', 'ffi', 'target', 'release', 'libsmoldot.dylib'),
       'libsmoldot.dylib',
     ]);
   } else if (Platform.isWindows) {
     candidates.addAll([
-      path.join(
-        cwd,
-        'smoldot',
-        'ffi',
-        'target',
-        'release',
-        'smoldot.dll',
-      ),
+      path.join(cwd, 'smoldot', 'ffi', 'target', 'release', 'smoldot.dll'),
       'smoldot.dll',
     ]);
   } else {
     candidates.addAll([
-      path.join(
-        cwd,
-        'smoldot',
-        'ffi',
-        'target',
-        'release',
-        'libsmoldot.so',
-      ),
+      path.join(cwd, 'smoldot', 'ffi', 'target', 'release', 'libsmoldot.so'),
       'libsmoldot.so',
     ]);
   }

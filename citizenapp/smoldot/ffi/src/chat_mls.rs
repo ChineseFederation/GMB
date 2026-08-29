@@ -6,6 +6,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use hpke_rs::{
+    hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
+    Hpke, HpkeKeyPair, HpkePublicKey, Mode,
+};
+use hpke_rs_rust_crypto::HpkeRustCrypto;
 use openmls::{
     prelude::{
         tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize},
@@ -31,6 +36,8 @@ const STATE_AAD_STORAGE: &[u8] = b"citizenapp.local/mls|openmls_storage";
 const STATE_AAD_DEVICE: &[u8] = b"citizenapp.local/mls|device_record";
 /// GCM nonce 固定 12 字节;密文布局 = nonce || ciphertext || tag(16)。
 const STATE_NONCE_LEN: usize = 12;
+const DIRECT_WIRE_VERSION: u8 = 1;
+const DIRECT_ENCAPSULATED_KEY_LEN: usize = 32;
 
 /// 解析 Dart 侧下传的 32 字节 MLS 状态密钥(小写 hex)。
 ///
@@ -122,7 +129,7 @@ struct EncryptRequest {
     conversation_id: String,
     recipient_cid_number: String,
     plaintext_hex: String,
-    recipient_key_package_hex: Option<String>,
+    recipient_device_public_key_hex: String,
 }
 
 #[derive(Deserialize)]
@@ -134,7 +141,6 @@ struct DecryptRequest {
     device_id: String,
     conversation_id: String,
     wire_message_hex: String,
-    ratchet_tree_hex: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -151,6 +157,14 @@ struct DeviceRecord {
     device_id: String,
     signature_public_key_hex: String,
     signature_scheme: String,
+}
+
+#[derive(Deserialize)]
+struct DeviceIdentityRequest {
+    cid_number: String,
+    device_id: String,
+    state_store_dir: String,
+    state_key_hex: String,
 }
 
 struct MlsProvider {
@@ -193,6 +207,45 @@ pub unsafe extern "C" fn citizen_chat_mls_create_key_package_json(
             std::ptr::null_mut()
         }
     }
+}
+
+/// 读取或首次创建当前 CID/设备的 RFC 9180 HPKE 身份。
+#[no_mangle]
+pub unsafe extern "C" fn citizen_chat_device_identity_json(
+    request_json: *const c_char,
+    error_out: *mut *mut c_char,
+) -> *mut c_char {
+    match device_identity_json(request_json) {
+        Ok(value) => crate::string_into_raw(value, error_out),
+        Err(message) => {
+            crate::set_error(error_out, &message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+fn device_identity_json(request_json: *const c_char) -> Result<String, String> {
+    let request: DeviceIdentityRequest = parse_request(request_json)?;
+    require_non_empty("cid_number", &request.cid_number)?;
+    require_non_empty("device_id", &request.device_id)?;
+    let state_dir = Path::new(&request.state_store_dir);
+    let state_key = parse_state_key(&request.state_key_hex)?;
+    let provider = load_provider(state_dir, &state_key)?;
+    let _ = ensure_device_signer(
+        &provider,
+        state_dir,
+        &request.cid_number,
+        &request.device_id,
+        &state_key,
+    )?;
+    save_provider(state_dir, &provider, &state_key)?;
+    let key_pair = device_hpke_key_pair(&state_key, &request.cid_number, &request.device_id)?;
+    serde_json::to_string(&json!({
+        "cid_number": request.cid_number,
+        "device_id": request.device_id,
+        "device_public_key_hex": hex::encode(key_pair.public_key().as_slice()),
+    }))
+    .map_err(|error| error.to_string())
 }
 
 /// 执行真实 OpenMLS 双人组 round-trip smoke。
@@ -353,7 +406,11 @@ fn create_key_package_json(request_json: *const c_char) -> Result<String, String
             &request.device_id,
             &state_key,
         )?;
-        let device_public_key_hex = hex::encode(signer.to_public_vec());
+        let device_public_key_hex = hex::encode(
+            device_hpke_key_pair(&state_key, &request.cid_number, &request.device_id)?
+                .public_key()
+                .as_slice(),
+        );
         let (key_package_hex, not_before_millis, not_after_millis, last_resort) =
             if request.identity_only {
                 (String::new(), 0, 0, false)
@@ -525,81 +582,51 @@ fn encrypt_json(request_json: *const c_char) -> Result<String, String> {
     let state_dir = Path::new(&request.state_store_dir);
     let state_key = parse_state_key(&request.state_key_hex)?;
     let provider = load_provider(state_dir, &state_key)?;
-    let (credential, signer) = ensure_device_signer(
+    let _ = ensure_device_signer(
         &provider,
         state_dir,
         &request.cid_number,
         &request.device_id,
         &state_key,
     )?;
-    let group_id = group_id_from_conversation(&request.conversation_id)?;
     let plaintext = decode_hex_field("plaintext_hex", &request.plaintext_hex)?;
-    let group_config = mls_group_config();
-
-    let mut welcome_hex = None;
-    let mut ratchet_tree_hex = None;
-    let mut created_new_session = false;
-    let mut group = match MlsGroup::load(provider.storage(), &group_id)
-        .map_err(|error| format!("加载 MLS group 失败: {error:?}"))?
-    {
-        Some(group) => group,
-        None => {
-            let key_package_hex = request
-                .recipient_key_package_hex
-                .as_deref()
-                .ok_or_else(|| "首次 MLS 会话必须提供 recipient_key_package_hex".to_string())?;
-            let key_package_bytes = decode_hex_field("recipient_key_package_hex", key_package_hex)?;
-            let recipient_key_package: KeyPackage =
-                KeyPackageIn::tls_deserialize_exact(key_package_bytes)
-                    .map_err(|error| format!("反序列化 recipient KeyPackage 失败: {error}"))?
-                    .validate(provider.crypto(), ProtocolVersion::default())
-                    .map_err(|error| format!("验证 recipient KeyPackage 失败: {error:?}"))?;
-            let mut new_group = MlsGroup::new_with_group_id(
-                &provider,
-                &signer,
-                &group_config,
-                group_id.clone(),
-                credential,
-            )
-            .map_err(|error| format!("创建 MLS group 失败: {error:?}"))?;
-            let (_, welcome, _) = new_group
-                .add_members(&provider, &signer, &[recipient_key_package])
-                .map_err(|error| format!("添加 recipient KeyPackage 失败: {error:?}"))?;
-            new_group
-                .merge_pending_commit(&provider)
-                .map_err(|error| format!("合并 pending commit 失败: {error:?}"))?;
-            let welcome_bytes = welcome
-                .tls_serialize_detached()
-                .map_err(|error| format!("序列化 Welcome 失败: {error}"))?;
-            let tree_bytes = new_group
-                .export_ratchet_tree()
-                .tls_serialize_detached()
-                .map_err(|error| format!("序列化 ratchet tree 失败: {error}"))?;
-            welcome_hex = Some(hex::encode(welcome_bytes));
-            ratchet_tree_hex = Some(hex::encode(tree_bytes));
-            created_new_session = true;
-            new_group
-        }
-    };
-
-    let application_message = group
-        .create_message(&provider, &signer, &plaintext)
-        .map_err(|error| format!("创建 MLS application message 失败: {error:?}"))?;
-    let application_hex = hex::encode(
-        application_message
-            .tls_serialize_detached()
-            .map_err(|error| format!("序列化 MLS application message 失败: {error}"))?,
-    );
     save_provider(state_dir, &provider, &state_key)?;
+    let recipient_key = decode_hex_field(
+        "recipient_device_public_key_hex",
+        &request.recipient_device_public_key_hex,
+    )?;
+    if recipient_key.len() != 32 {
+        return Err("接收设备 HPKE 公钥必须为 32 字节".to_string());
+    }
+    let mut hpke = direct_hpke();
+    let info = direct_info(&request.conversation_id, &request.recipient_cid_number);
+    let (encapsulated, ciphertext) = hpke
+        .seal(
+            &HpkePublicKey::new(recipient_key),
+            &info,
+            &info,
+            &plaintext,
+            None,
+            None,
+            None,
+        )
+        .map_err(|error| format!("RFC 9180 HPKE 加密失败: {error:?}"))?;
+    if encapsulated.len() != DIRECT_ENCAPSULATED_KEY_LEN {
+        return Err("RFC 9180 HPKE 封装钥长度异常".to_string());
+    }
+    let mut wire = Vec::with_capacity(1 + encapsulated.len() + ciphertext.len());
+    wire.push(DIRECT_WIRE_VERSION);
+    wire.extend_from_slice(&encapsulated);
+    wire.extend_from_slice(&ciphertext);
 
     let response = json!({
         "conversation_id": request.conversation_id,
         "recipient_cid_number": request.recipient_cid_number,
-        "cipher_suite": format!("{:?}", GMB_MLS_CIPHERSUITE),
-        "created_new_session": created_new_session,
-        "welcome_wire_message_hex": welcome_hex,
-        "application_wire_message_hex": application_hex,
-        "ratchet_tree_hex": ratchet_tree_hex,
+        "cipher_suite": "HPKE_BASE_X25519_HKDF_SHA256_AES128GCM",
+        "created_new_session": false,
+        "welcome_wire_message_hex": serde_json::Value::Null,
+        "application_wire_message_hex": hex::encode(wire),
+        "ratchet_tree_hex": serde_json::Value::Null,
     });
     serde_json::to_string(&response).map_err(|error| error.to_string())
 }
@@ -622,89 +649,60 @@ fn decrypt_json(request_json: *const c_char) -> Result<String, String> {
         &request.device_id,
         &state_key,
     )?;
-    let group_id = group_id_from_conversation(&request.conversation_id)?;
     let wire_bytes = decode_hex_field("wire_message_hex", &request.wire_message_hex)?;
-    let message_in = MlsMessageIn::tls_deserialize_exact(wire_bytes)
-        .map_err(|error| format!("反序列化 MLS wire message 失败: {error}"))?;
-
-    let response = match message_in.extract() {
-        MlsMessageBodyIn::Welcome(welcome) => {
-            let ratchet_tree = match request.ratchet_tree_hex.as_deref() {
-                Some(value) if !value.trim().is_empty() => {
-                    let tree_bytes = decode_hex_field("ratchet_tree_hex", value)?;
-                    Some(
-                        RatchetTreeIn::tls_deserialize_exact(tree_bytes)
-                            .map_err(|error| format!("反序列化 ratchet tree 失败: {error}"))?,
-                    )
-                }
-                _ => None,
-            };
-            let group = StagedWelcome::new_from_welcome(
-                &provider,
-                mls_group_config().join_config(),
-                welcome,
-                ratchet_tree,
-            )
-            .map_err(|error| format!("处理 MLS Welcome 失败: {error:?}"))?
-            .into_group(&provider)
-            .map_err(|error| format!("从 Welcome 创建 MLS group 失败: {error:?}"))?;
-            if group.group_id() != &group_id {
-                return Err("Welcome group_id 与 conversation_id 不一致".to_string());
-            }
-            save_provider(state_dir, &provider, &state_key)?;
-            json!({
-                "conversation_id": request.conversation_id,
-                "message_kind": "welcome",
-                "cipher_suite": format!("{:?}", GMB_MLS_CIPHERSUITE),
-                "plaintext_hex": null,
-            })
-        }
-        MlsMessageBodyIn::PublicMessage(message) => decrypt_protocol_message(
-            state_dir,
-            &provider,
-            &state_key,
-            &request.conversation_id,
-            group_id,
-            message.into(),
-        )?,
-        MlsMessageBodyIn::PrivateMessage(message) => decrypt_protocol_message(
-            state_dir,
-            &provider,
-            &state_key,
-            &request.conversation_id,
-            group_id,
-            message.into(),
-        )?,
-        _ => return Err("不支持的 MLS wire message 类型".to_string()),
-    };
+    if wire_bytes.len() <= 1 + DIRECT_ENCAPSULATED_KEY_LEN || wire_bytes[0] != DIRECT_WIRE_VERSION {
+        return Err("Chat HPKE 密文格式或版本不合法".to_string());
+    }
+    let key_pair = device_hpke_key_pair(&state_key, &request.cid_number, &request.device_id)?;
+    let info = direct_info(&request.conversation_id, &request.cid_number);
+    let plaintext = direct_hpke()
+        .open(
+            &wire_bytes[1..1 + DIRECT_ENCAPSULATED_KEY_LEN],
+            key_pair.private_key(),
+            &info,
+            &info,
+            &wire_bytes[1 + DIRECT_ENCAPSULATED_KEY_LEN..],
+            None,
+            None,
+            None,
+        )
+        .map_err(|error| format!("RFC 9180 HPKE 解密失败: {error:?}"))?;
+    let response = json!({
+        "conversation_id": request.conversation_id,
+        "message_kind": "application",
+        "cipher_suite": "HPKE_BASE_X25519_HKDF_SHA256_AES128GCM",
+        "plaintext_hex": hex::encode(plaintext),
+    });
     serde_json::to_string(&response).map_err(|error| error.to_string())
 }
 
-fn decrypt_protocol_message(
-    state_dir: &Path,
-    provider: &MlsProvider,
+fn direct_hpke() -> Hpke<HpkeRustCrypto> {
+    Hpke::new(
+        Mode::Base,
+        KemAlgorithm::DhKem25519,
+        KdfAlgorithm::HkdfSha256,
+        AeadAlgorithm::Aes128Gcm,
+    )
+}
+
+fn direct_info(conversation_id: &str, recipient_cid_number: &str) -> Vec<u8> {
+    format!("citizenapp.chat/direct/v1|{conversation_id}|{recipient_cid_number}").into_bytes()
+}
+
+fn device_hpke_key_pair(
     state_key: &[u8; 32],
-    conversation_id: &str,
-    group_id: GroupId,
-    protocol_message: openmls::prelude::ProtocolMessage,
-) -> Result<serde_json::Value, String> {
-    let mut group = MlsGroup::load(provider.storage(), &group_id)
-        .map_err(|error| format!("加载 MLS group 失败: {error:?}"))?
-        .ok_or_else(|| "MLS 会话不存在，application message 需要先处理 Welcome".to_string())?;
-    let processed = group
-        .process_message(provider, protocol_message)
-        .map_err(|error| format!("解密 MLS application message 失败: {error:?}"))?;
-    let plaintext = match processed.into_content() {
-        ProcessedMessageContent::ApplicationMessage(message) => message.into_bytes(),
-        _ => return Err("MLS 处理结果不是 application message".to_string()),
-    };
-    save_provider(state_dir, provider, state_key)?;
-    Ok(json!({
-        "conversation_id": conversation_id,
-        "message_kind": "application",
-        "cipher_suite": format!("{:?}", GMB_MLS_CIPHERSUITE),
-        "plaintext_hex": hex::encode(plaintext),
-    }))
+    cid_number: &str,
+    device_id: &str,
+) -> Result<HpkeKeyPair, String> {
+    let mut input = Vec::with_capacity(32 + cid_number.len() + device_id.len() + 32);
+    input.extend_from_slice(b"citizenapp.chat/device-hpke/v1|");
+    input.extend_from_slice(state_key);
+    input.extend_from_slice(cid_number.as_bytes());
+    input.push(0);
+    input.extend_from_slice(device_id.as_bytes());
+    direct_hpke()
+        .derive_key_pair(&input)
+        .map_err(|error| format!("派生 RFC 9180 HPKE 设备密钥失败: {error:?}"))
 }
 
 fn parse_request<T>(request_json: *const c_char) -> Result<T, String>
@@ -1676,10 +1674,11 @@ fn group_state_json(request_json: *const c_char) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        atomic_write, create_key_package_json, group_add_members_json, group_create_json,
-        group_create_message_json, group_process_json, group_remove_members_json, group_state_json,
-        open_state, parse_state_key, purge_legacy_plaintext_state, seal_state,
-        two_party_smoke_json, STATE_AAD_DEVICE, STATE_AAD_STORAGE,
+        atomic_write, create_key_package_json, device_hpke_key_pair, direct_hpke, direct_info,
+        group_add_members_json, group_create_json, group_create_message_json, group_process_json,
+        group_remove_members_json, group_state_json, open_state, parse_state_key,
+        purge_legacy_plaintext_state, seal_state, two_party_smoke_json, STATE_AAD_DEVICE,
+        STATE_AAD_STORAGE,
     };
     use std::ffi::CString;
     use std::fs;
@@ -1781,6 +1780,38 @@ mod tests {
         assert_eq!(json["plaintext"], "hello openmls");
         assert_eq!(json["decrypted_plaintext"], "hello openmls");
         assert!(json["alice_wire_message_hex"].as_str().unwrap().len() > 100);
+    }
+
+    #[test]
+    fn hpke_device_key_is_stable_and_direct_message_round_trips() {
+        let state_key = [9u8; 32];
+        let alice = device_hpke_key_pair(&state_key, "CID-ALICE", "alice-phone")
+            .expect("Alice HPKE key should derive");
+        let alice_again = device_hpke_key_pair(&state_key, "CID-ALICE", "alice-phone")
+            .expect("Alice HPKE key should remain stable");
+        assert_eq!(alice.public_key(), alice_again.public_key());
+
+        let bob = device_hpke_key_pair(&state_key, "CID-BOB", "bob-phone")
+            .expect("Bob HPKE key should derive");
+        assert_ne!(alice.public_key(), bob.public_key());
+        let info = direct_info("dm:alice:bob", "CID-BOB");
+        let plaintext = "第一条离线消息".as_bytes();
+        let (encapsulated, ciphertext) = direct_hpke()
+            .seal(bob.public_key(), &info, &info, plaintext, None, None, None)
+            .expect("HPKE seal should succeed");
+        let opened = direct_hpke()
+            .open(
+                &encapsulated,
+                bob.private_key(),
+                &info,
+                &info,
+                &ciphertext,
+                None,
+                None,
+                None,
+            )
+            .expect("HPKE open should succeed");
+        assert_eq!(opened, plaintext);
     }
 
     #[test]

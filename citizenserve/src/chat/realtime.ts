@@ -42,7 +42,13 @@ interface RoutedChatMailboxItem extends ChatMailboxItem {
 
 type ChatMailboxSqlRow = ChatMailboxItem & Record<string, SqlStorageValue>;
 
-export interface ChatPublishedKeyPackage {
+export interface ChatPublishedDeviceKey {
+  cid_number: string;
+  device_id: string;
+  device_public_key_hex: string;
+}
+
+export interface ChatGroupKeyPackage {
   cid_number: string;
   device_id: string;
   device_public_key_hex: string;
@@ -51,17 +57,12 @@ export interface ChatPublishedKeyPackage {
   cipher_suite: string;
   not_before: number;
   not_after: number;
-  last_resort: boolean;
+  last_resort: true;
 }
 
-interface ChatKeyPackageSqlRow extends Record<string, SqlStorageValue> {
-  package_json: string;
-}
-
-interface ChatKeyPackageStateSqlRow extends Record<string, SqlStorageValue> {
-  package_kind: string;
+interface ChatDeviceKeySqlRow extends Record<string, SqlStorageValue> {
   device_id: string;
-  not_after_millis: number;
+  device_public_key_hex: string;
 }
 
 interface ChatMailboxUsage extends Record<string, SqlStorageValue> {
@@ -93,15 +94,6 @@ export const CHAT_MAILBOX_MAX_MESSAGES = CHAT_ENVELOPE_LIMIT.max_count ?? 1000;
 export const CHAT_MAILBOX_MAX_BYTES = CHAT_ENVELOPE_LIMIT.max_total_bytes ?? 8 * 1024 * 1024;
 export const CHAT_MAILBOX_FETCH_BATCH = CHAT_ENVELOPE_LIMIT.max_items ?? 100;
 
-/** 同一设备未过期的公开包必须保持稳定；只有缺失、过期或设备变更才接受新包。 */
-export function needsKeyPackage(
-  stored: { device_id: string; not_after_millis: number } | undefined,
-  deviceId: string,
-  current: number,
-): boolean {
-  return !stored || stored.device_id !== deviceId || stored.not_after_millis <= current;
-}
-
 /**
  * CID 级 Chat 实时入口与有界密文邮箱；WebSocket 附件额外绑定 finalized 版本与当前授权账户。
  *
@@ -122,12 +114,14 @@ export class Chat implements DurableObject {
       created_at_millis INTEGER NOT NULL,
       ttl_millis INTEGER NOT NULL
     )`);
-    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_key_packages (
-      package_kind TEXT PRIMARY KEY,
+    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_device_key (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
       device_id TEXT NOT NULL,
-      package_json TEXT NOT NULL,
-      not_before_millis INTEGER NOT NULL,
-      not_after_millis INTEGER NOT NULL
+      device_public_key_hex TEXT NOT NULL
+    )`);
+    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_group_key_package (
+      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+      payload TEXT NOT NULL
     )`);
   }
 
@@ -137,80 +131,63 @@ export class Chat implements DurableObject {
       const payload = (await request.json()) as ChatSignalPayload;
       return jsonResponse({ ok: true, sent: this.deliver(payload) });
     }
-    if (request.method === 'PUT' && path === '/__key_packages') {
-      const payload = (await request.json()) as {
-        normal: ChatPublishedKeyPackage;
-        last_resort: ChatPublishedKeyPackage;
-      };
-      const current = nowMs();
-      this.state.storage.sql.exec(
-        'DELETE FROM chat_key_packages WHERE not_after_millis <= ?',
-        current,
-      );
-      let stored = this.state.storage.sql.exec<ChatKeyPackageStateSqlRow>(
-        `SELECT package_kind, device_id, not_after_millis
-           FROM chat_key_packages`,
-      ).toArray();
-      // 当前会话设备变化时，旧设备公开包必须整体退出；同一设备刷新会话不得旋转
-      // 尚未过期的包，否则已经进入邮箱的 Welcome 将失去稳定领取锚点。
-      if (stored.some((row) => row.device_id !== payload.normal.device_id)) {
-        this.state.storage.sql.exec('DELETE FROM chat_key_packages');
-        stored = [];
-      }
-      const byKind = new Map(stored.map((row) => [row.package_kind, row]));
-      for (const [kind, keyPackage] of [
-        ['normal', payload.normal],
-        ['last_resort', payload.last_resort],
-      ] as const) {
-        if (!needsKeyPackage(byKind.get(kind), keyPackage.device_id, current)) {
-          continue;
-        }
+    if (request.method === 'PUT' && path === '/__device_key') {
+      const payload = (await request.json()) as ChatPublishedDeviceKey;
+      const stored = this.state.storage.sql.exec<ChatDeviceKeySqlRow>(
+        'SELECT device_id, device_public_key_hex FROM chat_device_key WHERE singleton = 1',
+      ).toArray()[0];
+      if (stored?.device_id !== payload.device_id
+          || stored?.device_public_key_hex !== payload.device_public_key_hex) {
         this.state.storage.sql.exec(
-          `INSERT OR REPLACE INTO chat_key_packages (
-             package_kind, device_id, package_json, not_before_millis, not_after_millis
-           ) VALUES (?, ?, ?, ?, ?)`,
-          kind,
-          keyPackage.device_id,
-          JSON.stringify(keyPackage),
-          keyPackage.not_before,
-          keyPackage.not_after,
+          `INSERT OR REPLACE INTO chat_device_key
+             (singleton, device_id, device_public_key_hex) VALUES (1, ?, ?)`,
+          payload.device_id,
+          payload.device_public_key_hex,
         );
       }
       return jsonResponse({ ok: true });
     }
-    if (request.method === 'POST' && path === '/__key_packages/claim') {
-      const current = nowMs();
-      this.state.storage.sql.exec(
-        'DELETE FROM chat_key_packages WHERE not_after_millis <= ?',
-        current,
-      );
-      let row = this.state.storage.sql.exec<ChatKeyPackageSqlRow>(
-        `SELECT package_json FROM chat_key_packages
-          WHERE package_kind = 'normal'
-            AND not_before_millis <= ? AND not_after_millis > ?`,
-        current,
-        current,
+    if (request.method === 'GET' && path === '/__device_key') {
+      const row = this.state.storage.sql.exec<ChatDeviceKeySqlRow>(
+        'SELECT device_id, device_public_key_hex FROM chat_device_key WHERE singleton = 1',
       ).toArray()[0];
-      if (row) {
-        this.state.storage.sql.exec(
-          "DELETE FROM chat_key_packages WHERE package_kind = 'normal'",
-        );
-      } else {
-        row = this.state.storage.sql.exec<ChatKeyPackageSqlRow>(
-          `SELECT package_json FROM chat_key_packages
-            WHERE package_kind = 'last_resort'
-              AND not_before_millis <= ? AND not_after_millis > ?`,
-          current,
-          current,
-        ).toArray()[0];
-      }
       if (!row) {
         return jsonResponse(
-          { ok: false, error_code: 'chat_key_package_unavailable', message: '接收设备尚无可用公开密钥包' },
+          { ok: false, error_code: 'chat_device_key_unavailable', message: '接收设备尚未登记聊天加密钥' },
           { status: 404 },
         );
       }
-      return jsonResponse({ ok: true, key_package: JSON.parse(row.package_json) });
+      return jsonResponse({ ok: true, device_key: row });
+    }
+    if (request.method === 'PUT' && path === '/__group_key_package') {
+      const payload = (await request.json()) as { key_package: ChatGroupKeyPackage };
+      const encoded = JSON.stringify(payload.key_package);
+      const stored = this.state.storage.sql.exec<{ payload: string }>(
+        'SELECT payload FROM chat_group_key_package WHERE singleton = 1',
+      ).toArray()[0];
+      if (stored?.payload !== encoded) {
+        this.state.storage.sql.exec(
+          'INSERT OR REPLACE INTO chat_group_key_package (singleton, payload) VALUES (1, ?)',
+          encoded,
+        );
+      }
+      return jsonResponse({ ok: true });
+    }
+    if (request.method === 'GET' && path === '/__group_key_package') {
+      const row = this.state.storage.sql.exec<{ payload: string }>(
+        'SELECT payload FROM chat_group_key_package WHERE singleton = 1',
+      ).toArray()[0];
+      if (!row) {
+        return jsonResponse(
+          {
+            ok: false,
+            error_code: 'chat_group_key_package_unavailable',
+            message: '接收设备尚未登记群聊公开包',
+          },
+          { status: 404 },
+        );
+      }
+      return jsonResponse({ ok: true, key_package: JSON.parse(row.payload) });
     }
     if (request.method === 'POST' && path === '/__message') {
       const payload = (await request.json()) as RoutedChatMailboxItem;
@@ -292,7 +269,8 @@ export class Chat implements DurableObject {
         closed += 1;
       }
       this.state.storage.sql.exec('DELETE FROM chat_envelopes');
-      this.state.storage.sql.exec('DELETE FROM chat_key_packages');
+      this.state.storage.sql.exec('DELETE FROM chat_device_key');
+      this.state.storage.sql.exec('DELETE FROM chat_group_key_package');
       return jsonResponse({ ok: true, closed });
     }
     if (request.method === 'POST' && path === '/__close_stale') {
@@ -555,45 +533,85 @@ export async function relayChatSignal(env: Env, payload: ChatSignalPayload): Pro
   return ((await response.json()) as { sent?: number }).sent ?? 0;
 }
 
-/** 以当前 CID 的最新设备公开包替换旧设备包；私钥始终只存在于手机 OpenMLS 状态。 */
-export async function storeChatKeyPackages(
+/** 幂等保存当前 CID 认证设备的 HPKE 公开加密钥；私钥始终只存在于手机。 */
+export async function storeChatDeviceKey(
   env: Env,
   cidNumber: string,
-  normal: ChatPublishedKeyPackage,
-  lastResort: ChatPublishedKeyPackage,
+  deviceKey: ChatPublishedDeviceKey,
 ): Promise<void> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__key_packages', {
+    .fetch(new Request('https://chat.internal/__device_key', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ normal, last_resort: lastResort }),
+      body: JSON.stringify(deviceKey),
     }));
   if (!response.ok) {
-    throw new HttpError(503, 'chat_key_package_write_failed', 'Chat 公开密钥包写入失败');
+    throw new HttpError(503, 'chat_device_key_write_failed', 'Chat 设备公开加密钥写入失败');
   }
 }
 
-/** 原子领取普通包；普通包为空时返回 RFC 9420 last-resort 包。 */
-export async function claimStoredChatKeyPackage(
+/** 读取当前 CID 认证设备的 HPKE 公开加密钥；读取不会消费或改写状态。 */
+export async function readStoredChatDeviceKey(
   env: Env,
   cidNumber: string,
-): Promise<ChatPublishedKeyPackage> {
+): Promise<ChatPublishedDeviceKey> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__key_packages/claim', {
-      method: 'POST',
+    .fetch(new Request('https://chat.internal/__device_key', {
+      method: 'GET',
     }));
   const body = await response.json() as {
-    key_package?: ChatPublishedKeyPackage;
+    device_key?: Omit<ChatPublishedDeviceKey, 'cid_number'>;
+    error_code?: string;
+    message?: string;
+  };
+  if (!response.ok || !body.device_key) {
+    throw new HttpError(
+      response.status,
+      body.error_code ?? 'chat_device_key_unavailable',
+      body.message ?? '接收设备尚未登记聊天加密钥',
+    );
+  }
+  return { cid_number: cidNumber, ...body.device_key };
+}
+
+/** 幂等保存一枚仅供 OpenMLS 群成员加入的 last-resort 公开包。 */
+export async function storeChatGroupKeyPackage(
+  env: Env,
+  cidNumber: string,
+  keyPackage: ChatGroupKeyPackage,
+): Promise<void> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__group_key_package', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ key_package: keyPackage }),
+    }));
+  if (!response.ok) {
+    throw new HttpError(503, 'chat_group_key_package_write_failed', '群聊公开包写入失败');
+  }
+}
+
+/** 读取群聊 last-resort 公开包；读取不消费、不旋转。 */
+export async function readStoredChatGroupKeyPackage(
+  env: Env,
+  cidNumber: string,
+): Promise<ChatGroupKeyPackage> {
+  const response = await requireChatRealtimeNamespace(env)
+    .getByName(cidNumber)
+    .fetch(new Request('https://chat.internal/__group_key_package', { method: 'GET' }));
+  const body = await response.json() as {
+    key_package?: ChatGroupKeyPackage;
     error_code?: string;
     message?: string;
   };
   if (!response.ok || !body.key_package) {
     throw new HttpError(
       response.status,
-      body.error_code ?? 'chat_key_package_unavailable',
-      body.message ?? '接收设备尚无可用公开密钥包',
+      body.error_code ?? 'chat_group_key_package_unavailable',
+      body.message ?? '接收设备尚未登记群聊公开包',
     );
   }
   return body.key_package;

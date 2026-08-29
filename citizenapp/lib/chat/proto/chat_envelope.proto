@@ -5,7 +5,7 @@ package gmb.chat;
 // 跨端 Chat 信封真源。字段编号承担 wire 演进，不另设版本化协议标识。
 //
 // OpenMLS 标准 wire bytes 放在内层；本文件定义手机端持久化和 CitizenServe 临时密文邮箱
-// 共同使用的外层 Envelope、路由记录和 KeyPackage。CitizenServe 只保存序列化 Envelope，
+// 共同使用的外层 Envelope 与路由记录。CitizenServe 只保存序列化 Envelope，
 // 不解析 MLS 正文或持有密钥。Chat 身份只认 CID；当前钱包账户只在服务 Session
 // 完成签名授权，不进入 MLS 名册、会话 ID 或消息归属。
 
@@ -40,17 +40,4 @@ message ChatEnvelope {
   uint64 ttl_millis = 10;
   MlsWireMessageKind mls_message_kind = 11;
   bytes ratchet_tree = 12;
-}
-
-message ChatKeyPackage {
-  reserved 1;
-  string cid_number = 2;
-  string device_id = 3;
-  string device_public_key = 4;
-  string key_package_id = 5;
-  bytes key_package = 6;
-  string cipher_suite = 7;
-  uint64 not_before_millis = 8;
-  uint64 not_after_millis = 9;
-  bool last_resort = 10;
 }

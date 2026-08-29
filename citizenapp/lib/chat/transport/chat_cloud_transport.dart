@@ -142,7 +142,7 @@ class ChatIceConfiguration {
 
 /// CitizenServe Chat 网络边界。
 ///
-/// HTTPS 只承载系统推送端点、OpenMLS 公开 KeyPackage、端到端密文邮箱和固定
+/// HTTPS 只承载系统推送端点、设备公开加密钥、端到端密文邮箱和固定
 /// STUN 配置；同一账户级 WSS 只承载在线密文与音视频通话信令。Worker 不接收
 /// OpenMLS 私钥、聊天明文或附件明文字节。
 class ChatCloudTransport implements ChatTransport {
@@ -205,30 +205,46 @@ class ChatCloudTransport implements ChatTransport {
     });
   }
 
-  /// 发布当前设备唯一的普通包和 RFC 9420 last-resort 包。
-  /// CitizenServe 只保存签名后的公开 wire bytes，无法据此恢复任何 MLS 私钥。
-  Future<void> publishKeyPackages({
-    required MlsKeyPackage normal,
-    required MlsKeyPackage lastResort,
-  }) async {
-    if (normal.cidNumber != localCidNumber ||
-        lastResort.cidNumber != localCidNumber ||
-        normal.deviceId != localDeviceId ||
-        lastResort.deviceId != localDeviceId ||
-        normal.lastResort ||
-        !lastResort.lastResort ||
-        normal.keyPackageId == lastResort.keyPackageId) {
-      throw const FormatException('Chat KeyPackage 与当前设备身份不一致');
+  /// 幂等登记当前认证设备唯一的 HPKE 公开加密钥；私钥只存在于手机加密状态。
+  Future<void> publishDeviceKey(String devicePublicKey) async {
+    if (!RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(devicePublicKey)) {
+      throw const FormatException('Chat 设备公开加密钥必须为 32 字节 hex');
     }
-    await _putMap('/chat/key-packages', {
-      'normal': _keyPackageToJson(normal),
-      'last_resort': _keyPackageToJson(lastResort),
+    await _putMap('/chat/device-key', {
+      'device_id': localDeviceId,
+      'device_public_key_hex': devicePublicKey.toLowerCase(),
     });
   }
 
-  /// 为首次 OpenMLS 会话领取接收设备公开 KeyPackage；该动作不建立 WebRTC。
-  Future<MlsKeyPackage> claimKeyPackage(String recipientCidNumber) async {
-    final response = await _postMap('/chat/key-packages/claim', {
+  /// 读取接收 CID 当前认证设备的 HPKE 公开加密钥，不创建会话或 WebRTC 连接。
+  Future<String> resolveDeviceKey(String recipientCidNumber) async {
+    final response = await _postMap('/chat/device-key/resolve', {
+      'recipient_cid_number': recipientCidNumber,
+    });
+    final key = response['device_public_key_hex'];
+    if (key is! String || !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(key)) {
+      throw const FormatException('CitizenServe 未返回合法 Chat 设备公开加密钥');
+    }
+    return key.toLowerCase();
+  }
+
+  /// 发布当前设备唯一的 RFC 9420 last-resort 包，仅供 OpenMLS 群成员加入。
+  /// 私聊始终使用 HPKE 设备公钥，不读取本接口，也不维护普通包库存。
+  Future<void> publishGroupKeyPackage(MlsKeyPackage keyPackage) async {
+    if (keyPackage.cidNumber != localCidNumber ||
+        keyPackage.deviceId != localDeviceId ||
+        !keyPackage.lastResort) {
+      throw const FormatException('群聊 KeyPackage 与当前设备身份不一致');
+    }
+    await _putMap('/chat/groups/key-package', {
+      'key_package': _keyPackageToJson(keyPackage),
+    });
+  }
+
+  /// 读取被邀请设备的群聊公开包；读取不消费、不旋转，也不建立 WebRTC。
+  Future<MlsKeyPackage> resolveGroupKeyPackage(
+      String recipientCidNumber) async {
+    final response = await _postMap('/chat/groups/key-package/resolve', {
       'recipient_cid_number': recipientCidNumber,
     });
     final raw = response['key_package'];
@@ -346,12 +362,14 @@ class ChatCloudTransport implements ChatTransport {
         }
         final request = http.StreamedRequest('PUT', uri)
           ..contentLength = byteSize
-          ..headers.addAll(uploadHeaders
-              .map((key, value) => MapEntry(key, value.toString())));
+          ..headers.addAll(
+            uploadHeaders.map((key, value) => MapEntry(key, value.toString())),
+          );
         final sending =
             _httpClient.send(request).timeout(const Duration(hours: 6));
-        await request.sink
-            .addStream(cipherFile.openRead(offset, offset + byteSize));
+        await request.sink.addStream(
+          cipherFile.openRead(offset, offset + byteSize),
+        );
         await request.sink.close();
         final response = await sending;
         await response.stream.drain<void>();
@@ -381,8 +399,9 @@ class ChatCloudTransport implements ChatTransport {
     required int expectedByteSize,
     required String expectedSha256,
   }) async {
-    final plan = await _postMap(
-        '/chat/attachments/download', {'attachment_id': attachmentId});
+    final plan = await _postMap('/chat/attachments/download', {
+      'attachment_id': attachmentId,
+    });
     if (plan['cipher_byte_size'] != expectedByteSize ||
         plan['cipher_sha256'] != expectedSha256) {
       throw const FormatException('Chat 附件密文索引与 OpenMLS 控制消息不一致');
@@ -433,9 +452,11 @@ class ChatCloudTransport implements ChatTransport {
     if (stunUrls.isEmpty) {
       throw const FormatException('Chat ICE 配置不完整');
     }
-    final configuration = ChatIceConfiguration(iceServers: [
-      <String, dynamic>{'urls': stunUrls},
-    ]);
+    final configuration = ChatIceConfiguration(
+      iceServers: [
+        <String, dynamic>{'urls': stunUrls},
+      ],
+    );
     _cachedIce = configuration;
     _iceCachedAt = DateTime.now();
     return configuration;
@@ -508,9 +529,10 @@ class ChatCloudTransport implements ChatTransport {
     }
     WebSocket socket;
     try {
-      socket = await WebSocket.connect(uri.toString(),
-              headers: await _wsHeaders(uri))
-          .timeout(requestTimeout);
+      socket = await WebSocket.connect(
+        uri.toString(),
+        headers: await _wsHeaders(uri),
+      ).timeout(requestTimeout);
     } on TimeoutException {
       _recordRealtimeDiagnostic('chat_signal_connect_timeout');
       return null;
@@ -661,10 +683,7 @@ class ChatCloudTransport implements ChatTransport {
   Future<void> _diagnoseRealtimePreflight(Uri wsUri) async {
     try {
       final response = await _httpClient
-          .get(
-            wsUri.replace(scheme: 'https'),
-            headers: await _wsHeaders(wsUri),
-          )
+          .get(wsUri.replace(scheme: 'https'), headers: await _wsHeaders(wsUri))
           .timeout(requestTimeout);
       var errorCode = '-';
       try {
@@ -712,8 +731,11 @@ class ChatCloudTransport implements ChatTransport {
 
   Future<Object?> _getJson(String path) => _requestJson('GET', path);
 
-  Future<Object?> _requestJson(String method, String path,
-      {Object? body}) async {
+  Future<Object?> _requestJson(
+    String method,
+    String path, {
+    Object? body,
+  }) async {
     final uri = _uri(path);
     final encoded = body == null ? '' : jsonEncode(body);
     final headers = await _headers(method, uri, encoded);
@@ -740,7 +762,10 @@ class ChatCloudTransport implements ChatTransport {
   Uri _signalUri(String path) => _uri(path).replace(scheme: 'wss');
 
   Future<Map<String, String>> _headers(
-      String method, Uri uri, String body) async {
+    String method,
+    Uri uri,
+    String body,
+  ) async {
     final token = sessionToken?.trim() ?? '';
     final headers = <String, String>{
       'authorization': 'Bearer $token',
@@ -749,13 +774,15 @@ class ChatCloudTransport implements ChatTransport {
     };
     final signer = requestSigner;
     if (signer != null) {
-      headers.addAll(await squareRequestHeaders(
-        method: method,
-        uri: uri,
-        body: body,
-        sessionToken: token,
-        sign: signer,
-      ));
+      headers.addAll(
+        await squareRequestHeaders(
+          method: method,
+          uri: uri,
+          body: body,
+          sessionToken: token,
+          sign: signer,
+        ),
+      );
     }
     return headers;
   }
@@ -773,7 +800,8 @@ Map<String, dynamic> _keyPackageToJson(MlsKeyPackage keyPackage) =>
       'device_id': keyPackage.deviceId,
       'device_public_key_hex': keyPackage.devicePublicKey,
       'key_package_id': keyPackage.keyPackageId,
-      'key_package': base64Url.encode(keyPackage.keyPackageBytes).replaceAll('=', ''),
+      'key_package':
+          base64Url.encode(keyPackage.keyPackageBytes).replaceAll('=', ''),
       'cipher_suite': keyPackage.cipherSuite,
       'not_before': keyPackage.notBeforeMillis,
       'not_after': keyPackage.notAfterMillis,
@@ -832,8 +860,9 @@ MlsKeyPackage _keyPackageFromJson(Map<String, dynamic> value) {
 
 /// WebSocket 握手异常只提取 HTTP 状态类别，不把 URL、Header 或响应正文写入日志。
 String _webSocketFailureDiagnostic(WebSocketException error) {
-  final status =
-      RegExp(r'\b([45][0-9]{2})\b').firstMatch(error.message)?.group(1);
+  final status = RegExp(
+    r'\b([45][0-9]{2})\b',
+  ).firstMatch(error.message)?.group(1);
   return status == null
       ? 'chat_signal_handshake_failed'
       : 'chat_signal_http_$status';

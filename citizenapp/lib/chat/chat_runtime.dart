@@ -53,11 +53,7 @@ typedef MlsStateStoreFactory = Future<MlsStateStore> Function(
     String ownerCidNumber, String deviceId);
 
 /// Documents 根下持久擦除门闩的启动态。
-enum ChatPersistentWipeState {
-  none,
-  pending,
-  complete,
-}
+enum ChatPersistentWipeState { none, pending, complete }
 
 /// 系统推送唤醒后的短时后台收发窗口。
 ///
@@ -161,8 +157,9 @@ class _ChatRealtimeSession {
   final Set<Future<void>> _callbacks = <Future<void>>{};
   Future<void> _callbackTail = Future<void>.value();
   bool _acceptingCallbacks = true;
-  late final _RetryableAsyncDisposer _disposer =
-      _RetryableAsyncDisposer(_dispose);
+  late final _RetryableAsyncDisposer _disposer = _RetryableAsyncDisposer(
+    _dispose,
+  );
 
   void attachSocket(Future<void> Function() stopSocket) {
     if (_socketDisposer != null) {
@@ -465,9 +462,7 @@ class _ChatCrossIsolateCoordinator {
     }
   }
 
-  static Future<void> drainBackgroundLeases(
-    Directory documentsRoot,
-  ) async {
+  static Future<void> drainBackgroundLeases(Directory documentsRoot) async {
     final deadline = DateTime.now().add(_leaseDrainTimeout);
     while (await _hasCurrentProcessLease(documentsRoot)) {
       if (!DateTime.now().isBefore(deadline)) {
@@ -477,9 +472,7 @@ class _ChatCrossIsolateCoordinator {
     }
   }
 
-  static Future<void> _drainAllBackgroundLeases(
-    Directory documentsRoot,
-  ) async {
+  static Future<void> _drainAllBackgroundLeases(Directory documentsRoot) async {
     final deadline = DateTime.now().add(_leaseDrainTimeout);
     while (await _hasLiveBackgroundLease(documentsRoot)) {
       if (!DateTime.now().isBefore(deadline)) {
@@ -489,9 +482,7 @@ class _ChatCrossIsolateCoordinator {
     }
   }
 
-  static Future<bool> _hasLiveBackgroundLease(
-    Directory documentsRoot,
-  ) async {
+  static Future<bool> _hasLiveBackgroundLease(Directory documentsRoot) async {
     await for (final entity in documentsRoot.list(followLinks: false)) {
       final name = _basename(entity.path);
       if (!name.startsWith(_leasePrefix) || !name.endsWith(_leaseSuffix)) {
@@ -579,10 +570,7 @@ class _ChatCrossIsolateCoordinator {
       if (!activePattern.hasMatch(name) && !stalePattern.hasMatch(name)) {
         continue;
       }
-      final type = await FileSystemEntity.type(
-        entity.path,
-        followLinks: false,
-      );
+      final type = await FileSystemEntity.type(entity.path, followLinks: false);
       if (type != FileSystemEntityType.file &&
           type != FileSystemEntityType.link) {
         throw StateError('Chat 启动预检发现异常 CID lease 类型');
@@ -677,8 +665,10 @@ class _ChatCrossIsolateCoordinator {
   ) async {
     final pending = _directFile(documentsRoot, _pendingMarkerName);
     final complete = _directFile(documentsRoot, _completeMarkerName);
-    final completeType =
-        await FileSystemEntity.type(complete.path, followLinks: false);
+    final completeType = await FileSystemEntity.type(
+      complete.path,
+      followLinks: false,
+    );
     if (completeType == FileSystemEntityType.file) {
       try {
         if (await complete.readAsString() == _completeMarkerPayload) {
@@ -690,8 +680,10 @@ class _ChatCrossIsolateCoordinator {
     } else if (completeType != FileSystemEntityType.notFound) {
       return ChatPersistentWipeState.pending;
     }
-    final pendingType =
-        await FileSystemEntity.type(pending.path, followLinks: false);
+    final pendingType = await FileSystemEntity.type(
+      pending.path,
+      followLinks: false,
+    );
     return pendingType == FileSystemEntityType.notFound
         ? ChatPersistentWipeState.none
         : ChatPersistentWipeState.pending;
@@ -758,9 +750,7 @@ class _ChatCrossIsolateCoordinator {
     );
   }
 
-  static Future<bool> _hasCurrentProcessLease(
-    Directory documentsRoot,
-  ) async {
+  static Future<bool> _hasCurrentProcessLease(Directory documentsRoot) async {
     await for (final entity in documentsRoot.list(followLinks: false)) {
       final name = _basename(entity.path);
       if (name.startsWith(_leasePrefix) && name.endsWith(_leaseSuffix)) {
@@ -802,10 +792,7 @@ class _ChatCrossIsolateCoordinator {
           (removeStagedComplete && name.startsWith('.$_completeMarkerName.'));
       final belongsToCurrentProcess = name.startsWith(_currentLeasePrefix);
       if (!isProtocolArtifact || belongsToCurrentProcess) continue;
-      final type = await FileSystemEntity.type(
-        entity.path,
-        followLinks: false,
-      );
+      final type = await FileSystemEntity.type(entity.path, followLinks: false);
       if (name.startsWith(_leasePrefix) && name.endsWith(_leaseSuffix)) {
         if (type != FileSystemEntityType.file) {
           throw StateError('Chat 后台 lease 类型异常');
@@ -857,9 +844,7 @@ class _ChatCrossIsolateCoordinator {
         (!allowSameProcess && firstOwner.processId == pid)) {
       return false;
     }
-    await Future<void>.delayed(
-      _leaseHeartbeatInterval + _leasePollInterval,
-    );
+    await Future<void>.delayed(_leaseHeartbeatInterval + _leasePollInterval);
     final secondType = await FileSystemEntity.type(
       leaseFile.path,
       followLinks: false,
@@ -885,10 +870,7 @@ class _ChatCrossIsolateCoordinator {
       await renamed.delete();
       return true;
     } on FileSystemException {
-      return await FileSystemEntity.type(
-            leaseFile.path,
-            followLinks: false,
-          ) ==
+      return await FileSystemEntity.type(leaseFile.path, followLinks: false) ==
           FileSystemEntityType.notFound;
     }
   }
@@ -971,10 +953,7 @@ class _ChatCrossIsolateCoordinator {
       await renamed.delete();
       return true;
     } on FileSystemException {
-      return await FileSystemEntity.type(
-            leaseFile.path,
-            followLinks: false,
-          ) ==
+      return await FileSystemEntity.type(leaseFile.path, followLinks: false) ==
           FileSystemEntityType.notFound;
     }
   }
@@ -1142,9 +1121,7 @@ class _ChatCidMutationLease {
         _heartbeatStackTrace ?? StackTrace.current,
       );
     }
-    final actual = await _ChatCrossIsolateCoordinator._readCidLeaseOwner(
-      _file,
-    );
+    final actual = await _ChatCrossIsolateCoordinator._readCidLeaseOwner(_file);
     if (actual?.encode() != _owner.encode()) {
       throw StateError('Chat CID 文件协调 lease 所有权已变化');
     }
@@ -1272,22 +1249,20 @@ class _ChatBindingFencedMlsCrypto implements MlsCrypto, MlsGroupCrypto {
     ChatDevice identity, {
     bool lastResort = false,
   }) =>
-      _run(
-        () => _delegate.createKeyPackage(identity, lastResort: lastResort),
-      );
+      _run(() => _delegate.createKeyPackage(identity, lastResort: lastResort));
 
   @override
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
     required String recipientCidNumber,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) =>
       _run(
         () => _delegate.encrypt(
           conversationId: conversationId,
           recipientCidNumber: recipientCidNumber,
-          recipientKeyPackage: recipientKeyPackage,
+          recipientDevicePublicKey: recipientDevicePublicKey,
           plaintext: plaintext,
         ),
       );
@@ -1356,7 +1331,9 @@ class _ChatCrossIsolateLease {
     if (_released || _heartbeatError != null) return;
     _heartbeatTail = _heartbeatTail.then<void>((_) async {
       if (_released || _heartbeatError != null) return;
-      final actual = await _ChatCrossIsolateCoordinator._readLeaseOwner(_file);
+      final actual = await _ChatCrossIsolateCoordinator._readLeaseOwner(
+        _file,
+      );
       if (actual?.encode() != _owner.encode()) {
         throw StateError('Chat 跨 isolate lease 所有权已变化');
       }
@@ -1374,10 +1351,7 @@ class _ChatCrossIsolateLease {
     Object? error = _heartbeatError;
     StackTrace? stackTrace = _heartbeatStackTrace;
     try {
-      await _ChatCrossIsolateCoordinator._deleteOwnedLeaseFile(
-        _file,
-        _owner,
-      );
+      await _ChatCrossIsolateCoordinator._deleteOwnedLeaseFile(_file, _owner);
       _released = true;
     } catch (caught, caughtStackTrace) {
       error ??= caught;
@@ -1407,8 +1381,9 @@ class _ChatAccountContext {
   final MlsCrypto crypto;
   final ChatCloudTransport transport;
   final int sessionExpiresAt;
-  late final _RetryableAsyncDisposer _disposer =
-      _RetryableAsyncDisposer(_dispose);
+  late final _RetryableAsyncDisposer _disposer = _RetryableAsyncDisposer(
+    _dispose,
+  );
 
   bool get isUsable =>
       sessionExpiresAt - ChatRuntime._sessionRefreshSkewMillis >
@@ -1603,7 +1578,7 @@ class ChatRuntime {
   /// 本机处理成功后只重试云端 ACK，不得再次推进同一个 OpenMLS 控制消息。
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
   final Set<String> _incomingConvergenceInFlight = <String>{};
-  final Set<String> _keyPackagePublications = <String>{};
+  final Set<String> _groupKeyPackagePublications = <String>{};
 
   /// 同一账户/设备只允许一条初始化链。成功上下文复用到 session 临近过期；
   /// 失败只释放命中的 future，不得误删后来创建的新初始化。
@@ -1621,17 +1596,15 @@ class ChatRuntime {
     Future<Directory> Function()? documentsDirectoryProvider,
   }) {
     _processWipeRequested = true;
-    return _resolveWipeDocumentsRoot(documentsDirectoryProvider).then(
-      _ChatCrossIsolateCoordinator.ensureWipePending,
-    );
+    return _resolveWipeDocumentsRoot(
+      documentsDirectoryProvider,
+    ).then(_ChatCrossIsolateCoordinator.ensureWipePending);
   }
 
   static Future<ChatPersistentWipeState> readPersistentAppDataWipeState({
     Future<Directory> Function()? documentsDirectoryProvider,
   }) async {
-    final root = await _resolveWipeDocumentsRoot(
-      documentsDirectoryProvider,
-    );
+    final root = await _resolveWipeDocumentsRoot(documentsDirectoryProvider);
     return _ChatCrossIsolateCoordinator.readPersistentWipeState(root);
   }
 
@@ -1676,9 +1649,7 @@ class ChatRuntime {
     required Future<T> Function() operation,
     Future<Directory> Function()? documentsDirectoryProvider,
   }) async {
-    final root = await _resolveWipeDocumentsRoot(
-      documentsDirectoryProvider,
-    );
+    final root = await _resolveWipeDocumentsRoot(documentsDirectoryProvider);
     return _ChatCrossIsolateCoordinator.runStartupPreflight(root, operation);
   }
 
@@ -1746,9 +1717,9 @@ class ChatRuntime {
           FileSystemEntityType.directory) {
         throw StateError('Chat 明文清扫发现非目录 binding revision');
       }
-      await for (final account in Directory(revision.path).list(
-        followLinks: false,
-      )) {
+      await for (final account in Directory(
+        revision.path,
+      ).list(followLinks: false)) {
         if (await FileSystemEntity.type(account.path, followLinks: false) !=
             FileSystemEntityType.directory) {
           throw StateError('Chat 明文清扫发现非目录 account binding');
@@ -1777,9 +1748,7 @@ class ChatRuntime {
   static Future<void> markPersistentAppDataWipeComplete({
     Future<Directory> Function()? documentsDirectoryProvider,
   }) async {
-    final root = await _resolveWipeDocumentsRoot(
-      documentsDirectoryProvider,
-    );
+    final root = await _resolveWipeDocumentsRoot(documentsDirectoryProvider);
     await _ChatCrossIsolateCoordinator.markWipeComplete(root);
   }
 
@@ -1787,9 +1756,7 @@ class ChatRuntime {
   static Future<void> clearCompletedPersistentAppDataWipe({
     Future<Directory> Function()? documentsDirectoryProvider,
   }) async {
-    final root = await _resolveWipeDocumentsRoot(
-      documentsDirectoryProvider,
-    );
+    final root = await _resolveWipeDocumentsRoot(documentsDirectoryProvider);
     await _ChatCrossIsolateCoordinator.clearCompletedWipe(root);
   }
 
@@ -1851,11 +1818,7 @@ class ChatRuntime {
     final processOperations = _processOperations.toList(growable: false);
     await Future.wait<void>(<Future<void>>[
       for (final operation in processOperations)
-        _captureCleanupFailure(
-          '等待 Chat 后台进程操作',
-          () => operation,
-          failures,
-        ),
+        _captureCleanupFailure('等待 Chat 后台进程操作', () => operation, failures),
       for (final instance in instances)
         _closeInstanceForWipe(instance, failures),
     ]);
@@ -2010,8 +1973,9 @@ class ChatRuntime {
     final root = await _ChatCrossIsolateCoordinator.resolveDocumentsRoot(
       documentsDirectoryProvider,
     );
-    final lease =
-        await _ChatCrossIsolateCoordinator.acquireBackgroundLease(root);
+    final lease = await _ChatCrossIsolateCoordinator.acquireBackgroundLease(
+      root,
+    );
     if (checkLocalTerminal) _ensureProcessActive();
     // operation 必须把业务错误内部收敛，只在所有 runtime/push 清理成功
     // 后返回。任何 cleanup 异常均故意保留 lease，禁止 wipe 误报成功。
@@ -2114,7 +2078,7 @@ class ChatRuntime {
     _mediaBytesInFlight.clear();
     _mailboxEnvelopeReceipts.clear();
     _incomingConvergenceInFlight.clear();
-    _keyPackagePublications.clear();
+    _groupKeyPackagePublications.clear();
 
     final failures = <String>[];
     // 第一阶段只停止所有实时生产源。session 会同步拒绝新 callback，关闭
@@ -2135,17 +2099,9 @@ class ChatRuntime {
     final earlierDisposals = _contextDisposals.toList(growable: false);
     await Future.wait<void>(<Future<void>>[
       for (final mutation in fileMutations)
-        _captureCleanupFailure(
-          '等待 Chat 文件改写',
-          () => mutation,
-          failures,
-        ),
+        _captureCleanupFailure('等待 Chat 文件改写', () => mutation, failures),
       for (final operation in runtimeOperations)
-        _captureCleanupFailure(
-          '等待 Chat 运行操作',
-          () => operation,
-          failures,
-        ),
+        _captureCleanupFailure('等待 Chat 运行操作', () => operation, failures),
       for (final flight in flights)
         _captureCleanupFailure(
           '失效 Chat 初始化任务',
@@ -2153,11 +2109,7 @@ class ChatRuntime {
           failures,
         ),
       for (final disposal in earlierDisposals)
-        _captureCleanupFailure(
-          '等待此前 Chat 上下文关闭',
-          () => disposal,
-          failures,
-        ),
+        _captureCleanupFailure('等待此前 Chat 上下文关闭', () => disposal, failures),
     ]);
 
     // 第三阶段才关闭 context：此时没有 action 会继续使用 NativeMlsCrypto、
@@ -2320,9 +2272,7 @@ class ChatRuntime {
         }
         final result = await runZoned<Future<T>>(
           operation,
-          zoneValues: <Object, Object>{
-            _cidMutationZoneKey: scope,
-          },
+          zoneValues: <Object, Object>{_cidMutationZoneKey: scope},
         );
         // 保持 fast path 到已登记 nested action 全部完成，避免 nested callback 后半段
         // 再进入同 CID wrapper 时排到 outer 后面自锁；集合排空后的同步 continuation
@@ -2354,9 +2304,7 @@ class ChatRuntime {
       left.genesisHash == right.genesisHash &&
       left.generation == right.generation;
 
-  Future<ChatBindingFenceToken> _convergeBindingFence(
-    _ChatAccount account,
-  ) {
+  Future<ChatBindingFenceToken> _convergeBindingFence(_ChatAccount account) {
     return _runCidFileMutation(
       cidNumber: account.cidNumber,
       operation: () async {
@@ -2411,22 +2359,16 @@ class ChatRuntime {
   @visibleForTesting
   Future<T> debugRunFileMutationForTest<T>(Future<T> Function() operation) {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
-      return Future<T>.error(
-        UnsupportedError('仅 Flutter 测试允许注入 Chat 文件改写'),
-      );
+      return Future<T>.error(UnsupportedError('仅 Flutter 测试允许注入 Chat 文件改写'));
     }
     return _runFileMutation(operation);
   }
 
   /// 验证终态会拒绝新的实时回调，仅用于 Flutter 测试。
   @visibleForTesting
-  Future<T> debugRunRuntimeOperationForTest<T>(
-    Future<T> Function() operation,
-  ) {
+  Future<T> debugRunRuntimeOperationForTest<T>(Future<T> Function() operation) {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
-      return Future<T>.error(
-        UnsupportedError('仅 Flutter 测试允许注入 Chat 运行回调'),
-      );
+      return Future<T>.error(UnsupportedError('仅 Flutter 测试允许注入 Chat 运行回调'));
     }
     return _runRuntimeOperation(operation);
   }
@@ -2464,9 +2406,7 @@ class ChatRuntime {
 
   /// 把可控关闭操作注入真实 runtime 擦除链，仅用于验证失败后重试。
   @visibleForTesting
-  void debugRegisterContextDisposerForTest(
-    Future<void> Function() operation,
-  ) {
+  void debugRegisterContextDisposerForTest(Future<void> Function() operation) {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       throw UnsupportedError('仅 Flutter 测试允许注入 Chat 上下文关闭操作');
     }
@@ -2798,10 +2738,7 @@ class ChatRuntime {
         state: _ChatFileHandoverState.staged,
       );
     } finally {
-      for (final key in <Uint8List>[
-        ...?sourceKeys,
-        ...?targetKeys,
-      ]) {
+      for (final key in <Uint8List>[...?sourceKeys, ...?targetKeys]) {
         key.fillRange(0, key.length, 0);
       }
     }
@@ -2860,15 +2797,11 @@ class ChatRuntime {
     required Uint8List targetStateKey,
     required void Function(Uint8List sourceCopy, Uint8List targetCopy)
         runNativeRekey,
-    required Future<void> Function(
-      MlsStateStore store,
-      Uint8List targetCopy,
-    ) stagePending,
+    required Future<void> Function(MlsStateStore store, Uint8List targetCopy)
+        stagePending,
   }) {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
-      return Future<void>.error(
-        UnsupportedError('仅 Flutter 测试允许注入 MLS 换绑阶段'),
-      );
+      return Future<void>.error(UnsupportedError('仅 Flutter 测试允许注入 MLS 换绑阶段'));
     }
     return _stageMlsDeviceHandover(
       deviceDirectory: deviceDirectory,
@@ -3004,9 +2937,7 @@ class ChatRuntime {
       }
       if (sourceExists) {
         await AttachmentVault.commitAccountHandover(
-          attachmentDirectory: Directory(
-            '${sourceDirectory.path}/attachments',
-          ),
+          attachmentDirectory: Directory('${sourceDirectory.path}/attachments'),
           handoverId: _handoverId(target),
         );
         final mlsDirs = await _mlsDeviceDirectories(source);
@@ -3130,9 +3061,7 @@ class ChatRuntime {
         );
       }
       await AttachmentVault.discardAccountHandover(
-        attachmentDirectory: Directory(
-          '${sourceDirectory.path}/attachments',
-        ),
+        attachmentDirectory: Directory('${sourceDirectory.path}/attachments'),
         handoverId: _handoverId(target),
       );
       final mlsDirs = await _mlsDeviceDirectories(source);
@@ -3354,9 +3283,10 @@ class ChatRuntime {
       });
 
   static String _fileHandoverMac(List<int> key, String payloadJson) =>
-      crypto_hash.Hmac(crypto_hash.sha256, key)
-          .convert(utf8.encode('$_fileHandoverMacDomain$payloadJson'))
-          .toString();
+      crypto_hash.Hmac(
+        crypto_hash.sha256,
+        key,
+      ).convert(utf8.encode('$_fileHandoverMacDomain$payloadJson')).toString();
 
   static bool _constantTimeStringEquals(String left, String right) {
     final leftBytes = utf8.encode(left);
@@ -3371,18 +3301,13 @@ class ChatRuntime {
     return difference == 0;
   }
 
-  static String _relativeFileHandoverPath(
-    Directory root,
-    String path,
-  ) {
+  static String _relativeFileHandoverPath(Directory root, String path) {
     final prefix = '${root.path}${Platform.pathSeparator}';
     if (!path.startsWith(prefix)) {
       throw StateError('Chat 文件交接清单路径越界');
     }
-    final relative = path.substring(prefix.length).replaceAll(
-          Platform.pathSeparator,
-          '/',
-        );
+    final relative =
+        path.substring(prefix.length).replaceAll(Platform.pathSeparator, '/');
     if (relative.isEmpty ||
         relative.startsWith('/') ||
         relative
@@ -3432,17 +3357,15 @@ class ChatRuntime {
       }
       files.add(
         _ChatFileHandoverInventoryItem(
-          relativePath: _relativeFileHandoverPath(
-            bindingDirectory,
-            file.path,
-          ),
+          relativePath: _relativeFileHandoverPath(bindingDirectory, file.path),
           byteSize: after.size,
           sha256: digest.toString(),
         ),
       );
     }
-    files
-        .sort((left, right) => left.relativePath.compareTo(right.relativePath));
+    files.sort(
+      (left, right) => left.relativePath.compareTo(right.relativePath),
+    );
     return List<_ChatFileHandoverInventoryItem>.unmodifiable(files);
   }
 
@@ -3452,10 +3375,8 @@ class ChatRuntime {
   }) {
     final paths = deviceDirectories
         .map(
-          (directory) => _relativeFileHandoverPath(
-            bindingDirectory,
-            directory.path,
-          ),
+          (directory) =>
+              _relativeFileHandoverPath(bindingDirectory, directory.path),
         )
         .toList(growable: false)
       ..sort();
@@ -3480,10 +3401,7 @@ class ChatRuntime {
         markerType != FileSystemEntityType.file) {
       throw StateError('Chat 文件交接 receipt 路径类型异常');
     }
-    final tempType = await FileSystemEntity.type(
-      temp.path,
-      followLinks: false,
-    );
+    final tempType = await FileSystemEntity.type(temp.path, followLinks: false);
     if (tempType == FileSystemEntityType.file) {
       await temp.delete();
     } else if (tempType != FileSystemEntityType.notFound) {
@@ -3591,9 +3509,10 @@ class ChatRuntime {
     }
     final raw = jsonDecode(await marker.readAsString());
     if (raw is! Map<String, dynamic> ||
-        raw.keys
-            .toSet()
-            .difference(<String>{'payload_json', 'mac'}).isNotEmpty ||
+        raw.keys.toSet().difference(<String>{
+          'payload_json',
+          'mac',
+        }).isNotEmpty ||
         raw.length != 2 ||
         raw['payload_json'] is! String ||
         raw['mac'] is! String) {
@@ -3809,10 +3728,7 @@ class ChatRuntime {
     for (final entry in byCidNumber.entries) {
       await _captureCleanupFailure(
         '排空账户 Chat 文件操作',
-        () => _runCidFileMutation(
-          cidNumber: entry.key,
-          operation: () async {},
-        ),
+        () => _runCidFileMutation(cidNumber: entry.key, operation: () async {}),
         failures,
       );
     }
@@ -3831,9 +3747,7 @@ class ChatRuntime {
     if (!keepBlocked) _blockedAccountIds.remove(accountId);
   }
 
-  void _trackInvalidatedReadyFlight(
-    Future<_ChatAccountContext> flight,
-  ) {
+  void _trackInvalidatedReadyFlight(Future<_ChatAccountContext> flight) {
     if (!_readyFlightsPendingInvalidation.add(flight)) return;
     unawaited(
       flight.then<void>(
@@ -3871,7 +3785,7 @@ class ChatRuntime {
   }
 
   /// 用户点击发送后的第一持久边界。这里只依赖当前 finalized 账户和本机用途钥，
-  /// 不等待 Firebase、Worker 登录、系统唤醒端点、云端 KeyPackage 或 WebSocket。
+  /// 不等待 Firebase、Worker 登录、系统唤醒端点、设备公开钥或 WebSocket。
   Future<String> _savePendingDirectPayload({
     required String peerCidNumber,
     required String conversationId,
@@ -3943,8 +3857,9 @@ class ChatRuntime {
     unawaited(
       _runRuntimeOperation(
         () => _outboundDeliveryGate.run(key, () async {
-          final current =
-              await _readAccount(expectedAccountId: account.accountId);
+          final current = await _readAccount(
+            expectedAccountId: account.accountId,
+          );
           final context = await _readyContext(current);
           await _flushPendingOutgoing(
             context,
@@ -4078,14 +3993,10 @@ class ChatRuntime {
     String attachmentId,
   ) async =>
       File(
-        '${(await _pendingAttachmentUploadFile(
-          bindingToken,
-          conversationId,
-          attachmentId,
-        )).path}.uploaded',
+        '${(await _pendingAttachmentUploadFile(bindingToken, conversationId, attachmentId)).path}.uploaded',
       );
 
-  /// 发送内置贴纸只走控制信封。首次会话缺 KeyPackage 时经 HTTPS 领取后重试。
+  /// 发送内置贴纸只走与文字相同的 HPKE 密文邮箱，不建立 WebRTC 连接。
   Future<List<ChatDeliveryResult>> sendSticker({
     required String peerCidNumber,
     required String conversationId,
@@ -4106,14 +4017,16 @@ class ChatRuntime {
 
   // ==== 私密小群 ====
 
-  /// 建群：选联系人 CID，领其 KeyPackage 批量加入，创建者为 admin。
+  /// 建群：选联系人 CID，读取其群聊公开包批量加入，创建者为 admin。
   Future<ChatGroup> createGroup({
     required String name,
     List<String> inviteeCidNumbers = const [],
   }) {
     return _runWithReadyBinding((context) async {
-      final invitees =
-          await _fetchInviteeKeyPackages(context, inviteeCidNumbers);
+      final invitees = await _fetchInviteeKeyPackages(
+        context,
+        inviteeCidNumbers,
+      );
       final groupId = newGroupId(context.account.cidNumber);
       return _groupFlow(context).createGroup(
         groupId: groupId,
@@ -4131,8 +4044,10 @@ class ChatRuntime {
     required List<String> inviteeCidNumbers,
   }) {
     return _runWithReadyBinding((context) async {
-      final invitees =
-          await _fetchInviteeKeyPackages(context, inviteeCidNumbers);
+      final invitees = await _fetchInviteeKeyPackages(
+        context,
+        inviteeCidNumbers,
+      );
       await _groupFlow(context).addMembers(
         groupId: groupId,
         actorCidNumber: context.account.cidNumber,
@@ -4165,10 +4080,7 @@ class ChatRuntime {
   }
 
   /// 改群名(仅 admin)。
-  Future<void> renameGroup({
-    required String groupId,
-    required String name,
-  }) {
+  Future<void> renameGroup({required String groupId, required String name}) {
     return _runWithReadyBinding((context) async {
       await _groupFlow(context).renameGroup(groupId, name);
     });
@@ -4269,35 +4181,37 @@ class ChatRuntime {
     }();
   }
 
-  /// 逐个为被邀请 CID 从 CitizenServe 领取公开 KeyPackage。
+  /// 逐个读取被邀请 CID 的 OpenMLS 群聊公开包；私聊绝不进入这里。
   Future<List<MlsKeyPackage>> _fetchInviteeKeyPackages(
     _ChatAccountContext context,
     List<String> inviteeCidNumbers,
   ) async {
     final packages = <MlsKeyPackage>[];
     for (final cidNumber in inviteeCidNumbers) {
-      final consumed = await _claimKeyPackage(context, cidNumber);
-      if (consumed.cidNumber != cidNumber) {
+      final resolved = await _resolveGroupKeyPackage(context, cidNumber);
+      if (resolved.cidNumber != cidNumber) {
         throw StateError('CitizenServe 返回的 KeyPackage CID 与请求目标不一致');
       }
-      packages.add(consumed);
+      packages.add(resolved);
     }
     return packages;
   }
 
-  Future<MlsKeyPackage> _claimKeyPackage(
+  Future<MlsKeyPackage> _resolveGroupKeyPackage(
     _ChatAccountContext context,
     String targetCidNumber,
   ) async {
-    final claimed = await context.transport.claimKeyPackage(targetCidNumber);
-    if (claimed.cidNumber != targetCidNumber) {
+    final resolved = await context.transport.resolveGroupKeyPackage(
+      targetCidNumber,
+    );
+    if (resolved.cidNumber != targetCidNumber) {
       throw StateError('CitizenServe 返回的 KeyPackage CID 与请求目标不一致');
     }
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (claimed.notBeforeMillis >= now || claimed.notAfterMillis <= now) {
+    if (resolved.notBeforeMillis >= now || resolved.notAfterMillis <= now) {
       throw StateError('CitizenServe 返回的 KeyPackage Lifetime 当前不可用');
     }
-    return claimed;
+    return resolved;
   }
 
   ChatGroupFlow _groupFlow(_ChatAccountContext context) {
@@ -4375,11 +4289,8 @@ class ChatRuntime {
     required String controlPlaintext,
   }) {
     return _runWithReadyBinding(
-      (context) => _downloadAttachment(
-        context,
-        conversationId,
-        controlPlaintext,
-      ),
+      (context) =>
+          _downloadAttachment(context, conversationId, controlPlaintext),
     );
   }
 
@@ -4430,47 +4341,48 @@ class ChatRuntime {
       await _invalidateAccountContext(id);
     }
     return _runCidFileMutation(
-        cidNumber: cidNumber,
-        operation: () async {
-          _ensureActive();
-          await _store.clearAllForCidNumber(cidNumber);
+      cidNumber: cidNumber,
+      operation: () async {
+        _ensureActive();
+        await _store.clearAllForCidNumber(cidNumber);
 
-          final documentsRoot = (await _documentsDirectoryProvider()).absolute;
-          final cidDirectory = Directory(
-            '${documentsRoot.path}${Platform.pathSeparator}chat'
-            '${Platform.pathSeparator}by_cid'
-            '${Platform.pathSeparator}${_safePath(cidNumber)}',
-          ).absolute;
-          if (cidDirectory.path == cidDirectory.parent.path ||
-              !cidDirectory.path.startsWith(
-                '${documentsRoot.path}${Platform.pathSeparator}chat'
-                '${Platform.pathSeparator}by_cid${Platform.pathSeparator}',
-              )) {
-            throw StateError('Chat CID 清理目录越过本机 Chat 边界');
-          }
-          final type = await FileSystemEntity.type(
-            cidDirectory.path,
-            followLinks: false,
-          );
-          if (type == FileSystemEntityType.link) {
-            await Link(cidDirectory.path).delete();
-          } else if (type != FileSystemEntityType.notFound) {
-            await cidDirectory.delete(recursive: true);
-          }
+        final documentsRoot = (await _documentsDirectoryProvider()).absolute;
+        final cidDirectory = Directory(
+          '${documentsRoot.path}${Platform.pathSeparator}chat'
+          '${Platform.pathSeparator}by_cid'
+          '${Platform.pathSeparator}${_safePath(cidNumber)}',
+        ).absolute;
+        if (cidDirectory.path == cidDirectory.parent.path ||
+            !cidDirectory.path.startsWith(
+              '${documentsRoot.path}${Platform.pathSeparator}chat'
+              '${Platform.pathSeparator}by_cid${Platform.pathSeparator}',
+            )) {
+          throw StateError('Chat CID 清理目录越过本机 Chat 边界');
+        }
+        final type = await FileSystemEntity.type(
+          cidDirectory.path,
+          followLinks: false,
+        );
+        if (type == FileSystemEntityType.link) {
+          await Link(cidDirectory.path).delete();
+        } else if (type != FileSystemEntityType.notFound) {
+          await cidDirectory.delete(recursive: true);
+        }
 
-          final prefs = await _prefs;
-          final safeCid = _safePath(cidNumber);
-          final staleKeys = prefs.getKeys().where(
-                (key) =>
-                    key == deviceIdPreferenceKey(cidNumber) ||
-                    key == devicePublicKeyCachePreferenceKey(cidNumber) ||
-                    (key.startsWith('$_kPushRegistrationPrefix.') &&
-                        key.contains('.$safeCid.')),
-              );
-          for (final key in staleKeys.toList(growable: false)) {
-            await prefs.remove(key);
-          }
-        });
+        final prefs = await _prefs;
+        final safeCid = _safePath(cidNumber);
+        final staleKeys = prefs.getKeys().where(
+              (key) =>
+                  key == deviceIdPreferenceKey(cidNumber) ||
+                  key == devicePublicKeyCachePreferenceKey(cidNumber) ||
+                  (key.startsWith('$_kPushRegistrationPrefix.') &&
+                      key.contains('.$safeCid.')),
+            );
+        for (final key in staleKeys.toList(growable: false)) {
+          await prefs.remove(key);
+        }
+      },
+    );
   }
 
   Future<void> _deleteLocalConversation(
@@ -4601,8 +4513,11 @@ class ChatRuntime {
       return;
     }
     final flow = _messageFlow(context, scheduleDelivery: false);
+    final recipientDevicePublicKey = await context.transport.resolveDeviceKey(
+      pending.recipientCidNumber,
+    );
 
-    Future<void> send({MlsKeyPackage? keyPackage}) async {
+    Future<void> send() async {
       switch (content.kind) {
         case ChatMessageKind.text:
           await flow.sendText(
@@ -4610,7 +4525,7 @@ class ChatRuntime {
             senderCidNumber: context.account.cidNumber,
             recipientCidNumber: pending.recipientCidNumber,
             senderDeviceId: context.deviceId,
-            recipientKeyPackage: keyPackage,
+            recipientDevicePublicKey: recipientDevicePublicKey,
             text: content.text ?? '',
             pendingLocalMessageId: pending.localMessageId,
             createdAtMillis: pending.createdAtMillis,
@@ -4621,7 +4536,7 @@ class ChatRuntime {
             senderCidNumber: context.account.cidNumber,
             recipientCidNumber: pending.recipientCidNumber,
             senderDeviceId: context.deviceId,
-            recipientKeyPackage: keyPackage,
+            recipientDevicePublicKey: recipientDevicePublicKey,
             packId: content.packId ?? '',
             stickerId: content.stickerId ?? '',
             pendingLocalMessageId: pending.localMessageId,
@@ -4636,22 +4551,12 @@ class ChatRuntime {
             flow: flow,
             pending: pending,
             content: content,
-            keyPackage: keyPackage,
+            recipientDevicePublicKey: recipientDevicePublicKey,
           );
       }
     }
 
-    try {
-      await send();
-    } catch (error) {
-      if (!_needsFirstKeyPackage(error)) rethrow;
-      await send(
-        keyPackage: await _claimKeyPackage(
-          context,
-          pending.recipientCidNumber,
-        ),
-      );
-    }
+    await send();
   }
 
   Future<void> _sendPendingMedia({
@@ -4659,7 +4564,7 @@ class ChatRuntime {
     required ChatFlow flow,
     required ChatPendingOutgoingMessage pending,
     required ChatContent content,
-    MlsKeyPackage? keyPackage,
+    required String recipientDevicePublicKey,
   }) async {
     final attachmentId = content.attachmentId ?? '';
     final cipherByteSize = content.cipherByteSize ?? -1;
@@ -4707,7 +4612,7 @@ class ChatRuntime {
       senderCidNumber: context.account.cidNumber,
       recipientCidNumber: pending.recipientCidNumber,
       senderDeviceId: context.deviceId,
-      recipientKeyPackage: keyPackage,
+      recipientDevicePublicKey: recipientDevicePublicKey,
       media: content,
       pendingLocalMessageId: pending.localMessageId,
       createdAtMillis: pending.createdAtMillis,
@@ -5237,7 +5142,8 @@ class ChatRuntime {
       cidNumber: account.cidNumber,
       deviceId: deviceId,
       devicePublicKey: prefs.getString(
-              devicePublicKeyCachePreferenceKey(account.cidNumber)) ??
+            devicePublicKeyCachePreferenceKey(account.cidNumber),
+          ) ??
           '',
     );
     final service = await _ensureServiceReady(
@@ -5413,7 +5319,6 @@ class ChatRuntime {
         await _disposeContext(context);
         throw StateError('CID 当前绑定已切换，本次旧初始化结果已丢弃');
       }
-      await _ensureCurrentKeyPackages(context);
       final contextKey = _contextKey(
         context.account,
         context.identity,
@@ -5461,10 +5366,7 @@ class ChatRuntime {
 
     final cachedDevicePublicKey =
         prefs.getString(devicePublicKeyCacheKey) ?? '';
-    final stateStore = await _stateStore(
-      _bindingForAccount(account),
-      deviceId,
-    );
+    final stateStore = await _stateStore(_bindingForAccount(account), deviceId);
     ChatCloudTransport? transport;
     var keepStateStore = false;
     try {
@@ -5483,13 +5385,13 @@ class ChatRuntime {
       if (devicePublicKey.isEmpty) {
         throw const MlsNativeException(
           MlsNativeErrorCode.invalidResponse,
-          'OpenMLS native 未返回 Chat 设备公钥',
+          'native 未返回 Chat HPKE 设备公钥',
         );
       }
       if (cachedDevicePublicKey.isNotEmpty &&
           cachedDevicePublicKey.toLowerCase() !=
               devicePublicKey.toLowerCase()) {
-        // MLS 设备公钥轮换只影响本机状态；推送端点由会话设备键和 Token 独立维护。
+        // HPKE 设备公钥轮换只影响本机状态；推送端点由会话设备键和 Token 独立维护。
       }
       await prefs.setString(devicePublicKeyCacheKey, devicePublicKey);
       final identity = ChatDevice(
@@ -5505,13 +5407,13 @@ class ChatRuntime {
         prefs: prefs,
       );
       transport = service.transport;
+      await transport.publishDeviceKey(identity.devicePublicKey);
       final fencedCrypto = _ChatBindingFencedMlsCrypto(
         runtime: this,
         bindingToken: bindingToken,
         delegate: finalCrypto,
       );
-      keepStateStore = true;
-      return _ChatAccountContext(
+      final context = _ChatAccountContext(
         account: account,
         bindingToken: bindingToken,
         deviceId: deviceId,
@@ -5520,6 +5422,10 @@ class ChatRuntime {
         transport: transport,
         sessionExpiresAt: service.session.expiresAt,
       );
+      // 群聊公开包是独立的 best-effort 能力；其网络故障不得再次阻断私信上下文。
+      unawaited(_ensureCurrentGroupKeyPackage(context).catchError((_) {}));
+      keepStateStore = true;
+      return context;
     } finally {
       if (!keepStateStore) {
         transport?.dispose();
@@ -5676,16 +5582,11 @@ class ChatRuntime {
       );
     }
     // 会话握手 = 非用户动权 → P-256 硬件子钥静默签名 signing_message 摘要（不读 seed、不弹生物识别）。
-    final raw = await _deviceSubkey.signRawHex(
-      context.cidNumber,
-      loginMessage,
-    );
+    final raw = await _deviceSubkey.signRawHex(context.cidNumber, loginMessage);
     return '0x$raw';
   }
 
-  Future<void> _registerMissingDeviceSubkey(
-    SquareLoginContext context,
-  ) async {
+  Future<void> _registerMissingDeviceSubkey(SquareLoginContext context) async {
     final binding = await _bindingForLoginContext(context);
     await _walletManager.registerDeviceSubkeyForBinding(binding);
     _currentUser.invalidate();
@@ -5697,9 +5598,7 @@ class ChatRuntime {
     );
   }
 
-  Future<_ChatAccount> _readAccountInternal({
-    String? expectedAccountId,
-  }) async {
+  Future<_ChatAccount> _readAccountInternal({String? expectedAccountId}) async {
     _ensureActive();
     // CID 是永久身份主键；默认账户只从本机钱包顺序读取。普通 Chat 禁止链读：
     // 本机绑定命中时直接使用；首次安装/导入没有缓存时才由 Cloudflare `users`
@@ -5814,8 +5713,9 @@ class ChatRuntime {
   ) async {
     if (!content.isMedia) return;
     final attachmentId = content.attachmentId ?? '';
-    final cacheDirectory =
-        await _attachmentDirectoryForToken(context.bindingToken);
+    final cacheDirectory = await _attachmentDirectoryForToken(
+      context.bindingToken,
+    );
     final cachePath = ChatFlow.attachmentCachePath(
       cacheDirectory: cacheDirectory,
       conversationId: envelope.conversationId,
@@ -5834,10 +5734,12 @@ class ChatRuntime {
       throw const FormatException('Chat 附件传输密钥不合法');
     }
     final tempDirectory = Directory('${cacheDirectory.path}/.tmp');
-    final cipherFile =
-        File('${tempDirectory.path}/${_safePath(attachmentId)}.download');
-    final plainFile =
-        File('${tempDirectory.path}/${_safePath(attachmentId)}.plain');
+    final cipherFile = File(
+      '${tempDirectory.path}/${_safePath(attachmentId)}.download',
+    );
+    final plainFile = File(
+      '${tempDirectory.path}/${_safePath(attachmentId)}.plain',
+    );
     try {
       await context.transport.downloadEncryptedAttachment(
         attachmentId: attachmentId,
@@ -5908,8 +5810,9 @@ class ChatRuntime {
         await _groupFlow(context).processIncomingGroupEnvelope(envelopeBytes),
       );
     } else {
-      final result = await _messageFlow(context)
-          .processIncomingEnvelopeBytes(envelopeBytes);
+      final result = await _messageFlow(
+        context,
+      ).processIncomingEnvelopeBytes(envelopeBytes);
       accepted.addAll(result.acceptedEnvelopes);
     }
     final hub = _realtimeHubs[context.account.accountId];
@@ -5917,53 +5820,44 @@ class ChatRuntime {
       await _notifyRealtimeHub(hub, disconnected: false);
     }
     return accepted
-        .where((item) =>
-            item.mlsMessageKind ==
-            MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION)
+        .where(
+          (item) =>
+              item.mlsMessageKind ==
+              MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION,
+        )
         .map((item) => item.envelopeId)
         .toList(growable: false);
   }
 
-  /// 确保当前设备拥有一个一次性包和一个 RFC 9420 兜底包。
-  /// 同一运行期不重复生成；CitizenServe 也只在缺失、过期或设备变化时接受候选包。
-  Future<void> _ensureCurrentKeyPackages(
+  /// 确保当前设备只发布一枚 RFC 9420 last-resort 群聊公开包。
+  /// 它不参与私聊；同一运行期不重复生成，也不存在普通包或批量库存。
+  Future<void> _ensureCurrentGroupKeyPackage(
     _ChatAccountContext context,
   ) async {
     final publicationKey = '${context.account.cidNumber}|${context.deviceId}|'
         '${context.devicePublicKey.toLowerCase()}';
-    if (_keyPackagePublications.contains(publicationKey)) return;
-    final normal = await context.crypto.createKeyPackage(
-      context.identity,
-      lastResort: false,
-    );
+    if (_groupKeyPackagePublications.contains(publicationKey)) return;
     final lastResort = await context.crypto.createKeyPackage(
       context.identity,
       lastResort: true,
     );
-    for (final keyPackage in <MlsKeyPackage>[normal, lastResort]) {
-      if (keyPackage.cidNumber != context.account.cidNumber ||
-          keyPackage.deviceId != context.deviceId ||
-          keyPackage.devicePublicKey.toLowerCase() !=
-              context.devicePublicKey.toLowerCase()) {
-        throw const MlsNativeException(
-          MlsNativeErrorCode.invalidResponse,
-          'OpenMLS KeyPackage 与当前本机 CID 设备身份不一致',
-        );
-      }
-    }
-    if (normal.lastResort ||
-        !lastResort.lastResort ||
-        normal.keyPackageId == lastResort.keyPackageId) {
+    if (lastResort.cidNumber != context.account.cidNumber ||
+        lastResort.deviceId != context.deviceId ||
+        lastResort.devicePublicKey.toLowerCase() !=
+            context.devicePublicKey.toLowerCase()) {
       throw const MlsNativeException(
         MlsNativeErrorCode.invalidResponse,
-        'OpenMLS 普通包与 last-resort 包不合法',
+        'OpenMLS 群聊 KeyPackage 与当前本机 CID 设备身份不一致',
       );
     }
-    await context.transport.publishKeyPackages(
-      normal: normal,
-      lastResort: lastResort,
-    );
-    _keyPackagePublications.add(publicationKey);
+    if (!lastResort.lastResort) {
+      throw const MlsNativeException(
+        MlsNativeErrorCode.invalidResponse,
+        'OpenMLS 群聊 last-resort KeyPackage 不合法',
+      );
+    }
+    await context.transport.publishGroupKeyPackage(lastResort);
+    _groupKeyPackagePublications.add(publicationKey);
   }
 
   Future<MlsStateStore> _stateStore(
@@ -6055,9 +5949,9 @@ class _ChatFileHandoverInventoryItem {
     if (relativePath is! String ||
         relativePath.isEmpty ||
         relativePath.startsWith('/') ||
-        relativePath.split('/').any(
-              (segment) => segment.isEmpty || segment == '..',
-            ) ||
+        relativePath
+            .split('/')
+            .any((segment) => segment.isEmpty || segment == '..') ||
         byteSize is! int ||
         byteSize < 0 ||
         sha256 is! String ||
@@ -6085,10 +5979,6 @@ class _ChatFileHandoverReceipt {
   final String payloadJson;
   final List<String> mlsDevicePaths;
   final List<_ChatFileHandoverInventoryItem> files;
-}
-
-bool _needsFirstKeyPackage(Object error) {
-  return error.toString().contains('首次 MLS 会话必须提供');
 }
 
 String _newPendingMessageId(String conversationId, int millis) =>

@@ -13,26 +13,23 @@ import 'transport/chat_transport.dart';
 /// 投递一个密文 Envelope。[recipientCidNumber] 是收件人唯一身份主键和路由键。
 import '../log/app_log.dart';
 
-typedef ChatEnvelopeDeliverer = Future<ChatDeliveryResult> Function(
-  ChatEnvelope envelope,
-  List<int> envelopeBytes,
-  String recipientCidNumber,
-);
+typedef ChatEnvelopeDeliverer =
+    Future<ChatDeliveryResult> Function(
+      ChatEnvelope envelope,
+      List<int> envelopeBytes,
+      String recipientCidNumber,
+    );
 
 /// 本地可靠队列落盘后，把网络投递交给按会话保序的后台执行器。调用方不得
 /// 在执行器内重新处理 MLS 或改写附件，只允许投递已持久化的密文信封并回写状态。
-typedef ChatEnvelopeDeliveryScheduler = void Function(
-  String conversationId,
-  Future<void> Function() delivery,
-);
+typedef ChatEnvelopeDeliveryScheduler =
+    void Function(String conversationId, Future<void> Function() delivery);
 
 /// 媒体控制消息和发送方本地附件均已安全落盘，可以立即刷新本机聊天气泡。
 typedef ChatMediaLocalCommitNotifier = Future<void> Function();
 
-typedef ChatIncomingContentHandler = Future<void> Function(
-  ChatEnvelope envelope,
-  ChatContent content,
-);
+typedef ChatIncomingContentHandler =
+    Future<void> Function(ChatEnvelope envelope, ChatContent content);
 
 /// 待发送的本机明文媒体(图片 / 视频 / 文件 / 语音)。
 ///
@@ -127,7 +124,7 @@ class ChatIncomingProcessResult {
 
 /// 公民 Chat 消息收发状态机。
 ///
-/// 本类是聊天收发编排层。它不实现密码学，只负责把 OpenMLS native、
+/// 本类是聊天收发编排层。它不实现密码学，只负责把 native HPKE、
 /// ChatEnvelope、本地 Isar 和正式 transport 串起来。
 class ChatFlow {
   const ChatFlow({
@@ -140,12 +137,12 @@ class ChatFlow {
     this.deliveryScheduler,
     this.beforeIncomingStore,
     this.defaultTtlMillis = chatMailboxTtlMillis,
-  })  : _crypto = crypto,
-        _store = store,
-        _deliverer = deliverer,
-        _bindingToken = bindingToken,
-        _ownerCidNumber = ownerCidNumber,
-        _currentAccountId = currentAccountId;
+  }) : _crypto = crypto,
+       _store = store,
+       _deliverer = deliverer,
+       _bindingToken = bindingToken,
+       _ownerCidNumber = ownerCidNumber,
+       _currentAccountId = currentAccountId;
 
   final MlsCrypto _crypto;
   final ChatStore _store;
@@ -162,7 +159,7 @@ class ChatFlow {
     required String senderCidNumber,
     required String recipientCidNumber,
     required String senderDeviceId,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required String text,
     String? pendingLocalMessageId,
     int? createdAtMillis,
@@ -172,7 +169,7 @@ class ChatFlow {
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
       recipientCidNumber: recipientCidNumber,
-      recipientKeyPackage: recipientKeyPackage,
+      recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
     return _deliverOutbound(
@@ -194,7 +191,7 @@ class ChatFlow {
     required String senderCidNumber,
     required String recipientCidNumber,
     required String senderDeviceId,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required String packId,
     required String stickerId,
     String? pendingLocalMessageId,
@@ -207,7 +204,7 @@ class ChatFlow {
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
       recipientCidNumber: recipientCidNumber,
-      recipientKeyPackage: recipientKeyPackage,
+      recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
     return _deliverOutbound(
@@ -229,7 +226,7 @@ class ChatFlow {
     required String senderCidNumber,
     required String recipientCidNumber,
     required String senderDeviceId,
-    MlsKeyPackage? recipientKeyPackage,
+    required String recipientDevicePublicKey,
     required ChatContent media,
     String? pendingLocalMessageId,
     int? createdAtMillis,
@@ -248,7 +245,7 @@ class ChatFlow {
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
       recipientCidNumber: recipientCidNumber,
-      recipientKeyPackage: recipientKeyPackage,
+      recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
     return _deliverOutbound(
@@ -409,8 +406,9 @@ class ChatFlow {
           bindingToken: _bindingToken,
         );
         for (final item in pending) {
-          final replayed =
-              await processIncomingEnvelopeBytes(item.writeToBuffer());
+          final replayed = await processIncomingEnvelopeBytes(
+            item.writeToBuffer(),
+          );
           acceptedEnvelopes.addAll(replayed.acceptedEnvelopes);
         }
         return ChatIncomingProcessResult(
