@@ -975,7 +975,7 @@ void main() {
     );
   });
 
-  test('普通启动没有 wipe marker 时直接放行，绝不触发擦除或数据迁移', () async {
+  test('普通启动没有 wipe marker 时直接放行，绝不触发擦除或数据转换', () async {
     var secureStorageCalls = 0;
     var sharedPreferencesCalls = 0;
     expect(
@@ -994,6 +994,30 @@ void main() {
       ),
       ChatPersistentWipeState.none,
     );
+  });
+
+  test('普通启动没有 wipe marker 时不等待正在运行的后台收件 lease', () async {
+    final entered = Completer<void>();
+    final release = Completer<void>();
+    final background = ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+      () async {
+        entered.complete();
+        await release.future;
+      },
+      documentsDirectoryProvider: () async => chatDocumentsRoot,
+    );
+    await entered.future.timeout(_shortQueueTimeout);
+    try {
+      expect(
+        await AppLockService.recoverPersistentWipeAtStartup(
+          debugChatDocumentsDirectoryProvider: () async => chatDocumentsRoot,
+        ).timeout(_shortQueueTimeout),
+        AppDataWipeStartupResult.ready,
+      );
+    } finally {
+      if (!release.isCompleted) release.complete();
+      await background;
+    }
   });
 
   test('覆盖安装后的新进程立即退役上一 PID 的新鲜 CID lease 且保留 Chat 数据', () async {
@@ -1019,6 +1043,10 @@ void main() {
       ).timeout(_shortQueueTimeout),
       AppDataWipeStartupResult.ready,
     );
+    expect(await orphanLease.exists(), isTrue);
+    await ChatRuntime.recoverStartupArtifacts(
+      documentsDirectoryProvider: () async => chatDocumentsRoot,
+    );
     expect(await orphanLease.exists(), isFalse);
     expect(
       await retainedCiphertext.readAsBytes(),
@@ -1032,7 +1060,7 @@ void main() {
     );
   });
 
-  test('普通启动遇到当前进程仍持有的 CID lease 时失败关闭且不删除活锁', () async {
+  test('普通启动遇到当前进程 CID lease 时放行且不删除活锁', () async {
     final leaseEntered = Completer<void>();
     final releaseLease = Completer<void>();
     final heldLease = ChatRuntime.debugRunCidMutationLeaseForTest<void>(
@@ -1049,7 +1077,7 @@ void main() {
         await AppLockService.recoverPersistentWipeAtStartup(
           debugChatDocumentsDirectoryProvider: () async => chatDocumentsRoot,
         ).timeout(_shortQueueTimeout),
-        AppDataWipeStartupResult.preflightBlocked,
+        AppDataWipeStartupResult.ready,
       );
       final digest =
           crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
@@ -1066,7 +1094,7 @@ void main() {
     }
   });
 
-  test('普通启动遇到损坏的 CID lease 时失败关闭且不删除业务数据', () async {
+  test('普通启动遇到损坏的 CID lease 时放行且后台整理失败关闭', () async {
     final digest = crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
     final damagedLease = File(
       '${chatDocumentsRoot.path}/.citizenapp_chat_cid_'
@@ -1083,7 +1111,13 @@ void main() {
       await AppLockService.recoverPersistentWipeAtStartup(
         debugChatDocumentsDirectoryProvider: () async => chatDocumentsRoot,
       ).timeout(_shortQueueTimeout),
-      AppDataWipeStartupResult.preflightBlocked,
+      AppDataWipeStartupResult.ready,
+    );
+    await expectLater(
+      ChatRuntime.recoverStartupArtifacts(
+        documentsDirectoryProvider: () async => chatDocumentsRoot,
+      ),
+      throwsA(isA<StateError>()),
     );
     expect(await damagedLease.readAsString(), 'damaged-owner');
     expect(

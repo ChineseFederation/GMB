@@ -48,8 +48,22 @@ Future<void> main() async {
   // 任何 ChatRuntime、钱包页或 PIN 门禁构造前先处理跨重启擦除门闩。
   // pending 不依赖已被平台阶段删除的 PIN，直接继续全量擦除；
   // 当前进程无论成败都只允许重试或退出，禁止恢复业务运行态。
-  final wipeStartupResult =
-      await AppLockService.recoverPersistentWipeAtStartup();
+  var wipeStartupResult = await AppLockService.recoverPersistentWipeAtStartup();
+  // Documents 暂时不可用时先在业务初始化前有界复查；只有连续失败才进入
+  // 安全阻断页，不能要求用户通过强退重开代替正常的启动恢复。
+  if (wipeStartupResult == AppDataWipeStartupResult.preflightBlocked) {
+    for (final delay in <Duration>[
+      const Duration(milliseconds: 100),
+      const Duration(milliseconds: 300),
+      const Duration(milliseconds: 900),
+    ]) {
+      await Future<void>.delayed(delay);
+      wipeStartupResult = await AppLockService.recoverPersistentWipeAtStartup();
+      if (wipeStartupResult != AppDataWipeStartupResult.preflightBlocked) {
+        break;
+      }
+    }
+  }
   if (wipeStartupResult != AppDataWipeStartupResult.ready) {
     runApp(_DataWipeRecoveryApp(initialResult: wipeStartupResult));
     return;
@@ -402,8 +416,18 @@ class _AppLockGateState extends State<_AppLockGate>
     WidgetsBinding.instance.addObserver(this);
     // 短命 Chat 明文附件 purge 点之一：启动即清上次会话残留。
     // 崩溃/强杀会跳过退后台那次清理，没有这道兜底明文就会跨会话留在盘上。
-    unawaited(_purgePlainAttachments());
+    unawaited(_recoverChatArtifactsAndPurge());
     _checkLock();
+  }
+
+  /// 普通 Chat artifact 在首帧后整理，不能参与全局数据擦除启动门禁。
+  Future<void> _recoverChatArtifactsAndPurge() async {
+    try {
+      await ChatRuntime.recoverStartupArtifacts();
+    } catch (error) {
+      debugPrint('chat_startup_artifacts:recovery_failed:${error.runtimeType}');
+    }
+    await _purgePlainAttachments();
   }
 
   /// 清空解密出来的短命 Chat 附件。失败静默，不阻断 App 启动/切换。

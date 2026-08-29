@@ -1620,13 +1620,23 @@ class ChatRuntime {
   }
 
   /// main 在构造任何 ChatRuntime 或启动后台操作前调用一次。
-  static Future<void> preflightCidMutationLeasesAtStartup({
+  static Future<void> recoverStartupArtifacts({
     Future<Directory> Function()? documentsDirectoryProvider,
   }) async {
-    await runStartupPreflight(
-      operation: () async {},
-      documentsDirectoryProvider: documentsDirectoryProvider,
-    );
+    // 这是普通 Chat 文件维护，不是数据擦除门禁。首帧后等待正在运行的
+    // FCM/APNs 收件自然结束并重试，失败不得阻断 CitizenApp 其它功能。
+    for (var attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await runStartupPreflight(
+          operation: () async {},
+          documentsDirectoryProvider: documentsDirectoryProvider,
+        );
+        return;
+      } catch (_) {
+        if (attempt == 2) rethrow;
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+    }
   }
 
   /// 持有当前进程 generation 的真实 CID lease，验证启动预检不会误删活锁。

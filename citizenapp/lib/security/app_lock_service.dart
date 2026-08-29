@@ -365,6 +365,14 @@ class AppLockService {
       _requireFlutterTest();
     }
     try {
+      // 普通启动只验证擦除门闩；没有 marker 时不得等待正常 Chat 后台收件，
+      // 否则 FCM/APNs 唤醒与用户冷启动重叠会被误判成数据安全故障。
+      final initialState = await ChatRuntime.readPersistentAppDataWipeState(
+        documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
+      );
+      if (initialState == ChatPersistentWipeState.none) {
+        return AppDataWipeStartupResult.ready;
+      }
       return await ChatRuntime.runStartupPreflight(
         // barrier 覆盖 CID artifact 清理、wipe marker 判定与完整恢复，不能在
         // 中间释放后让后台 isolate 插入新 lease。
@@ -383,6 +391,7 @@ class AppLockService {
                 );
                 return AppDataWipeStartupResult.ready;
               } catch (_) {
+                debugPrint('wipe_preflight:complete_cleanup_failed');
                 return AppDataWipeStartupResult.preflightBlocked;
               }
             case ChatPersistentWipeState.pending:
@@ -401,9 +410,10 @@ class AppLockService {
         },
         documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
       );
-    } catch (_) {
+    } catch (error) {
       // 无法读取 marker 不等于已经开始过 wipe：普通启动绝不得
       // 因路径/文件系统故障擅自删数据，只能 fail-closed 并退出重试。
+      debugPrint('wipe_preflight:blocked:${error.runtimeType}');
       return AppDataWipeStartupResult.preflightBlocked;
     }
   }
