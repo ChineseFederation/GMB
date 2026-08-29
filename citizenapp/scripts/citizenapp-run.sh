@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
-# Console 原生安全进程使用固定本机开发签名并安装。
+# ProgramConsole 原生安全进程使用固定本机开发签名并安装。
 #
 # 用法：citizenapp-run.sh <ios|android>
 # 只读包检查：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
 #
 # 目标平台是必填参数，不做任何自动探测：探测总要在失败时选一个回落，
 # 而回落的那一端会被当成用户想编的那一端——「以为编了 iOS、实际编的 Android」
-# 就是这么来的。控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
+# 就是这么来的。编程控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
 #
-# 本机中间文件只允许进入 Console 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
+# 本机中间文件只允许进入 ProgramConsole 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
 # 固定使用 smoldot 轻节点连接区块链（无需 RPC 服务器）。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -24,23 +24,23 @@ PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 cd "$APP_ROOT"
 
 if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
-  : "${CONSOLE_TARGET_ROOT:?本机编译必须由 Console 提供中央产物目录}"
-  : "${CONSOLE_WORK_DIR:?本机编译必须由 Console 提供中央工作目录}"
-  case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
-    echo "公民中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
+  : "${PROGRAM_CONSOLE_TARGET_ROOT:?本机编译必须由 ProgramConsole 提供中央产物目录}"
+  : "${PROGRAM_CONSOLE_WORK_DIR:?本机编译必须由 ProgramConsole 提供中央工作目录}"
+  case "$PROGRAM_CONSOLE_WORK_DIR" in "$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
+    echo "公民中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2; exit 1 ;;
   esac
   # Flutter会把.dart_tool、Pods、Gradle和Xcode状态写到当前工程。编译脚本只接受
-  # Console建立的一次性源码快照，直接从GMB主检出运行必须在任何Flutter命令前失败。
-  [[ "$APP_ROOT" == "$CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] || {
-    echo "公民本机编译只能在Console中央源码快照中运行：$APP_ROOT" >&2
+  # ProgramConsole建立的一次性源码快照，直接从GMB主检出运行必须在任何Flutter命令前失败。
+  [[ "$APP_ROOT" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] || {
+    echo "公民本机编译只能在ProgramConsole中央源码快照中运行：$APP_ROOT" >&2
     exit 1
   }
-  BUILD_DIR="$CONSOLE_WORK_DIR/build"
-  ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenapp"
-  export CONSOLE_BUILD_DIR="$BUILD_DIR"
-  export CONSOLE_NATIVE_ANDROID_DIR="$CONSOLE_WORK_DIR/native/android"
-  export CONSOLE_NATIVE_IOS_DIR="$CONSOLE_WORK_DIR/native/ios"
-  export XDG_CONFIG_HOME="$CONSOLE_WORK_DIR/flutter-config"
+  BUILD_DIR="$PROGRAM_CONSOLE_WORK_DIR/build"
+  ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenapp"
+  export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
+  export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/android"
+  export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/ios"
+  export XDG_CONFIG_HOME="$PROGRAM_CONSOLE_WORK_DIR/flutter-config"
   mkdir -p "$XDG_CONFIG_HOME"
   build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
   flutter config --build-dir="$build_dir_relative" >/dev/null
@@ -63,7 +63,7 @@ clean_platform_build_outputs() {
 
 # iOS 的 Runner.app 已由系统签名并经设备安装回读验证；成功后只覆盖固定 `ios.app.zip`。
 retain_ios_local_artifact() {
-  local app_bundle="$1" staging="$CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
+  local app_bundle="$1" staging="$PROGRAM_CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
   rm -f "$staging"
   ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging"
   mkdir -p "$ARTIFACT_ROOT"
@@ -237,7 +237,7 @@ verify_android_release_localization() {
   [[ -f "$apk" ]] || { echo "Android Release APK 不存在：$apk" >&2; return 1; }
   aapt_bin="$(command -v aapt2 || true)"
   if [[ -z "$aapt_bin" ]]; then
-    # Console 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
+    # ProgramConsole 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
     # ANDROID_HOME。与原生库构建保持同一确定性规则：显式 SDK 优先，macOS 默认
     # SDK 目录兜底，再从已安装 build-tools 中选择最高版本，禁止硬编码具体版本。
     sdk_home="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
@@ -282,8 +282,8 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # 已删除：`-f` 匹配全命令行，而 `flutter_tools.snapshot` 是每一个 flutter 命令的实际执行体，
 # 那一枪不区分产品、不区分平台、也不区分是不是本次运行的——公民钱包正在跑的编译、
 # 乃至你自己在终端里手敲的 flutter，都会一起被 SIGKILL（现象是 `Killed: 9`）。
-# 它要解决的残留问题已经由控制台承接：所有动作子进程都在独立进程组里启动，
-# 「停止」与控制台退出都按进程组终止整棵进程树，不会再留下脱缰的 flutter。
+# 它要解决的残留问题已经由编程控制台承接：所有动作子进程都在独立进程组里启动，
+# 「停止」与编程控制台退出都按进程组终止整棵进程树，不会再留下脱缰的 flutter。
 
 # Rust 的 iOS、Android 与宿主产物分别位于不同 target 子目录。禁止设备构建执行根级
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
@@ -297,7 +297,7 @@ flutter pub get
 
 # iOS 在脚本内挑选设备并把 id 显式传给系统安装命令；Android 的设备选择、签名证书
 # 比对与覆盖安装全部归原生安全进程，脚本不得取得 APP_KEY 或自行调用 adb 安装。
-# 不传设备 id 时 flutter 自己挑：同时连着安卓机和 iPhone 就无从决定，而控制台日志面板
+# 不传设备 id 时 flutter 自己挑：同时连着安卓机和 iPhone 就无从决定，而编程控制台日志面板
 # 没有输入框，它的选择提示在那里根本回答不了。挑不到就报错退出，绝不改编另一端。
 # `flutter devices --machine` 内部会调 `adb devices`，万一 adb 异常会永久阻塞，
 # 故用 perl alarm 包 60s 超时（macOS 自带 perl，无 GNU `timeout`）。
@@ -345,7 +345,7 @@ if [[ "$PLATFORM" == ios ]]; then
 elif [[ "$PLATFORM" == android ]]; then
   ANDROID_APK="$BUILD_DIR/app/outputs/flutter-apk/app-release.apk"
   # Flutter 27 的 Android 包定位器仍可能只检查产品默认 build/，即使 Gradle 已按
-  # CONSOLE_BUILD_DIR 把唯一 Release APK 写入中央目录。只允许用这个准确中央产物
+  # PROGRAM_CONSOLE_BUILD_DIR 把唯一 Release APK 写入中央目录。只允许用这个准确中央产物
   # 收口该工具误报；Gradle 未产出时保持失败，禁止搜索猜测或复制回源码目录。
   if ! flutter build apk --release --target-platform android-arm64 \
     ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}; then

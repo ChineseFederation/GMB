@@ -374,11 +374,13 @@ class ChatCloudTransport implements ChatTransport {
         if (uri.scheme != 'https' || uri.host.isEmpty) {
           throw const FormatException('Chat 附件只允许 HTTPS 直传地址');
         }
+        // 与广场已经稳定使用的 R2 PUT 保持同一请求顺序：先写入签名覆盖的
+        // Header，再锁定内容长度。禁止为 Chat 维护第二套预签名请求实现。
         final request = http.StreamedRequest('PUT', uri)
-          ..contentLength = byteSize
           ..headers.addAll(
             uploadHeaders.map((key, value) => MapEntry(key, value.toString())),
-          );
+          )
+          ..contentLength = byteSize;
         // 小附件不得沿用 6 小时固定等待；大附件按最低 64 KiB/s 给出与大小成比例的上限。
         final transferSeconds =
             (((byteSize + 65535) ~/ 65536) + 60).clamp(120, 21600).toInt();
@@ -390,13 +392,17 @@ class ChatCloudTransport implements ChatTransport {
         );
         await request.sink.close();
         final response = await sending;
-        await response.stream.drain<void>();
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          await response.stream.drain<void>();
+          throw StateError(
+            'chat_attachment_part_upload_failed:'
+            'status=${response.statusCode}',
+          );
+        }
         final etag = response.headers['etag'];
-        if (response.statusCode < 200 ||
-            response.statusCode >= 300 ||
-            etag == null ||
-            etag.isEmpty) {
-          throw StateError('chat_attachment_part_upload_failed');
+        await response.stream.drain<void>();
+        if (etag == null || etag.isEmpty) {
+          throw StateError('chat_attachment_part_upload_failed:etag_missing');
         }
         etags.add(etag);
       }

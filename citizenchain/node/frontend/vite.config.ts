@@ -5,7 +5,7 @@ const host = process.env.TAURI_DEV_HOST;
 
 export default defineConfig(({ command }) => {
   if (command === 'build' && !process.env.CITIZENCHAIN_FRONTEND_DIST && process.env.CI !== 'true') {
-    throw new Error('本机编译必须由Console提供CITIZENCHAIN_FRONTEND_DIST，禁止恢复产品目录dist');
+    throw new Error('本机编译必须由ProgramConsole提供CITIZENCHAIN_FRONTEND_DIST，禁止恢复产品目录dist');
   }
   return {
   plugins: [react()],

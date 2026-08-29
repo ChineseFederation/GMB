@@ -12,14 +12,14 @@ REPO_ROOT="$(dirname "$CITIZENAPP_DIR")"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 
 if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
-  CONSOLE_TARGET_ROOT="${CONSOLE_TARGET_ROOT:-/Users/rhett/Only/console/target}"
-  CONSOLE_WORK_DIR="$CONSOLE_TARGET_ROOT/.work/citizenapp-test"
-  helper=/Users/rhett/Only/console/actions/local-build.sh
-  [[ -f "$helper" && "$CONSOLE_WORK_DIR" == /Users/rhett/Only/console/target/.work/citizenapp-test ]] \
-    || { echo '本机CitizenApp测试缺少Console中央快照入口' >&2; exit 1; }
-  /usr/bin/find "$CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-  mkdir -p "$CONSOLE_WORK_DIR"
-  export CONSOLE_TARGET_ROOT CONSOLE_WORK_DIR
+  PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/ProgramConsole/target}"
+  PROGRAM_CONSOLE_WORK_DIR="$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-test"
+  helper=/Users/rhett/Only/ProgramConsole/actions/local-build.sh
+  [[ -f "$helper" && "$PROGRAM_CONSOLE_WORK_DIR" == /Users/rhett/Only/ProgramConsole/target/.work/citizenapp-test ]] \
+    || { echo '本机CitizenApp测试缺少ProgramConsole中央快照入口' >&2; exit 1; }
+  /usr/bin/find "$PROGRAM_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+  mkdir -p "$PROGRAM_CONSOLE_WORK_DIR"
+  export PROGRAM_CONSOLE_TARGET_ROOT PROGRAM_CONSOLE_WORK_DIR
   # shellcheck disable=SC1090
   source "$helper"
   snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
@@ -40,19 +40,19 @@ if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
     /usr/bin/ditto "$source_path" "$snapshot_path"
   done
   cleanup_snapshot() {
-    /usr/bin/find "$CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-    rmdir "$CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
+    /usr/bin/find "$PROGRAM_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+    rmdir "$PROGRAM_CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
   }
   trap cleanup_snapshot EXIT INT TERM HUP
-  GMB_CENTRAL_SNAPSHOT=1 CONSOLE_TARGET_ROOT="$CONSOLE_TARGET_ROOT" \
-    CONSOLE_WORK_DIR="$CONSOLE_WORK_DIR" \
+  GMB_CENTRAL_SNAPSHOT=1 PROGRAM_CONSOLE_TARGET_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT" \
+    PROGRAM_CONSOLE_WORK_DIR="$PROGRAM_CONSOLE_WORK_DIR" \
     bash "$snapshot_root/citizenapp/scripts/citizenapp-test.sh" "$@"
   exit $?
 fi
 
 if [[ "${CI:-}" != true ]]; then
-  [[ "$CITIZENAPP_DIR" == "$CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
-    || { echo "CitizenApp本机测试源码不在Console中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
+  [[ "$CITIZENAPP_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
+    || { echo "CitizenApp本机测试源码不在ProgramConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
 fi
 
 if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then

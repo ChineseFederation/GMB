@@ -73,6 +73,7 @@ Future<void> chatRuntimeBackgroundHandler(RemoteMessage message) async {
         runtime = ChatRuntime(
           pushService: push,
           pushTokenProvider: () => push.readToken(requestPermission: false),
+          receiveOnly: true,
         );
         final accountId = await runtime.readAccountId();
         if (accountId == null) return;
@@ -1466,6 +1467,7 @@ class ChatRuntime {
     CurrentUserContext? currentUserContext,
     ChainBootstrapApi? bootstrapApi,
     Future<Directory> Function()? documentsDirectoryProvider,
+    bool receiveOnly = false,
     @visibleForTesting bool debugUseIndependentCidMutationGate = false,
   })  : _store = _initializeWhileProcessActive(() => store ?? ChatStore()),
         _walletManager = walletManager ?? WalletManager(),
@@ -1480,6 +1482,7 @@ class ChatRuntime {
         _cloudTransportFactory = cloudTransportFactory,
         _pushService = pushService ?? ChatPushService(),
         _pushTokenProvider = pushTokenProvider,
+        _receiveOnly = receiveOnly,
         _cidMutationGate = debugUseIndependentCidMutationGate
             ? _ChatCidMutationGate()
             : _sharedCidMutationGate,
@@ -1575,13 +1578,20 @@ class ChatRuntime {
   final ChatCloudTransportFactory? _cloudTransportFactory;
   final ChatPushService _pushService;
   final ChatPushTokenProvider? _pushTokenProvider;
+  final bool _receiveOnly;
   final _ChatCidMutationGate _cidMutationGate;
   final _ChatCidMutationGate _outboundDeliveryGate = _ChatCidMutationGate();
   final Future<Directory> Function() _documentsDirectoryProvider;
 
   /// 正在经 HTTPS 上传 R2 密文的媒体 attachmentId（初始发送或补发中），用于去重：
   /// 启动、恢复前台或推送触发的补发不得对在途媒体再整块重传。
-  final Set<String> _mediaBytesInFlight = {};
+  // Chat 列表、会话页和后台同步可能各持有 ChatRuntime；附件网络状态必须进程
+  // 唯一，否则多个实例会同时为同一 attachmentId prepare/abort 并耗尽 D1。
+  static final Set<String> _mediaBytesInFlight = {};
+  static bool _mediaUploadBusy = false;
+  static final Map<String, int> _mediaUploadFailures = <String, int>{};
+  static final Map<String, DateTime> _mediaUploadRetryAt =
+      <String, DateTime>{};
 
   /// 正在下载的入站 R2 密文附件。相同账户、会话和 attachmentId 共用一个 Future，
   /// WSS、邮箱补拉、页面恢复和用户点击不得并发重复下载整块密文。
@@ -2106,6 +2116,9 @@ class ChatRuntime {
     _readyFlights.clear();
     _accountContextKeys.clear();
     _mediaBytesInFlight.clear();
+    _mediaUploadBusy = false;
+    _mediaUploadFailures.clear();
+    _mediaUploadRetryAt.clear();
     _incomingAttachmentDownloads.clear();
     _mailboxEnvelopeReceipts.clear();
     _outgoingRetryInFlight.clear();
@@ -4524,13 +4537,20 @@ class ChatRuntime {
     });
   }
 
-  /// 把本机用途钥密文待发送行按会话顺序转换为正式 MLS Envelope。某条失败时
-  /// 立即停止该批，禁止后一条越过它推进 ratchet；原行保留到下一次补发。
+  /// 把本机用途钥密文待发送行按会话顺序转换为正式 MLS Envelope。
+  ///
+  /// 直聊附件的 R2 上传不是 MLS 操作，必须先移出会话门闩独立执行；否则一张
+  /// 上传缓慢的图片会把同会话后续文字、表情和贴纸全部堵在本机 pending。附件
+  /// 上传完成后重新进入本方法生成控制 Envelope，所有 MLS 状态改写仍只发生在
+  /// 会话门闩内。群聊保持严格顺序，不越过尚未上传的媒体。
   Future<bool> _flushPendingOutgoing(
     _ChatAccountContext context, {
     String? recipientCidNumber,
     String? conversationId,
   }) async {
+    // FCM 后台 isolate 只补拉、验密、落库和通知；出站队列只属于前台主
+    // isolate。禁止推送唤醒后重复 prepare/abort 同一附件。
+    if (_receiveOnly) return false;
     final pending = await _store.readPendingOutgoingMessages(
       bindingToken: context.bindingToken,
       ownerCidNumber: context.account.cidNumber,
@@ -4543,6 +4563,22 @@ class ChatRuntime {
       if (nowMillis - item.createdAtMillis >= chatMailboxTtlMillis) {
         await _expirePendingOutgoing(context, item);
         continue;
+      }
+      final content = ChatPayloadCodec.decode(item.payload);
+      if (!item.conversationId.startsWith('grp:') && content.isMedia) {
+        final attachmentId = content.attachmentId ?? '';
+        if (attachmentId.isEmpty) return true;
+        final uploaded = await _pendingAttachmentUploadedMarker(
+          context.bindingToken,
+          item.conversationId,
+          attachmentId,
+        );
+        if (!await uploaded.exists()) {
+          _schedulePendingMediaUpload(context, item, content);
+          // 直聊 Application 是独立 HPKE 密文；附件上传不持有 MLS 门闩，后续
+          // 消息可立即生成 Envelope，展示顺序仍由原始 createdAtMillis 恢复。
+          continue;
+        }
       }
       try {
         await _sendPendingOutgoing(context, item);
@@ -4589,6 +4625,118 @@ class ChatRuntime {
       if (await staged.exists()) await staged.delete();
     } catch (_) {
       // 过期状态已经落库；残留密文随会话本地清理收口。
+    }
+  }
+
+  /// 在会话门闩之外上传一条直聊附件。相同 attachmentId 全进程只允许一个上传
+  /// Future；成功后重新调度原会话发送媒体控制信封，失败走既有有界退避。
+  void _schedulePendingMediaUpload(
+    _ChatAccountContext context,
+    ChatPendingOutgoingMessage pending,
+    ChatContent content,
+  ) {
+    final attachmentId = content.attachmentId ?? '';
+    final retryAt = _mediaUploadRetryAt[attachmentId];
+    if (retryAt != null && DateTime.now().isBefore(retryAt)) return;
+    if (attachmentId.isEmpty ||
+        _mediaUploadBusy ||
+        !_mediaBytesInFlight.add(attachmentId)) {
+      return;
+    }
+    _mediaUploadBusy = true;
+    unawaited(
+      _runRuntimeOperation(() async {
+        try {
+          await _uploadPendingDirectMedia(context, pending, content);
+          _mediaUploadFailures.remove(attachmentId);
+          _mediaUploadRetryAt.remove(attachmentId);
+        } finally {
+          _mediaBytesInFlight.remove(attachmentId);
+          _mediaUploadBusy = false;
+        }
+        _schedulePendingOutgoing(
+          account: context.account,
+          recipientCidNumber: pending.recipientCidNumber,
+          conversationId: pending.conversationId,
+        );
+      }).catchError((Object _) {
+        _mediaBytesInFlight.remove(attachmentId);
+        _mediaUploadBusy = false;
+        final failures = (_mediaUploadFailures[attachmentId] ?? 0) + 1;
+        _mediaUploadFailures[attachmentId] = failures;
+        final delay = switch (failures) {
+          1 => const Duration(seconds: 5),
+          2 => const Duration(seconds: 15),
+          3 => const Duration(minutes: 1),
+          _ => const Duration(minutes: 5),
+        };
+        _mediaUploadRetryAt[attachmentId] = DateTime.now().add(delay);
+        // 每条附件独立有界退避，禁止同一会话中的多条失败附件每两秒共同
+        // prepare/abort；普通文字、表情和贴纸不经过该等待。
+        unawaited(
+          Future<void>.delayed(
+            delay,
+            () => _schedulePendingOutgoing(
+              account: context.account,
+              recipientCidNumber: pending.recipientCidNumber,
+              conversationId: pending.conversationId,
+            ),
+          ),
+        );
+        // 当前失败附件进入退避后立即调度下一条；单并发只限制附件字节，
+        // 不限制普通消息，也不会让一条坏附件占住全队列。
+        _schedulePendingOutgoing(
+          account: context.account,
+          recipientCidNumber: pending.recipientCidNumber,
+          conversationId: pending.conversationId,
+        );
+      }),
+    );
+  }
+
+  Future<void> _uploadPendingDirectMedia(
+    _ChatAccountContext context,
+    ChatPendingOutgoingMessage pending,
+    ChatContent content,
+  ) async {
+    final attachmentId = content.attachmentId ?? '';
+    final cipherByteSize = content.cipherByteSize ?? -1;
+    final cipherSha256 = content.cipherSha256 ?? '';
+    if (attachmentId.isEmpty || cipherByteSize < 1 || cipherSha256.isEmpty) {
+      throw StateError('Chat 本地待发送附件密文元数据无效');
+    }
+    final staged = await _pendingAttachmentUploadFile(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    final uploaded = await _pendingAttachmentUploadedMarker(
+      context.bindingToken,
+      pending.conversationId,
+      attachmentId,
+    );
+    if (await uploaded.exists()) return;
+    if (!await staged.exists() || await staged.length() != cipherByteSize) {
+      throw StateError('Chat 本地待上传附件密文缺失');
+    }
+    try {
+      await context.transport.uploadEncryptedAttachment(
+        attachmentId: attachmentId,
+        recipientCidNumbers: <String>[pending.recipientCidNumber],
+        cipherFile: staged,
+        cipherByteSize: cipherByteSize,
+        cipherSha256: cipherSha256,
+      );
+      await uploaded.writeAsString('uploaded', flush: true);
+    } catch (_) {
+      // transport 是上传事务唯一所有者，失败时已完成一次 abort；运行态禁止
+      // 再次中止同一 attachmentId，避免重复 R2/D1 写入。
+      rethrow;
+    }
+    try {
+      await staged.delete();
+    } catch (_) {
+      // 上传标记已经持久成立；密文缓存残留由会话删除统一清理。
     }
   }
 
@@ -4662,45 +4810,16 @@ class ChatRuntime {
     required String recipientDevicePublicKey,
   }) async {
     final attachmentId = content.attachmentId ?? '';
-    final cipherByteSize = content.cipherByteSize ?? -1;
-    final cipherSha256 = content.cipherSha256 ?? '';
-    if (attachmentId.isEmpty || cipherByteSize < 1 || cipherSha256.isEmpty) {
+    if (attachmentId.isEmpty) {
       throw StateError('Chat 本地待发送附件密文元数据无效');
     }
-    final staged = await _pendingAttachmentUploadFile(
-      context.bindingToken,
-      pending.conversationId,
-      attachmentId,
-    );
     final uploaded = await _pendingAttachmentUploadedMarker(
       context.bindingToken,
       pending.conversationId,
       attachmentId,
     );
     if (!await uploaded.exists()) {
-      if (!await staged.exists() || await staged.length() != cipherByteSize) {
-        throw StateError('Chat 本地待上传附件密文缺失');
-      }
-      try {
-        await context.transport.uploadEncryptedAttachment(
-          attachmentId: attachmentId,
-          recipientCidNumbers: <String>[pending.recipientCidNumber],
-          cipherFile: staged,
-          cipherByteSize: cipherByteSize,
-          cipherSha256: cipherSha256,
-        );
-        await uploaded.writeAsString('uploaded', flush: true);
-      } catch (_) {
-        await context.transport
-            .abortAttachment(attachmentId)
-            .catchError((Object _) {});
-        rethrow;
-      }
-      try {
-        await staged.delete();
-      } catch (_) {
-        // 已持久写入上传标记后，缓存清理失败不能撤销已经可投递的远端密文。
-      }
+      throw StateError('Chat 附件密文仍在后台上传');
     }
     await flow.sendMediaControl(
       conversationId: pending.conversationId,
@@ -5855,6 +5974,9 @@ class ChatRuntime {
       throw const FormatException('Chat 附件传输密钥不合法');
     }
     final tempDirectory = Directory('${cacheDirectory.path}/.tmp');
+    // 首次接收附件时临时目录尚不存在；必须在 R2 流打开目标文件之前创建，
+    // 否则每次自动重试和用户点击重试都会在 openWrite() 前重复失败。
+    await tempDirectory.create(recursive: true);
     final cipherFile = File(
       '${tempDirectory.path}/${_safePath(attachmentId)}.download',
     );
