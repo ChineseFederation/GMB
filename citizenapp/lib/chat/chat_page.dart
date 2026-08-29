@@ -1262,6 +1262,7 @@ class _ChatPageState extends State<ChatPage> {
   }) {
     final maxWidth = MediaQuery.of(context).size.width * 0.62;
     final hasFile = message.source.isNotEmpty;
+    // 附件未到达时保留控制载荷；用户点击只重试当前附件，不能阻塞消息列表。
     final control =
         message.metadata?['attachment_control_plaintext']?.toString() ?? '';
     final ratio = _mediaAspectRatio(message.width, message.height);
@@ -1313,6 +1314,7 @@ class _ChatPageState extends State<ChatPage> {
   }) {
     final maxWidth = MediaQuery.of(context).size.width * 0.62;
     final hasFile = message.source.isNotEmpty;
+    // 视频占位与图片共用同一独立补取边界，不重新消费或确认聊天信封。
     final control =
         message.metadata?['attachment_control_plaintext']?.toString() ?? '';
     final hash = message.metadata?['blurhash']?.toString();

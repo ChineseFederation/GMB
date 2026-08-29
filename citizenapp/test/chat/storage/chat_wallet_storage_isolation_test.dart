@@ -996,6 +996,7 @@ void main() {
     );
   });
 
+  // 普通启动只判断擦除 marker；后台收件 lease 由独立恢复阶段整理。
   test('普通启动没有 wipe marker 时不等待正在运行的后台收件 lease', () async {
     final entered = Completer<void>();
     final release = Completer<void>();
@@ -1020,6 +1021,7 @@ void main() {
     }
   });
 
+  // 覆盖安装先放行启动，再由显式恢复入口退役旧进程 lease，绝不删除聊天密文。
   test('覆盖安装后的新进程立即退役上一 PID 的新鲜 CID lease 且保留 Chat 数据', () async {
     final digest = crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
     final orphanLease = File(

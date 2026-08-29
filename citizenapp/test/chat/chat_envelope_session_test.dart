@@ -767,6 +767,7 @@ void main() {
     );
   });
 
+  // 回归：附件网络失败发生在持久化之后，不能撤销消息或阻断邮箱 ACK。
   test('入站后置附件任务失败不撤销已落库消息', () async {
     final receiverStore = ChatStore();
     final receiverBinding =
