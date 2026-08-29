@@ -43,6 +43,7 @@ void main() {
     expect(flow, isNot(contains('await _store.savePendingInbound(')));
   });
 
+  // 中文注释：锁定邮箱补拉发生在实时 socket 之前，并禁止旧在线探测信令回流。
   test('普通消息补拉邮箱不依赖WSS、WebRTC或对端在线', () {
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
     final mailboxFetch = runtime.indexOf(
