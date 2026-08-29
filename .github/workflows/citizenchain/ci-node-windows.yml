@@ -2,7 +2,7 @@ name: 公民链 · CI · Windows
 run-name: 公民链 · CI · Windows
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
-# CI 只能由公民控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# CI 只能由编程控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
 # 这样每个软件的 CI 彼此彻底分开，也不会出现「推送触发一条、dispatch 再触发一条、
 # 后者用 concurrency 把前者掐掉」的空跑 runner 浪费。
 on:
@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   # 中文注释：目标是并发键的一部分，四个目标互不取消；同目标新任务也只排队，绝不
-  # 把已经运行数小时的任务掐掉。CitizenConsole 会在 dispatch 前负责精确去重。
+  # 把已经运行数小时的任务掐掉。ProgramConsole 会在 dispatch 前负责精确去重。
   group: citizenchain-node-ci-windows
   cancel-in-progress: false
 
@@ -59,7 +59,7 @@ jobs:
   verify:
     name: 公民链全工程验证
     needs: changes
-    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # 中文注释：Release 的源码提交已经由 ProgramConsole 锁定为最近成功 CI 的提交；
     # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
     if: ${{ needs.changes.outputs.citizenchain == 'true' }}
     runs-on: ubuntu-24.04

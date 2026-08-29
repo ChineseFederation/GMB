@@ -118,10 +118,10 @@ CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然
 XCTest；编译成功不等于平台测试执行成功。这些是每个准确提交都要重新满足的测试合同，不是
 对尚未完成最终验收的日期性结论。
 
-2026-08-29 当前冻结源码的 Console `.work` 隔离快照已实际通过根 Flutter
+2026-08-29 当前冻结源码的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
 230/230 和冻结 smoldot Dart 51/51。signer Rust 6/6、FFI Rust 5/5、PoW Rust
 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、Android JUnit 3/3
-与 Console 99/99 是同一次任务中的先前执行记录，相关生产字节未变；本轮禁止运行
+与 ProgramConsole 99/99 是同一次任务中的先前执行记录，相关生产字节未变；本轮禁止运行
 Git，因而不把内部调用 Git 的 GMB 完整仓库套件记为当前通过。iOS 的 2 项 XCTest
 已编译链接，但本机没有 Simulator runtime，未宣称本地执行成功；正式 workflow
 在 GitHub macOS Runner 上要求真实执行并失败关闭。

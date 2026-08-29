@@ -44,7 +44,7 @@ jobs:
 
       - name: 检查 CitizenSDK 发布闭集与归档合同
         env:
-          CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
+          PROGRAM_CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
         run: node --test citizensdk/scripts/release.test.mjs
 
       - name: 安装 Rust 工具链
@@ -125,9 +125,9 @@ jobs:
 
       - name: 编译并运行 Android 与 iOS 插件测试
         env:
-          CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
-          CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
-          CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
+          PROGRAM_CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
+          PROGRAM_CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
+          PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
           GRADLE_USER_HOME: ${{ runner.temp }}/citizensdk/gradle
           TMPDIR: ${{ runner.temp }}/citizensdk/tmp
         run: |
@@ -224,7 +224,7 @@ jobs:
           PY
           (
             cd "$ios_test_host/ios"
-            CONSOLE_NATIVE_IOS_DIR="$CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
+            PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
           )
           simulator_id="$(python3 - <<'PY'
           import json

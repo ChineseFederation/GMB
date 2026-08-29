@@ -12,7 +12,7 @@
 ## 设备机密与受信任宿主
 
 助记词、母种子、child mini-secret 和私钥不得上传到 TuyuServe、TuyuBooking、Cloudflare、
-GitHub、Console 或任何远端服务。标准移动装配只在用户设备硬件金库保存 child 密文，并在
+GitHub、ProgramConsole 或任何远端服务。标准移动装配只在用户设备硬件金库保存 child 密文，并在
 本地认证、解密和签名。
 
 Android 使用硬件 RSA-OAEP KEK、AES-256-GCM 与逐次 `BIOMETRIC_STRONG`；iOS 使用 Secure

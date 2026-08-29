@@ -10,8 +10,8 @@ android {
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
-    // Console本机编译只从中央工作目录打包Rust库，产品仓库不得保留生成的jniLibs。
-    System.getenv("CONSOLE_NATIVE_ANDROID_DIR")?.takeIf { it.isNotBlank() }?.let { nativeDir ->
+    // ProgramConsole本机编译只从中央工作目录打包Rust库，产品仓库不得保留生成的jniLibs。
+    System.getenv("PROGRAM_CONSOLE_NATIVE_ANDROID_DIR")?.takeIf { it.isNotBlank() }?.let { nativeDir ->
         sourceSets.getByName("main").jniLibs.setSrcDirs(listOf(nativeDir))
     }
 
@@ -40,7 +40,7 @@ android {
 
     buildTypes {
         release {
-            // 所有环境只生成无私钥 Release 候选。正式 JKS 只存在 CitizenConsole 的
+            // 所有环境只生成无私钥 Release 候选。正式 JKS 只存在 ProgramConsole 的
             // Data Protection Keychain，并由原生安全进程在 Touch ID 后通过匿名 stdin 使用。
             signingConfig = null
             // release 不加 keepDebugSymbols：APK 保持精简，也不把内部符号随包发出。

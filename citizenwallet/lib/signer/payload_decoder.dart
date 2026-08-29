@@ -3801,7 +3801,7 @@ class PayloadDecoder {
         '${local.minute.toString().padLeft(2, '0')}';
   }
 
-  /// 严格解码 CitizenConsole 生产发布授权。
+  /// 严格解码 ProgramConsole 生产发布授权。
   ///
   /// SCALE 布局固定为：product_id、platform、version_tag 三个字符串，20 字节
   /// source_sha，32 字节 artifact_sha256，previous_deployment_id 字符串，

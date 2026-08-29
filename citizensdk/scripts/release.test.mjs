@@ -30,9 +30,9 @@ import {
   verifyCitizenSdkRelease,
 } from './release.mjs';
 
-const workRoot = process.env.CONSOLE_WORK_DIR;
+const workRoot = process.env.PROGRAM_CONSOLE_WORK_DIR;
 if (!workRoot) {
-  throw new Error('CitizenSDK 发布测试缺少 Console 中央工作目录');
+  throw new Error('CitizenSDK 发布测试缺少 ProgramConsole 中央工作目录');
 }
 mkdirSync(workRoot, { recursive: true });
 

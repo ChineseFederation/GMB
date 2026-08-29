@@ -31,7 +31,7 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 
 每个产品、端和动作独立管理。CitizenServe 的 `cloudflare` 端分别使用独立的 CI、Release
 逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish 只由本机
-  Console 执行，不属于 GitHub Workflow。
+  ProgramConsole 执行，不属于 GitHub Workflow。
 
 会员状态采用“手机即时确认 + 服务端唯一 finalized 投影”两条互补写入路径。CitizenApp 在
 订阅、取消、换档或档位变更交易 finalized 后，只用链上 `tx_hash + block_hash` 立即确认；
@@ -40,7 +40,7 @@ CitizenServe 每五分钟通过既有 Cloudflare Access + Tunnel 连接国储会
 System.Events 发现受影响关系，再从同一 finalized 区块批量读取订阅和创作者档位 storage。
 平台会员、创作者订阅和创作者档位共用一个游标，整块处理成功后才推进；自动续费、自动
 恢复、挂起、终止以及手机同步失败都由这一任务补齐，不增加节点回调、密钥、操作编号或
-链时钟。旧 `chain_clock` 表由 Console 在 CitizenServe 正式发布的只读门禁和回滚锚点
+链时钟。旧 `chain_clock` 表由 ProgramConsole 在 CitizenServe 正式发布的只读门禁和回滚锚点
 验收通过后，使用同一次 `SERVER_DEPLOY` 授权通过 Cloudflare 官方 D1 Query API 幂等删除；
 该步骤不是 D1 预检，不读取业务数据。广场发布与资料读取仍只读 CitizenServe D1，禁止在请求路径点查链或追赶投影。
 D1 没有会员行就不向其他用户展示会员信息，不输出“未知”“尚未同步”等第三状态。
@@ -55,7 +55,7 @@ D1 没有会员行就不向其他用户展示会员信息，不输出“未知�
 一路径执行一次无 Upgrade 的 HTTPS 预检，只记录 HTTP 状态和稳定错误码；不记录响应正文
 或复用正式 WSS 签名。正常发布不携带该开关。
 
-iOS 必须由 Console 完成 Release 编译并安装到真机；安装完成后的真机测试、设备操作和日志
+iOS 必须由 ProgramConsole 完成 Release 编译并安装到真机；安装完成后的真机测试、设备操作和日志
 检查必须统一使用 Device Hub，禁止以截图驱动、拍照、模拟器或其他未登记测试工具替代。
 真机记录继续遵守最小诊断边界，不得保存消息正文、附件内容、钱包密钥、设备子钥、会话令牌
 或生物识别数据。
@@ -111,7 +111,7 @@ Envelope 完成本机落盘后仅按发送方合并重试本机待发队列，�
 - WSS 协议只接受带 `connection_id` 的语音、视频通话建连信令；普通消息禁止增加在线探测、反向唤醒或补发信令。
 #### CitizenApp 中央测试快照真源规则（2026-08-28）
 
-- CitizenApp 本机测试继续只在 Console 中央隔离快照运行；应用目录不得保存链端 SCALE 金标或 CitizenServe 推送实现的镜像副本。
+- CitizenApp 本机测试继续只在 ProgramConsole 中央隔离快照运行；应用目录不得保存链端 SCALE 金标或 CitizenServe 推送实现的镜像副本。
 - 官方测试入口必须把 `scale_codec_vectors.json`、`role_permission.json` 与 `citizenserve/src/chat/push.ts` 从当前 GMB 仓库复制到一次性快照，并在任一真源缺失时立即失败。
 - 跨产品契约测试始终读取本次仓库源码，禁止读取历史缓存、发布产物或另行维护的兼容副本。
 

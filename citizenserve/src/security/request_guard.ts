@@ -121,10 +121,10 @@ export async function guardRequest(request: Request, env: Env, path: string): Pr
     await enforceEdgeRate(env, 'RATE_WRITE', `user_projection:${ipKey}`);
     return;
   }
-  // 结算子接口只给本地部署控制台调用，handler 内用 SETTLE_TOKEN 鉴权，
-  // 不套 IP 限流（避免控制台批量补发被节流）。
+  // 结算子接口只给本地部署编程控制台调用，handler 内用 SETTLE_TOKEN 鉴权，
+  // 不套 IP 限流（避免编程控制台批量补发被节流）。
   if (path.startsWith('/square/topup/settlement/')) return;
-  // 公民链官网下载指针只接受 handler 内的控制台 HMAC，不得回落到普通用户 Session。
+  // 公民链官网下载指针只接受 handler 内的编程控制台 HMAC，不得回落到普通用户 Session。
   if (path.startsWith('/operations/citizenchain/download-publications/')) return;
   // 充值整片免广场会话:充值是"付款人自掏稳定币给某个公民链账户打公民币",收款方无需
   // 证明账户所有权(同转账),冷钱包本机也没有私钥可签。绑定会话既挡不住抢单(见 orders.ts

@@ -58,7 +58,7 @@ CitizenSDK 只额外增加 `native/smoldot/dart/example/README.md`，说明发�
 历史说明，其中的桌面平台、CitizenApp 路径及源码树内 `target` 命令不代表 CitizenSDK 当前
 交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前只交付 Android ARM64 与 iOS ARM64；
 arm64+x86_64 macOS 宿主动态库和与 Runner 同架构的 iOS Simulator 静态库只用于测试，且与
-全部生成记录一样只能写入 Runner 临时目录或 Console 中央目录。实际指引以本文件、根 README
+全部生成记录一样只能写入 Runner 临时目录或 ProgramConsole 中央目录。实际指引以本文件、根 README
 和 `docs/NATIVE_PACKAGING.md` 为准。直接修改冻结文件会破坏逐字节来源闭集。
 
 ## smoldot FFI
@@ -239,10 +239,10 @@ Android `:citizen_sdk:testDebugUnitTest` JUnit 与 iOS Simulator `xcodebuild tes
 插件、发现测试或生成测试报告都不能替代执行。上述数量和命令描述测试套件合同，不是尚未完成
 的某次最终验收结果。
 
-2026-08-29 当前冻结源码的 Console `.work` 隔离快照已实际通过根 Flutter
+2026-08-29 当前冻结源码的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
 230/230、冻结 smoldot Dart 51/51、钱包定向 88/88、交易定向 85/85、signer Rust 6/6、
 FFI Rust 5/5、PoW Rust 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、
-Android JUnit 3/3、Release 合同 18/18、Console 99/99 与统一数据字典定向合同 2/2。
+Android JUnit 3/3、Release 合同 18/18、ProgramConsole 99/99 与统一数据字典定向合同 2/2。
 Android 最终冻结副本与产品真源逐字节目录比较无差异，生成的 CitizenSDK AAR 只包含
 `arm64-v8a/libsmoldot.so`。iOS ARM64 设备 Release App 与 ARM64 Simulator 测试包均完成
 编译链接并保留全部 25 个轻节点/sr25519 导出符号；设备与 Simulator 静态归档各有 397 个

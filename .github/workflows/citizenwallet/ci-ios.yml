@@ -2,7 +2,7 @@ name: 公民钱包 · CI · iOS
 run-name: 公民钱包 · CI · iOS
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
-# CI 只能由公民控制台「公民 → 公民钱包 → 运行 CI / Release」按钮经 workflow_dispatch 发起。
+# CI 只能由编程控制台「公民 → 公民钱包 → 运行 CI / Release」按钮经 workflow_dispatch 发起。
 on:
   workflow_dispatch:
 

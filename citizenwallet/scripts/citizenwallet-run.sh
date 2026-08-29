@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
 # iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
-# Console 原生安全进程使用固定本机开发签名并安装。
+# ProgramConsole 原生安全进程使用固定本机开发签名并安装。
 #
 # 用法：citizenwallet-run.sh <ios|android>
 #
 # 目标平台是必填参数，不做任何自动探测：探测总要在失败时选一个回落，
-# 而回落的那一端会被当成用户想编的那一端。控制台的「编译iOS端 / 编译Android端」
+# 而回落的那一端会被当成用户想编的那一端。编程控制台的「编译iOS端 / 编译Android端」
 # 两个按钮各自传死这个参数。与 citizenapp-run.sh 同口径。
 #
-# 本机中间文件只允许进入 Console 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
+# 本机中间文件只允许进入 ProgramConsole 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CITIZENWALLET_DIR="$SCRIPT_DIR/.."
@@ -19,23 +19,23 @@ PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
   || { echo "本机目标平台只接受 ios 或 android：$PLATFORM" >&2; exit 1; }
 cd "$CITIZENWALLET_DIR"
 
-: "${CONSOLE_TARGET_ROOT:?本机编译必须由 Console 提供中央产物目录}"
-: "${CONSOLE_WORK_DIR:?本机编译必须由 Console 提供中央工作目录}"
-case "$CONSOLE_WORK_DIR" in "$CONSOLE_TARGET_ROOT/.work/citizenwallet-$PLATFORM") ;; *)
-  echo "公民钱包中央工作目录不合法：$CONSOLE_WORK_DIR" >&2; exit 1 ;;
+: "${PROGRAM_CONSOLE_TARGET_ROOT:?本机编译必须由 ProgramConsole 提供中央产物目录}"
+: "${PROGRAM_CONSOLE_WORK_DIR:?本机编译必须由 ProgramConsole 提供中央工作目录}"
+case "$PROGRAM_CONSOLE_WORK_DIR" in "$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenwallet-$PLATFORM") ;; *)
+  echo "公民钱包中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2; exit 1 ;;
 esac
-# 与公民使用同一条不可绕过边界：脚本只接受Console中央一次性源码快照，禁止
+# 与公民使用同一条不可绕过边界：脚本只接受ProgramConsole中央一次性源码快照，禁止
 # 通过手工注入中央build目录却仍在GMB主检出执行Flutter并恢复产品缓存。
-[[ "$CITIZENWALLET_DIR" == "$CONSOLE_WORK_DIR/source/GMB/citizenwallet" ]] || {
-  echo "公民钱包本机编译只能在Console中央源码快照中运行：$CITIZENWALLET_DIR" >&2
+[[ "$CITIZENWALLET_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenwallet" ]] || {
+  echo "公民钱包本机编译只能在ProgramConsole中央源码快照中运行：$CITIZENWALLET_DIR" >&2
   exit 1
 }
-BUILD_DIR="$CONSOLE_WORK_DIR/build"
-ARTIFACT_ROOT="$CONSOLE_TARGET_ROOT/citizenwallet"
-export CONSOLE_BUILD_DIR="$BUILD_DIR"
-export CONSOLE_NATIVE_ANDROID_DIR="$CONSOLE_WORK_DIR/native/android"
-export CONSOLE_NATIVE_IOS_DIR="$CONSOLE_WORK_DIR/native/ios"
-export XDG_CONFIG_HOME="$CONSOLE_WORK_DIR/flutter-config"
+BUILD_DIR="$PROGRAM_CONSOLE_WORK_DIR/build"
+ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenwallet"
+export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
+export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/android"
+export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/ios"
+export XDG_CONFIG_HOME="$PROGRAM_CONSOLE_WORK_DIR/flutter-config"
 mkdir -p "$XDG_CONFIG_HOME"
 build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$CITIZENWALLET_DIR")"
 flutter config --build-dir="$build_dir_relative" >/dev/null
@@ -56,7 +56,7 @@ clean_platform_build_outputs() {
 }
 
 retain_ios_local_artifact() {
-  local app_bundle="$1" staging="$CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
+  local app_bundle="$1" staging="$PROGRAM_CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
   rm -f "$staging"
   ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging"
   mkdir -p "$ARTIFACT_ROOT"
@@ -174,7 +174,7 @@ flutter pub get
 # 所以必须先于 flutter build 产出；实现来自 shared/citizen-signer，
 # 与 CitizenApp 热端同一份源码。
 echo "==> 编译原生签名库（${PLATFORM}）..."
-# 必须用绝对路径 SCRIPT_DIR:上方已 cd 进 CITIZENWALLET_DIR,而控制台以相对路径
+# 必须用绝对路径 SCRIPT_DIR:上方已 cd 进 CITIZENWALLET_DIR,而编程控制台以相对路径
 # 调本脚本时 $0 是相对串,$(dirname "$0") 会拼在新 cwd 上多套一层目录。
 "$SCRIPT_DIR/build-signer-native.sh" "$PLATFORM"
 

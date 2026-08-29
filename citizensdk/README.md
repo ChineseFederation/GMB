@@ -53,8 +53,8 @@ GMB 的唯一顶层 Workflow 路由 `公民SDK · CI · SDK` 与
 `citizensdk-release.json`、`SHA256SUMS`。CitizenSDK 不设置独立“发布”按钮、不接入公民网
 下载，也不发布到 pub.dev。
 
-本机 Console 只允许把 CitizenSDK 生成记录写入
-`/Users/rhett/Only/console/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
+本机 ProgramConsole 只允许把 CitizenSDK 生成记录写入
+`/Users/rhett/Only/ProgramConsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
 工作区中的未提交修改不会被冒充成该提交。中央目录现有三件套属于其生成时的历史提交，
 除非重新完成当前提交的统一构建与核验，否则不得称为当前源码候选。
 

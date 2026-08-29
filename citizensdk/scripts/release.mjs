@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const PRODUCT_ID = 'citizensdk';
 const PACKAGE_NAME = 'citizen_sdk';
-const CONSOLE_TARGET_ROOT = '/Users/rhett/Only/console/target/citizensdk';
+const PROGRAM_CONSOLE_TARGET_ROOT = '/Users/rhett/Only/ProgramConsole/target/citizensdk';
 const ROOT_FILES = [
   '.gitignore',
   'Cargo.lock',
@@ -238,9 +238,9 @@ function assertSafeTargetPath(path, label) {
 function assertLocalTarget(path, label) {
   const target = assertSafeTargetPath(path, label);
   if (process.env.GITHUB_ACTIONS === 'true') return target;
-  const root = assertSafeTargetPath(CONSOLE_TARGET_ROOT, 'Console 中央目录');
+  const root = assertSafeTargetPath(PROGRAM_CONSOLE_TARGET_ROOT, 'ProgramConsole 中央目录');
   if (!existsSync(root) || !lstatSync(root).isDirectory()) {
-    fail(`Console 中央目录不存在或不是普通目录：${root}`);
+    fail(`ProgramConsole 中央目录不存在或不是普通目录：${root}`);
   }
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
     fail(`${label} 的本地路径必须位于 ${root}：${target}`);

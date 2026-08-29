@@ -4,4 +4,4 @@
 示例目录和发布闭集的职责，不修改来源示例。
 
 禁止在本目录写入生成文件。本机 CitizenSDK 编译、测试和工具记录只能进入
-`/Users/rhett/Only/console/target/citizensdk`，GitHub 流程只能写入对应 Runner 临时目录。
+`/Users/rhett/Only/ProgramConsole/target/citizensdk`，GitHub 流程只能写入对应 Runner 临时目录。

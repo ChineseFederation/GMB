@@ -131,9 +131,9 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/citizenweb-release.tgz
 
-      # 中文注释：GitHub runner 只固化已验证归档；公民控制台不再下载 Actions 候选、
+      # 中文注释：GitHub runner 只固化已验证归档；编程控制台不再下载 Actions 候选、
       # 本机复核后二次创建 Release。草稿只作为三项正式资产上传的原子事务边界，
-      # Cloudflare Pages 生产发布仍由控制台的独立“发布”动作负责。
+      # Cloudflare Pages 生产发布仍由编程控制台的独立“发布”动作负责。
       - name: 固化公民网正式 Release
         env:
           GH_TOKEN: ${{ github.token }}

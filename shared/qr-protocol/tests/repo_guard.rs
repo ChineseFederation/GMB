@@ -413,7 +413,7 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
     ] {
         if run_script.contains(forbidden) {
             violations.push(format!(
-                "citizenchain/scripts/run.sh: CitizenConsole 产品入口禁止旧命令或 Debug 残留 {forbidden}"
+                "citizenchain/scripts/run.sh: ProgramConsole 产品入口禁止旧命令或 Debug 残留 {forbidden}"
             ));
         }
     }

@@ -6,7 +6,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 sdk_dir="$(dirname "$script_dir")"
 ffi_manifest="$sdk_dir/native/smoldot/ffi/Cargo.toml"
 target_name="${1:-all}"
-console_target_root="/Users/rhett/Only/console/target/citizensdk"
+program_console_target_root="/Users/rhett/Only/ProgramConsole/target/citizensdk"
 ios_deployment_target=16.0
 android_ndk_version=28.2.13676358
 
@@ -43,13 +43,13 @@ canonical_directory() {
 }
 
 # 中文注释：GitHub Actions 使用 Runner 临时盘；当前开发机的任何本地记录只能进入
-# Console 统一 target/citizensdk。先检查原始路径，避免错误输入也创建目录。
+# ProgramConsole 统一 target/citizensdk。先检查原始路径，避免错误输入也创建目录。
 if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   for path in "${CITIZENSDK_WORK_DIR:-}" "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"; do
     assert_safe_directory_path "$path" 本机构建目录
     case "$path/" in
-      "$console_target_root/"*) ;;
-      *) fail "本机构建目录必须位于 $console_target_root：${path:-<empty>}" ;;
+      "$program_console_target_root/"*) ;;
+      *) fail "本机构建目录必须位于 $program_console_target_root：${path:-<empty>}" ;;
     esac
   done
 fi
@@ -57,16 +57,16 @@ fi
 work_dir="$(canonical_directory "${CITIZENSDK_WORK_DIR:-}" CITIZENSDK_WORK_DIR)"
 output_dir="$(canonical_directory "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" CITIZENSDK_NATIVE_OUTPUT_DIR)"
 
-# 中文注释：无论本机、Console 还是 GitHub runner，都禁止把 Cargo、二进制或符号清单
-# 回写到 SDK 源码树；Console 本机调用时两个目录必须位于 console/target/citizensdk。
+# 中文注释：无论本机、ProgramConsole 还是 GitHub runner，都禁止把 Cargo、二进制或符号清单
+# 回写到 SDK 源码树；ProgramConsole 本机调用时两个目录必须位于 ProgramConsole/target/citizensdk。
 for directory in "$work_dir" "$output_dir"; do
   case "$directory/" in
     "$sdk_dir/"*) fail "工作目录或产物目录位于 CitizenSDK 源码树：$directory" ;;
   esac
   if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
     case "$directory/" in
-      "$console_target_root/"*) ;;
-      *) fail "本机构建真实路径越出 $console_target_root：$directory" ;;
+      "$program_console_target_root/"*) ;;
+      *) fail "本机构建真实路径越出 $program_console_target_root：$directory" ;;
     esac
   fi
 done

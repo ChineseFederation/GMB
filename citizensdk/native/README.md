@@ -11,4 +11,4 @@ CitizenApp 或 `shared` 相对路径取得运行时源码的依赖。Android/iOS
 平台只包含 Android ARM64 与 iOS ARM64；桌面原生核心可继续适配，但不表示桌面 SDK 已交付。
 
 任何编译状态和原生产物都必须写入调用方指定的源码树外目录。本机唯一允许目录是
-`/Users/rhett/Only/console/target/citizensdk`。
+`/Users/rhett/Only/ProgramConsole/target/citizensdk`。

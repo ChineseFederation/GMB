@@ -14,7 +14,7 @@ CITIZENSDK_NATIVE_OUTPUT_DIR=<原生产物目录>
 
 脚本在首次 `mkdir` 前要求两个目录都是绝对规范路径，拒绝 `.`、`..`、重复或末尾分隔符，
 并逐级拒绝既存符号链接及非目录祖先。发布器对 candidate、archive 和 verify 路径执行同一
-预检，不能借中间符号链接或路径穿越把生成状态写进 SDK 源码树或 Console 中央目录之外。
+预检，不能借中间符号链接或路径穿越把生成状态写进 SDK 源码树或 ProgramConsole 中央目录之外。
 
 脚本使用 `cargo build --locked`，核对 `smoldot_*` 与四个 `citizen_sr25519_*` 符号，并拒绝
 聊天或产品账户密码学符号进入原生核心。`all` 另外按 Runner 宿主架构生成
@@ -26,7 +26,7 @@ Android NDK 版本在 SDK 原生入口中固定为 `28.2.13676358`，与 GMB 官
 调用方提供 `ANDROID_NDK_HOME` 时必须精确指向该版本；同时提供 `ANDROID_HOME` 与
 `ANDROID_SDK_ROOT` 时两者必须一致。若三个 Android 环境变量均缺失，本机入口只从宿主标准
 SDK 目录（macOS 为 `$HOME/Library/Android/sdk`，Linux 为 `$HOME/Android/Sdk`）解析该固定
-版本，不扫描或选择“最新”NDK。这样 SDK 本机构建不依赖控制台版本，同时仍拒绝版本漂移。
+版本，不扫描或选择“最新”NDK。这样 SDK 本机构建不依赖编程控制台版本，同时仍拒绝版本漂移。
 
 设备与 Simulator 的 iOS 原生构建共用脚本中的唯一 `ios_deployment_target=16.0`，两条
 `cargo build` 都显式接收 `IPHONEOS_DEPLOYMENT_TARGET="$ios_deployment_target"`。该环境同时约束
@@ -39,7 +39,7 @@ Rust 对象和 Cargo 依赖中由 C 编译器生成的对象，避免它们继�
 Android 构建读取：
 
 ```text
-CONSOLE_NATIVE_ANDROID_DIR=<包含 arm64-v8a/libsmoldot.so 的目录>
+PROGRAM_CONSOLE_NATIVE_ANDROID_DIR=<包含 arm64-v8a/libsmoldot.so 的目录>
 ```
 
 `android/build.gradle` 只声明 `arm64-v8a`，其它 ABI 不进入正式包。
@@ -47,16 +47,16 @@ CONSOLE_NATIVE_ANDROID_DIR=<包含 arm64-v8a/libsmoldot.so 的目录>
 iOS 构建读取：
 
 ```text
-CONSOLE_NATIVE_IOS_DIR=<包含 libsmoldot.a 与 exported_symbols.txt 的目录>
+PROGRAM_CONSOLE_NATIVE_IOS_DIR=<包含 libsmoldot.a 与 exported_symbols.txt 的目录>
 ```
 
 podspec 用 `-force_load` 链入静态库，并根据真实产物的 `exported_symbols.txt` 逐符号添加
 `-Wl,-u,<symbol>`，防止 Release `dead_strip` 删除 Dart FFI 入口。缺文件、空清单或符号漂移
 必须失败关闭。
 
-## 本机 Console
+## 本机 ProgramConsole
 
-所有本机生成状态只允许位于 `/Users/rhett/Only/console/target/citizensdk`。本机构建先读取
+所有本机生成状态只允许位于 `/Users/rhett/Only/ProgramConsole/target/citizensdk`。本机构建先读取
 GMB 当前提交 SHA，再通过 `git archive <sha> citizensdk` 建立无生成状态的打包快照；构建
 快照从该提交快照派生。这样工作区未提交修改不会被错误标注为已提交 HEAD。
 
@@ -72,7 +72,7 @@ GMB 当前提交 SHA，再通过 `git archive <sha> citizensdk` 建立无生成�
 SHA-256 同时识别。它只允许作为准确历史前驱被完整备份、原子替换或失败恢复；任何其他
 324 行先前清单、部分集合或损坏字节均不在接受范围内并失败关闭。
 
-Console 本机构建以 `.work/candidate-transaction.lock` 覆盖初始化、构建、提交和恢复的完整
+ProgramConsole 本机构建以 `.work/candidate-transaction.lock` 覆盖初始化、构建、提交和恢复的完整
 跨进程事务。锁 owner 先以 noclobber 完整写入 PID 与随机 token，再由同文件系统硬链接原子
 声明固定普通文件锁，不存在空 owner 固定态。活动、非法或无法确认死亡的 owner 均失败关闭，
 失效锁只有在两种本机进程检查均证明 PID 已死亡后才可原子接管。退出清理只能移除逐字节属于

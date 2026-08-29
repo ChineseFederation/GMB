@@ -7,7 +7,7 @@ const workspaceRoot = fileURLToPath(new URL('..', import.meta.url))
 
 export default defineConfig(({ command }) => {
   if (command === 'build' && !process.env.CITIZENWEB_DIST && process.env.CI !== 'true') {
-    throw new Error('本机编译必须由Console提供CITIZENWEB_DIST，禁止恢复产品目录dist')
+    throw new Error('本机编译必须由ProgramConsole提供CITIZENWEB_DIST，禁止恢复产品目录dist')
   }
   return {
     plugins: [react(), tailwindcss()],

@@ -1,7 +1,7 @@
 name: 公民服务端 · CI · Cloudflare
 run-name: 公民服务端 · CI · Cloudflare
 
-# 中文注释：CitizenServe 是与 CitizenApp、CitizenWeb 分离的 Cloudflare 服务端产品，只由公民控制台显式发起；
+# 中文注释：CitizenServe 是与 CitizenApp、CitizenWeb 分离的 Cloudflare 服务端产品，只由编程控制台显式发起；
 # 普通 main push 只触发独立仓库门禁，不触发本软件 CI；本 CI 绝不读取生产 Secret 或修改 Cloudflare 远端资源。
 on:
   workflow_dispatch:

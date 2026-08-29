@@ -43,7 +43,7 @@ env:
 
 jobs:
   # Release 在同一个 GitHub macOS runner 内完成构建、Apple Distribution 签名和 GitHub Release 固化；
-  # App Store 发布只允许由本机公民控制台执行。
+  # App Store 发布只允许由本机编程控制台执行。
   ios:
     name: 签名并固化公民 iOS Release
     runs-on: macos-15

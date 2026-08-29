@@ -1,7 +1,7 @@
 name: 公民服务端 · Release · Cloudflare
 run-name: 公民服务端 · Release · Cloudflare
 
-# 中文注释：CitizenServe 是与 CitizenApp、CitizenWeb 分离的 Cloudflare 服务端产品，只由公民控制台显式发起；
+# 中文注释：CitizenServe 是与 CitizenApp、CitizenWeb 分离的 Cloudflare 服务端产品，只由编程控制台显式发起；
 # 普通 main push 只触发独立仓库门禁，不触发本 Release；本流程绝不读取生产 Secret 或修改 Cloudflare 远端资源。
 on:
   workflow_dispatch:
@@ -153,9 +153,9 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/citizenserve-cloudflare-release.tgz
 
-      # 中文注释：GitHub runner 只固化已验证归档；公民控制台不再下载 Actions 候选、
+      # 中文注释：GitHub runner 只固化已验证归档；编程控制台不再下载 Actions 候选、
       # 本机复核后二次创建 Release。草稿只作为三项正式资产上传的原子事务边界，
-      # Cloudflare 生产发布仍由控制台的独立“发布”动作负责。
+      # Cloudflare 生产发布仍由编程控制台的独立“发布”动作负责。
       - name: 固化公民服务端正式 Release
         env:
           GH_TOKEN: ${{ github.token }}

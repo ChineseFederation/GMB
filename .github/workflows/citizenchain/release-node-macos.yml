@@ -2,7 +2,7 @@ name: 公民链 · Release · macOS
 run-name: 公民链 · Release · macOS
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
-# CI 只能由公民控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# CI 只能由编程控制台节点行的「运行 CI / Release」按钮经 workflow_dispatch 发起。
 # 这样每个软件的 CI 彼此彻底分开，也不会出现「推送触发一条、dispatch 再触发一条、
 # 后者用 concurrency 把前者掐掉」的空跑 runner 浪费。
 on:
@@ -33,7 +33,7 @@ permissions:
 
 concurrency:
   # 中文注释：目标是并发键的一部分，四个目标互不取消；同目标新任务也只排队，绝不
-  # 把已经运行数小时的任务掐掉。CitizenConsole 会在 dispatch 前负责精确去重。
+  # 把已经运行数小时的任务掐掉。ProgramConsole 会在 dispatch 前负责精确去重。
   group: citizenchain-node-release-macos
   cancel-in-progress: false
 
@@ -102,7 +102,7 @@ jobs:
   build-desktop:
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: changes
-    # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
+    # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ needs.changes.outputs.desktop == 'true' }}
     runs-on: ${{ matrix.os }}
     strategy:

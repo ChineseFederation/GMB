@@ -14,7 +14,7 @@ on:
         required: true
         type: string
       run_title:
-        description: 公民控制台展示标题
+        description: 编程控制台展示标题
         required: true
         type: string
       source_sha:
@@ -65,7 +65,7 @@ env:
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
   # CI 始终使用 workflow_dispatch 创建时由 GitHub 锁定的 main 提交；只有 Release
-  # 使用对应成功 CI 的 source_sha。禁止控制台给 CI 注入预读或历史提交。
+  # 使用对应成功 CI 的 source_sha。禁止编程控制台给 CI 注入预读或历史提交。
   GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && contains(inputs.pipeline, '/release-') && inputs.source_sha || github.sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
@@ -1010,7 +1010,7 @@ jobs:
 
   # ── .github/workflows/citizenapp/release-ios.yml ──
   # Release 在同一个 GitHub macOS runner 内完成构建、Apple Distribution 签名和 GitHub Release 固化；
-  # App Store 发布只允许由本机公民控制台执行。
+  # App Store 发布只允许由本机编程控制台执行。
   citizenapp_release_ios__ios:
     permissions:
       actions: read
@@ -1294,7 +1294,7 @@ jobs:
       attestations: write
     name: 公民链 LinuxAMD 全工程验证
     needs: [validate_dispatch, citizenchain_ci_node_linux_amd__changes]
-    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # 中文注释：Release 的源码提交已经由 ProgramConsole 锁定为最近成功 CI 的提交；
     # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/ci-node-linux-amd.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_ci_node_linux_amd__changes.outputs.citizenchain == 'true') }}
     runs-on: ubuntu-24.04
@@ -1586,7 +1586,7 @@ jobs:
       attestations: write
     name: 公民链 LinuxARM 全工程验证
     needs: [validate_dispatch, citizenchain_ci_node_linux_arm__changes]
-    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # 中文注释：Release 的源码提交已经由 ProgramConsole 锁定为最近成功 CI 的提交；
     # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/ci-node-linux-arm.yaml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_ci_node_linux_arm__changes.outputs.citizenchain == 'true') }}
     runs-on: ubuntu-24.04-arm
@@ -1877,7 +1877,7 @@ jobs:
       attestations: write
     name: 公民链全工程验证
     needs: [validate_dispatch, citizenchain_ci_node_macos__changes]
-    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # 中文注释：Release 的源码提交已经由 ProgramConsole 锁定为最近成功 CI 的提交；
     # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/ci-node-macos.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_ci_node_macos__changes.outputs.citizenchain == 'true') }}
     runs-on: ubuntu-24.04
@@ -2212,7 +2212,7 @@ jobs:
       attestations: write
     name: 公民链全工程验证
     needs: [validate_dispatch, citizenchain_ci_node_windows__changes]
-    # 中文注释：Release 的源码提交已经由 CitizenConsole 锁定为最近成功 CI 的提交；
+    # 中文注释：Release 的源码提交已经由 ProgramConsole 锁定为最近成功 CI 的提交；
     # Release 只重新生成正式候选并交给本机安全进程签名，禁止把整套 CI 门禁再跑一遍。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/ci-node-windows.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_ci_node_windows__changes.outputs.citizenchain == 'true') }}
     runs-on: ubuntu-24.04
@@ -2730,7 +2730,7 @@ jobs:
       attestations: write
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: [validate_dispatch, citizenchain_release_node_linux_amd__changes]
-    # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
+    # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/release-node-linux-amd.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_release_node_linux_amd__changes.outputs.desktop == 'true') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
@@ -3009,7 +3009,7 @@ jobs:
       attestations: write
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: [validate_dispatch, citizenchain_release_node_linux_arm__changes]
-    # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
+    # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/release-node-linux-arm.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_release_node_linux_arm__changes.outputs.desktop == 'true') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 180
@@ -3287,7 +3287,7 @@ jobs:
       attestations: write
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: [validate_dispatch, citizenchain_release_node_macos__changes]
-    # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
+    # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/release-node-macos.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_release_node_macos__changes.outputs.desktop == 'true') }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -3609,7 +3609,7 @@ jobs:
       attestations: write
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: [validate_dispatch, citizenchain_release_node_windows__changes]
-    # 中文注释：CI 来源已由 CitizenConsole 锁定；Release 只构建本平台正式候选。
+    # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
     if: ${{ inputs.pipeline == '.github/workflows/citizenchain/release-node-windows.yml' && needs.validate_dispatch.result == 'success' && (needs.citizenchain_release_node_windows__changes.outputs.desktop == 'true') }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -4051,7 +4051,7 @@ jobs:
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.wasm
             citizenchain/target/release/wbuild/citizenchain/citizenchain.compact.compressed.wasm
 
-      # 中文注释：GitHub runner 在同一受审工作流内直接固化正式 Release；公民控制台不再
+      # 中文注释：GitHub runner 在同一受审工作流内直接固化正式 Release；编程控制台不再
       # 下载 Actions 候选、不再本地签名或二次发布。草稿只作为资产上传的原子事务边界。
       - name: 固化公民协议正式 Release
         env:
@@ -4295,9 +4295,9 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/citizenserve-cloudflare-release.tgz
 
-      # 中文注释：GitHub runner 只固化已验证归档；公民控制台不再下载 Actions 候选、
+      # 中文注释：GitHub runner 只固化已验证归档；编程控制台不再下载 Actions 候选、
       # 本机复核后二次创建 Release。草稿只作为三项正式资产上传的原子事务边界，
-      # Cloudflare 生产发布仍由控制台的独立“发布”动作负责。
+      # Cloudflare 生产发布仍由编程控制台的独立“发布”动作负责。
       - name: 固化公民服务端正式 Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -5287,9 +5287,9 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/citizenweb-release.tgz
 
-      # 中文注释：GitHub runner 只固化已验证归档；公民控制台不再下载 Actions 候选、
+      # 中文注释：GitHub runner 只固化已验证归档；编程控制台不再下载 Actions 候选、
       # 本机复核后二次创建 Release。草稿只作为三项正式资产上传的原子事务边界，
-      # Cloudflare Pages 生产发布仍由控制台的独立“发布”动作负责。
+      # Cloudflare Pages 生产发布仍由编程控制台的独立“发布”动作负责。
       - name: 固化公民网正式 Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -5331,7 +5331,7 @@ jobs:
 
       - name: 检查 CitizenSDK 发布闭集与归档合同
         env:
-          CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
+          PROGRAM_CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
         run: node --test citizensdk/scripts/release.test.mjs
 
       - name: 安装 Rust 工具链
@@ -5412,9 +5412,9 @@ jobs:
 
       - name: 编译并运行 Android 与 iOS 插件测试
         env:
-          CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
-          CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
-          CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
+          PROGRAM_CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
+          PROGRAM_CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
+          PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
           GRADLE_USER_HOME: ${{ runner.temp }}/citizensdk/gradle
           TMPDIR: ${{ runner.temp }}/citizensdk/tmp
         run: |
@@ -5511,7 +5511,7 @@ jobs:
           PY
           (
             cd "$ios_test_host/ios"
-            CONSOLE_NATIVE_IOS_DIR="$CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
+            PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
           )
           simulator_id="$(python3 - <<'PY'
           import json
@@ -5638,7 +5638,7 @@ jobs:
 
       - name: 检查 CitizenSDK 发布闭集与归档合同
         env:
-          CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
+          PROGRAM_CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
         run: node --test citizensdk/scripts/release.test.mjs
 
       - name: 安装 Rust 工具链
@@ -5714,9 +5714,9 @@ jobs:
 
       - name: 编译并运行 Android 与 iOS 插件测试
         env:
-          CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
-          CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
-          CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
+          PROGRAM_CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
+          PROGRAM_CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
+          PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
           GRADLE_USER_HOME: ${{ runner.temp }}/citizensdk/gradle
           TMPDIR: ${{ runner.temp }}/citizensdk/tmp
         run: |
@@ -5813,7 +5813,7 @@ jobs:
           PY
           (
             cd "$ios_test_host/ios"
-            CONSOLE_NATIVE_IOS_DIR="$CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
+            PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
           )
           simulator_id="$(python3 - <<'PY'
           import json

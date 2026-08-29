@@ -9,7 +9,7 @@
 - `include/`：公共 C 头文件。
 
 当前 Dart 来源路径是 `native/smoldot/dart`，不是旧的 `lib/src/smoldot`。动态库继续使用
-官方依赖名称 `smoldot`。Android/iOS 从 Console 或 Runner 的外部原生产物目录注入库，源码
+官方依赖名称 `smoldot`。Android/iOS 从 ProgramConsole 或 Runner 的外部原生产物目录注入库，源码
 树不保存 `.so`、`.a` 或 Cargo target。
 
 `dart/` 内的 24 个来源文件按哈希冻结，因此其中 CitizenApp 路径、五平台说明与源码树内

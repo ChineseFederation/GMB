@@ -93,7 +93,7 @@ export async function citizenchainPublicationRoute(
 ): Promise<Response> {
   const platform = parsePlatform(path);
   if (!platform) throw new HttpError(404, 'publication_target_not_found', '发布目标不存在');
-  await requireConsoleSignature(request, env, path);
+  await requireProgramConsoleSignature(request, env, path);
   if (request.method === 'GET') {
     return jsonResponse({ ok: true, publication: await readPublication(env, platform) });
   }
@@ -215,7 +215,7 @@ function parsePlatform(path: string): CitizenchainDownloadPlatform | null {
   return Object.hasOwn(platformContracts, value) ? value as CitizenchainDownloadPlatform : null;
 }
 
-async function requireConsoleSignature(request: Request, env: Env, path: string): Promise<void> {
+async function requireProgramConsoleSignature(request: Request, env: Env, path: string): Promise<void> {
   const secret = env.CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET;
   const timestamp = request.headers.get('x-console-time') ?? '';
   const nonce = request.headers.get('x-console-nonce') ?? '';

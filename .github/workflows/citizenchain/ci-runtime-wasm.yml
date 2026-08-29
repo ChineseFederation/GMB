@@ -1,7 +1,7 @@
 name: 公民协议 · CI · WASM
 run-name: 公民协议 · CI · WASM
 
-# 中文注释：只能由公民控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。
+# 中文注释：只能由编程控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。
 # 本软件不设 push 触发——main push 只运行独立仓库门禁，绝不产生任何 WASM 运行记录。
 # 因此也不再需要按提交名分流：那套做法会让每一次普通 push 都留下一条 skipped 记录
 # 污染 Actions 列表，失败重试还只能靠造空提交换 SHA；dispatch 可以直接对同一 SHA 重跑。

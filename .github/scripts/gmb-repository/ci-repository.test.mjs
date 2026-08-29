@@ -1716,7 +1716,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   for (const source of [ci, release]) {
     assert5.match(source, /cargo install cargo-audit --version 0\.22\.2 --locked/);
     assert5.match(source, /node --test citizensdk\/scripts\/release\.test\.mjs/);
-    assert5.match(source, /CONSOLE_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/release-tests/);
+    assert5.match(source, /PROGRAM_CONSOLE_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/release-tests/);
     assert5.match(source, /CITIZENSDK_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/work/);
     assert5.match(source, /CITIZENSDK_NATIVE_OUTPUT_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/native/);
     assert5.match(source, /\$RUNNER_TEMP\/citizensdk\/build-source/);
@@ -1733,7 +1733,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     assert5.match(source, /flutter create --platforms=ios/);
     assert5.match(source, /flutter build ios --no-codesign --release/);
     assert5.match(source, /aarch64-apple-ios-sim,x86_64-apple-ios/);
-    assert5.match(source, /CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
+    assert5.match(source, /PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
     assert5.match(source, /xcrun simctl bootstatus/);
     assert5.match(source, /xcodebuild test/);
     assert5.match(source, /-only-testing:RunnerTests/);
@@ -1759,7 +1759,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     assert5.match(source, /node --test citizensdk\/scripts\/release\.test\.mjs/);
     assert5.match(source, /:citizen_sdk:testDebugUnitTest --no-daemon/);
     assert5.match(source, /flutter build ios --no-codesign --release/);
-    assert5.match(source, /CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
+    assert5.match(source, /PROGRAM_CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
     assert5.match(source, /xcodebuild test/);
     assert5.match(source, /-only-testing:RunnerTests/);
   }
@@ -1787,7 +1787,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/release-sdk\.yml'/);
   assert5.match(nativeBuild, /CITIZENSDK_WORK_DIR/);
   assert5.match(nativeBuild, /CITIZENSDK_NATIVE_OUTPUT_DIR/);
-  assert5.match(nativeBuild, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
+  assert5.match(nativeBuild, /\/Users\/rhett\/Only\/ProgramConsole\/target\/citizensdk/);
   assert5.match(nativeBuild, /cargo build[^\n]+--locked/);
   assert5.match(nativeBuild, /aarch64-apple-ios-sim/);
   assert5.match(nativeBuild, /x86_64-apple-ios/);
@@ -1802,7 +1802,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   assert5.match(releaseTool, /ios\/libsmoldot\.a/);
   assert5.match(releaseTool, /citizensdk-release\.json/);
   assert5.match(releaseTool, /assertOutsideSource/);
-  assert5.match(releaseTool, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
+  assert5.match(releaseTool, /\/Users\/rhett\/Only\/ProgramConsole\/target\/citizensdk/);
   assert5.match(releaseTool, /'test\/subscription_test\.dart'/);
   assert5.match(releaseTool, /'example\/README\.md'/);
   assert5.match(releaseWrapper, /const localRepositoryRoot = resolve\(dirname\(fileURLToPath\(import\.meta\.url\)\), '\.\.\/\.\.\/\.\.'\)/);

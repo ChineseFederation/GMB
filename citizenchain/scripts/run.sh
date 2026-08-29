@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CitizenConsole 本机产品启动入口：只构建并运行本机优化软件，不清库，继续使用
+# ProgramConsole 本机产品启动入口：只构建并运行本机优化软件，不清库，继续使用
 # 【冻结 SSOT】(node/chainspecs/citizenchain.plain.json)续跑现有开发数据。
 # 单元测试和开发者手工 Debug 不走本入口；需要清理开发数据或 fresh 链时改用 clean-run.sh。
 #
@@ -32,7 +32,7 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 # macOS 产品 App 只接受今后唯一的新团队 Developer ID；禁止按枚举顺序选证书，
-# 否则 Apple Development 或其它团队身份可能被静默当成控制台运行软件的签名。
+# 否则 Apple Development 或其它团队身份可能被静默当成编程控制台运行软件的签名。
 MACOS_SIGNING_IDENTITY='Developer ID Application: WEI CHENG (MHYMVRN6FC)'
 MACOS_TEAM_ID='MHYMVRN6FC'
 MACOS_BUNDLE_ID='macOS.citizenappchain'
@@ -109,18 +109,18 @@ resolve_macos_profile() {
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
 GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
-: "${CONSOLE_TARGET_ROOT:?公民链本机编译必须由Console提供中央产物目录}"
-: "${CONSOLE_WORK_DIR:?公民链本机编译必须由Console提供中央工作目录}"
-[[ "$CONSOLE_WORK_DIR" == "$CONSOLE_TARGET_ROOT/.work/citizenchain-macos" ]] || {
-    echo "    [error] 公民链中央工作目录不合法：$CONSOLE_WORK_DIR" >&2
+: "${PROGRAM_CONSOLE_TARGET_ROOT:?公民链本机编译必须由ProgramConsole提供中央产物目录}"
+: "${PROGRAM_CONSOLE_WORK_DIR:?公民链本机编译必须由ProgramConsole提供中央工作目录}"
+[[ "$PROGRAM_CONSOLE_WORK_DIR" == "$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenchain-macos" ]] || {
+    echo "    [error] 公民链中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2
     exit 1
 }
-TARGET_DIR="$CONSOLE_WORK_DIR/cargo"
+TARGET_DIR="$PROGRAM_CONSOLE_WORK_DIR/cargo"
 export CARGO_TARGET_DIR="$TARGET_DIR"
-NODE_FRONTEND_DIST="$CONSOLE_WORK_DIR/node-frontend"
-ONCHINA_BUILD_DIST="$CONSOLE_WORK_DIR/onchina-frontend/dist"
-PACKAGE_RESOURCES="$CONSOLE_WORK_DIR/resources"
-ARTIFACT_DIR="$CONSOLE_TARGET_ROOT/citizenchain"
+NODE_FRONTEND_DIST="$PROGRAM_CONSOLE_WORK_DIR/node-frontend"
+ONCHINA_BUILD_DIST="$PROGRAM_CONSOLE_WORK_DIR/onchina-frontend/dist"
+PACKAGE_RESOURCES="$PROGRAM_CONSOLE_WORK_DIR/resources"
+ARTIFACT_DIR="$PROGRAM_CONSOLE_TARGET_ROOT/citizenchain"
 GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 
 # 读取仓库统一依赖真源中的精确 Node.js 版本和 npm lockfile。
@@ -130,7 +130,7 @@ source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 # 本机启动脚本只使用当前工作区源码构建 runtime WASM，禁止接受外部 WASM 覆盖。
 unset WASM_FILE
 # Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
-# 本任务不迁移、不删除正式 gmb 数据，也不让控制台启动的软件争用正式安装版 RocksDB。
+# 本任务不迁移、不删除正式 gmb 数据，也不让编程控制台启动的软件争用正式安装版 RocksDB。
 export CITIZENCHAIN_DATA_PROFILE=dev
 mkdir -p "$TARGET_DIR" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onchina-frontend"
 
@@ -266,7 +266,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     echo "    本机优化路径、新团队签名、Bundle ID、Hardened Runtime、安全时间戳与 entitlement 校验通过"
     # 成功后只覆盖中央产品目录中的唯一App，不保留压缩副本、时间目录或历史代次。
     mkdir -p "$ARTIFACT_DIR"
-    previous_app="$CONSOLE_WORK_DIR/.previous-CitizenChain.app"
+    previous_app="$PROGRAM_CONSOLE_WORK_DIR/.previous-CitizenChain.app"
     rm -rf "$previous_app"
     if [[ -d "$ARTIFACT_DIR/CitizenChain.app" ]]; then
         mv "$ARTIFACT_DIR/CitizenChain.app" "$previous_app"
@@ -300,7 +300,7 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
         [[ -z "${!name:-}" ]] || open_args+=(--env "$name=${!name}")
     done
     # LaunchServices 让 TCC 以 macOS.citizenappchain 识别请求方；编译任务只负责确认
-    # App进程和RPC已就绪，不继续占用Console标签跟踪节点生命周期。
+    # App进程和RPC已就绪，不继续占用ProgramConsole标签跟踪节点生命周期。
     open "${open_args[@]}" "$app_bundle"
     node_health=''
     node_ready=0
@@ -323,8 +323,8 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     }
     # 节点已由 LaunchServices 独立托管；此后脚本正常退出不得触发失败路径的进程清理。
     trap - EXIT INT TERM HUP
-    echo "    节点启动验证通过，CitizenConsole 编译任务结束"
+    echo "    节点启动验证通过，ProgramConsole 编译任务结束"
 else
-    echo "    [error] CitizenConsole 本机产品启动入口只支持 macOS；其它平台请使用正式安装包" >&2
+    echo "    [error] ProgramConsole 本机产品启动入口只支持 macOS；其它平台请使用正式安装包" >&2
     exit 1
 fi

@@ -124,7 +124,7 @@ describe('公民链官网显式发布指针', () => {
     )).rejects.toMatchObject({ code: 'publication_revision_conflict' });
   });
 
-  it('错误或过期的控制台签名在读取 D1 前拒绝', async () => {
+  it('错误或过期的编程控制台签名在读取 D1 前拒绝', async () => {
     const path = `${basePath}macos`;
     const invalid = new Request(`https://worker.test/api${path}`, {
       headers: {
