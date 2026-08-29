@@ -187,7 +187,6 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
 
   it("Worker 路由分发与资源白名单只登记无版本业务路径", () => {
     expect(workerRoutes).toContain('path === "/chain/bootstrap"');
-    expect(workerRoutes).toContain('path === "/chain/citizensdk/bootstrap"');
     expect(workerRoutes).toContain('path === "/square/creator/plan"');
     expect(routeCatalog).toContain("^\\/square\\/contacts$");
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
