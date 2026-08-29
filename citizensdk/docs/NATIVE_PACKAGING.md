@@ -22,6 +22,12 @@ CITIZENSDK_NATIVE_OUTPUT_DIR=<原生产物目录>
 `libsmoldot.dylib` 固定为 arm64+x86_64，同时适用于原生与 Rosetta `flutter_tester`。发布器不会把
 这些测试库复制进正式候选。
 
+Android NDK 版本在 SDK 原生入口中固定为 `28.2.13676358`，与 GMB 官方依赖合同一致。
+调用方提供 `ANDROID_NDK_HOME` 时必须精确指向该版本；同时提供 `ANDROID_HOME` 与
+`ANDROID_SDK_ROOT` 时两者必须一致。若三个 Android 环境变量均缺失，本机入口只从宿主标准
+SDK 目录（macOS 为 `$HOME/Library/Android/sdk`，Linux 为 `$HOME/Android/Sdk`）解析该固定
+版本，不扫描或选择“最新”NDK。这样 SDK 本机构建不依赖控制台版本，同时仍拒绝版本漂移。
+
 设备与 Simulator 的 iOS 原生构建共用脚本中的唯一 `ios_deployment_target=16.0`，两条
 `cargo build` 都显式接收 `IPHONEOS_DEPLOYMENT_TARGET="$ios_deployment_target"`。该环境同时约束
 Rust 对象和 Cargo 依赖中由 C 编译器生成的对象，避免它们继承构建机 Xcode 的当前系统版本。

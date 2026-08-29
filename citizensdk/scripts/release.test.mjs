@@ -512,6 +512,82 @@ test('原生构建入口固定 iOS16 且在 mkdir 前拒绝穿越和中间符号
   }
 });
 
+test('Android 原生构建固定 NDK 版本并可从宿主标准 SDK 目录自解析', () => {
+  const root = mkdtempSync(join(workRoot, 'android-ndk-resolution-test-'));
+  try {
+    const sdkRelative = process.platform === 'darwin'
+      ? ['Library', 'Android', 'sdk']
+      : ['Android', 'Sdk'];
+    const hostTag = process.platform === 'darwin'
+      ? (process.arch === 'arm64' ? 'darwin-aarch64' : 'darwin-x86_64')
+      : 'linux-x86_64';
+    const sdk = join(root, ...sdkRelative);
+    const toolchain = join(
+      sdk,
+      'ndk',
+      '28.2.13676358',
+      'toolchains',
+      'llvm',
+      'prebuilt',
+      hostTag,
+    );
+    mkdirSync(toolchain, { recursive: true });
+    const environment = {
+      ...process.env,
+      CITIZENSDK_BUILD_TEST: '1',
+      CITIZENSDK_NATIVE_OUTPUT_DIR: join(root, 'native-output'),
+      CITIZENSDK_WORK_DIR: join(root, 'native-work'),
+      GITHUB_ACTIONS: 'true',
+      HOME: root,
+    };
+    delete environment.ANDROID_HOME;
+    delete environment.ANDROID_NDK_HOME;
+    delete environment.ANDROID_SDK_ROOT;
+
+    const resolved = spawnSync(
+      '/bin/bash',
+      ['scripts/build-native.sh', '__test-android-toolchain'],
+      { cwd: citizenSdkRoot, encoding: 'utf8', env: environment },
+    );
+    assert.equal(resolved.status, 0, resolved.stderr);
+    assert.equal(resolved.stdout.trim(), toolchain);
+
+    const wrongNdk = join(sdk, 'ndk', '28.1.13356709');
+    mkdirSync(wrongNdk, { recursive: true });
+    const wrongVersion = spawnSync(
+      '/bin/bash',
+      ['scripts/build-native.sh', '__test-android-toolchain'],
+      {
+        cwd: citizenSdkRoot,
+        encoding: 'utf8',
+        env: { ...environment, ANDROID_NDK_HOME: wrongNdk },
+      },
+    );
+    assert.notEqual(wrongVersion.status, 0);
+    assert.match(wrongVersion.stderr, /统一版本 28\.2\.13676358/);
+
+    const divergentSdk = join(root, 'divergent-sdk');
+    mkdirSync(divergentSdk, { recursive: true });
+    const divergentRoots = spawnSync(
+      '/bin/bash',
+      ['scripts/build-native.sh', '__test-android-toolchain'],
+      {
+        cwd: citizenSdkRoot,
+        encoding: 'utf8',
+        env: {
+          ...environment,
+          ANDROID_HOME: sdk,
+          ANDROID_SDK_ROOT: divergentSdk,
+        },
+      },
+    );
+    assert.notEqual(divergentRoots.status, 0);
+    assert.match(divergentRoots.stderr, /指向不同目录/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
   const root = mkdtempSync(join(workRoot, 'release-archive-test-'));
   try {

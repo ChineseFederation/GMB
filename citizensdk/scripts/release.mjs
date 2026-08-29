@@ -78,7 +78,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': 'b0e0bf739325f8fe6f87f5b734611b96611b96575ae676a26d2184cb0ff47857',
+  'scripts/release.test.mjs': '28dcd8060665f366a2a80738b13fb0b7b26be0521af7bb30f90443701a4fb61d',
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',

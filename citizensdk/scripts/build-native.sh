@@ -8,6 +8,7 @@ ffi_manifest="$sdk_dir/native/smoldot/ffi/Cargo.toml"
 target_name="${1:-all}"
 console_target_root="/Users/rhett/Only/console/target/citizensdk"
 ios_deployment_target=16.0
+android_ndk_version=28.2.13676358
 
 fail() {
   echo "CitizenSDK 原生构建失败：$1" >&2
@@ -122,11 +123,39 @@ verify_symbol_contract() {
 }
 
 android_toolchain() {
-  local ndk_home="${ANDROID_NDK_HOME:-}" sdk_home host_tag
+  local ndk_home="${ANDROID_NDK_HOME:-}" sdk_home host_tag expected_ndk
+  if [[ -n "${ANDROID_HOME:-}" && -n "${ANDROID_SDK_ROOT:-}" \
+    && "$ANDROID_HOME" != "$ANDROID_SDK_ROOT" ]]; then
+    fail "ANDROID_HOME 与 ANDROID_SDK_ROOT 指向不同目录"
+  fi
+  sdk_home="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
   if [[ -z "$ndk_home" ]]; then
-    sdk_home="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
-    [[ -n "$sdk_home" && -d "$sdk_home/ndk" ]] || fail "缺少 ANDROID_NDK_HOME 或 Android SDK NDK"
-    ndk_home="$(find "$sdk_home/ndk" -mindepth 1 -maxdepth 1 -type d -print | sort | tail -1)"
+    if [[ -z "$sdk_home" ]]; then
+      [[ -n "${HOME:-}" ]] || fail "缺少 Android SDK 环境与 HOME"
+      case "$(uname -s)" in
+        Darwin) sdk_home="$HOME/Library/Android/sdk" ;;
+        Linux) sdk_home="$HOME/Android/Sdk" ;;
+        *) fail "当前宿主没有登记 Android SDK 标准目录：$(uname -s)" ;;
+      esac
+    fi
+    assert_safe_directory_path "$sdk_home" "Android SDK"
+    [[ -d "$sdk_home" ]] || fail "Android SDK 不存在：$sdk_home"
+    sdk_home="$(cd "$sdk_home" && pwd -P)"
+    ndk_home="$sdk_home/ndk/$android_ndk_version"
+  else
+    assert_safe_directory_path "$ndk_home" "ANDROID_NDK_HOME"
+    [[ -d "$ndk_home" ]] || fail "Android NDK 不存在：$ndk_home"
+    ndk_home="$(cd "$ndk_home" && pwd -P)"
+    [[ "${ndk_home##*/}" == "$android_ndk_version" ]] \
+      || fail "ANDROID_NDK_HOME 必须使用统一版本 $android_ndk_version"
+    if [[ -n "$sdk_home" ]]; then
+      assert_safe_directory_path "$sdk_home" "Android SDK"
+      [[ -d "$sdk_home" ]] || fail "Android SDK 不存在：$sdk_home"
+      sdk_home="$(cd "$sdk_home" && pwd -P)"
+      expected_ndk="$sdk_home/ndk/$android_ndk_version"
+      [[ "$ndk_home" == "$expected_ndk" ]] \
+        || fail "ANDROID_NDK_HOME 不属于统一 Android SDK 与 NDK 版本"
+    fi
   fi
   [[ -d "$ndk_home" ]] || fail "Android NDK 不存在：$ndk_home"
   case "$(uname -s)-$(uname -m)" in
@@ -280,5 +309,9 @@ case "$target_name" in
   host) build_host ;;
   all) build_android; build_ios; build_ios_simulator; build_host; verify_outputs ;;
   verify) verify_outputs ;;
+  __test-android-toolchain)
+    [[ "${CITIZENSDK_BUILD_TEST:-}" == 1 ]] || fail "Android toolchain 测试入口未授权"
+    android_toolchain
+    ;;
   *) fail "用法：$0 [android|ios|ios-simulator|host|all|verify]" ;;
 esac
