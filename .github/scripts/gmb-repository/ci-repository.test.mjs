@@ -1536,3 +1536,13 @@ test5("25 个独立动作的 Tauri 依赖契约完全一致", () => {
   });
   assert5.equal(new Set(dependencies).size, 1, "25 个动作的 dependencies 实现发生漂移");
 });
+
+
+// 中文注释：Android NDK 官方版本由主版本、次版本和构建号组成，禁止再次误按四段版本拦截全部任务。
+test5("Android NDK 官方三段版本能够通过统一依赖门禁", () => {
+  const source = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
+  const prefix = "const implementations = Object.freeze(";
+  const line = source.split("\n").find((candidate) => candidate.startsWith(prefix));
+  const dependencies = JSON.parse(line.slice(prefix.length, -2)).dependencies;
+  assert5.ok(dependencies.includes("if (!/^\\d+(?:\\.\\d+){2}$/.test(androidNdk))"));
+});

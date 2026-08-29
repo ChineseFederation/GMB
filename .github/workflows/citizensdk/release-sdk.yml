@@ -84,6 +84,9 @@ jobs:
         with:
           targets: aarch64-linux-android,aarch64-apple-ios
 
+      - name: 安装固定 Cargo 审计工具
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
       - name: 读取 Flutter 版本
         id: flutter-version
         run: |
