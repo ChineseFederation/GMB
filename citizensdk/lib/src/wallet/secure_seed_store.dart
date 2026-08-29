@@ -16,19 +16,22 @@ import 'dart:typed_data';
 /// 平台通道、插件和存储后端异常不得越过本边界裸露给上层，必须
 /// 统一映射为这些类型之一。
 abstract interface class SecureSeedStore {
-  /// 设备认证能力预检。创建和导入先用它 fail-closed；实际读写仍须
-  /// 独立执行硬件门禁并映射 [NoDeviceCredential]，不能只依赖预检结果。
+  /// 设备认证能力预检。创建、导入和追加账户先用它 fail-closed；实际读写仍须
+  /// 独立执行硬件门禁并映射 [NoStrongBiometric]，不能只依赖预检结果。
   Future<SecureAuthStatus> authStatus();
 
   /// 写入指定账户的 child mini-secret 到严档金库；**静默**，
   /// 不触发生物识别。
   ///
-  /// KEK 按 [walletIndex] 绑定（同钱包多账户共享一把 KEK），blob 按
-  /// [accountId] 分键，故每个账户各有独立密文。成功返回前必须
+  /// KEK 按 [walletIndex] 与 [walletGeneration] 绑定（同代钱包多账户共享
+  /// 一把 KEK），blob 按 [walletGeneration]、[secretOwner] 与 [accountId]
+  /// 分键，故每个账户的每次生命周期各有独立密文。成功返回前必须
   /// 静默完整回读密文并确认与本次写入一致；底层写入若已提交后
   /// 抛错，回读一致时必须收敛为成功。
   Future<void> putAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
     required Uint8List childMiniSecret,
   });
@@ -41,6 +44,8 @@ abstract interface class SecureSeedStore {
   /// - 条目不存在 → 返回 `null`。
   Future<Uint8List?> readAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
   });
 
@@ -51,37 +56,51 @@ abstract interface class SecureSeedStore {
   /// （钱包行在、密钥没了）的钱包，故用静默存在性判定，避免
   /// 每次冷启动弹指纹。
   /// 后端不可用时抛 [SecureStoreUnavailable]，由上层走错误态而非判死。
-  Future<bool> hasAccountKey(String accountId);
+  Future<bool> hasAccountKey({
+    required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
+    required String accountId,
+  });
 
-  /// 删除指定账户的 child 密文条目，不删除同钱包其它账户共享的 KEK。
+  /// 删除精确 generation/owner/account 身份的 child 密文条目，不删除
+  /// 同钱包其它账户共享的 KEK，也不能命中同 AccountId 的另一代条目。
   /// 条目已经不存在时也必须成功，保证崩溃恢复清理可以幂等重放。
   /// 删除调用返回或抛错后都必须静默回读存在性；确认条目已不存在
   /// 才算成功。
   Future<void> deleteAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
   });
 
   /// 删除整只钱包共享的硬件 KEK。
   ///
-  /// 多账户共享同一 [walletIndex] 的 KEK，因此删除单个账户时禁止
-  /// 调用本方法；只有整钱包删除或创建回滚时才能调用。KEK 已不
+  /// 多账户共享同一 [walletIndex] + [walletGeneration] 的 KEK，因此
+  /// 删除单个账户时禁止调用本方法；只有整钱包删除或创建回滚时才能调用。KEK 已不
   /// 存在时也必须成功。删除调用返回或抛错后都必须回读
   /// [hasWalletKey]；确认 KEK 已不存在才算成功。
-  Future<void> deleteWalletKey({required int walletIndex});
+  Future<void> deleteWalletKey({
+    required int walletIndex,
+    required String walletGeneration,
+  });
 
   /// 钱包作用域硬件 KEK 是否仍存在；删除与回滚完成前必须回读确认，
   /// 且该查询不得触发生物识别。
-  Future<bool> hasWalletKey({required int walletIndex});
+  Future<bool> hasWalletKey({
+    required int walletIndex,
+    required String walletGeneration,
+  });
 }
 
 /// 设备认证能力（咨询用）。
 enum SecureAuthStatus {
-  /// 可用生物识别或设备密码认证。
+  /// 已登记平台要求的强生物识别，且硬件金库可用。
   available,
 
-  /// 设备未设置任何锁屏；创建/读取钱包应 fail-closed。
-  noDeviceLock,
+  /// 未登记平台要求的强生物识别；创建、导入、追加或读取钱包应 fail-closed。
+  noStrongBiometric,
 
   /// 无相关硬件或平台不支持。
   unsupported,
@@ -112,9 +131,9 @@ final class AuthCancelled extends SecureSeedException {
   const AuthCancelled(super.message);
 }
 
-/// 设备无锁屏，无法安全存取密钥——D3 fail-closed。
-final class NoDeviceCredential extends SecureSeedException {
-  const NoDeviceCredential(super.message);
+/// 未登记平台要求的强生物识别，无法安全存取密钥——fail-closed。
+final class NoStrongBiometric extends SecureSeedException {
+  const NoStrongBiometric(super.message);
 }
 
 /// 后端不可用或非上述三类的未知底层错误——上抛，不静默、不误判。

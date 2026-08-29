@@ -1,12 +1,10 @@
-import 'dart:async';
 import 'dart:convert';
+import 'dart:async';
 import 'dart:ffi';
-
 import 'package:ffi/ffi.dart';
-
 import 'bindings.dart';
-import 'json_rpc.dart';
 import 'types.dart';
+import 'json_rpc.dart';
 
 // ──── 原生 capability 异步回调管理器 ────
 
@@ -46,7 +44,7 @@ class NativeCapabilityHandler {
     _nativeCallback = _nativeCallable.nativeFunction;
   }
 
-  /// 发起异步 FFI 调用，返回 `Future<String>`。
+  /// 发起异步 FFI 调用，返回 Future<String>。
   ///
   /// [invoke] 回调接收 callbackId 和 callback 指针，负责调用对应的
   /// bindings.*Async 方法。Rust 侧完成后通过 DartCallback 回调结果。

@@ -1,26 +1,38 @@
 # Third-party notices
 
-CitizenSDK 是由不同许可证覆盖的组合产品。任何公开下载、Release 或再分发都必须同时
-保留对应源码、许可证文本和来源说明。
+CitizenSDK 组合了不同许可证覆盖的源码。任何 GitHub Release、下载或再分发都必须保留
+本文件、对应许可证原文、来源说明和锁文件，不能只分发原生二进制。
 
-## 当前导入内容
+## sr25519 signer
 
-`native/signer` 来源于 GMB 的 `shared/citizen-signer`，其 Rust 清单继承 GMB workspace
-的 MIT 许可证。根目录的 `LICENSE-MIT` 保存该许可证原文。
+`native/signer/Cargo.toml` 与 `native/signer/src/lib.rs` 的初始基线逐字节来自
+`shared/citizen-signer`，许可证为 MIT；原文保存于根目录 `LICENSE-MIT`。该 crate 使用
+`schnorrkel`、`zeroize` 等官方生态依赖，解析闭包由根 `Cargo.lock` 固定。
 
-该模块依赖官方生态实现 `schnorrkel` 和 `zeroize`。具体解析版本以未来受控生成并纳入
-发布留档的 `Cargo.lock` 和 SBOM 为准；本阶段没有运行依赖解析或生成锁文件。
+## smoldot Dart 与 FFI
 
-`native/smoldot/ffi` 的初始边界来自 CitizenApp 内收编的 smoldot FFI。SDK 副本已经排除
-OpenMLS、AES-GCM 聊天状态、Base64 聊天信封和 `account-crypto`，保留的 Rust 依赖将在
-轻节点主体迁入后统一解析和留档。
+`native/smoldot/dart` 是 CitizenApp 已验证 Dart smoldot 包的独立源码快照；24 个来源文件
+保持逐字节一致，CitizenSDK 只额外增加 `example/README.md` 说明发布边界。该包的
+`pubspec.lock` 也随来源复制并由发布闭集校验。
 
-`native/smoldot/pow/light-base` 已作为逐字节来源快照迁入。该层保留其文件头声明的
-GPL-3.0-or-later WITH Classpath-exception-2.0；smoldot Dart/FFI 侧声明的 Apache 2.0
-许可证原文保存在 `native/smoldot/LICENSE-APACHE-2.0`。
+`native/smoldot/ffi` 继承 CitizenApp 的 Apache-2.0 FFI 边界，保留轻节点和 signer C ABI，
+排除只供聊天使用的 OpenMLS/聊天信封与账户数据加密代码。Apache 2.0 许可证原文保存于
+`native/smoldot/LICENSE-APACHE-2.0`；FFI `Cargo.lock` 从 CitizenApp 已验证锁机械裁掉已排除
+产品闭包，并保持全部保留 registry 包的 name/version/checksum。
 
-## 轻节点许可证
+## smoldot PoW 轻节点
 
-公民链 smoldot PoW 快照来源目录使用 GNU GPL v3。根目录 `LICENSE-GPL-3.0` 与
-`native/smoldot/LICENSE` 均逐字节保存该来源许可证，`native/smoldot/UPSTREAM.md`
-保存上游和分叉说明。迁入轻节点主体时还必须记录精确文件来源与修改清单。
+`native/smoldot/pow/lib` 与 `native/smoldot/pow/light-base` 来源于 CitizenApp 当前使用的
+smoldot PoW + GRANDPA 快照。该范围保留上游声明的
+`GPL-3.0-or-later WITH Classpath-exception-2.0`；许可证原文保存于根目录
+`LICENSE-GPL-3.0` 与 `native/smoldot/LICENSE`，上游提交和本地 PoW 改动记录保存于
+`native/smoldot/UPSTREAM.md`。
+
+轻客户端产品明确不包含全节点 `author` 出块模块，也不包含全节点 identity keystore 与
+seed phrase 私钥入口。其余共享生产源码、夹具和上游内联测试按来源复制；仅 workspace、
+crate 入口和 identity 模块做最小产品边界适配。PoW 依赖闭包由与 CitizenApp 稳定来源
+中保留 registry 包 name/version/checksum 一致、但已机械裁掉全节点/WASM 不可达闭包的
+`native/smoldot/pow/Cargo.lock` 固定。
+
+完整来源分类、排除项和同步策略见 `docs/SOURCE_PROVENANCE.md`。锁文件是依赖输入，不是
+构建产物；实际许可证义务仍以每个依赖包自身许可证为准。

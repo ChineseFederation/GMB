@@ -1,7 +1,7 @@
 //! 冻结 CitizenApp/CitizenWallet 已共同验证的 Substrate 派生结果。
 //!
 //! 这里只验证 signer 接收到 child mini-secret 后计算出的 AccountId；助记词和 junction
-//! 编码将在钱包层迁入时由独立测试覆盖，避免把钱包职责塞进密码学 crate。
+//! 编码已由根钱包金标独立覆盖，避免把钱包职责塞进密码学 crate。
 
 use citizen_signer::{citizen_sr25519_public_key, CITIZEN_SIGNER_OK};
 
@@ -26,9 +26,8 @@ fn frozen_child_keys_produce_expected_account_ids() {
         let child = decode_32(child_hex);
         let expected_public = decode_32(expected_public_hex);
         let mut actual_public = [0u8; 32];
-        let status = unsafe {
-            citizen_sr25519_public_key(child.as_ptr(), actual_public.as_mut_ptr())
-        };
+        let status =
+            unsafe { citizen_sr25519_public_key(child.as_ptr(), actual_public.as_mut_ptr()) };
         assert_eq!(status, CITIZEN_SIGNER_OK);
         assert_eq!(actual_public, expected_public);
     }

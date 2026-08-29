@@ -1,6 +1,10 @@
 import 'package:citizen_sdk/citizen_sdk.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+const _walletGeneration = '10101010101010101010101010101010';
+const _secretOwner = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+const _operationId = 'cccccccccccccccccccccccccccccccc';
+
 void main() {
   test('round-trips public wallet state and increments revision', () async {
     final preferences = _MemoryPreferences();
@@ -10,7 +14,9 @@ void main() {
     final committed = await repository.commit(
       expectedRevision: 0,
       profile: profile,
+      provisioning: null,
       cleanup: null,
+      cleanupQueue: const <WalletCleanupPlan>[],
     );
     final restored = await repository.load();
 
@@ -32,19 +38,106 @@ void main() {
     final committed = await repository.commit(
       expectedRevision: 0,
       profile: null,
+      provisioning: null,
       cleanup: WalletCleanupPlan(
+        operationId: _operationId,
         walletIndex: 0,
-        accountIds: <String>[accountId],
+        walletGeneration: _walletGeneration,
+        secretRefs: <WalletSecretRef>[
+          WalletSecretRef(
+            walletGeneration: _walletGeneration,
+            secretOwner: _secretOwner,
+            accountId: accountId,
+          ),
+        ],
         deleteWalletKey: true,
       ),
+      cleanupQueue: const <WalletCleanupPlan>[],
     );
     final restored = await repository.load();
 
     expect(committed.revision, 1);
     expect(restored.profile, isNull);
-    expect(restored.cleanup?.accountIds, <String>[accountId]);
+    expect(restored.cleanup?.operationId, _operationId);
+    expect(restored.cleanup?.walletGeneration, _walletGeneration);
+    expect(restored.cleanup?.secretRefs.single.accountId, accountId);
+    expect(restored.cleanup?.secretRefs.single.secretOwner, _secretOwner);
     expect(restored.cleanup?.deleteWalletKey, isTrue);
   });
+
+  test('round-trips the exact sidecar cleanup queue', () async {
+    final preferences = _MemoryPreferences();
+    final repository = PreferencesWalletRepository(preferences: preferences);
+    final accountId = '0x${'0d' * 32}';
+    final queued = WalletCleanupPlan(
+      operationId: _operationId,
+      walletIndex: 0,
+      walletGeneration: _walletGeneration,
+      secretRefs: <WalletSecretRef>[
+        WalletSecretRef(
+          walletGeneration: _walletGeneration,
+          secretOwner: _secretOwner,
+          accountId: accountId,
+        ),
+      ],
+      deleteWalletKey: true,
+    );
+
+    final committed = await repository.commit(
+      expectedRevision: 0,
+      profile: null,
+      provisioning: null,
+      cleanup: null,
+      cleanupQueue: <WalletCleanupPlan>[queued],
+    );
+    final restored = await repository.load();
+
+    expect(committed.cleanupQueue.single.operationId, _operationId);
+    expect(restored.cleanupQueue.single.walletGeneration, _walletGeneration);
+    expect(restored.cleanupQueue.single.secretRefs.single.accountId, accountId);
+    expect(restored.cleanupQueue.single.deleteWalletKey, isTrue);
+  });
+
+  test(
+    'round-trips the exact provisioning owner and previous profile',
+    () async {
+      final preferences = _MemoryPreferences();
+      final repository = PreferencesWalletRepository(preferences: preferences);
+      final previousProfile = _profile(accountByte: '0e');
+      final accountId = '0x${'0f' * 32}';
+
+      final committed = await repository.commit(
+        expectedRevision: 0,
+        profile: previousProfile,
+        provisioning: WalletProvisioningPlan(
+          operationId: _operationId,
+          walletIndex: 0,
+          walletGeneration: _walletGeneration,
+          previousProfile: previousProfile,
+          secretRefs: <WalletSecretRef>[
+            WalletSecretRef(
+              walletGeneration: _walletGeneration,
+              secretOwner: _secretOwner,
+              accountId: accountId,
+            ),
+          ],
+          deleteWalletKeyOnRollback: false,
+        ),
+        cleanup: null,
+        cleanupQueue: const <WalletCleanupPlan>[],
+      );
+      final restored = await repository.load();
+
+      expect(committed.revision, 1);
+      expect(restored.provisioning?.operationId, _operationId);
+      expect(
+        restored.provisioning?.previousProfile?.masterAccountId,
+        previousProfile.masterAccountId,
+      );
+      expect(restored.provisioning?.secretRefs.single.accountId, accountId);
+      expect(restored.provisioning?.deleteWalletKeyOnRollback, isFalse);
+    },
+  );
 
   test('rejects stale compare-and-swap revision', () async {
     final repository = PreferencesWalletRepository(
@@ -53,13 +146,17 @@ void main() {
     await repository.commit(
       expectedRevision: 0,
       profile: _profile(),
+      provisioning: null,
       cleanup: null,
+      cleanupQueue: const <WalletCleanupPlan>[],
     );
     await expectLater(
       repository.commit(
         expectedRevision: 0,
         profile: _profile(),
+        provisioning: null,
         cleanup: null,
+        cleanupQueue: const <WalletCleanupPlan>[],
       ),
       throwsA(isA<WalletRepositoryConflict>()),
     );
@@ -75,14 +172,18 @@ void main() {
         first.commit(
           expectedRevision: 0,
           profile: _profile(accountByte: '07'),
+          provisioning: null,
           cleanup: null,
+          cleanupQueue: const <WalletCleanupPlan>[],
         ),
       ),
       _capture(
         second.commit(
           expectedRevision: 0,
           profile: _profile(accountByte: '08'),
+          provisioning: null,
           cleanup: null,
+          cleanupQueue: const <WalletCleanupPlan>[],
         ),
       ),
     ]);
@@ -105,7 +206,9 @@ void main() {
     final committed = await repository.commit(
       expectedRevision: 0,
       profile: profile,
+      provisioning: null,
       cleanup: null,
+      cleanupQueue: const <WalletCleanupPlan>[],
     );
 
     expect(committed.revision, 1);
@@ -121,7 +224,9 @@ void main() {
       repository.commit(
         expectedRevision: 0,
         profile: _profile(accountByte: '0c'),
+        provisioning: null,
         cleanup: null,
+        cleanupQueue: const <WalletCleanupPlan>[],
       ),
       throwsA(isA<WalletRepositoryConflict>()),
     );
@@ -137,7 +242,9 @@ void main() {
       repository.commit(
         expectedRevision: 0,
         profile: _profile(accountByte: '0a'),
+        provisioning: null,
         cleanup: null,
+        cleanupQueue: const <WalletCleanupPlan>[],
       ),
       throwsA(isA<StateError>()),
     );
@@ -146,7 +253,9 @@ void main() {
     final committed = await repository.commit(
       expectedRevision: 0,
       profile: _profile(accountByte: '0b'),
+      provisioning: null,
       cleanup: null,
+      cleanupQueue: const <WalletCleanupPlan>[],
     );
     expect(committed.revision, 1);
     expect(committed.profile?.masterAccountId, '0x${'0b' * 32}');
@@ -165,6 +274,7 @@ WalletProfile _profile({String accountByte = '06'}) {
   final accountId = '0x${accountByte * 32}';
   return WalletProfile(
     walletIndex: 0,
+    walletGeneration: _walletGeneration,
     masterAccountId: accountId,
     origin: WalletOrigin.created,
     createdAtMillis: 1,
@@ -173,6 +283,7 @@ WalletProfile _profile({String accountByte = '06'}) {
       WalletAccount(
         index: 0,
         accountId: accountId,
+        secretOwner: _secretOwner,
         ss58Address: citizenSs58FromAccountId(accountId),
         name: '账户 1',
         createdAtMillis: 1,

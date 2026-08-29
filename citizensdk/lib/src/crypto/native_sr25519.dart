@@ -3,12 +3,12 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
-import '../smoldot/platform.dart' show SmoldotPlatform;
+import 'package:smoldot/smoldot.dart' show SmoldotPlatform;
 
 /// sr25519 原生签名（schnorrkel）的 Dart 侧唯一入口。
 ///
 /// 实现真源位于 CitizenSDK `native/signer`；当前代码逐字节来源为原
-/// `shared/citizen-signer`，在 CitizenApp 切换 SDK 前不反向修改旧应用。FFI 外壳由
+/// `shared/citizen-signer`，在 CitizenApp 切换 SDK 前不反向修改现有应用。FFI 外壳由
 /// `native/smoldot/ffi/src/lib.rs` 的 signer 导出宏提供，与
 /// smoldot 同处 `libsmoldot` 一个库，因此这里复用 `SmoldotPlatform.loadLibrary()`
 /// 而不另开库句柄。
@@ -19,7 +19,7 @@ import '../smoldot/platform.dart' show SmoldotPlatform;
 ///
 /// **口径**（错一处钱包就变成另一个账户，改动前先看 citizen-signer 的同名说明）：
 /// 扩展模式恒 Ed25519、签名上下文恒 `substrate`、硬派生 chaincode 由调用方按
-/// junction 顺序逐层传入。由 `test/wallet/derivation_golden_test.dart` 逐字节钉死
+/// junction 顺序逐层传入。由 `test/crypto/derivation_golden_test.dart` 逐字节钉死
 /// ——它拿本实现直接对拍 Substrate 官方权威向量（`//Alice`、`//0 //1 //2` 的
 /// accountId / ss58 / childMiniSecret），改动后金标必须原样通过。
 ///

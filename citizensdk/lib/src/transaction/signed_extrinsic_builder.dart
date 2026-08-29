@@ -46,7 +46,12 @@ final class SignedExtrinsicBuilder {
     required Uint8List signerPublicKey,
     required Future<Uint8List> Function(Uint8List payload) sign,
     void Function(SignedExtrinsicTrace trace)? onTrace,
+    Future<void> Function(SignedExtrinsicTrace trace, String txHash)?
+    beforeBroadcast,
     TransactionStatusCallback? onStatus,
+    Duration watchTimeout = const Duration(minutes: 20),
+    Duration executionLookupTimeout = const Duration(seconds: 30),
+    Duration executionRetryInterval = const Duration(seconds: 1),
   }) async {
     final prepared = await _prepare(
       callData: callData,
@@ -57,7 +62,13 @@ final class SignedExtrinsicBuilder {
     onTrace?.call(prepared.trace);
     final txHash = await _rpc.submitExtrinsic(
       prepared.trace.encoded,
+      beforeBroadcast: beforeBroadcast == null
+          ? null
+          : (txHash) => beforeBroadcast(prepared.trace, txHash),
       onStatus: onStatus,
+      watchTimeout: watchTimeout,
+      executionLookupTimeout: executionLookupTimeout,
+      executionRetryInterval: executionRetryInterval,
     );
     return SubmittedTransaction(
       txHash: txHash,
@@ -71,8 +82,13 @@ final class SignedExtrinsicBuilder {
     required Uint8List signerPublicKey,
     required Future<Uint8List> Function(Uint8List payload) sign,
     void Function(SignedExtrinsicTrace trace)? onTrace,
+    Future<void> Function(SignedExtrinsicTrace trace, String txHash)?
+    beforeBroadcast,
     TransactionStatusCallback? onStatus,
     bool waitForFinalized = false,
+    Duration timeout = const Duration(minutes: 20),
+    Duration executionLookupTimeout = const Duration(seconds: 30),
+    Duration executionRetryInterval = const Duration(seconds: 1),
   }) async {
     final prepared = await _prepare(
       callData: callData,
@@ -83,14 +99,22 @@ final class SignedExtrinsicBuilder {
     onTrace?.call(prepared.trace);
     final result = await _rpc.submitAndWait(
       prepared.trace.encoded,
+      beforeBroadcast: beforeBroadcast == null
+          ? null
+          : (txHash) => beforeBroadcast(prepared.trace, txHash),
       onStatus: onStatus,
       waitForFinalized: waitForFinalized,
+      timeout: timeout,
+      executionLookupTimeout: executionLookupTimeout,
+      executionRetryInterval: executionRetryInterval,
     );
     return IncludedTransaction(
       txHash: result.txHash,
       usedNonce: prepared.trace.nonce,
       blockHash: result.included.blockHash!,
       finalized: result.included.kind == TransactionStatusKind.finalized,
+      extrinsicIndex: result.extrinsicIndex,
+      executionVerified: true,
     );
   }
 
@@ -111,14 +135,13 @@ final class SignedExtrinsicBuilder {
     if (!_bytesEqual(addressPublicKey, signerPublicKey)) {
       throw ArgumentError('fromSs58Address 与 signerPublicKey 不属于同一账户');
     }
-    final metadata = await _rpc.fetchMetadata();
+    // runtime version 与 metadata 必须来自同一当前 best 块。禁止分别读取后
+    // 在升级边界拼出“前一代 registry + 新 specVersion/transactionVersion”。
+    final runtimeContext = await _rpc.fetchRuntimeContext();
+    final metadata = runtimeContext.metadata;
     final genesisHash = await _rpc.fetchGenesisHash();
-    final values = await Future.wait<Object>(<Future<Object>>[
-      _rpc.fetchRuntimeVersion(),
-      _rpc.fetchNonce(fromSs58Address),
-    ]);
-    final runtimeVersion = values[0] as RuntimeVersion;
-    final nonce = values[1] as int;
+    final runtimeVersion = runtimeContext.runtimeVersion;
+    final nonce = await _rpc.fetchNonce(fromSs58Address);
     final registry = metadata.chainInfo.scaleCodec.registry;
     final signingPayload = buildImmortalSigningPayload(
       callData: callData,

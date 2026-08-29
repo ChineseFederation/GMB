@@ -192,11 +192,22 @@
 
 extern crate alloc;
 
+// CitizenApp's validated manifest keeps these dependencies in the light-client
+// crate even though the SDK omits the authoring and seed-phrase source modules.
+// The SDK lock is a prune-only derivative of the validated workspace lock and
+// preserves every retained registry name/version/checksum. Mark the dormant
+// crates as intentional instead of weakening `unused_crate_dependencies`.
+use bip39 as _;
+use hmac as _;
+use pbkdf2 as _;
+
 // Necessary because of `#![deny(unused_crate_dependencies)]`.
 #[cfg(test)]
 use criterion as _;
 #[cfg(test)]
 use futures_executor as _;
+#[cfg(test)]
+use tempfile as _;
 
 pub mod chain;
 pub mod chain_spec;

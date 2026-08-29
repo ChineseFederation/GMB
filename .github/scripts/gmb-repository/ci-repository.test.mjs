@@ -12,7 +12,7 @@ var repositoryRoot = resolve(dirname(scriptPath), "../../..");
 var dictionaryPath = join(repositoryRoot, "shared/data-dictionary.json");
 var sourceExtensions = /\.(?:dart|js|jsx|json|kts?|md|mjs|proto|py|rs|sh|sql|swift|toml|tsx?|ya?ml)$/;
 var authorities = /* @__PURE__ */ new Set(["gmb", "polkadot_sdk"]);
-var dataTypes = /* @__PURE__ */ new Set(["array", "boolean", "enum", "hash", "hex_32", "integer", "string"]);
+var dataTypes = /* @__PURE__ */ new Set(["array", "boolean", "enum", "hash", "hex_32", "integer", "object", "string"]);
 var valueTypes = /* @__PURE__ */ new Set(["boolean", "integer", "string"]);
 function fail(message) {
   throw new Error(message);
@@ -525,6 +525,24 @@ test("\u6570\u636E\u5B57\u5178\u8981\u6C42\u5B57\u6BB5\u3001\u503C\u96C6\u548C\u
   assert.equal(result.valueSets.size, 1);
   assert.throws(() => validateDictionary(index, [{ ...shards[0], contracts: [] }]), /字段未进入任何契约/);
 });
+// 中文注释：钱包崩溃恢复快照是结构化对象，数据字典必须准确表达其 wire 类型。
+test("数据字典准确支持持久 JSON 对象字段", () => {
+  const { index, shards } = fixture();
+  const objectShards = structuredClone(shards);
+  objectShards[0].concepts = [{
+    concept_id: "previous_profile",
+    field_name: "previous_profile",
+    field_name_zh: "操作前钱包资料",
+    authority: "gmb",
+    data_type: "object",
+    forbidden_names: []
+  }];
+  objectShards[0].value_sets = [];
+  objectShards[0].contracts[0].fields = ["previous_profile"];
+  objectShards[0].contracts[0].value_sets = [];
+  const result = validateDictionary(index, objectShards);
+  assert.equal(result.concepts.get("previous_profile").data_type, "object");
+});
 test("\u6570\u636E\u5B57\u5178\u62D2\u7EDD\u91CD\u590D\u5B57\u6BB5\u3001\u5047\u7B80\u79F0\u548C\u52A8\u6001\u503C", () => {
   const { index, shards } = fixture();
   const duplicate = structuredClone(shards);
@@ -579,7 +597,7 @@ function embeddedReleaseSource2(path) {
 const releaseSources2 = releaseScriptPaths2.map(embeddedReleaseSource2);
 const releaseSource2 = releaseSources2[0];
 const releaseModule2 = await import(`data:text/javascript;base64,${Buffer.from(releaseSource2).toString("base64")}#unified-release`);
-const { release: release2 } = releaseModule2;
+const { gh: gh2, release: release2 } = releaseModule2;
 
 function input2() {
   return {
@@ -600,21 +618,29 @@ function marker2(value = input2()) {
 function client2(options = {}) {
   const calls = [];
   const value = input2();
-  const defaultSHA = "8b1a9953c4611296a827abf8c47804d7fddf6abc";
+  const defaultSHA = options.wrongTagSHA ?? value.sourceSHA;
+  const annotatedTargetSHA = options.annotatedTagObjectSHA ?? defaultSHA;
   let tagExists = options.staleTag === true || options.staleDraft === true;
   let created = false;
   let draft = options.staleDraft === true;
   let published = options.publishedExisting === true;
-  const remote = (isDraft = draft) => ({
-    id: 42,
+  let createAttempted = false;
+  let publishThrew = false;
+  let listReleaseCalls = 0;
+  const remote = (isDraft = draft, foreign = false) => ({
+    id: !isDraft && options.formalDifferentId ? 43 : 42,
     name: value.title,
     tag_name: value.tag,
     target_commitish: "main",
-    body: `${value.notes}\n\n${marker2(value)}\n`,
+    body: foreign
+      ? `${value.notes}\n\n<!-- GMB_RELEASE_SOURCE_SHA:${"0".repeat(40)} -->\n`
+      : `${value.notes}\n\n${marker2(value)}\n`,
     draft: isDraft,
     assets: value.assets.map((asset) => ({
       name: asset.name,
-      size: options.badSize ? asset.size + 1 : asset.size,
+      size: options.badSize || (!isDraft && options.badFormalSize)
+        ? asset.size + 1
+        : asset.size,
       state: "uploaded",
     })),
   });
@@ -622,41 +648,105 @@ function client2(options = {}) {
     calls,
     async listReleases() {
       calls.push("list");
+      listReleaseCalls += 1;
+      if (options.concurrentDraftBeforeStaleTagDelete && listReleaseCalls === 2) {
+        return [remote(true, true)];
+      }
+      if (options.concurrentDraftBeforeRollbackTagDelete && listReleaseCalls === 3) {
+        return [remote(true, true)];
+      }
       if (published) return [remote(false)];
       if (draft || created) return [remote(true)];
+      if (createAttempted && options.foreignDiscoveredDraft) {
+        return [remote(true, true)];
+      }
       return [];
     },
     async getTag() {
       calls.push("get-tag");
+      if (options.tagReadError) throw new Error(options.tagReadError);
+      if (published && options.formalTagError) {
+        throw new Error(options.formalTagError);
+      }
+      if (published && options.formalTagMissing) return null;
       return tagExists
-        ? { ref: `refs/tags/${value.tag}`, object: { type: "commit", sha: defaultSHA } }
+        ? {
+          ref: `refs/tags/${value.tag}`,
+          object: {
+            type: options.invalidTagType ?? (options.annotatedTag ? "tag" : "commit"),
+            sha: options.annotatedTag ? "1".repeat(40) : defaultSHA,
+          },
+        }
         : null;
     },
-    async getTagObject() { throw new Error("轻量 Tag 不应读取 Tag 对象"); },
+    async getTagObject() {
+      calls.push("get-tag-object");
+      if (options.annotatedTagObjectError) throw new Error(options.annotatedTagObjectError);
+      if (!options.annotatedTag) throw new Error("轻量 Tag 不应读取 Tag 对象");
+      return {
+        tag: value.tag,
+        object: {
+          type: options.annotatedTargetType ?? "commit",
+          sha: annotatedTargetSHA,
+        },
+      };
+    },
     async createDraft() {
       calls.push("create-draft");
+      createAttempted = true;
+      if (options.foreignDiscoveredDraft) throw new Error("草稿创建响应中断");
       created = true;
       draft = true;
       tagExists = true;
     },
-    async getRelease() { calls.push("get-release"); return remote(!published); },
+    async getRelease() {
+      calls.push("get-release");
+      if (publishThrew && options.recoveryGetReleaseError) {
+        throw new Error(options.recoveryGetReleaseError);
+      }
+      if (createAttempted && options.foreignDiscoveredDraft) {
+        return remote(true, true);
+      }
+      if (!created && !draft && !published) return null;
+      return remote(!published);
+    },
     async getReleaseByTag() {
       calls.push("by-tag");
+      if (options.byTagError) throw new Error(options.byTagError);
+      if (options.byTagMissing) return null;
       return published ? remote(false) : null;
     },
     async publish() {
       calls.push("publish");
+      if (options.publishServerFailure) {
+        publishThrew = true;
+        throw new Error("发布请求失败");
+      }
       published = true;
       draft = false;
-      if (options.publishResponseFailure) throw new Error("发布响应中断");
+      if (options.publishResponseFailure) {
+        publishThrew = true;
+        throw new Error("发布响应中断");
+      }
     },
     async deleteRelease() {
       calls.push("delete-release");
+      if (options.deleteResponseFailureUnknown) {
+        throw new Error("删除响应中断且服务端未删除");
+      }
       created = false;
       draft = false;
       published = false;
+      if (options.deleteResponseFailure) throw new Error("删除响应中断");
     },
-    async deleteTag() { calls.push("delete-tag"); tagExists = false; },
+    async deleteTag() {
+      calls.push("delete-tag");
+      if (options.tagDeleteResponseFailureUnknown) {
+        throw new Error("Tag 删除响应中断且服务端未删除");
+      }
+      tagExists = false;
+      if (options.tagDeleteResponseFailure) throw new Error("Tag 删除响应中断");
+    },
     async wait() { calls.push("wait"); },
   };
 }
@@ -666,15 +756,102 @@ test2("12 个独立 Release 动作使用完全相同的原子 Tag 事务", () =>
   for (const [index, source] of releaseSources2.entries()) {
     assert2.equal(source, releaseSource2, `${releaseScriptPaths2[index]} 的 Release 事务发生漂移`);
   }
-  assert2.doesNotMatch(releaseSource2, /releaseSHA|createTag\(|--verify-tag|--target/);
+  assert2.doesNotMatch(releaseSource2, /releaseSHA|createTag\(|--verify-tag/);
   assert2.doesNotMatch(releaseSource2, /GITHUB_SHA/);
-  assert2.match(releaseSource2, /'release', 'create'[\s\S]*'--draft'/);
+  assert2.match(
+    releaseSource2,
+    /'release', 'create', input\.tag, '--repo', input\.repository,[\s\S]*'--target', input\.sourceSHA,[\s\S]*'--draft'/,
+  );
   assert2.match(releaseSource2, /GMB_RELEASE_SOURCE_SHA/);
   assert2.match(releaseSource2, /await client\.createDraft\(input\)/);
+  assert2.equal(
+    [...releaseSource2.matchAll(/versionTagCommit\(client, input\) === input\.sourceSHA/g)].length,
+    3,
+    "孤立 Tag、主路径与恢复路径都必须逐字节核对版本 Tag 的成功 CI 源提交",
+  );
+  assert2.equal(
+    [...releaseSource2.matchAll(/await verifyTagDeletionOwnership\(client, input,/g)].length,
+    2,
+    "孤立 Tag 与失败回滚 Tag 每次删除前都必须重新核对 Release 附着关系和 sourceSHA",
+  );
 });
 
-// 中文注释：GitHub 必须在草稿创建请求中原子生成 Tag，成功 CI 源提交由隐藏标记和资产证明绑定。
-test2("Release 不预建 Tag 并在资产验真后发布", async () => {
+test2("GitHub 不存在查询只把准确 HTTP 404 作为空结果", () => {
+  let receivedArguments;
+  const missing = gh2(["api", "repos/ChineseFederation/GMB/git/ref/tags/example"], {
+    notFound: true,
+    run(command, args) {
+      assert2.equal(command, "gh");
+      receivedArguments = args;
+      return {
+        status: 1,
+        stdout: "HTTP/2.0 404 Not Found\r\ncontent-type: application/json\r\n\r\n{\"message\":\"Not Found\"}\n",
+        stderr: "gh: Not Found (HTTP 404)",
+      };
+    },
+  });
+  assert2.equal(missing, null);
+  assert2.deepEqual(receivedArguments, [
+    "api",
+    "repos/ChineseFederation/GMB/git/ref/tags/example",
+    "--include",
+  ]);
+
+  const body = gh2(["api", "repos/ChineseFederation/GMB/releases/tags/example"], {
+    notFound: true,
+    run() {
+      return {
+        status: 0,
+        stdout: "HTTP/2.0 200 OK\ncontent-type: application/json\n\n{\"id\":42}\n",
+        stderr: "",
+      };
+    },
+  });
+  assert2.equal(body, '{"id":42}');
+});
+
+test2("GitHub 503 正文 Not Found、403 与网络错误全部失败关闭", () => {
+  assert2.throws(
+    () => gh2(["api", "repos/ChineseFederation/GMB/releases/tags/example"], {
+      notFound: true,
+      retryRead: true,
+      wait() {},
+      run() {
+        return {
+          status: 1,
+          stdout: "HTTP/2.0 503 Service Unavailable\n\nNot Found\n",
+          stderr: "Not Found",
+        };
+      },
+    }),
+    /Not Found/,
+  );
+  assert2.throws(
+    () => gh2(["api", "repos/ChineseFederation/GMB/git/ref/tags/example"], {
+      notFound: true,
+      run() {
+        return {
+          status: 1,
+          stdout: "HTTP/2.0 403 Forbidden\n\n{\"message\":\"Not Found\"}\n",
+          stderr: "Forbidden",
+        };
+      },
+    }),
+    /Forbidden/,
+  );
+  assert2.throws(
+    () => gh2(["api", "repos/ChineseFederation/GMB/git/ref/tags/example"], {
+      notFound: true,
+      run() {
+        return { error: new Error("network unavailable") };
+      },
+    }),
+    /network unavailable/,
+  );
+});
+
+// 中文注释：GitHub 必须在草稿创建请求中通过 --target 将 Tag 原子锚定到成功 CI 源提交。
+test2("Release 不预建 Tag、精确锚定成功 CI 源提交并在资产验真后发布", async () => {
   const fake = client2();
   const result = await release2(input2(), fake);
   assert2.equal(result.draft, false);
@@ -683,15 +860,83 @@ test2("Release 不预建 Tag 并在资产验真后发布", async () => {
   assert2.equal(fake.calls.includes("delete-tag"), false);
 });
 
-test2("同版本遗留草稿和孤立 Tag 统一清理后重新原子创建", async () => {
-  for (const options of [{ staleDraft: true }, { staleTag: true }]) {
+test2("主路径与恢复路径发现版本 Tag 偏离成功 CI 源提交时都保留正式结果", async () => {
+  for (const options of [
+    { wrongTagSHA: "8b1a9953c4611296a827abf8c47804d7fddf6abc" },
+    {
+      publishResponseFailure: true,
+      wrongTagSHA: "8b1a9953c4611296a827abf8c47804d7fddf6abc",
+    },
+  ]) {
+    const fake = client2(options);
+    await assert2.rejects(
+      release2(input2(), fake),
+      /远端状态已保留.*正式版本 Tag 未锚定本次成功 CI 源提交/,
+    );
+    assert2.equal(fake.calls.includes("delete-release"), false);
+    assert2.equal(fake.calls.includes("delete-tag"), false);
+  }
+});
+
+test2("同版本同源遗留草稿、轻量 Tag 与注解 Tag 验真后重新原子创建", async () => {
+  for (const options of [
+    { staleDraft: true },
+    { staleTag: true },
+    { staleTag: true, annotatedTag: true },
+  ]) {
     const fake = client2(options);
     await release2(input2(), fake);
     assert2.ok(fake.calls.indexOf("delete-tag") < fake.calls.indexOf("create-draft"));
+    assert2.equal(fake.calls.includes("get-tag-object"), options.annotatedTag === true);
     if (options.staleDraft) {
       assert2.ok(fake.calls.indexOf("delete-release") < fake.calls.indexOf("create-draft"));
     }
   }
+});
+
+test2("孤立同名 Tag 不同 source、异常类型或 API 未知时保留并失败关闭", async () => {
+  for (const [options, pattern] of [
+    [
+      { staleTag: true, wrongTagSHA: "8b1a9953c4611296a827abf8c47804d7fddf6abc" },
+      /未锚定本次成功 CI 源提交/,
+    ],
+    [{ staleTag: true, invalidTagType: "blob" }, /类型无效/],
+    [
+      { staleTag: true, annotatedTag: true, annotatedTagObjectError: "Tag 对象 API 未知" },
+      /Tag 对象 API 未知/,
+    ],
+    [{ staleTag: true, tagReadError: "Tag 读取网络异常" }, /Tag 读取网络异常/],
+  ]) {
+    const fake = client2(options);
+    await assert2.rejects(release2(input2(), fake), pattern);
+    assert2.equal(fake.calls.includes("delete-tag"), false);
+    assert2.equal(fake.calls.includes("create-draft"), false);
+  }
+});
+
+test2("孤立同源 Tag 删除响应丢失只以准确不存在收敛", async () => {
+  const removed = client2({ staleTag: true, tagDeleteResponseFailure: true });
+  await release2(input2(), removed);
+  assert2.equal(removed.calls.filter((call) => call === "delete-tag").length, 1);
+  assert2.ok(removed.calls.indexOf("delete-tag") < removed.calls.indexOf("create-draft"));
+
+  const unknown = client2({ staleTag: true, tagDeleteResponseFailureUnknown: true });
+  await assert2.rejects(release2(input2(), unknown), /孤立 Tag 删除状态未确认/);
+  assert2.equal(unknown.calls.includes("create-draft"), false);
+});
+
+test2("孤立同源 Tag 删除紧前发现并发附着草稿时保留 Tag 并失败关闭", async () => {
+  const fake = client2({
+    staleTag: true,
+    concurrentDraftBeforeStaleTagDelete: true,
+  });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /同名孤立版本 Tag 已附着 GitHub Release，禁止删除/,
+  );
+  assert2.equal(fake.calls.filter((call) => call === "list").length, 2);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+  assert2.equal(fake.calls.includes("create-draft"), false);
 });
 
 test2("资产不一致时精确回滚草稿与本次 Tag", async () => {
@@ -701,11 +946,124 @@ test2("资产不一致时精确回滚草稿与本次 Tag", async () => {
   assert2.equal(fake.calls.includes("delete-tag"), true);
 });
 
+test2("草稿回滚后 Tag 删除紧前发现并发附着草稿时只保留 Tag", async () => {
+  const fake = client2({
+    badSize: true,
+    concurrentDraftBeforeRollbackTagDelete: true,
+  });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /资产大小不符.*；Tag 回滚前归属核验失败：待回滚版本 Tag 已附着 GitHub Release，禁止删除/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), true);
+  assert2.equal(fake.calls.filter((call) => call === "list").length, 3);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
 test2("发布响应中断但正式终态完整时禁止误回滚", async () => {
   const fake = client2({ publishResponseFailure: true });
   const result = await release2(input2(), fake);
   assert2.equal(result.draft, false);
   assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("PATCH 已成功但恢复按 id 遇到 503 时保留全部远端状态", async () => {
+  const fake = client2({
+    publishResponseFailure: true,
+    recoveryGetReleaseError: "HTTP 503 Service Unavailable",
+  });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /PATCH 后恢复核对失败.*HTTP 503 Service Unavailable/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("PATCH 已成功但恢复 by-tag 遇到 403 时正式状态进入吸收态", async () => {
+  const fake = client2({
+    publishResponseFailure: true,
+    byTagError: "HTTP 403 Resource not accessible by integration",
+  });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /远端状态已保留.*HTTP 403 Resource not accessible by integration/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("主路径已经读到正式 Release 后 by-tag 503 绝不回滚", async () => {
+  const fake = client2({ byTagError: "HTTP 503 Service Unavailable" });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /远端状态已保留.*HTTP 503 Service Unavailable/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("正式 Release 与 by-tag 均已读到后 Tag 查询异常或 404 都保留正式结果", async () => {
+  for (const options of [
+    { formalTagError: "HTTP 503 Service Unavailable" },
+    { formalTagMissing: true },
+  ]) {
+    const fake = client2(options);
+    await assert2.rejects(release2(input2(), fake), /远端状态已保留/);
+    assert2.equal(fake.calls.includes("delete-release"), false);
+    assert2.equal(fake.calls.includes("delete-tag"), false);
+  }
+});
+
+test2("只有 by-tag 精确 404 且按 id 仍是本次草稿时才回滚", async () => {
+  const fake = client2({ publishServerFailure: true });
+  await assert2.rejects(release2(input2(), fake), /发布请求失败/);
+  assert2.equal(fake.calls.includes("delete-release"), true);
+  assert2.equal(fake.calls.includes("delete-tag"), true);
+  assert2.ok(fake.calls.indexOf("by-tag") < fake.calls.indexOf("delete-release"));
+  assert2.ok(fake.calls.indexOf("delete-release") < fake.calls.indexOf("delete-tag"));
+});
+
+test2("by-tag 精确 404 但按 id 已是正式 Release 时禁止回滚", async () => {
+  const fake = client2({ publishResponseFailure: true, byTagMissing: true });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /正式 Release 已形成但 Tag 查询尚未关联.*远端状态已保留|远端状态已保留.*正式 Release 已形成但 Tag 查询尚未关联/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("恢复读到内容不符的正式 Release 时保留而不是删除", async () => {
+  const fake = client2({ badFormalSize: true });
+  await assert2.rejects(release2(input2(), fake), /远端状态已保留.*资产大小不符/);
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("createDraft 响应失败后不得删除 source marker 不符的同名草稿", async () => {
+  const fake = client2({ foreignDiscoveredDraft: true });
+  await assert2.rejects(
+    release2(input2(), fake),
+    /发布前恢复核对失败.*未绑定本次成功 CI 源提交/,
+  );
+  assert2.equal(fake.calls.includes("delete-release"), false);
+  assert2.equal(fake.calls.includes("delete-tag"), false);
+});
+
+test2("草稿删除响应丢失只在按 id 精确 404 后继续删除 Tag", async () => {
+  const fake = client2({ badSize: true, deleteResponseFailure: true });
+  await assert2.rejects(release2(input2(), fake), /资产大小不符/);
+  assert2.equal(fake.calls.filter((value) => value === "delete-release").length, 1);
+  assert2.equal(fake.calls.includes("delete-tag"), true);
+  assert2.ok(fake.calls.lastIndexOf("get-release") < fake.calls.indexOf("delete-tag"));
+});
+
+test2("草稿删除失败且按 id 仍存在时保留 Tag", async () => {
+  const fake = client2({ badSize: true, deleteResponseFailureUnknown: true });
+  await assert2.rejects(release2(input2(), fake), /草稿删除未确认，已保留 Tag/);
+  assert2.equal(fake.calls.includes("delete-release"), true);
   assert2.equal(fake.calls.includes("delete-tag"), false);
 });
 
@@ -717,7 +1075,19 @@ test2("已有正式 Release 时拒绝覆盖", async () => {
 
 // ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/version-tag-contract.test.mjs
 import assert5 from "node:assert/strict";
-import { existsSync as existsSync7, readdirSync, readFileSync as readFileSync7 } from "node:fs";
+import {
+  chmodSync as chmodSync7,
+  existsSync as existsSync7,
+  mkdirSync as mkdirSync7,
+  mkdtempSync as mkdtempSync7,
+  readdirSync,
+  readFileSync as readFileSync7,
+  realpathSync as realpathSync7,
+  rmSync as rmSync7,
+  writeFileSync as writeFileSync7,
+} from "node:fs";
+import { tmpdir as tmpdir7 } from "node:os";
+import { join as join7 } from "node:path";
 import test5 from "node:test";
 
 // ../../../private/var/folders/z1/h1pvtv0x76xg5h60y_2npmbc0000gn/T/gmb-script-tests-BK47jS/version-tag-contract.mjs
@@ -764,7 +1134,7 @@ function expectedSemanticCandidate(seed, successfulVersions) {
     parseSemanticVersion(value2);
     return value2;
   }))].sort(compareSemanticVersions);
-  return nextSemanticVersion(normalized.length === 0 ? seed : normalized.at(-1));
+  return normalized.length === 0 ? seed : nextSemanticVersion(normalized.at(-1));
 }
 function parseArguments(argv) {
   const [command, ...rest] = argv;
@@ -1041,7 +1411,7 @@ test5("\u6B63\u5F0F Release \u8F6F\u4EF6\u7248\u672C\u6309\u672B\u4E24\u6BB5 0\u
   assert5.equal(nextSemanticVersion("1.0.99"), "1.1.0");
   assert5.equal(nextSemanticVersion("1.23.99"), "1.24.0");
   assert5.equal(nextSemanticVersion("1.99.99"), "2.0.0");
-  assert5.equal(expectedSemanticCandidate("1.0.0", []), "1.0.1");
+  assert5.equal(expectedSemanticCandidate("1.0.0", []), "1.0.0");
   assert5.equal(expectedSemanticCandidate("1.0.0", ["1.0.2", "1.0.1"]), "1.0.3");
 });
 test5("\u4E0D\u540C\u7AEF\u5206\u522B\u8BFB\u53D6\u81EA\u5DF1\u7684\u6B63\u5F0F Release \u96C6\u5408\uFF0C\u4E0D\u5171\u4EAB\u7248\u672C\u57FA\u7EBF", () => {
@@ -1154,16 +1524,21 @@ test5("\u6BCF\u4E2A Release \u7528\u6210\u529F ci_run_id \u590D\u6838\u6765\u6E9
     assert5.match(source, /--tag "\$GMB_VERSION_TAG"/);
   }
 });
-// 中文注释：所有产品直接脚本统一由 GitHub 原子创建 Tag，不再绑定可能落后于 main 的 workflow 提交。
-test5("Release 公共工具禁止预建 Tag 与双提交模型", () => {
+// 中文注释：所有产品直接脚本统一由 GitHub 在创建草稿时将 Tag 原子锚定到成功 CI 的 sourceSHA。
+test5("Release 公共工具禁止预建 Tag 并精确锚定成功 CI 源提交", () => {
   const wrapper = readFileSync7(new URL("../citizenapp/release-ios.mjs", import.meta.url), "utf8");
   const prefix = "const implementations = Object.freeze(";
   const start = wrapper.indexOf(prefix) + prefix.length;
   const end = wrapper.indexOf(");\nconst [command", start);
   const source = JSON.parse(wrapper.slice(start, end))["github-release"];
-  assert5.doesNotMatch(source, /async createTag|releaseSHA|--verify-tag|--target/);
+  assert5.doesNotMatch(source, /async createTag|releaseSHA|--verify-tag/);
+  assert5.match(source, /'--target', input\.sourceSHA/);
   assert5.match(source, /GMB_RELEASE_SOURCE_SHA/);
   assert5.match(source, /await client\.createDraft\(input\)[\s\S]*await client\.publish/);
+  assert5.equal(
+    [...source.matchAll(/versionTagCommit\(client, input\) === input\.sourceSHA/g)].length,
+    2,
+  );
   assert5.match(source, /async deleteTag/);
   assert5.match(source, /Tag 回滚失败/);
 });
@@ -1334,20 +1709,93 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   const ci = readFileSync7(new URL("../../workflows/citizensdk/ci-sdk.yml", import.meta.url), "utf8");
   const release = readFileSync7(new URL("../../workflows/citizensdk/release-sdk.yml", import.meta.url), "utf8");
   const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
+  const dependencies = JSON.parse(readFileSync7(new URL("../../dependencies.json", import.meta.url), "utf8"));
   const nativeBuild = readFileSync7(new URL("../../../citizensdk/scripts/build-native.sh", import.meta.url), "utf8");
   const releaseTool = readFileSync7(new URL("../../../citizensdk/scripts/release.mjs", import.meta.url), "utf8");
+  const releaseWrapper = readFileSync7(new URL("../citizensdk/release-sdk.mjs", import.meta.url), "utf8");
   for (const source of [ci, release]) {
+    assert5.match(source, /cargo install cargo-audit --version 0\.22\.2 --locked/);
+    assert5.match(source, /node --test citizensdk\/scripts\/release\.test\.mjs/);
+    assert5.match(source, /CONSOLE_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/release-tests/);
     assert5.match(source, /CITIZENSDK_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/work/);
     assert5.match(source, /CITIZENSDK_NATIVE_OUTPUT_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/native/);
+    assert5.match(source, /\$RUNNER_TEMP\/citizensdk\/build-source/);
+    assert5.match(source, /native\/smoldot\/dart && dart pub get --enforce-lockfile/);
+    assert5.match(source, /dart analyze --no-fatal-warnings/);
+    assert5.doesNotMatch(source, /native\/smoldot\/dart[^\n]*dart format/);
+    assert5.match(source, /native\/smoldot\/dart && dart test --timeout=2m/);
+    assert5.match(source, /native\/host\/libsmoldot\.dylib/);
+    assert5.match(source, /build-source\/libsmoldot\.dylib/);
+    assert5.match(source, /build-source\/native\/smoldot\/dart\/libsmoldot\.dylib/);
+    assert5.match(source, /flutter create --platforms=android/);
+    assert5.match(source, /flutter build apk --debug --target-platform android-arm64/);
+    assert5.match(source, /:citizen_sdk:testDebugUnitTest --no-daemon/);
+    assert5.match(source, /flutter create --platforms=ios/);
+    assert5.match(source, /flutter build ios --no-codesign --release/);
+    assert5.match(source, /aarch64-apple-ios-sim,x86_64-apple-ios/);
+    assert5.match(source, /CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
+    assert5.match(source, /xcrun simctl bootstatus/);
+    assert5.match(source, /xcodebuild test/);
+    assert5.match(source, /-only-testing:RunnerTests/);
+    assert5.match(source, /native\/host\/libsmoldot\.dylib/);
+    assert5.match(source, /--source citizensdk/);
     assert5.match(source, /citizensdk\/citizensdk\.tgz/);
     assert5.doesNotMatch(source, /citizensdk\/(?:target|build|\.dart_tool)\//);
   }
+  for (const expected of [
+    "$RUNNER_TEMP/citizensdk/build-source",
+    "native/smoldot/dart && dart pub get --enforce-lockfile",
+    "dart analyze --no-fatal-warnings",
+    "native/smoldot/dart && dart test --timeout=2m",
+  ]) assert5.ok(registered.includes(expected), expected);
+  const registeredCiStart = registered.indexOf('  citizensdk_ci_sdk__check:');
+  const registeredReleaseStart = registered.indexOf('  citizensdk_release_sdk__check:');
+  assert5.ok(registeredCiStart >= 0 && registeredReleaseStart > registeredCiStart);
+  const registeredCi = registered.slice(registeredCiStart, registeredReleaseStart);
+  const registeredRelease = registered.slice(registeredReleaseStart);
+  for (const source of [registeredCi, registeredRelease]) {
+    assert5.match(source, /cargo install cargo-audit --version 0\.22\.2 --locked/);
+    assert5.match(source, /dependencies audit --scope citizensdk/);
+    assert5.match(source, /node --test citizensdk\/scripts\/release\.test\.mjs/);
+    assert5.match(source, /:citizen_sdk:testDebugUnitTest --no-daemon/);
+    assert5.match(source, /flutter build ios --no-codesign --release/);
+    assert5.match(source, /CONSOLE_NATIVE_IOS_SIMULATOR_DIR/);
+    assert5.match(source, /xcodebuild test/);
+    assert5.match(source, /-only-testing:RunnerTests/);
+  }
+  assert5.match(release, /--verify "\$RUNNER_TEMP\/citizensdk\/candidate"[\s\S]*--archive "\$RUNNER_TEMP\/citizensdk\/citizensdk\.tgz"/);
+  assert5.match(registeredRelease, /--verify "\$RUNNER_TEMP\/citizensdk\/candidate"[\s\S]*--archive "\$RUNNER_TEMP\/citizensdk\/citizensdk\.tgz"/);
+  const normalizedSteps = (source) => {
+    const start = source.indexOf("    steps:\n");
+    assert5.ok(start >= 0, "CitizenSDK workflow 缺少 steps");
+    let body = source.slice(start);
+    const nextJob = body.indexOf("\n\n\n  # ──");
+    if (nextJob >= 0) body = body.slice(0, nextJob);
+    return body
+      .replaceAll("${{ github.sha }}", "${{ env.GMB_SOURCE_SHA }}")
+      .replaceAll("${{ inputs.source_sha }}", "${{ env.GMB_SOURCE_SHA }}")
+      .trim();
+  };
+  assert5.equal(normalizedSteps(ci), normalizedSteps(registeredCi));
+  assert5.equal(normalizedSteps(release), normalizedSteps(registeredRelease));
+  assert5.ok(dependencies.dartApplications.includes("citizensdk/native/smoldot/dart"));
+  for (const required of [
+    "citizensdk/native/smoldot/dart/pubspec.yaml",
+    "citizensdk/native/smoldot/dart/pubspec.lock",
+  ]) assert5.ok(dependencies.scopes.citizensdk.requiredFiles.includes(required), required);
   assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/ci-sdk\.yml'/);
   assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/release-sdk\.yml'/);
   assert5.match(nativeBuild, /CITIZENSDK_WORK_DIR/);
   assert5.match(nativeBuild, /CITIZENSDK_NATIVE_OUTPUT_DIR/);
   assert5.match(nativeBuild, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
   assert5.match(nativeBuild, /cargo build[^\n]+--locked/);
+  assert5.match(nativeBuild, /aarch64-apple-ios-sim/);
+  assert5.match(nativeBuild, /x86_64-apple-ios/);
+  assert5.match(nativeBuild, /output_dir\/ios-simulator/);
+  assert5.match(nativeBuild, /aarch64-apple-darwin/);
+  assert5.match(nativeBuild, /x86_64-apple-darwin/);
+  assert5.match(nativeBuild, /lipo -create/);
+  assert5.match(nativeBuild, /output_dir\/host\/libsmoldot\.dylib/);
   assert5.match(nativeBuild, /citizen_sr25519_derive_hard/);
   assert5.match(nativeBuild, /\^\(citizen_chat_mls_\|account_crypto_\)/);
   assert5.match(releaseTool, /android\/src\/main\/jniLibs\/arm64-v8a\/libsmoldot\.so/);
@@ -1355,11 +1803,112 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   assert5.match(releaseTool, /citizensdk-release\.json/);
   assert5.match(releaseTool, /assertOutsideSource/);
   assert5.match(releaseTool, /\/Users\/rhett\/Only\/console\/target\/citizensdk/);
+  assert5.match(releaseTool, /'test\/subscription_test\.dart'/);
+  assert5.match(releaseTool, /'example\/README\.md'/);
+  assert5.match(releaseWrapper, /const localRepositoryRoot = resolve\(dirname\(fileURLToPath\(import\.meta\.url\)\), '\.\.\/\.\.\/\.\.'\)/);
+  assert5.match(releaseWrapper, /process\.env\.GITHUB_WORKSPACE[\s\S]*: localRepositoryRoot/);
+  const smoldotDartFiles = [
+    "BUILD.md", "CHANGELOG.md", "LICENSE", "README.md", "UPSTREAM.md",
+    "analysis_options.yaml", "pubspec.lock", "pubspec.yaml",
+    "example/smoldot_example.dart", "lib/smoldot.dart", "lib/src/bindings.dart",
+    "lib/src/chain.dart", "lib/src/client.dart", "lib/src/json_rpc.dart",
+    "lib/src/platform.dart", "lib/src/types.dart", "test/chain_info_test.dart",
+    "test/client_basic_test.dart", "test/ffi_basic_test.dart",
+    "test/fixtures/polkadot.json", "test/fixtures/westend.json",
+    "test/json_rpc_test.dart", "test/smoldot_test.dart", "test/subscription_test.dart",
+  ];
+  assert5.equal(smoldotDartFiles.length, 24);
+  for (const path of smoldotDartFiles) {
+    const source = readFileSync7(new URL(`../../../citizenapp/smoldot/dart/${path}`, import.meta.url));
+    const target = readFileSync7(new URL(`../../../citizensdk/native/smoldot/dart/${path}`, import.meta.url));
+    assert5.ok(source.equals(target), path);
+  }
+  const eventMetadataSource = readFileSync7(new URL(
+    "../../../citizenapp/smoldot/pow/full-node/tests/substrate-node-template-metadata.hex",
+    import.meta.url,
+  ));
+  const eventMetadataFixture = readFileSync7(new URL(
+    "../../../citizensdk/test/transaction/fixtures/substrate-v14-system-events-metadata.hex",
+    import.meta.url,
+  ));
+  assert5.ok(
+    eventMetadataSource.equals(eventMetadataFixture),
+    "CitizenSDK System.Event metadata 测试夹具必须与登记来源逐字节一致",
+  );
+  const powSourceLock = readFileSync7(
+    new URL("../../../citizenapp/smoldot/pow/Cargo.lock", import.meta.url),
+    "utf8",
+  );
+  const powTargetLock = readFileSync7(
+    new URL("../../../citizensdk/native/smoldot/pow/Cargo.lock", import.meta.url),
+    "utf8",
+  );
+  const ffiTargetLock = readFileSync7(
+    new URL("../../../citizensdk/native/smoldot/ffi/Cargo.lock", import.meta.url),
+    "utf8",
+  );
+  const ffiSourceLock = readFileSync7(
+    new URL("../../../citizenapp/smoldot/ffi/Cargo.lock", import.meta.url),
+    "utf8",
+  );
+  for (const forbidden of ["account-crypto", "openmls", "hpke-rs", "aes-gcm"]) {
+    assert5.doesNotMatch(ffiTargetLock, new RegExp(`name = "${forbidden}"`));
+  }
+  const registryIdentities = (lock) => new Set(
+    [...lock.matchAll(
+      /\[\[package\]\]\nname = "([^"]+)"\nversion = "([^"]+)"\nsource = "registry\+[^"]+"\nchecksum = "([0-9a-f]{64})"/g,
+    )].map((match) => `${match[1]}@${match[2]}#${match[3]}`),
+  );
+  const sourceRegistry = registryIdentities(ffiSourceLock);
+  for (const identity of registryIdentities(ffiTargetLock)) {
+    assert5.ok(sourceRegistry.has(identity), `FFI 锁文件引入未经 CitizenApp 验证的依赖：${identity}`);
+  }
+  const powSourceRegistry = registryIdentities(powSourceLock);
+  for (const identity of registryIdentities(powTargetLock)) {
+    assert5.ok(
+      powSourceRegistry.has(identity),
+      `PoW 锁文件引入未经 CitizenApp 验证的依赖：${identity}`,
+    );
+  }
+  for (const forbidden of ["smoldot-full-node", "smoldot-light-wasm"]) {
+    assert5.doesNotMatch(powTargetLock, new RegExp(`name = "${forbidden}"`));
+  }
+  for (const path of ["Cargo.toml", "src/lib.rs"]) {
+    const source = readFileSync7(new URL(`../../../shared/citizen-signer/${path}`, import.meta.url));
+    const target = readFileSync7(new URL(`../../../citizensdk/native/signer/${path}`, import.meta.url));
+    assert5.ok(source.equals(target), `native/signer/${path}`);
+  }
+  for (const relativePath of [
+    "android/src/main/kotlin/org/citizen/sdk/CitizenSdkPlugin.kt",
+    "android/src/main/kotlin/org/citizen/sdk/AndroidHardwareSecretVault.kt",
+    "android/src/test/kotlin/org/citizen/sdk/HardwareSecretVaultTest.kt",
+    "android/src/test/kotlin/org/citizen/sdk/VaultEnvelopeTest.kt",
+    "ios/Tests/SecureEnclaveSecretVaultTests.swift",
+    "ios/Tests/VaultEnvelopeTests.swift",
+  ]) {
+    assert5.ok(existsSync7(new URL(`../../../citizensdk/${relativePath}`, import.meta.url)), relativePath);
+  }
+  for (const obsoletePath of [
+    "android/src/main/kotlin/CitizenSdkPlugin.kt",
+    "android/src/main/kotlin/AndroidHardwareSecretVault.kt",
+    "android/src/test/kotlin/HardwareSecretVaultTest.kt",
+    "android/src/test/kotlin/VaultEnvelopeTest.kt",
+  ]) {
+    assert5.equal(existsSync7(new URL(`../../../citizensdk/${obsoletePath}`, import.meta.url)), false, obsoletePath);
+  }
+  const podspec = readFileSync7(new URL("../../../citizensdk/ios/citizen_sdk.podspec", import.meta.url), "utf8");
+  assert5.match(podspec, /s\.test_spec 'Tests'/);
+  assert5.deepEqual(
+    readdirSync(new URL("../../../citizensdk/native/smoldot/dart", import.meta.url)).sort(),
+    ["BUILD.md", "CHANGELOG.md", "LICENSE", "README.md", "UPSTREAM.md",
+      "analysis_options.yaml", "example", "lib", "pubspec.lock", "pubspec.yaml", "test"],
+  );
   const prefix2 = "const implementations = Object.freeze(";
   const repositoryAction = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
   const repositoryLine = repositoryAction.split("\n").find((candidate) => candidate.startsWith(prefix2));
   const guardrails = JSON.parse(repositoryLine.slice(prefix2.length, -2)).guardrails;
   assert5.match(guardrails, /citizensdk\/native\/smoldot\/pow\/\*/);
+  assert5.match(guardrails, /citizensdk\/native\/smoldot\/dart\/\*/);
   assert5.match(guardrails, /citizen_sdk\.smoldot\.database\.v1/);
   assert5.match(guardrails, /citizensdk-v\[0-9\]\+/);
   for (const action of ["ci-sdk.mjs", "release-sdk.mjs"]) {
@@ -1441,6 +1990,84 @@ test5("12 个独立 Release 动作锚定成功 CI 源码且首次版本不递增
     assert5.match(source, /realpathSync\(process\.env\.GITHUB_WORKSPACE\)/);
     assert5.match(source, /normalized\.length === 0 \? seed : nextSemanticVersion\(normalized\.at\(-1\)\)/);
     assert5.doesNotMatch(source, /nextSemanticVersion\(normalized\.length === 0 \? seed/);
+  }
+});
+
+test5("CitizenSDK 实际版本门禁验证 CI 身份、版本真源和 Tag 软件版本", () => {
+  const prefix = "const implementations = Object.freeze(";
+  const actions = [
+    "citizenapp/release-ios.mjs", "citizenapp/release-android.mjs",
+    "citizenwallet/release-ios.mjs", "citizenwallet/release-android.mjs",
+    "citizenchain/release-node-linux-arm.mjs", "citizenchain/release-node-linux-amd.mjs",
+    "citizenchain/release-node-macos.mjs", "citizenchain/release-node-windows.mjs",
+    "citizenchain/release-runtime-wasm.mjs", "citizenserve/release-cloudflare.mjs",
+    "citizensdk/release-sdk.mjs", "citizenweb/release-web.mjs",
+  ];
+  const versions = actions.map((action) => {
+    const wrapper = readFileSync7(new URL(`../${action}`, import.meta.url), "utf8");
+    const line = wrapper.split("\n").find((candidate) => candidate.startsWith(prefix));
+    return JSON.parse(line.slice(prefix.length, -2))["version-tag"];
+  });
+  assert5.equal(new Set(versions).size, 1, "12 个 Release 必须使用同一版本门禁字节");
+
+  // macOS 的 /var 是 /private/var 的符号链接；使用规范路径确保被测模块的
+  // import.meta.url 主入口判断真实执行，而不是把空操作误判成成功。
+  const root = realpathSync7(mkdtempSync7(join7(tmpdir7(), "citizensdk-version-gate-")));
+  try {
+    const bin = join7(root, "bin");
+    mkdirSync7(join7(root, "citizensdk"), { recursive: true });
+    mkdirSync7(bin);
+    writeFileSync7(join7(root, "citizensdk", "pubspec.yaml"), "name: citizen_sdk\nversion: 0.1.0\n");
+    writeFileSync7(join7(root, "version-tag.mjs"), versions[0]);
+    const sourceSha = "a".repeat(40);
+    writeFileSync7(join7(bin, "git"), `#!/bin/sh\nprintf '%s\\n' '${sourceSha}'\n`);
+    writeFileSync7(join7(bin, "gh"), `#!/bin/sh
+case "$*" in
+  *actions/runs/77*) printf '%s\\n' '{"status":"completed","conclusion":"success","event":"workflow_dispatch","head_branch":"main","head_sha":"${sourceSha}","display_title":"公民SDK · CI · SDK","path":".github/workflows/gmb-repository.yml"}' ;;
+  *releases?*) printf '%s\\n' '[]' ;;
+  *) exit 2 ;;
+esac
+`);
+    chmodSync7(join7(bin, "git"), 0o700);
+    chmodSync7(join7(bin, "gh"), 0o700);
+    const base = [
+      join7(root, "version-tag.mjs"), "verify-release-source",
+      "--ci-run-id", "77", "--version-tag", "citizensdk-v0.1.0",
+      "--source-sha", sourceSha, "--software-version", "0.1.0",
+      "--prefix", "citizensdk-v", "--product-id", "citizensdk",
+      "--target", "sdk", "--workflow", "citizensdk/ci-sdk.yml",
+    ];
+    const environment = { ...process.env, PATH: `${bin}:${process.env.PATH}` };
+    const success = spawnSync2(process.execPath, base, { cwd: root, env: environment, encoding: "utf8" });
+    assert5.equal(success.status, 0, success.stderr);
+    assert5.match(success.stdout, /Release 已锁定成功 CI/);
+    const softwareVersionIndex = base.indexOf("--software-version") + 1;
+    const mismatchedArguments = [...base];
+    mismatchedArguments[softwareVersionIndex] = "0.1.1";
+    const mismatch = spawnSync2(
+      process.execPath,
+      mismatchedArguments,
+      { cwd: root, env: environment, encoding: "utf8" },
+    );
+    assert5.notEqual(mismatch.status, 0);
+    assert5.match(mismatch.stderr, /CitizenSDK Tag 与正式软件版本不一致/);
+
+    writeFileSync7(join7(bin, "gh"), `#!/bin/sh
+case "$*" in
+  *actions/runs/77*) printf '%s\\n' '{"status":"completed","conclusion":"success","event":"workflow_dispatch","head_branch":"main","head_sha":"${sourceSha}","display_title":"错误 CI","path":".github/workflows/gmb-repository.yml"}' ;;
+  *releases?*) printf '%s\\n' '[]' ;;
+  *) exit 2 ;;
+esac
+`);
+    const wrongIdentity = spawnSync2(
+      process.execPath,
+      base,
+      { cwd: root, env: environment, encoding: "utf8" },
+    );
+    assert5.notEqual(wrongIdentity.status, 0);
+    assert5.match(wrongIdentity.stderr, /Release 来源不是同产品、同端、同 workflow 的成功 CI/);
+  } finally {
+    rmSync7(root, { recursive: true, force: true });
   }
 });
 

@@ -44,16 +44,6 @@ final class CitizenChainAssets {
     BootstrapManifest? bootstrap,
   }) {
     final chainSpec = _jsonObject(chainSpecJson, 'chainspec.json');
-    if (bootstrap != null && _matchesLocalSpec(chainSpec, bootstrap)) {
-      final existing =
-          (chainSpec['bootNodes'] as List?)?.cast<Object?>() ?? <Object?>[];
-      for (final bootnode in bootstrap.p2p.bootnodes.reversed) {
-        existing.removeWhere((entry) => entry == bootnode);
-        existing.insert(0, bootnode);
-      }
-      chainSpec['bootNodes'] = existing;
-    }
-
     final lightSyncState = _jsonObject(
       lightSyncStateJson,
       'light_sync_state.json',
@@ -64,8 +54,19 @@ final class CitizenChainAssets {
       throw const FormatException('light_sync_state.json 缺少必要 checkpoint 字段');
     }
     final genesisHash = genesisHashFromCheckpoint(headerHex);
-    if (bootstrap != null && bootstrap.chain.genesisHash != genesisHash) {
-      throw const FormatException('远端启动清单与随包 genesis 不一致');
+    // 远端清单只是非权威 bootnode 建议。任何链参数或 genesis 不匹配都必须
+    // 忽略清单并继续使用随包 chainspec，不能让远端配置阻断本地可信
+    // 启动路径。
+    if (bootstrap != null &&
+        bootstrap.chain.genesisHash == genesisHash &&
+        _matchesLocalSpec(chainSpec, bootstrap)) {
+      final existing =
+          (chainSpec['bootNodes'] as List?)?.cast<Object?>() ?? <Object?>[];
+      for (final bootnode in bootstrap.p2p.bootnodes.reversed) {
+        existing.removeWhere((entry) => entry == bootnode);
+        existing.insert(0, bootnode);
+      }
+      chainSpec['bootNodes'] = existing;
     }
     chainSpec['lightSyncState'] = lightSyncState;
     return CitizenChainBundle(

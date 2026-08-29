@@ -1493,7 +1493,7 @@ fn classify_warp_phase(
 }
 
 #[cfg(test)]
-mod citizensdk_warp_policy_tests {
+mod citizenapp_warp_policy_tests {
     use super::{
         FragmentActivity, Phase, TargetActivity, classify_warp_phase, should_request_warp,
     };

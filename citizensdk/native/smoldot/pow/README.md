@@ -1,18 +1,14 @@
 # 公民链 smoldot PoW 快照
 
-该目录逐步收编 CitizenApp 当前已经验证的 smoldot PoW 轻节点快照。导入采用“先逐字节
-复制、记录哈希，再在 CitizenSDK 独立演进”的方式，禁止在 Release 或 CI 中回指
-CitizenApp 源码。
+本目录收编 CitizenApp 当前使用的 smoldot PoW + GRANDPA 轻节点源码。内部 workspace 只含
+`lib` 与 `light-base`。`Cargo.lock` 从 CitizenApp 已验证 workspace 锁机械裁掉全节点与 WASM
+成员不可达闭包，并固定所有保留 registry 包的来源 name/version/checksum。
 
-当前已有 `light-base` 编排层，以及 `lib` 中的 chain、chain-spec、finality、header、
-verify、trie、executor、database、json-rpc、libp2p、network、sync 与 transactions
-源码闭包。本目录已成为只包含 `lib` 和 `light-base` 的内部 Cargo workspace；没有复制
-`full-node` 或 `wasm-node`，并由本目录的 `Cargo.lock` 固定依赖。在用户批准编译验收前
-不得发布。
+生产源码、公开夹具与上游内联测试按来源复制；只对 workspace、crate 入口和 identity 模块
+进行轻客户端最小适配。SDK 新增来源 manifest 与能力边界测试，钉死复制集合和排除项。
 
-轻客户端 SDK 不收编全节点 `author`、`identity` keystore 或 seed phrase 解析。保留的
-`identity::ss58` 只处理公钥地址；用户私钥只允许由 CitizenSDK signer 与平台安全金库
-管理。
+不收编全节点 `author` 出块、identity keystore 或 seed phrase 解析。保留的
+`identity::ss58` 只处理公钥地址；用户密钥只由 CitizenSDK signer 与设备安全金库管理。
+libp2p Noise 密钥只用于单连接传输握手，不持久化。
 
-libp2p Noise 的连接级密钥只用于传输握手，由平台随机源按连接生成并在内存中零化；它
-不是钱包或管理员身份密钥，不得持久化。
+上游提交、本地 PoW 改动和同步规则见相邻 `UPSTREAM.md`。CI/Release 不得回指 CitizenApp。

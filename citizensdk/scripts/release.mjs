@@ -9,6 +9,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   readdirSync,
   writeFileSync,
 } from 'node:fs';
@@ -39,6 +40,146 @@ const NATIVE_FILES = Object.freeze({
   'ios/libsmoldot.a': 'ios/libsmoldot.a',
   'ios/exported_symbols.txt': 'ios/exported_symbols.txt',
 });
+// 两份运行时信任锚必须与 CitizenApp 已验证链资产逐字节一致；只验证 JSON 形状、
+// bootnode 数量或区块高度无法阻止 genesis、authority set 等安全关键字段漂移。
+const CHAIN_ASSET_FILES = Object.freeze({
+  'assets/chainspec.json': '6ae934933682a8ffca78663dd4391a730b6ae219bd12abfb5d96b4d8154fc2e0',
+  'assets/light_sync_state.json': '014802836a0f6e01a9f1bf7173b8e04c9df8fc3f057565f855abdccdc7361ab6',
+});
+// 真实 Substrate v14 System.Events metadata 夹具及 CitizenChain Runtime 生产
+// metadata/events 对为正式解码输入；测试与夹具同时改写不能绕过
+// Release 的来源守卫。
+const SOURCE_FIXTURE_FILES = Object.freeze({
+  'test/transaction/fixtures/citizenchain-runtime-system-events.hex': '2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef',
+  'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
+  'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
+});
+// Release 必须保留两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
+const LICENSE_SOURCE_FILES = Object.freeze({
+  'LICENSE-GPL-3.0': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
+  'LICENSE-MIT': '39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c',
+});
+// 根 Flutter、signer、Android、iOS 与 Release 合同测试共同构成 SDK 自有测试闭集。
+// 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
+const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
+  'test',
+  'native/signer/tests',
+  'android/src/test',
+  'ios/Tests',
+]);
+const SDK_TEST_CONTRACT_FILES = Object.freeze({
+  'android/src/test/README.md': '1febb9bdc7414053cff9844028f10dfb291a7293a270754a6806f7f4f216b57f',
+  'android/src/test/kotlin/README.md': 'c9f29a30f65f17d7b43d46982c9a7812418b4ba84420ce77408fb3d3f399436a',
+  'android/src/test/kotlin/org/README.md': '2a4c0f4f8a1f6ff813ad4c94d91aded7078bdb81a650db5de54920956dfbbb80',
+  'android/src/test/kotlin/org/citizen/README.md': 'af7c4dd6b81841a7b96c4b101c20432b58d8d197b72283f9c5b846b9531af5eb',
+  'android/src/test/kotlin/org/citizen/sdk/HardwareSecretVaultTest.kt': '28dac0330e788e4f5de0842d5250655b07d1a8c15c21683e1d83e6e21ca3b816',
+  'android/src/test/kotlin/org/citizen/sdk/VaultEnvelopeTest.kt': 'a7c01a8c1794878b6bc7ec3e566f511ec80768d189b2c3430129408f77cfde65',
+  'ios/Tests/SecureEnclaveSecretVaultTests.swift': 'a3e5d2433cbf1d426c1fc8ee18ac56fd13473fca7f8c8fe61d39ff332fb409aa',
+  'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
+  'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
+  'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
+  'scripts/release.test.mjs': 'b0e0bf739325f8fe6f87f5b734611b96611b96575ae676a26d2184cb0ff47857',
+  'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
+  'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
+  'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
+  'test/node/bootstrap_client_test.dart': 'bce35fec9a26d1cd3f2e86146fec947b046d6aeb67aa6b543288684abf1b2b9e',
+  'test/node/chain_assets_test.dart': '655039fe80c27a703e4325dc17780b7bfa7ba1a84c243f16fcdb6d23d2fff99c',
+  'test/node/citizensdk_bootstrap_manifest.json': '33bd8e2c7407abea376f21a7adf7c9df644aedb7a9e985211075bba6cde28a00',
+  'test/node/light_client_lifecycle_test.dart': '9773d47459f688e4f95f8e1b93499ce96c11fbf7ab02c58d2888e5831a15bd8e',
+  'test/platform/hardware_bound_seed_store_test.dart': 'fb6c3a66f04d9dae6ffabb479d381c017f1a2ba5796ddfd407eb3dcd57480cb3',
+  'test/platform/hardware_secret_vault_test.dart': '868cc66b5dc728e6b51186df4ea67c9e66743bf4e35f53a153252c4d3bf2f1f7',
+  'test/platform/preferences_chain_database_store_test.dart': '032f34f0a0402444264db190b240b434e52021fe41894e4ed7e2606fca868139',
+  'test/platform/preferences_finalized_transaction_repository_test.dart': '3797b1bc9630707765ad73a9c97633573d77e97eff1fac89d7cb8b27bf149530',
+  'test/platform/preferences_wallet_repository_test.dart': 'a2b0a095ed96713fa087c5d9648671cadc944932bfc7773e252cdb5e68bdd890',
+  'test/transaction/chain_rpc_test.dart': 'faeeb377f4bfc3608868594f0784a933a19f59814dacffd38405560a864ab733',
+  'test/transaction/chain_transfer_event_decoder_test.dart': 'b1599e10a16401cf19beb4b1400f4c4ae52acf43a78ad7df1ac7670df4c736ad',
+  'test/transaction/finalized_transaction_scanner_test.dart': 'e7dc85abf5ec51a3086de248a02c194ac74e1180d490075efc82e9c3738ab1b1',
+  'test/transaction/fixtures/README.md': '4716126fe3a802cc637c28cf2add8988800e2de645bc8036c2ea0528804533d8',
+  'test/transaction/fixtures/citizenchain-runtime-system-events.hex': '2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef',
+  'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
+  'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
+  'test/transaction/signed_extrinsic_builder_test.dart': '75952dd740d3f37b339177cf9d929127aa4546e11f30bac4a602b679e0171c1f',
+  'test/transaction/transaction_status_test.dart': '9afb279e5b70e1e4099a33e6bf01fa4a7da52ed216ce81b704eac0d1366a6c83',
+  'test/transaction/transfer_service_test.dart': 'a9ddd0f88149e464ed830660a30938a6cf060a7a7932238617f18541bb5f1af3',
+  'test/wallet/secure_seed_store_contract_test.dart': '01456c50783ded684eceb400242cd00afd2c2ddcb470ecfdae8dbc2935a982e4',
+  'test/wallet/wallet_service_test.dart': '5f12a0a33bab91355072420f519a1aa6e72c04e2f57163692effe05a9fd643d8',
+});
+// 24 个来源文件必须与 CitizenApp 已验证的 smoldot Dart 包逐字节一致；
+// example/README.md 是唯一的 CitizenSDK 本地说明文件。固定闭集和哈希可防止
+// Release 在“文件还在”但内容或测试已经漂移时继续打包。
+const SMOLDOT_DART_FILES = Object.freeze({
+  'BUILD.md': '8260e070ee9b84eb2f4e4a51623aa93d25a820e7d7fd843839fb0910ef9286e8',
+  'CHANGELOG.md': 'd9adb01f7c62313a14bb86dbfd7f4077d925745e9c17a14f153eef79c45f8b94',
+  'LICENSE': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
+  'README.md': 'c024610fdaf73b3fbc8d68460c289d87297620dd2090d0c3ba1346b820f7b6be',
+  'UPSTREAM.md': 'ed3f21bc62a6c6dc76beb870bf6f224914123a2cc95bdbab8b5cb453c4767539',
+  'analysis_options.yaml': 'e67b963f89cf75f675a0ed25d258bae038d216832c22b84782e5e3a90b8d3076',
+  'example/README.md': '0a05f26276e9d30946f291a12bf9ab63985ebc0218011dfe5fa1974c21105b99',
+  'example/smoldot_example.dart': 'e0275ad18ca2aa5c982d0f67f2f2a8ca1b94acc01a0e90baf4ed7666374d9eb8',
+  'lib/smoldot.dart': 'c97dcab31dc04dd474cfe012052d8ee1f2e83712b18b04815a5aa36ec3f75ca8',
+  'lib/src/bindings.dart': '33d23827c203a0d3f92146f2da27de4615badb8e3732f23b56dbcd79596d31da',
+  'lib/src/chain.dart': '0d3e341d60cca0bb3161b8eeb3710e838aa5e1b33cc23f0e3c298b4ecb8eaba9',
+  'lib/src/client.dart': 'e238c48e78c5125a7a5b85bb0c06d0c7708128d4331f5d4d817959d37c3226e7',
+  'lib/src/json_rpc.dart': 'c81ed472e43ce2d9ccb56ce82477a2c4ff775de29932d26a0aef976d044ed53c',
+  'lib/src/platform.dart': '65f48e6cc98a47895973409e79543c4b15ba2311228959bc8a6e8895c4395b95',
+  'lib/src/types.dart': 'e20b6f97d0b6e289c2b492e12dd66afafc1133adc0fc5fe5a547106ed3338e89',
+  'pubspec.lock': '91ad4c26c8abdf6384292e1f01f335ba7ce50443a99b01b45e2f4efa72dab25a',
+  'pubspec.yaml': '408910b7b043d30aa29dc1f226f750f64dbee90ad343b1154478a7ee6ff3d83e',
+  'test/chain_info_test.dart': '25cf4677267e0d830f49895b123d975c9a4654e4e2f0b77cb9013ad5bd1f473f',
+  'test/client_basic_test.dart': '68001424dba93472bacc0aee665426c111c9bcba450323f02e4c72297522e616',
+  'test/ffi_basic_test.dart': 'ea6a411d1926b7ea5b9e4ee8d48a182a262fb8e8d798536a33931486b23be0a2',
+  'test/fixtures/polkadot.json': '1d5079040595c54f56f31900beea91254cf2a3a25e245bcdd26fe1ccc4672a9b',
+  'test/fixtures/westend.json': '5457a3c8322b8f2a2d7c2c713c113a7e0b1ee7e646d3f00abc4fa21198ea879d',
+  'test/json_rpc_test.dart': 'dbcf86e83dcf00eef70975f45fbf7ad07ff83b400209a2ee65a9a535578234b9',
+  'test/smoldot_test.dart': '969eb56ce52fac3c8cd11f6e9bfa7d4e09877d7d394821db954f90eb0ab06285',
+  'test/subscription_test.dart': '99e83be4875390059a70047b667b8814ddd2c7281dbc8977c152552f9dd14b43',
+});
+// 两份锁文件都从 CitizenApp 已验证结果机械裁掉 SDK 明确排除的产品/全节点闭包后固定；
+// 保留的 registry 包必须继续使用 CitizenApp 已验证的版本与校验和，且不得在
+// CI、Release 或本机编译时更新。
+const SMOLDOT_LOCK_FILES = Object.freeze({
+  'native/smoldot/ffi/Cargo.lock': '05190e2ed21987a8ca61c023c47eadc29f9cb415a065308843af5c4ad37537e7',
+  'native/smoldot/pow/Cargo.lock': '6d832fb629bbf19ff6c2cce589c6285c3367cbcb3b55f4819beb7e733d9e038b',
+});
+// 根 signer workspace 与 Flutter 包的解析闭包同样属于正式来源输入；locked 模式
+// 只能保证使用当前锁，必须再固定锁文件自身，才能阻止依赖身份随提交静默漂移。
+const SDK_ROOT_LOCK_FILES = Object.freeze({
+  'Cargo.lock': '62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670',
+  'pubspec.lock': '805510ddae3c2b9283593487100c6b9e942e64ac9a01b0edeb2cf0b31b5d07f2',
+});
+// 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
+// byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
+// SDK 边界。清单自身再由此哈希固定，CI/Release 不回指 CitizenApp。
+const SMOLDOT_RUST_SOURCE_MANIFEST = Object.freeze({
+  path: 'native/smoldot/SOURCE_SHA256.json',
+  sha256: '8433f0f9d5bae8f254d9bd7c98330a714908f37d15fe0aa07e7ff2d22fd66ae2',
+});
+// 这些文件位于各来源单元之外，但仍属于 Release 的正式输入：许可证、来源说明、
+// 公共 ABI 头文件以及由 light-base 示例通过 include_str! 编译引用的链规范。
+// 它们与来源清单、213 个 Rust 单元文件和 25 个冻结 Dart 文件共同组成
+// native/smoldot 的 248 文件完整闭集，任何未登记文件都必须失败关闭。
+const SMOLDOT_SUPPORT_FILES = Object.freeze({
+  'native/smoldot/LICENSE': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
+  'native/smoldot/LICENSE-APACHE-2.0': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
+  'native/smoldot/README.md': 'df5d26f25425d0216d948e04c89ee4d005e180a761fbd023d6cc4a47898d5780',
+  'native/smoldot/UPSTREAM.md': '9826a09529ebf2eabb253d05bcccbf8b2107e9c39950ee0aa200b06b5e4feb94',
+  'native/smoldot/include/README.md': '2ae510563d3b87a852bc990d462ad940d92578b05fbe9809a9c82d63c16503bc',
+  'native/smoldot/include/citizensdk.h': '18c476d67cd00822b1a14fe4317330d56195712a7f8e33f39a487d84ad1a0819',
+  'native/smoldot/include/smoldot.h': 'f7c2645588809f73f8aa799975b363a4a7b22e8de7149da9d0b4c2ea20c90a20',
+  'native/smoldot/pow/demo-chain-specs/polkadot.json': '859c8ade8b740e6a106082e0fdb4ae14075d79f8a277f02124bf9856d8a302aa',
+  'native/smoldot/pow/demo-chain-specs/polkadot_asset_hub.json': '4909f824189edd0c7c64e444f81a4082fe5bc433861a5ac9e8b00838203a35ab',
+});
+// signer 是可编译的 Rust crate，正式输入不能只固定 Cargo.toml 与 lib.rs；README
+// 和两份合同测试也必须进入同一 6 文件闭集，任何 build.rs、src/bin 或其他新增文件
+// 都会改变 Cargo 行为，因此一律失败关闭。
+const SIGNER_FILES = Object.freeze({
+  'native/signer/Cargo.toml': '4b063da8dbf821d14798be37b41366be35418f5c14ed2b451420be80d424d3d8',
+  'native/signer/README.md': 'c4b6de1df02a82b42e30f520b58266e296d49135fa0abc82804e5f195c2dca26',
+  'native/signer/src/README.md': '9e3d90810c32ef0ea73dda76fa4c75745849066cbd45261c841a401f85e373e3',
+  'native/signer/src/lib.rs': '4fcdcda78e3050ab2daff782881b2c223ddabf61dc00113f4f83f799b5436f9d',
+  'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
+  'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
+});
 
 function fail(message) {
   throw new Error(message);
@@ -61,23 +202,54 @@ function prettyStableJson(value) {
 }
 
 function assertOutsideSource(source, target, label) {
-  const sourcePrefix = `${resolve(source)}${sep}`;
+  const sourcePath = resolve(source);
+  const resolvedSource = existsSync(sourcePath) ? realpathSync(sourcePath) : sourcePath;
+  const sourcePrefix = `${resolvedSource}${sep}`;
   const resolvedTarget = resolve(target);
-  if (resolvedTarget === resolve(source) || resolvedTarget.startsWith(sourcePrefix)) {
+  if (resolvedTarget === resolvedSource || resolvedTarget.startsWith(sourcePrefix)) {
     fail(`${label} 禁止位于 CitizenSDK 源码树：${resolvedTarget}`);
   }
 }
 
+function assertSafeTargetPath(path, label) {
+  if (typeof path !== 'string' || path.length === 0 || resolve(path) !== path) {
+    fail(`${label} 必须使用不含 .、.. 或重复分隔符的绝对规范路径：${path || '<empty>'}`);
+  }
+  const resolved = resolve(path);
+  let current = sep;
+  const segments = resolved.split(sep).filter(Boolean);
+  for (let index = 0; index < segments.length; index += 1) {
+    current = join(current, segments[index]);
+    let info;
+    try {
+      info = lstatSync(current);
+    } catch (error) {
+      if (error?.code === 'ENOENT') break;
+      throw error;
+    }
+    if (info.isSymbolicLink()) fail(`${label} 的既存路径祖先禁止使用符号链接：${current}`);
+    if (index < segments.length - 1 && !info.isDirectory()) {
+      fail(`${label} 的既存路径祖先不是目录：${current}`);
+    }
+  }
+  return resolved;
+}
+
 function assertLocalTarget(path, label) {
-  if (process.env.GITHUB_ACTIONS === 'true') return;
-  const root = resolve(CONSOLE_TARGET_ROOT);
-  const target = resolve(path);
+  const target = assertSafeTargetPath(path, label);
+  if (process.env.GITHUB_ACTIONS === 'true') return target;
+  const root = assertSafeTargetPath(CONSOLE_TARGET_ROOT, 'Console 中央目录');
+  if (!existsSync(root) || !lstatSync(root).isDirectory()) {
+    fail(`Console 中央目录不存在或不是普通目录：${root}`);
+  }
   if (target !== root && !target.startsWith(`${root}${sep}`)) {
     fail(`${label} 的本地路径必须位于 ${root}：${target}`);
   }
+  return target;
 }
 
 function ensureNewDirectory(path, source, label) {
+  assertSafeTargetPath(path, label);
   assertOutsideSource(source, path, label);
   if (existsSync(path)) fail(`${label} 已存在，拒绝覆盖：${path}`);
   mkdirSync(path, { recursive: true, mode: 0o700 });
@@ -121,6 +293,255 @@ function regularFiles(root) {
   };
   visit(root);
   return files.sort();
+}
+
+/**
+ * Verify the complete, immutable smoldot Dart source snapshot under [root].
+ *
+ * The check is applied both before copying a source tree and while verifying a
+ * finished candidate, so neither an omitted test nor a self-consistent but
+ * modified release manifest can hide source drift.
+ */
+export function assertSmoldotDartSource(root) {
+  const packageRoot = join(resolve(root), 'native', 'smoldot', 'dart');
+  if (!existsSync(packageRoot)
+      || lstatSync(packageRoot).isSymbolicLink()
+      || !lstatSync(packageRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通目录 native/smoldot/dart');
+  }
+  const actualPaths = regularFiles(packageRoot);
+  const expectedPaths = Object.keys(SMOLDOT_DART_FILES).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`smoldot Dart 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  for (const relativePath of expectedPaths) {
+    const actualHash = sha256File(join(packageRoot, ...relativePath.split('/')));
+    if (actualHash !== SMOLDOT_DART_FILES[relativePath]) {
+      fail(`smoldot Dart 文件哈希漂移：${relativePath}`);
+    }
+  }
+}
+
+export function assertSmoldotLocks(root) {
+  const sourceRoot = resolve(root);
+  for (const [relativePath, expectedHash] of Object.entries(SMOLDOT_LOCK_FILES)) {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
+      fail(`CitizenSDK 缺少普通锁文件：${relativePath}`);
+    }
+    if (sha256File(path) !== expectedHash) {
+      fail(`CitizenSDK smoldot 锁文件漂移：${relativePath}`);
+    }
+  }
+}
+
+export function assertSdkRootLocks(root) {
+  assertPinnedFiles(root, SDK_ROOT_LOCK_FILES, 'SDK 根锁');
+}
+
+function assertPinnedFiles(root, files, label) {
+  const sourceRoot = resolve(root);
+  for (const [relativePath, expectedHash] of Object.entries(files)) {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK 缺少普通${label}文件：${relativePath}`);
+    }
+    if (sha256File(path) !== expectedHash) {
+      fail(`CitizenSDK ${label}文件哈希漂移：${relativePath}`);
+    }
+  }
+}
+
+export function assertChainAssets(root) {
+  const sourceRoot = resolve(root);
+  const assetsRoot = join(sourceRoot, 'assets');
+  if (!existsSync(assetsRoot)
+      || lstatSync(assetsRoot).isSymbolicLink()
+      || !lstatSync(assetsRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通链资产目录');
+  }
+  const actualPaths = regularFiles(assetsRoot).map((path) => `assets/${path}`);
+  const expectedPaths = Object.keys(CHAIN_ASSET_FILES).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`CitizenSDK 链资产闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  assertPinnedFiles(sourceRoot, CHAIN_ASSET_FILES, '链资产');
+}
+
+export function assertSourceFixtures(root) {
+  assertPinnedFiles(root, SOURCE_FIXTURE_FILES, '逐字节来源夹具');
+}
+
+export function assertLicenseSources(root) {
+  assertPinnedFiles(root, LICENSE_SOURCE_FILES, '许可证原文');
+}
+
+export function assertSdkTestContracts(root) {
+  const sourceRoot = resolve(root);
+  for (const relativeRoot of SDK_TEST_CONTRACT_ROOTS) {
+    const testRoot = join(sourceRoot, ...relativeRoot.split('/'));
+    if (!existsSync(testRoot)
+        || lstatSync(testRoot).isSymbolicLink()
+        || !lstatSync(testRoot).isDirectory()) {
+      fail(`CitizenSDK 缺少普通测试目录：${relativeRoot}`);
+    }
+    const actualPaths = regularFiles(testRoot)
+      .map((path) => `${relativeRoot}/${path}`)
+      .sort();
+    const expectedPaths = Object.keys(SDK_TEST_CONTRACT_FILES)
+      .filter((path) => path.startsWith(`${relativeRoot}/`))
+      .sort();
+    if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+      const actual = new Set(actualPaths);
+      const expected = new Set(expectedPaths);
+      const missing = expectedPaths.filter((path) => !actual.has(path));
+      const extra = actualPaths.filter((path) => !expected.has(path));
+      fail(`CitizenSDK 测试文件闭集漂移：${relativeRoot}；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    }
+  }
+  assertPinnedFiles(sourceRoot, SDK_TEST_CONTRACT_FILES, '测试合同');
+}
+
+export function assertSmoldotRustSource(root) {
+  const sourceRoot = resolve(root);
+  const manifestPath = join(
+    sourceRoot,
+    ...SMOLDOT_RUST_SOURCE_MANIFEST.path.split('/'),
+  );
+  if (!existsSync(manifestPath)
+      || lstatSync(manifestPath).isSymbolicLink()
+      || !lstatSync(manifestPath).isFile()) {
+    fail('CitizenSDK 缺少普通 smoldot Rust 来源清单');
+  }
+  if (sha256File(manifestPath) !== SMOLDOT_RUST_SOURCE_MANIFEST.sha256) {
+    fail('CitizenSDK smoldot Rust 来源清单漂移');
+  }
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  if (manifest.schema !== 'citizensdk.smoldot.source-sha256.v1'
+      || !manifest.units || typeof manifest.units !== 'object') {
+    fail('CitizenSDK smoldot Rust 来源清单 schema 无效');
+  }
+  const manifestPaths = [];
+  for (const [name, unit] of Object.entries(manifest.units)) {
+    if (!unit || typeof unit !== 'object' || typeof unit.root !== 'string'
+        || !unit.root.startsWith('native/smoldot/')
+        || typeof unit.recursive !== 'boolean') {
+      fail(`CitizenSDK smoldot Rust 来源单元无效：${name}`);
+    }
+    const unitRoot = join(sourceRoot, ...unit.root.split('/'));
+    if (!existsSync(unitRoot)
+        || lstatSync(unitRoot).isSymbolicLink()
+        || !lstatSync(unitRoot).isDirectory()) {
+      fail(`CitizenSDK smoldot Rust 来源目录缺失：${unit.root}`);
+    }
+    const entries = ['byte_identical', 'adapted', 'sdk_only']
+      .flatMap((category) => {
+        if (!Array.isArray(unit[category])) {
+          fail(`CitizenSDK smoldot Rust 来源分类无效：${name}/${category}`);
+        }
+        return unit[category];
+      });
+    const expectedPaths = entries.map((entry) => entry?.path).sort();
+    if (entries.some((entry) => !entry
+          || typeof entry.path !== 'string'
+          || !/^[A-Za-z0-9._/-]+$/.test(entry.path)
+          || entry.path.split('/').includes('..')
+          || !/^[0-9a-f]{64}$/.test(entry.sha256))
+        || new Set(expectedPaths).size !== expectedPaths.length) {
+      fail(`CitizenSDK smoldot Rust 来源条目无效：${name}`);
+    }
+    const actualPaths = unit.recursive
+      ? regularFiles(unitRoot)
+      : readdirSync(unitRoot).filter((path) => {
+          const absolute = join(unitRoot, path);
+          return !lstatSync(absolute).isSymbolicLink() && lstatSync(absolute).isFile();
+        }).sort();
+    if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+      fail(`CitizenSDK smoldot Rust 文件闭集漂移：${name}`);
+    }
+    for (const entry of entries) {
+      const absolutePath = join(unitRoot, ...entry.path.split('/'));
+      if (sha256File(absolutePath) !== entry.sha256) {
+        fail(`CitizenSDK smoldot Rust 文件哈希漂移：${name}/${entry.path}`);
+      }
+      manifestPaths.push(`${unit.root}/${entry.path}`);
+    }
+    if (!Array.isArray(unit.excluded)) {
+      fail(`CitizenSDK smoldot Rust 排除集合无效：${name}`);
+    }
+    for (const relativePath of unit.excluded) {
+      if (typeof relativePath !== 'string'
+          || relativePath.split('/').includes('..')
+          || existsSync(join(unitRoot, ...relativePath.split('/')))) {
+        fail(`CitizenSDK smoldot Rust 排除项漂移：${name}/${relativePath}`);
+      }
+    }
+  }
+
+  for (const [relativePath, expectedHash] of Object.entries(SMOLDOT_SUPPORT_FILES)) {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK 缺少普通 smoldot 支持文件：${relativePath}`);
+    }
+    if (sha256File(path) !== expectedHash) {
+      fail(`CitizenSDK smoldot 支持文件哈希漂移：${relativePath}`);
+    }
+  }
+
+  const smoldotRoot = join(sourceRoot, 'native', 'smoldot');
+  const actualClosure = regularFiles(smoldotRoot)
+    .map((path) => `native/smoldot/${path}`)
+    .sort();
+  const expectedClosure = [
+    SMOLDOT_RUST_SOURCE_MANIFEST.path,
+    ...manifestPaths,
+    ...Object.keys(SMOLDOT_SUPPORT_FILES),
+    ...Object.keys(SMOLDOT_DART_FILES).map((path) => `native/smoldot/dart/${path}`),
+  ].sort();
+  if (new Set(expectedClosure).size !== expectedClosure.length) {
+    fail('CitizenSDK smoldot 来源合同存在重复路径');
+  }
+  if (JSON.stringify(actualClosure) !== JSON.stringify(expectedClosure)) {
+    const actual = new Set(actualClosure);
+    const expected = new Set(expectedClosure);
+    const missing = expectedClosure.filter((path) => !actual.has(path));
+    const extra = actualClosure.filter((path) => !expected.has(path));
+    fail(`CitizenSDK smoldot 248 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+}
+
+export function assertSignerSource(root) {
+  const sourceRoot = resolve(root);
+  for (const [relativePath, expectedHash] of Object.entries(SIGNER_FILES)) {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (!existsSync(path) || !lstatSync(path).isFile() || lstatSync(path).isSymbolicLink()) {
+      fail(`CitizenSDK 缺少普通 signer 源文件：${relativePath}`);
+    }
+    if (sha256File(path) !== expectedHash) {
+      fail(`CitizenSDK signer 来源字节漂移：${relativePath}`);
+    }
+  }
+  const signerRoot = join(sourceRoot, 'native', 'signer');
+  const actualClosure = regularFiles(signerRoot)
+    .map((path) => `native/signer/${path}`)
+    .sort();
+  const expectedClosure = Object.keys(SIGNER_FILES).sort();
+  if (JSON.stringify(actualClosure) !== JSON.stringify(expectedClosure)) {
+    const actual = new Set(actualClosure);
+    const expected = new Set(expectedClosure);
+    const missing = expectedClosure.filter((path) => !actual.has(path));
+    const extra = actualClosure.filter((path) => !expected.has(path));
+    fail(`CitizenSDK signer 6 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
 }
 
 function replaceExact(path, pattern, replacement, label) {
@@ -168,9 +589,10 @@ function writeOctal(buffer, offset, length, value) {
   buffer.write(`${text}\0`, offset, length, 'ascii');
 }
 
-function deterministicTar(candidatePath) {
+function deterministicTar(candidatePath, excludedPaths = new Set()) {
   const chunks = [];
   for (const relativePath of regularFiles(candidatePath)) {
+    if (excludedPaths.has(relativePath)) continue;
     if (Buffer.byteLength(relativePath) > 100) fail(`CitizenSDK 归档路径过长：${relativePath}`);
     const path = join(candidatePath, ...relativePath.split('/'));
     const content = readFileSync(path);
@@ -195,14 +617,25 @@ function deterministicTar(candidatePath) {
   return Buffer.concat(chunks);
 }
 
-export function verifyCitizenSdkRelease(candidatePath, expectedGitSha = null) {
-  const candidate = resolve(candidatePath);
+function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExternalSums = false) {
+  const candidate = assertSafeTargetPath(candidatePath, '候选目录');
   if (!existsSync(candidate) || lstatSync(candidate).isSymbolicLink() || !lstatSync(candidate).isDirectory()) {
     fail('CitizenSDK 候选目录不存在或不是普通目录');
   }
   const manifestPath = join(candidate, 'citizensdk-release.json');
   const sumsPath = join(candidate, 'SHA256SUMS');
-  if (!existsSync(manifestPath) || !existsSync(sumsPath)) fail('CitizenSDK 候选缺少正式清单');
+  if (!existsSync(manifestPath) || (expectExternalSums && !existsSync(sumsPath))) {
+    fail('CitizenSDK 候选缺少正式清单');
+  }
+  assertSmoldotDartSource(candidate);
+  assertSmoldotLocks(candidate);
+  assertSdkRootLocks(candidate);
+  assertSmoldotRustSource(candidate);
+  assertSignerSource(candidate);
+  assertChainAssets(candidate);
+  assertSourceFixtures(candidate);
+  assertLicenseSources(candidate);
+  assertSdkTestContracts(candidate);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const keys = Object.keys(manifest).sort();
   const expectedKeys = ['files', 'git_commit_sha', 'package_name', 'platforms', 'product_id', 'software_version'];
@@ -238,25 +671,60 @@ export function verifyCitizenSdkRelease(candidatePath, expectedGitSha = null) {
   for (const required of ['pubspec.yaml', ...Object.keys(NATIVE_FILES)]) {
     if (!paths.includes(required)) fail(`CitizenSDK 候选缺少必需文件：${required}`);
   }
-  const checksums = [
-    ...manifest.files,
-    { path: 'citizensdk-release.json', sha256: sha256File(manifestPath) },
-  ].sort((left, right) => left.path.localeCompare(right.path));
-  const expectedSums = `${checksums.map(({ sha256, path }) => `${sha256}  ${path}`).join('\n')}\n`;
-  if (readFileSync(sumsPath, 'utf8') !== expectedSums) fail('CitizenSDK SHA256SUMS 不一致');
-  const expectedFiles = [...paths, 'SHA256SUMS', 'citizensdk-release.json'].sort();
+  const expectedFiles = [
+    ...paths,
+    'citizensdk-release.json',
+    ...(expectExternalSums ? ['SHA256SUMS'] : []),
+  ].sort();
   if (JSON.stringify(regularFiles(candidate)) !== JSON.stringify(expectedFiles)) fail('CitizenSDK 候选包含未登记文件');
   assertNoSecrets(candidate);
-  return manifest;
+  return { candidate, manifest, manifestPath, sumsPath };
+}
+
+/// 反向核验最终 gzip/tar 字节、外层下载校验和与候选闭集。
+///
+/// `SHA256SUMS` 是 GitHub Release 的外部资产，不进入 tgz，从而可以覆盖 tgz
+/// 自身而不存在循环哈希。归档必须逐字节等于本打包器从候选重建出的规范 gzip。
+export function verifyCitizenSdkRelease(candidatePath, archivePath, expectedGitSha = null) {
+  const verified = verifyCandidatePayload(candidatePath, expectedGitSha, true);
+  const archive = assertSafeTargetPath(archivePath, '归档');
+  if (!existsSync(archive) || lstatSync(archive).isSymbolicLink() || !lstatSync(archive).isFile()) {
+    fail('CitizenSDK 归档不存在或不是普通文件');
+  }
+  const expectedArchive = gzipSync(
+    deterministicTar(verified.candidate, new Set(['SHA256SUMS'])),
+    { level: 9, mtime: 0 },
+  );
+  if (!readFileSync(archive).equals(expectedArchive)) {
+    fail('CitizenSDK 归档不是候选闭集的规范 gzip/tar 字节');
+  }
+  const checksums = [
+    { path: 'citizensdk-release.json', sha256: sha256File(verified.manifestPath) },
+    { path: 'citizensdk.tgz', sha256: sha256File(archive) },
+  ].sort((left, right) => left.path.localeCompare(right.path));
+  const expectedSums = `${checksums.map(({ sha256, path }) => `${sha256}  ${path}`).join('\n')}\n`;
+  if (readFileSync(verified.sumsPath, 'utf8') !== expectedSums) {
+    fail('CitizenSDK 外层 SHA256SUMS 不一致');
+  }
+  return verified.manifest;
 }
 
 export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, archivePath, gitCommitSha, softwareVersion }) {
   const source = resolve(sourcePath);
-  const native = resolve(nativePath);
-  const output = resolve(outputPath);
-  const archive = resolve(archivePath);
+  const native = assertSafeTargetPath(nativePath, '原生产物目录');
+  const output = assertSafeTargetPath(outputPath, '候选目录');
+  const archive = assertSafeTargetPath(archivePath, '归档');
   if (!existsSync(source) || !lstatSync(source).isDirectory()) fail('CitizenSDK 源码目录不存在');
   if (!existsSync(native) || !lstatSync(native).isDirectory()) fail('CitizenSDK 原生产物目录不存在');
+  assertSmoldotDartSource(source);
+  assertSmoldotLocks(source);
+  assertSdkRootLocks(source);
+  assertSmoldotRustSource(source);
+  assertSignerSource(source);
+  assertChainAssets(source);
+  assertSourceFixtures(source);
+  assertLicenseSources(source);
+  assertSdkTestContracts(source);
   if (!/^[0-9a-f]{40}$/.test(gitCommitSha)) fail('Git commit SHA 必须是 40 位小写十六进制');
   if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(softwareVersion)) fail('CitizenSDK 软件版本无效');
   assertLocalTarget(native, '原生产物目录');
@@ -286,14 +754,19 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   };
   const manifestPath = join(output, 'citizensdk-release.json');
   writeFileSync(manifestPath, prettyStableJson(manifest), { mode: 0o600 });
+  verifyCandidatePayload(output, gitCommitSha);
+  mkdirSync(dirname(archive), { recursive: true, mode: 0o700 });
+  writeFileSync(
+    archive,
+    gzipSync(deterministicTar(output), { level: 9, mtime: 0 }),
+    { mode: 0o600 },
+  );
   const checksums = [
-    ...manifest.files,
     { path: 'citizensdk-release.json', sha256: sha256File(manifestPath) },
+    { path: 'citizensdk.tgz', sha256: sha256File(archive) },
   ].sort((left, right) => left.path.localeCompare(right.path));
   writeFileSync(join(output, 'SHA256SUMS'), `${checksums.map(({ sha256, path }) => `${sha256}  ${path}`).join('\n')}\n`, { mode: 0o600 });
-  verifyCitizenSdkRelease(output, gitCommitSha);
-  mkdirSync(dirname(archive), { recursive: true, mode: 0o700 });
-  writeFileSync(archive, gzipSync(deterministicTar(output), { level: 9, mtime: 0 }), { mode: 0o600 });
+  verifyCitizenSdkRelease(output, archive, gitCommitSha);
   return manifest;
 }
 
@@ -313,7 +786,12 @@ if (isMain) {
   try {
     const values = parseArguments(process.argv.slice(2));
     if (values.verify) {
-      const manifest = verifyCitizenSdkRelease(values.verify, values['expected-git-sha'] || null);
+      if (!values.archive) fail('候选校验缺少参数 --archive');
+      const manifest = verifyCitizenSdkRelease(
+        values.verify,
+        values.archive,
+        values['expected-git-sha'] || null,
+      );
       process.stdout.write(`CitizenSDK 候选校验通过：${manifest.software_version}\n`);
     } else {
       for (const key of ['source', 'native', 'output', 'archive', 'git-sha', 'software-version']) {

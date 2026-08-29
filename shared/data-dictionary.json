@@ -50,6 +50,20 @@
       ]
     },
     {
+      "domain": "citizensdk",
+      "concept_id": "anchor_block_hash",
+      "field_name": "anchor_block_hash",
+      "field_name_zh": "待确认交易锚定区块哈希",
+      "authority": "gmb",
+      "data_type": "hash",
+      "forbidden_names": [],
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_models.dart",
+        "citizensdk/test/platform/preferences_finalized_transaction_repository_test.dart"
+      ]
+    },
+    {
       "domain": "release",
       "concept_id": "artifact_sha256",
       "field_name": "artifact_sha256",
@@ -353,6 +367,15 @@
       ]
     },
     {
+      "domain": "citizensdk",
+      "concept_id": "cleanup_queue",
+      "field_name": "cleanup_queue",
+      "field_name_zh": "待执行精确清理队列",
+      "authority": "gmb",
+      "data_type": "array",
+      "forbidden_names": []
+    },
+    {
       "domain": "citizenchain",
       "concept_id": "content_hash",
       "field_name": "content_hash",
@@ -383,6 +406,24 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizensdk",
+      "concept_id": "delete_wallet_key",
+      "field_name": "delete_wallet_key",
+      "field_name_zh": "删除钱包主密钥",
+      "authority": "gmb",
+      "data_type": "boolean",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "delete_wallet_key_on_rollback",
+      "field_name": "delete_wallet_key_on_rollback",
+      "field_name_zh": "回滚时删除钱包主密钥",
+      "authority": "gmb",
+      "data_type": "boolean",
+      "forbidden_names": []
+    },
+    {
       "domain": "citizenapp",
       "concept_id": "delivery_state",
       "field_name": "delivery_state",
@@ -391,6 +432,19 @@
       "data_type": "enum",
       "value_set_id": "delivery_state",
       "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "dispatch_error_variant",
+      "field_name": "dispatch_error_variant",
+      "field_name_zh": "链上派发错误变体索引",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/transaction_status.dart"
+      ]
     },
     {
       "domain": "citizenchain",
@@ -457,6 +511,15 @@
       "field_name_zh": "签发方",
       "authority": "gmb",
       "data_type": "string",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "master_account_id",
+      "field_name": "master_account_id",
+      "field_name_zh": "钱包主账户标识",
+      "authority": "gmb",
+      "data_type": "hex_32",
       "forbidden_names": []
     },
     {
@@ -601,6 +664,15 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizensdk",
+      "concept_id": "previous_profile",
+      "field_name": "previous_profile",
+      "field_name_zh": "操作前钱包资料",
+      "authority": "gmb",
+      "data_type": "object",
+      "forbidden_names": []
+    },
+    {
       "domain": "onchina",
       "concept_id": "private_type",
       "field_name": "private_type",
@@ -686,12 +758,43 @@
       "forbidden_names": []
     },
     {
+      "domain": "citizensdk",
+      "concept_id": "reserved_fen",
+      "field_name": "reserved_fen",
+      "field_name_zh": "链上账户保留余额（分）",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "citizensdk/lib/src/transaction/chain_rpc.dart",
+        "citizensdk/test/transaction/chain_rpc_test.dart"
+      ]
+    },
+    {
       "domain": "cloudflare",
       "concept_id": "resource_key",
       "field_name": "resource_key",
       "field_name_zh": "资源限制键",
       "authority": "gmb",
       "data_type": "string",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "secret_owner",
+      "field_name": "secret_owner",
+      "field_name_zh": "密文所有者标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "secret_refs",
+      "field_name": "secret_refs",
+      "field_name_zh": "密文引用集合",
+      "authority": "gmb",
+      "data_type": "array",
       "forbidden_names": []
     },
     {
@@ -719,6 +822,20 @@
       "forbidden_names": [
         "signerPubkey",
         "signer_pubkey"
+      ]
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "source_pallet",
+      "field_name": "source_pallet",
+      "field_name_zh": "转账事件来源 Pallet",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_models.dart",
+        "citizensdk/test/platform/preferences_finalized_transaction_repository_test.dart"
       ]
     },
     {
@@ -759,6 +876,21 @@
       "authority": "gmb",
       "data_type": "string",
       "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "submissions",
+      "field_name": "submissions",
+      "field_name_zh": "本机已提交交易集合",
+      "authority": "gmb",
+      "data_type": "array",
+      "forbidden_names": [],
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_models.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_repository.dart",
+        "citizensdk/test/platform/preferences_finalized_transaction_repository_test.dart"
+      ]
     },
     {
       "domain": "citizenapp",
@@ -827,6 +959,15 @@
       "authority": "gmb",
       "data_type": "enum",
       "value_set_id": "voting_engine",
+      "forbidden_names": []
+    },
+    {
+      "domain": "citizensdk",
+      "concept_id": "wallet_generation",
+      "field_name": "wallet_generation",
+      "field_name_zh": "钱包代际标识",
+      "authority": "gmb",
+      "data_type": "string",
       "forbidden_names": []
     },
     {
@@ -1605,6 +1746,62 @@
       ]
     },
     {
+      "domain": "citizensdk",
+      "contract_id": "citizensdk_chain_account_balance",
+      "contract_name_zh": "CitizenSDK 链上账户余额",
+      "authority": "gmb",
+      "paths": [
+        "citizensdk/lib/src/transaction/chain_rpc.dart",
+        "citizensdk/test/transaction/chain_rpc_test.dart"
+      ],
+      "fields": [
+        "account_id",
+        "reserved_fen"
+      ],
+      "value_sets": []
+    },
+    {
+      "domain": "citizensdk",
+      "contract_id": "citizensdk_finalized_transaction_state",
+      "contract_name_zh": "CitizenSDK 最终确认交易状态",
+      "authority": "gmb",
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_models.dart",
+        "citizensdk/lib/src/transaction/finalized_transaction_repository.dart",
+        "citizensdk/lib/src/transaction/transaction_status.dart",
+        "citizensdk/test/platform/preferences_finalized_transaction_repository_test.dart"
+      ],
+      "fields": [
+        "account_id",
+        "anchor_block_hash",
+        "dispatch_error_variant",
+        "source_pallet",
+        "submissions"
+      ],
+      "value_sets": []
+    },
+    {
+      "domain": "citizensdk",
+      "contract_id": "citizensdk_wallet_state",
+      "contract_name_zh": "CitizenSDK 钱包持久状态",
+      "authority": "gmb",
+      "paths": [
+        "citizensdk/lib/src/platform/preferences_wallet_repository.dart"
+      ],
+      "fields": [
+        "cleanup_queue",
+        "delete_wallet_key",
+        "delete_wallet_key_on_rollback",
+        "master_account_id",
+        "previous_profile",
+        "secret_owner",
+        "secret_refs",
+        "wallet_generation"
+      ],
+      "value_sets": []
+    },
+    {
       "domain": "cloudflare",
       "contract_id": "cloudflare_resource_reservation",
       "contract_name_zh": "Cloudflare 资源预留",
@@ -1840,6 +2037,8 @@
     ".github/scripts/gmb-repository/ci-repository.test.mjs",
     "citizenapp/assets/topup/walletconnect.bundle.js",
     "citizenapp/smoldot/pow/**",
+    "citizensdk/native/smoldot/SOURCE_SHA256.json",
+    "citizensdk/native/smoldot/pow/**",
     "citizenserve/worker-configuration.d.ts",
     "shared/data-dictionary.json",
     "shared/qr-protocol/tests/registry_consistency.rs"

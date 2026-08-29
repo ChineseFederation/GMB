@@ -1,6 +1,9 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  # 该目录是与 CitizenApp 逐字节一致并由独立命令分析的来源快照；根包不重复套用 Flutter lint。
+  exclude:
+    - native/smoldot/dart/**
   language:
     strict-casts: true
     strict-inference: true

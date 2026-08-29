@@ -149,6 +149,8 @@
       "requiredFiles": [
         "citizensdk/pubspec.yaml",
         "citizensdk/pubspec.lock",
+        "citizensdk/native/smoldot/dart/pubspec.yaml",
+        "citizensdk/native/smoldot/dart/pubspec.lock",
         "citizensdk/Cargo.toml",
         "citizensdk/Cargo.lock",
         "citizensdk/native/signer/Cargo.toml",
@@ -229,6 +231,7 @@
     "citizenapp",
     "citizenapp/smoldot/dart",
     "citizensdk",
+    "citizensdk/native/smoldot/dart",
     "citizenwallet",
     "shared/hardware-secretvault",
     "shared/wallet-password"

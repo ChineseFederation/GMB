@@ -12,7 +12,7 @@ final class BootstrapManifestException implements Exception {
 
 /// 只保留 CitizenSDK 轻节点所需字段的公民链启动清单。
 ///
-/// SDK 只接受自己的 wire schema，不导入宿主产品的广场、聊天、媒体或交易中继配置。
+/// SDK 只接受自己的 wire schema，不导入宿主产品的任何非链服务配置。
 final class BootstrapManifest {
   const BootstrapManifest({
     required this.generatedAt,
@@ -39,12 +39,27 @@ final class BootstrapManifest {
       'rpc_url',
       'rpc_urls',
       'rpc_endpoint',
+      'validator_rpc_url',
+      'archive_rpc_url',
+      'chain_rpc_url',
       'checkpoint',
       'checkpoint_url',
       'light_sync_state',
+      'light_sync_state_url',
+      'light_sync_state_sha256',
     })) {
       throw const BootstrapManifestException('启动清单不得下发 RPC 或 checkpoint');
     }
+    _expectExactKeys(json, '启动清单', const <String>{
+      'ok',
+      'schema',
+      'generated_at',
+      'cache_ttl_seconds',
+      'chain',
+      'light_client',
+      'p2p',
+      'security',
+    });
     final manifest = BootstrapManifest(
       generatedAt: _int(json, 'generated_at'),
       cacheTtlSeconds: _int(json, 'cache_ttl_seconds'),
@@ -90,15 +105,26 @@ final class BootstrapChain {
   final String tokenSymbol;
   final int tokenDecimals;
 
-  factory BootstrapChain.fromJson(Map<String, dynamic> json) => BootstrapChain(
-    chainId: _string(json, 'chain_id'),
-    protocolId: _string(json, 'protocol_id'),
-    genesisHash: _hex32(json, 'genesis_hash'),
-    stateRoot: _hex32(json, 'state_root'),
-    ss58Format: _int(json, 'ss58_format'),
-    tokenSymbol: _string(json, 'token_symbol'),
-    tokenDecimals: _int(json, 'token_decimals'),
-  );
+  factory BootstrapChain.fromJson(Map<String, dynamic> json) {
+    _expectExactKeys(json, 'chain', const <String>{
+      'chain_id',
+      'protocol_id',
+      'genesis_hash',
+      'state_root',
+      'ss58_format',
+      'token_symbol',
+      'token_decimals',
+    });
+    return BootstrapChain(
+      chainId: _string(json, 'chain_id'),
+      protocolId: _string(json, 'protocol_id'),
+      genesisHash: _hex32(json, 'genesis_hash'),
+      stateRoot: _hex32(json, 'state_root'),
+      ss58Format: _int(json, 'ss58_format'),
+      tokenSymbol: _string(json, 'token_symbol'),
+      tokenDecimals: _int(json, 'token_decimals'),
+    );
+  }
 }
 
 final class BootstrapLightClient {
@@ -115,6 +141,12 @@ final class BootstrapLightClient {
   final List<String> bundledAssetsRequired;
 
   factory BootstrapLightClient.fromJson(Map<String, dynamic> json) {
+    _expectExactKeys(json, 'light_client', const <String>{
+      'mode',
+      'truth_source',
+      'api_is_truth',
+      'bundled_assets_required',
+    });
     final assets = json['bundled_assets_required'];
     if (assets is! List ||
         assets.length != 2 ||
@@ -138,13 +170,22 @@ final class BootstrapP2p {
   final int minPeerCountHint;
 
   factory BootstrapP2p.fromJson(Map<String, dynamic> json) {
+    _expectExactKeys(json, 'p2p', const <String>{
+      'bootnodes',
+      'min_peer_count_hint',
+    });
     final raw = json['bootnodes'];
     if (raw is! List) {
       throw const BootstrapManifestException('启动清单缺少 bootnodes');
     }
     final bootnodes = raw
         .whereType<String>()
-        .where((value) => value.startsWith('/') && value.contains('/p2p/'))
+        .where(
+          (value) =>
+              value.startsWith('/') &&
+              value.contains('/p2p/') &&
+              value.length <= 256,
+        )
         .toList(growable: false);
     return BootstrapP2p(
       bootnodes: List<String>.unmodifiable(bootnodes),
@@ -166,13 +207,35 @@ final class BootstrapSecurity {
   final bool exposesPrivateKeyMaterial;
   final bool validatorRpcPublic;
 
-  factory BootstrapSecurity.fromJson(Map<String, dynamic> json) =>
-      BootstrapSecurity(
-        exposesRpcUrl: _bool(json, 'exposes_rpc_url'),
-        rpcProxy: _bool(json, 'rpc_proxy'),
-        exposesPrivateKeyMaterial: _bool(json, 'exposes_private_key_material'),
-        validatorRpcPublic: _bool(json, 'validator_rpc_public'),
-      );
+  factory BootstrapSecurity.fromJson(Map<String, dynamic> json) {
+    _expectExactKeys(json, 'security', const <String>{
+      'exposes_rpc_url',
+      'rpc_proxy',
+      'exposes_private_key_material',
+      'validator_rpc_public',
+    });
+    return BootstrapSecurity(
+      exposesRpcUrl: _bool(json, 'exposes_rpc_url'),
+      rpcProxy: _bool(json, 'rpc_proxy'),
+      exposesPrivateKeyMaterial: _bool(json, 'exposes_private_key_material'),
+      validatorRpcPublic: _bool(json, 'validator_rpc_public'),
+    );
+  }
+}
+
+void _expectExactKeys(
+  Map<String, dynamic> json,
+  String objectName,
+  Set<String> expected,
+) {
+  final actual = json.keys.toSet();
+  final unknown = actual.difference(expected).toList()..sort();
+  final missing = expected.difference(actual).toList()..sort();
+  if (unknown.isNotEmpty || missing.isNotEmpty) {
+    throw BootstrapManifestException(
+      '$objectName 字段集合无效；未知字段：${unknown.join(', ')}；缺少字段：${missing.join(', ')}',
+    );
+  }
 }
 
 Map<String, dynamic> _map(Map<String, dynamic> json, String key) {

@@ -1,17 +1,12 @@
 # smoldot FFI
 
-本 crate 保留 CitizenApp 稳定实现的 `smoldot_*` 句柄、回调和异步 RPC 语义，并把
-CitizenSDK 内部唯一 signer 的四个 `citizen_sr25519_*` 符号链接进同一原生库。
+本 crate 保留 CitizenApp 稳定实现的 `smoldot_*` 句柄、回调、所有权和异步 RPC 语义，并
+把 CitizenSDK 内部唯一 signer 的四个 `citizen_sr25519_*` 入口链接到同一原生库。
 
-## 当前状态
+来源的 `rust-toolchain.toml`、错误类型与 FFI 类型逐字节保留；Cargo 清单、build script 和
+模块入口只删除聊天/OpenMLS/账户数据加密依赖与导出，并把路径依赖指向本 SDK 的
+`../pow/light-base` 和 `../../signer`。
 
-`Cargo.toml` 中的 `../pow/light-base` 及其相邻 `../lib` 依赖已经迁入。该 crate 保持
-独立 workspace 边界，不加入 GMB 根 workspace，并由本目录的 `Cargo.lock` 固定依赖。
-当前仍未运行构建或测试。
-
-## 禁止范围
-
-- 不得加入聊天或广场功能。
-- 不得依赖 OpenMLS、`account-crypto` 或其他产品目录。
-- 不得改变现有 `smoldot_*` 轻节点函数的句柄、回调、所有权和错误契约。
-- 公共头文件必须由真实 Rust 导出面生成并通过符号契约检查，禁止手写漂移。
+本 crate 维持独立 workspace。锁文件从 CitizenApp 已验证锁机械裁掉已排除产品闭包；保留
+registry 包的 name/version/checksum 必须与来源完全一致。公共头文件和测试守卫会核对符号、
+资源边界与禁止能力；实际通过状态以对应提交的执行报告为准。

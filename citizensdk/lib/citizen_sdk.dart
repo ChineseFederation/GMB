@@ -5,10 +5,13 @@ import 'src/crypto/citizen_signer.dart';
 import 'src/node/bootstrap_client.dart';
 import 'src/node/chain_assets.dart';
 import 'src/node/chain_database_store.dart';
+import 'src/node/chain_event_subscription.dart';
 import 'src/node/light_client.dart';
 import 'src/node/sdk_log.dart';
 import 'src/platform/mobile_citizen_sdk.dart';
 import 'src/transaction/chain_rpc.dart';
+import 'src/transaction/finalized_transaction_repository.dart';
+import 'src/transaction/finalized_transaction_scanner.dart';
 import 'src/transaction/transfer_service.dart';
 import 'src/wallet/secure_seed_store.dart';
 import 'src/wallet/wallet_repository.dart';
@@ -20,6 +23,7 @@ export 'src/node/bootstrap_client.dart';
 export 'src/node/bootstrap_manifest.dart';
 export 'src/node/chain_assets.dart';
 export 'src/node/chain_database_store.dart';
+export 'src/node/chain_event_subscription.dart';
 export 'src/node/chain_health.dart';
 export 'src/node/light_client.dart';
 export 'src/node/sdk_log.dart';
@@ -27,9 +31,15 @@ export 'src/platform/hardware_bound_seed_store.dart';
 export 'src/platform/hardware_secret_vault.dart';
 export 'src/platform/mobile_citizen_sdk.dart';
 export 'src/platform/preferences_chain_database_store.dart';
+export 'src/platform/preferences_data_store.dart';
+export 'src/platform/preferences_finalized_transaction_repository.dart';
 export 'src/platform/preferences_wallet_repository.dart';
 export 'src/platform/secure_blob_store.dart';
 export 'src/transaction/chain_rpc.dart';
+export 'src/transaction/chain_transfer_event_decoder.dart';
+export 'src/transaction/finalized_transaction_models.dart';
+export 'src/transaction/finalized_transaction_repository.dart';
+export 'src/transaction/finalized_transaction_scanner.dart';
 export 'src/transaction/signed_extrinsic_builder.dart';
 export 'src/transaction/transaction_status.dart';
 export 'src/transaction/transfer_service.dart';
@@ -52,6 +62,8 @@ final class CitizenSdk {
     CitizenChainAssets chainAssets = const CitizenChainAssets(),
     BootstrapClient? bootstrapClient,
     ChainDatabaseStore? chainDatabaseStore,
+    FinalizedTransactionRepository? transactionRepository,
+    FinalizedBlockHeadSource? transactionHeadSource,
     CitizenSdkLogger logger = discardCitizenSdkLog,
     int nativeLogLevel = 1,
   }) {
@@ -69,7 +81,25 @@ final class CitizenSdk {
       repository: walletRepository,
       seedStore: secureSeedStore,
     );
-    transfers = TransferService(rpc);
+    if (transactionRepository != null) {
+      transactionHistory = FinalizedTransactionHistory(
+        repository: transactionRepository,
+      );
+      transactionScanner = FinalizedTransactionScanner(
+        rpc: rpc,
+        history: transactionHistory!,
+        headSource:
+            transactionHeadSource ??
+            ChainEventFinalizedBlockHeadSource(
+              ChainEventSubscription(lightClient: chain, logger: logger),
+            ),
+        logger: logger,
+      );
+    } else {
+      transactionHistory = null;
+      transactionScanner = null;
+    }
+    transfers = TransferService(rpc, transactionHistory: transactionHistory);
   }
 
   /// Creates the standard Android/iOS SDK assembly.
@@ -93,6 +123,7 @@ final class CitizenSdk {
       chainAssets: chainAssets,
       bootstrapClient: bootstrapClient,
       chainDatabaseStore: mobile.chainDatabaseStore,
+      transactionRepository: mobile.transactionRepository,
       logger: logger,
       nativeLogLevel: nativeLogLevel,
     );
@@ -102,6 +133,8 @@ final class CitizenSdk {
   late final ChainRpc rpc;
   late final WalletService wallet;
   late final TransferService transfers;
+  late final FinalizedTransactionHistory? transactionHistory;
+  late final FinalizedTransactionScanner? transactionScanner;
   final CitizenSigner signer = const CitizenSigner();
 
   Future<void> start({bool waitUntilSynced = false}) async {
@@ -109,5 +142,40 @@ final class CitizenSdk {
     if (waitUntilSynced) await chain.waitUntilSynced();
   }
 
-  Future<void> dispose() => chain.dispose();
+  /// 以当前钱包完整账户快照启动 finalized 交易流水扫描。
+  ///
+  /// 钱包创建、导入、增删账户后再次调用即可原子替换监控集合；新账户从调用时的
+  /// finalized 高度开始，已有账户从持久游标补缺口。未装配 transaction repository
+  /// 的自定义 SDK 返回 false。
+  Future<bool> syncWalletTransactionHistory() async {
+    final scanner = transactionScanner;
+    if (scanner == null) return false;
+    final profile = await wallet.profile;
+    await scanner.replaceWatchedAccounts(
+      profile?.accounts.map((account) => account.accountId) ?? const <String>[],
+    );
+    if (profile == null || profile.accounts.isEmpty) return true;
+    await scanner.start();
+    return true;
+  }
+
+  Future<void> dispose() async {
+    Object? firstError;
+    StackTrace? firstStackTrace;
+    try {
+      await transactionScanner?.stop();
+    } on Object catch (error, stackTrace) {
+      firstError = error;
+      firstStackTrace = stackTrace;
+    }
+    try {
+      await chain.dispose();
+    } on Object catch (error, stackTrace) {
+      firstError ??= error;
+      firstStackTrace ??= stackTrace;
+    }
+    if (firstError != null) {
+      Error.throwWithStackTrace(firstError, firstStackTrace!);
+    }
+  }
 }

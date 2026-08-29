@@ -7,16 +7,36 @@ sdk_dir="$(dirname "$script_dir")"
 ffi_manifest="$sdk_dir/native/smoldot/ffi/Cargo.toml"
 target_name="${1:-all}"
 console_target_root="/Users/rhett/Only/console/target/citizensdk"
+ios_deployment_target=16.0
 
 fail() {
   echo "CitizenSDK 原生构建失败：$1" >&2
   exit 1
 }
 
+assert_safe_directory_path() {
+  local path="$1" label="$2" component current=''
+  local -a components
+  [[ -n "$path" && "$path" == /* && "$path" != */ && "$path" != *//* ]] \
+    || fail "$label 必须使用不含重复分隔符的绝对规范路径：${path:-<empty>}"
+  IFS='/' read -r -a components <<<"$path"
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
+    [[ "$component" != . && "$component" != .. ]] \
+      || fail "$label 禁止包含 . 或 .. 路径段：$path"
+    current="$current/$component"
+    [[ ! -L "$current" ]] || fail "$label 的既存路径祖先禁止使用符号链接：$current"
+    if [[ -e "$current" && ! -d "$current" && "$current" != "$path" ]]; then
+      fail "$label 的既存路径祖先不是目录：$current"
+    fi
+    [[ -e "$current" ]] || break
+  done
+}
+
 canonical_directory() {
   local path="$1" label="$2"
   [[ -n "$path" ]] || fail "缺少 $label"
-  [[ ! -L "$path" ]] || fail "$label 禁止使用符号链接：$path"
+  assert_safe_directory_path "$path" "$label"
   mkdir -p "$path"
   (cd "$path" && pwd -P)
 }
@@ -25,6 +45,7 @@ canonical_directory() {
 # Console 统一 target/citizensdk。先检查原始路径，避免错误输入也创建目录。
 if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   for path in "${CITIZENSDK_WORK_DIR:-}" "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"; do
+    assert_safe_directory_path "$path" 本机构建目录
     case "$path/" in
       "$console_target_root/"*) ;;
       *) fail "本机构建目录必须位于 $console_target_root：${path:-<empty>}" ;;
@@ -152,7 +173,8 @@ build_ios() {
   assert_new_file "$destination"
   assert_new_file "$symbols_path"
   mkdir -p "$(dirname "$destination")"
-  cargo build --manifest-path "$ffi_manifest" --release --locked --target aarch64-apple-ios
+  IPHONEOS_DEPLOYMENT_TARGET="$ios_deployment_target" \
+    cargo build --manifest-path "$ffi_manifest" --release --locked --target aarch64-apple-ios
   source_library="$CARGO_TARGET_DIR/aarch64-apple-ios/release/libsmoldot.a"
   [[ -f "$source_library" ]] || fail "iOS 原生库未生成"
   cp "$source_library" "$destination"
@@ -163,17 +185,55 @@ build_ios() {
   echo "CitizenSDK iOS ARM64 原生库完成：$destination"
 }
 
+build_ios_simulator() {
+  [[ "$(uname -s)" == "Darwin" ]] || fail "iOS Simulator 测试库只允许在 macOS runner 构建"
+  local rust_target destination symbols_path source_library nm_bin symbols
+  case "$(uname -m)" in
+    arm64) rust_target=aarch64-apple-ios-sim ;;
+    x86_64) rust_target=x86_64-apple-ios ;;
+    *) fail "不支持的 iOS Simulator 构建宿主：$(uname -m)" ;;
+  esac
+  require_rust_target "$rust_target"
+  destination="$output_dir/ios-simulator/libsmoldot.a"
+  symbols_path="$output_dir/ios-simulator/exported_symbols.txt"
+  assert_new_file "$destination"
+  assert_new_file "$symbols_path"
+  mkdir -p "$(dirname "$destination")"
+  # 该静态库只供同架构 iOS Simulator 执行 Swift XCTest；正式候选仍只复制
+  # output/ios 下的 aarch64-apple-ios 设备库。
+  IPHONEOS_DEPLOYMENT_TARGET="$ios_deployment_target" \
+    cargo build --manifest-path "$ffi_manifest" --release --locked --target "$rust_target"
+  source_library="$CARGO_TARGET_DIR/$rust_target/release/libsmoldot.a"
+  [[ -f "$source_library" ]] || fail "iOS Simulator 测试库未生成"
+  cp "$source_library" "$destination"
+  nm_bin="$(xcrun --find llvm-nm)"
+  symbols="$(symbol_list_ios "$destination" "$nm_bin")"
+  verify_symbol_contract "$symbols" "_" "iOS Simulator libsmoldot.a"
+  printf '%s\n' "$symbols" > "$symbols_path"
+  echo "CitizenSDK iOS Simulator 测试库完成：$destination"
+}
+
 build_host() {
   [[ "$(uname -s)" == "Darwin" ]] || fail "当前宿主测试库只允许在 macOS runner 构建"
-  local destination source_library nm_bin symbols
+  local destination arm_library x64_library nm_bin symbols architectures
+  require_rust_target aarch64-apple-darwin
+  require_rust_target x86_64-apple-darwin
   destination="$output_dir/host/libsmoldot.dylib"
   assert_new_file "$destination"
   mkdir -p "$(dirname "$destination")"
-  # 中文注释：这份 dylib 只供 flutter_tester 动态加载，不进入 SDK Release 平台集合。
-  CARGO_PROFILE_RELEASE_STRIP=false cargo build --manifest-path "$ffi_manifest" --release --locked
-  source_library="$CARGO_TARGET_DIR/release/libsmoldot.dylib"
-  [[ -f "$source_library" ]] || fail "macOS 宿主测试库未生成"
-  cp "$source_library" "$destination"
+  # Flutter SDK 可能通过 Rosetta 使用 x86_64 flutter_tester；宿主测试库固定同时包含
+  # arm64 与 x86_64，且只供测试，不进入 SDK Release 平台集合。
+  CARGO_PROFILE_RELEASE_STRIP=false cargo build --manifest-path "$ffi_manifest" \
+    --release --locked --target aarch64-apple-darwin
+  CARGO_PROFILE_RELEASE_STRIP=false cargo build --manifest-path "$ffi_manifest" \
+    --release --locked --target x86_64-apple-darwin
+  arm_library="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libsmoldot.dylib"
+  x64_library="$CARGO_TARGET_DIR/x86_64-apple-darwin/release/libsmoldot.dylib"
+  [[ -f "$arm_library" && -f "$x64_library" ]] || fail "macOS 双架构宿主测试库未生成"
+  xcrun lipo -create "$arm_library" "$x64_library" -output "$destination"
+  architectures="$(xcrun lipo -archs "$destination")"
+  [[ " $architectures " == *" arm64 "* && " $architectures " == *" x86_64 "* ]] \
+    || fail "macOS 宿主测试库不是 arm64+x86_64"
   nm_bin="$(xcrun --find llvm-nm)"
   symbols="$(symbol_list_ios "$destination" "$nm_bin")"
   verify_symbol_contract "$symbols" "_" "macOS 宿主测试库"
@@ -184,9 +244,14 @@ verify_outputs() {
   local android_library="$output_dir/android/arm64-v8a/libsmoldot.so"
   local ios_library="$output_dir/ios/libsmoldot.a"
   local ios_symbols="$output_dir/ios/exported_symbols.txt"
-  [[ -f "$android_library" && -f "$ios_library" && -f "$ios_symbols" ]] \
-    || fail "Android/iOS 原生产物集合不完整"
-  local toolchain nm_bin extracted
+  local ios_simulator_library="$output_dir/ios-simulator/libsmoldot.a"
+  local ios_simulator_symbols="$output_dir/ios-simulator/exported_symbols.txt"
+  local host_library="$output_dir/host/libsmoldot.dylib"
+  [[ -f "$android_library" && -f "$ios_library" && -f "$ios_symbols" \
+    && -f "$ios_simulator_library" && -f "$ios_simulator_symbols" \
+    && -f "$host_library" ]] \
+    || fail "Android/iOS 原生产物与移动/宿主测试库集合不完整"
+  local toolchain nm_bin extracted simulator_extracted
   toolchain="$(android_toolchain)"
   verify_symbol_contract "$(symbol_list_android "$android_library" "$toolchain/bin/llvm-nm")" "" "Android libsmoldot.so"
   nm_bin="$(xcrun --find llvm-nm)"
@@ -194,14 +259,26 @@ verify_outputs() {
   verify_symbol_contract "$extracted" "_" "iOS libsmoldot.a"
   [[ "$(printf '%s\n' "$extracted")" == "$(sed '/^[[:space:]]*$/d' "$ios_symbols")" ]] \
     || fail "iOS exported_symbols.txt 与真实静态库不一致"
-  echo "CitizenSDK Android/iOS 原生产物合同通过"
+  simulator_extracted="$(symbol_list_ios "$ios_simulator_library" "$nm_bin")"
+  verify_symbol_contract "$simulator_extracted" "_" "iOS Simulator libsmoldot.a"
+  [[ "$(printf '%s\n' "$simulator_extracted")" \
+    == "$(sed '/^[[:space:]]*$/d' "$ios_simulator_symbols")" ]] \
+    || fail "iOS Simulator exported_symbols.txt 与真实测试库不一致"
+  local host_architectures
+  host_architectures="$(xcrun lipo -archs "$host_library")"
+  [[ " $host_architectures " == *" arm64 "* && " $host_architectures " == *" x86_64 "* ]] \
+    || fail "macOS 宿主测试库架构不完整"
+  verify_symbol_contract "$(symbol_list_ios "$host_library" "$nm_bin")" "_" \
+    "macOS 宿主测试库"
+  echo "CitizenSDK Android/iOS 原生产物与移动/宿主测试库合同通过"
 }
 
 case "$target_name" in
   android) build_android ;;
   ios) build_ios ;;
+  ios-simulator) build_ios_simulator ;;
   host) build_host ;;
-  all) build_android; build_ios; build_host; verify_outputs ;;
+  all) build_android; build_ios; build_ios_simulator; build_host; verify_outputs ;;
   verify) verify_outputs ;;
-  *) fail "用法：$0 [android|ios|host|all|verify]" ;;
+  *) fail "用法：$0 [android|ios|ios-simulator|host|all|verify]" ;;
 esac

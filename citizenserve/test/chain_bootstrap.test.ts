@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   buildChainBootstrapResponse,
@@ -12,6 +13,34 @@ const bootnodeB =
   '/dns4/prczss.crcfrcn.com/tcp/30333/wss/p2p/12D3KooWPjWNXvCzPv6PPuiGnF3J5uToW3ySfaB7rKkwUrN2CALv';
 const testGenesisHash = `0x${'11'.repeat(32)}`;
 const testStateRoot = `0x${'22'.repeat(32)}`;
+const citizenSdkFixture = JSON.parse(readFileSync(
+  new URL('../../citizensdk/test/node/citizensdk_bootstrap_manifest.json', import.meta.url),
+  'utf8',
+)) as ReturnType<typeof buildCitizenSdkBootstrapResponse>;
+
+function normalizedCitizenSdkResponse(
+  value: ReturnType<typeof buildCitizenSdkBootstrapResponse>,
+): ReturnType<typeof buildCitizenSdkBootstrapResponse> {
+  return { ...value, generated_at: citizenSdkFixture.generated_at };
+}
+
+function expectCitizenSdkExactKeys(value: ReturnType<typeof buildCitizenSdkBootstrapResponse>): void {
+  expect(Object.keys(value).sort()).toEqual([
+    'cache_ttl_seconds', 'chain', 'generated_at', 'light_client',
+    'ok', 'p2p', 'schema', 'security',
+  ]);
+  expect(Object.keys(value.chain).sort()).toEqual([
+    'chain_id', 'genesis_hash', 'protocol_id', 'ss58_format',
+    'state_root', 'token_decimals', 'token_symbol',
+  ]);
+  expect(Object.keys(value.light_client).sort()).toEqual([
+    'api_is_truth', 'bundled_assets_required', 'mode', 'truth_source',
+  ]);
+  expect(Object.keys(value.p2p).sort()).toEqual(['bootnodes', 'min_peer_count_hint']);
+  expect(Object.keys(value.security).sort()).toEqual([
+    'exposes_private_key_material', 'exposes_rpc_url', 'rpc_proxy', 'validator_rpc_public',
+  ]);
+}
 
 describe('chain bootstrap manifest', () => {
   it('returns the exact running Worker version for deployment verification', async () => {
@@ -132,25 +161,31 @@ describe('chain bootstrap manifest', () => {
   });
 
   it('routes an SDK-only bootstrap without host product services', async () => {
+    const sdkEnvironment = env({
+      BOOT_TTL_SECONDS: '300',
+      CHAIN_BOOTNODES: `${bootnodeA}\n${bootnodeB}`,
+    });
     const direct = buildCitizenSdkBootstrapResponse(
       new Request('https://api.onchina.org/api/chain/citizensdk/bootstrap'),
-      env({ BOOT_TTL_SECONDS: '45' }),
+      sdkEnvironment,
     );
-    expect(direct.schema).toBe('citizensdk.chain.bootstrap');
-    expect(direct.light_client.mode).toBe('smoldot');
+    expect(normalizedCitizenSdkResponse(direct)).toStrictEqual(citizenSdkFixture);
+    expectCitizenSdkExactKeys(direct);
     expect(direct).not.toHaveProperty('services');
     expect(direct).not.toHaveProperty('degradation');
+    expect(direct.chain).not.toHaveProperty('chain_name');
+    expect(direct.chain).not.toHaveProperty('chain_type');
+    expect(direct.p2p).not.toHaveProperty('bootnodes_source');
 
     const response = await routeRequest(
       new Request('https://api.onchina.org/api/chain/citizensdk/bootstrap'),
-      env({ BOOT_TTL_SECONDS: '45' }),
+      sdkEnvironment,
     );
     expect(response.status).toBe(200);
-    expect(response.headers.get('cache-control')).toBe('public, max-age=45');
-    await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      schema: 'citizensdk.chain.bootstrap',
-    });
+    expect(response.headers.get('cache-control')).toBe('public, max-age=300');
+    const body = await response.json() as ReturnType<typeof buildCitizenSdkBootstrapResponse>;
+    expect(normalizedCitizenSdkResponse(body)).toStrictEqual(citizenSdkFixture);
+    expectCitizenSdkExactKeys(body);
   });
 
   it('fails closed when the public chain identity is missing or invalid', () => {

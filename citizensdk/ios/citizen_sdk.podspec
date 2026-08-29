@@ -25,8 +25,12 @@ sr25519 signing and on-chain transaction capabilities for Flutter products.
   s.homepage         = 'https://github.com/ChineseFederation/GMB'
   s.license          = { :type => 'MIT' }
   s.author           = { 'Chinese Federation' => 'chinanation@icloud.com' }
-  s.source           = { :git => 'https://github.com/ChineseFederation/GMB.git' }
+  s.source           = {
+    :git => 'https://github.com/ChineseFederation/GMB.git',
+    :tag => "citizensdk-v#{s.version}",
+  }
   s.platform         = :ios, '16.0'
+  s.swift_versions   = ['5.0']
   s.source_files     = 'Classes/**/*.swift'
   s.dependency 'Flutter'
   s.vendored_libraries = library_pattern
@@ -39,4 +43,8 @@ sr25519 signing and on-chain transaction capabilities for Flutter products.
     'OTHER_LDFLAGS' => "-force_load #{library_path} " +
                        ffi_symbols.map { |symbol| "-Wl,-u,#{symbol}" }.join(' '),
   }
+
+  s.test_spec 'Tests' do |tests|
+    tests.source_files = 'Tests/**/*.swift'
+  end
 end

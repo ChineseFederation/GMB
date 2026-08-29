@@ -2,75 +2,105 @@
 
 ## sr25519 固定口径
 
-- 密码学实现使用 `schnorrkel`，禁止增加第二套纯 Dart 或自研 sr25519 实现。
-- mini-secret 扩展固定为 `ExpansionMode::Ed25519`。
-- 签名上下文固定为字节串 `substrate`。
-- 硬派生 chain code 由上层按 Substrate junction 规则生成，原生层逐层派生。
-- 私钥输入、child mini-secret 和展开后的 SecretKey 必须在使用后清零。
-- FFI panic 必须转为错误码，禁止跨 FFI 展开或使宿主应用退出。
+- 唯一实现是 `native/signer` 中的 `schnorrkel`，不增加纯 Dart 或自研实现。
+- mini-secret 扩展模式固定为 `ExpansionMode::Ed25519`。
+- 签名 context 固定为字节串 `substrate`。
+- 硬派生 chain code 按 Substrate junction 规则生成。
+- mini-secret、展开后的 SecretKey 和签名临时字节在作用域结束时清零。
+- signer FFI 用 `catch_unwind` 把 panic 转为错误码；FFI Release profile 不允许破坏该契约。
 
-## 设备机密
+## 设备机密与受信任宿主
 
-助记词、母种子、child mini-secret 和私钥不得上传到 TuyuServe、TuyuBooking 主机、
-Cloudflare 或任何远端服务。后续钱包层只能存储硬件金库产生的密文，解锁和签名必须在
-用户设备本地完成。
+助记词、母种子、child mini-secret 和私钥不得上传到 TuyuServe、TuyuBooking、Cloudflare、
+GitHub、Console 或任何远端服务。标准移动装配只在用户设备硬件金库保存 child 密文，并在
+本地认证、解密和签名。
 
-新硬件金库产品标识固定为 `citizensdk`。没有满足安全契约的平台实现或设备能力时必须失败
-关闭：允许轻节点查询和公钥验签，但禁止创建、导入、解锁钱包和提交签名交易。
+Android 使用硬件 RSA-OAEP KEK、AES-256-GCM 与逐次 `BIOMETRIC_STRONG`；iOS 使用 Secure
+Enclave ECIES、`biometryCurrentSet + privateKeyUsage` 与
+`WhenUnlockedThisDeviceOnly`。产品标识、AAD、硬件别名和密文命名空间固定为
+`citizensdk`。每代钱包 KEK 别名绑定 `walletGeneration`；每份账户信封和密文键同时绑定
+`walletGeneration`、`secretOwner`、AccountId 与秘密类型。
 
-Android 继续使用硬件 RSA-OAEP KEK 包装随机 AES-256-GCM DEK，KEK 必须位于 StrongBox
-或 TEE，且每次私钥使用由硬件强制 `BIOMETRIC_STRONG`。iOS 继续使用 Secure Enclave
-ECIES，访问控制固定为 `biometryCurrentSet + privateKeyUsage` 和
-`WhenUnlockedThisDeviceOnly`。两个平台都只通过 Flutter 通道传输字节数组。
+公共 API 保留 `WalletRepository`、`SecureSeedStore` 和平台组件注入，以支持受控宿主、
+测试和未来平台适配。这意味着宿主进程是信任边界：恶意自定义 `SecureSeedStore` 可以复制
+SDK 交给它的 child mini-secret。SDK 保证自身标准实现不上传秘密，但不能对同进程恶意宿主
+提供硬隔离；产品接入必须审计注入点，普通应用应使用 `CitizenSdk.mobile()`。
 
-硬件金库不存在旧产品入口。Dart 不接收宿主产品名或密钥命名空间；Android/iOS 原生层
-只接受 `citizensdk`，硬件别名和 AAD 都由 SDK 固定生成。SDK 不读取、转换或删除其它产品的
-密文和硬件密钥，未来任何产品切换都必须在该产品步骤中单独设计和批准。
+没有合格硬件金库或设备能力时必须失败关闭钱包创建、导入、追加账户、签名和签名交易；
+公开轻节点查询与公钥验签仍可用。
 
-## 当前阶段限制
+## 钱包一致性
 
-当前目录已包含 sr25519、轻节点核心、Dart 编排、交易与无根钱包源码及锁文件，但全面复核
-已经确认：Dart 轻节点行为、交易执行结果、锁文件依赖闭包和测试来源仍未完成与 CitizenApp
-稳定实现的逐项对齐，必须按后续步骤继续修复，不能把当前目录描述成完整源码闭包。
-2026-08-28 的历史基线曾完成本机构建和已有测试；第 10.1 步又修改了钱包服务、仓储、安全
-存储及测试源码，依用户限制未运行测试或编译。因此历史结果既不证明与 CitizenApp 完整
-一致，也不证明当前字节已经通过，本轮不得声明完成构建验收。
-全节点 `identity` keystore、seed phrase 解析和 `author` 出块模块明确排除；保留的
-`identity::ss58` 只处理公开公钥地址，不接触私钥。SQLite 完整数据库保持上游源码和特性
-门控，移动轻节点使用 finalized database 序列化，不把它作为钱包存储。
+- `WalletRepository` 只保存公开 profile、revision、provisioning plan、active cleanup 和
+  不相交的 exact cleanup queue。
+- `SecureSeedStore` 每个账户只保存 `//index` child mini-secret。
+- 创建、导入、追加账户先预检强生物识别，再为钱包、账户秘密和操作生成 CSPRNG 128 位身份；
+  在任何秘密写入前用 revision CAS 提交并回读目标 profile 与完整 provisioning plan。
+- 仓储正常返回或“写入后抛错”都必须由回读的 revision/profile/provisioning/cleanup/
+  cleanup queue 决定真实提交结果。
+- 追加前必须确认钱包 KEK 与当前 profile 的每个既有账户 child 都存在，避免在不可恢复的
+  缺失秘密上继续扩大钱包；还必须实际解密并核对账户0锚点，确保生物集合变化没有使先前
+  KEK 失效，随后立即清零锚点明文。
+- 每个 child 由 `walletGeneration + secretOwner + AccountId` 精确定位；写后逐项确认账户密文
+  与本代钱包 KEK。
+- 失败方必须先以 CAS 把自己持有的 provisioning 转成 exact cleanup，取得计划后才可删除。
+  若越出默认单 isolate 合同的另一执行者先清除计划而 secret 随后落地，还在运行的失败方
+  会把同一 exact cleanup 加入与当前事实不相交的 queue；只能删除自身 generation/
+  owner。清理失败时计划保持可重放。
+- 删除先持久化 cleanup plan，再幂等删除全部账户 child 与钱包 KEK，并逐项回读；未完成计划
+  必须保留并可在重启后重放。
+- 钱包变更与 `sign` 在同一 Dart isolate 内跨 `WalletService` 实例串行；签名前再次确认账户
+  仍存在，成功或失败均清零读取的 child。
+- `usableProfile` / `isUsable` 不只读取公开 profile，而是验证账户0、KEK 及全部 child 的
+  sr25519 公钥；后端异常上抛，不能把认证、金库或仓储故障伪装成“无钱包”。
+- `renameAccount` 只经 revision CAS 修改公开名称；cleanup 未完成或并发删除时失败关闭，绝不
+  代为创建、恢复或删除秘密。
+- `getAccountPrivateKey` 只在用户主动请求后导出所选 child。内部 `Uint8List` 会清零，但返回的
+  Dart `String` 不可擦除；宿主必须负责风险确认、防截屏、禁日志/持久化/上传和尽快丢弃引用。
+- 标准合同仅在同一 Dart isolate 内跨实例串行；进程中断会保留 secret 写入前已提交的
+  provisioning，新实例可精确重放。SharedPreferences 不承诺跨 isolate 或跨进程 CAS；
+  generation/owner 仍提供不越权的物理隔离，但 queue 不能覆盖迟到物理写成功后、
+  其补偿 CAS 之前的跨引擎崩溃。需要该范围的宿主必须同时提供强原子仓储和覆盖整个钱包操作
+  的单写协调；否则不承诺跨引擎线性化或零孤儿密文。
 
-libp2p Noise 私钥只用于单条连接的传输握手：由平台随机源按连接生成，使用 `Zeroizing`
-清理，不保存到数据库或安全金库，也不得被解释为公民账户、钱包、TUYU 账户或管理员
-身份密钥。测试源码只使用公开开发向量、上游公开链数据和固定非生产字节，不得加入真实
-助记词、设备密钥或用户数据。
+## 轻节点与交易
 
-## Dart 钱包边界
+公民链状态由设备内 smoldot P2P 轻节点验证。Bootstrap 只能提供固定 schema 下的链身份与
+bootnode 建议；根对象及 `chain/light_client/p2p/security` 都必须精确匹配字段闭集，不能夹带
+聊天、广场、TUYU、宿主业务、远程 RPC 或链状态真源。SDK 不实现服务器签名或通用 RPC 代理。
 
-- `WalletRepository` 只保存公开账户资料、revision 和待清理计划，禁止出现秘密字段。
-- `SecureSeedStore` 只保存 `//index` child mini-secret，读取必须由平台认证保护。
-- 创建返回的助记词不持久化；恢复和追加账户时只在派生作用域短暂使用。
-- 创建、导入和追加先提交并回读公开事实，只有 CAS 胜者写秘密；写后必须回读账户密文和
-  钱包 KEK，失败时只有秘密全部确认不存在后才回滚公开事实。
-- 删除采用持久清理计划，安全金库删除接口必须幂等；全部账户 child 和钱包 KEK 都要尝试，
-  每项删除后回读，任一失败都保留计划。
-- 默认变更串行范围是同一 Dart isolate；SharedPreferences 不提供跨 isolate 或进程 CAS。
-- `WalletService.sign` 是任意协议载荷的唯一账户签名入口；调用方拿不到 child 私钥。
-- 公民链 extrinsic 固定实时 runtime nonce 与 immortal era，不提供远程 RPC 或服务器签名。
+`author_submitExtrinsic` 返回 txHash、peer 广播、`inBlock` 和 `finalized` 都不能单独证明
+runtime 执行成功。SDK 必须按 txHash 定位同一 extrinsic index，并读取该 index 的
+`System.ExtrinsicSuccess/Failed`；未找到明确结果时报告未核实。收到 finalized 后由执行核对
+独占后台终态，订阅流的迟到数据和错误不能形成与执行结果冲突的第二终态。
 
-Android/iOS 硬件金库历史基线曾完成本机构建与合同测试，但尚未完成签名 Release 真机安全
-验收；第 10.1 步当前钱包字节也尚未重新执行测试或编译，因此仍不能声明生产可用。
-SharedPreferences 只允许保存公开钱包事实与公开 finalized database；私钥材料只能保存为
-硬件金库密文，禁止用内存、普通文件、SharedPreferences 或产品数据库模拟生产私钥存储。
+runtime version 与 metadata 必须在同一 finalized/目标块上读取并按 `specVersion` 绑定缓存；
+前一代 in-flight 请求迟到不能覆盖新缓存。余额批量读取只走轻节点 finalized batch storage，
+手续费只信任同一 metadata 的链上常量。状态观察回调和订阅取消 Future 的异常均为
+best-effort 隔离，不能泄漏未处理错误或改变交易终态。
 
-## 构建与分发安全
+公民链账户签名、TUYU challenge 签名和 TuyuBooking 员工登录是不同业务权限。它们可以在
+明确设计下使用同一用户 sr25519 公钥，但不得合并账户、授权或审计记录。
 
-- 源码树不得接收 Cargo、Flutter、Gradle、CocoaPods、原生库或 Release 产物；构建脚本会
-  对解析后的真实工作目录和输出目录执行源码树越界检查。
-- CI 不接受 `source_sha` 或正式版本。Release 必须通过同产品 `citizensdk`、同目标 `sdk`、
-  同 CI workflow 的成功 `ci_run_id` 复核，并绑定准确的 40 位小写 Git SHA。
-- Release 候选拒绝符号链接、路径穿越、未登记文件、常见密钥文件和私钥 PEM 材料；
-  `citizensdk-release.json` 与 `SHA256SUMS` 覆盖全部源码和移动原生库。
-- GitHub runner 不读取宿主产品私钥、用户助记词或设备硬件金库数据。构建来源证明只签署
-  三项公开 SDK 资产，不能被解释为设备密钥证明或生产真机安全验收。
-- 当前 Release 只声明 Android `arm64-v8a` 与 iOS `arm64`。测试用 macOS dylib 不进入
-  候选；macOS、Linux、Windows 只有在平台适配和硬件金库另行批准后才能扩展同一产品流程。
+## 原生产品边界
+
+全节点 `author` 出块代码、identity keystore 和 seed phrase 私钥入口不进入 CitizenSDK。
+保留的 `identity::ss58` 只做公开地址编解码。libp2p Noise 密钥按连接随机生成、只用于传输
+握手并在内存清理，不是钱包或管理员密钥。
+
+聊天、广场、OpenMLS、TUYU 消息协议与产品数据库均被排除。测试夹具只能使用公开向量和
+非生产数据，不得加入真实助记词、设备密钥或用户数据。
+
+## 构建与分发
+
+- SDK 源码树不得接收构建缓存、原生库或 Release 产物。
+- 原生构建和 Release 在首次建目录前校验绝对规范路径及每一级既存祖先，拒绝路径穿越、
+  符号链接祖先和非目录祖先。
+- CI/Release 使用锁文件与准确提交；Release 必须绑定同产品、同目标的成功 CI。
+- 候选拒绝符号链接、路径穿越、未登记文件、常见密钥文件及 PEM 私钥材料。
+- `SHA256SUMS` 是 tgz 外部资产，精确覆盖 manifest 与 tgz；校验器重建规范归档字节。
+- 当前 Release 只声明 Android `arm64-v8a` 与 iOS `arm64`。
+- GitHub Release 是正式分发终态，但不等于真机硬件金库安全验收；对应结果必须单独留档。
+
+本文不把测试源码存在、历史本机候选或先前哈希解释为当前字节已经通过验证。本轮实际测试、
+编译和复核结果以任务关闭时的执行报告为准。

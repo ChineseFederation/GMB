@@ -23,6 +23,8 @@ dependencies:
   polkadart_keyring: 0.7.1
   substrate_bip39: ^0.7.0
   shared_preferences: ^2.5.5
+  smoldot:
+    path: native/smoldot/dart
   unorm_dart: ^0.3.2
 
 dev_dependencies:

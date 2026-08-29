@@ -20,7 +20,8 @@ mod error;
 mod ffi_types;
 
 // sr25519 逻辑与 FFI 外壳统一来自 CitizenSDK 内部 native/signer。宏在本原生库
-// 就地生成 4 个 no_mangle C ABI 入口，保证五个平台共享同一实现和符号契约。
+// 就地生成 4 个 no_mangle C ABI 入口；正式 Android/iOS 交付和测试用
+// iOS Simulator/macOS 宿主均共享同一实现与符号契约。
 citizen_signer::export_citizen_signer_ffi!();
 
 use ffi_types::*;

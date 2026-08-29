@@ -11,7 +11,7 @@ final class BootstrapClient {
     http.Client? httpClient,
     this.timeout = const Duration(seconds: 6),
   }) : baseUrl = _normalizeBaseUrl(baseUrl ?? defaultBaseUrl),
-       _http = httpClient ?? http.Client();
+       _http = httpClient;
 
   static const environmentDefine = 'CITIZEN_SDK_BOOTSTRAP_URL';
   static const productionBaseUrl = 'https://www.crcfrcn.com/api';
@@ -22,29 +22,35 @@ final class BootstrapClient {
       : _configuredBaseUrl;
 
   final String baseUrl;
-  final http.Client _http;
+  final http.Client? _http;
   final Duration timeout;
 
   Future<BootstrapManifest> fetch() async {
-    final response = await _http
-        .get(
-          Uri.parse('$baseUrl/chain/citizensdk/bootstrap'),
-          headers: const <String, String>{'accept': 'application/json'},
-        )
-        .timeout(timeout);
-    if (response.statusCode != 200) {
-      throw BootstrapManifestException(
-        '公民链启动清单读取失败：HTTP ${response.statusCode}',
-      );
+    final client = _http ?? http.Client();
+    try {
+      final response = await client
+          .get(
+            Uri.parse('$baseUrl/chain/citizensdk/bootstrap'),
+            headers: const <String, String>{'accept': 'application/json'},
+          )
+          .timeout(timeout);
+      if (response.statusCode != 200) {
+        throw BootstrapManifestException(
+          '公民链启动清单读取失败：HTTP ${response.statusCode}',
+        );
+      }
+      final decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic>) {
+        throw const BootstrapManifestException('公民链启动清单不是 JSON 对象');
+      }
+      return BootstrapManifest.fromJson(decoded);
+    } finally {
+      if (_http == null) client.close();
     }
-    final decoded = jsonDecode(response.body);
-    if (decoded is! Map<String, dynamic>) {
-      throw const BootstrapManifestException('公民链启动清单不是 JSON 对象');
-    }
-    return BootstrapManifest.fromJson(decoded);
   }
 
-  void close() => _http.close();
+  /// 只关闭调用方显式注入的 HTTP client；默认 client 每次 fetch 自动释放。
+  void close() => _http?.close();
 
   static String _normalizeBaseUrl(String value) {
     final trimmed = value.trim().replaceFirst(RegExp(r'/+$'), '');

@@ -62,12 +62,7 @@ fn empty_message_is_valid_but_null_required_arguments_are_rejected() {
 
     unsafe {
         assert_eq!(
-            citizen_sr25519_sign(
-                child.as_ptr(),
-                ptr::null(),
-                0,
-                signature.as_mut_ptr(),
-            ),
+            citizen_sr25519_sign(child.as_ptr(), ptr::null(), 0, signature.as_mut_ptr(),),
             CITIZEN_SIGNER_OK
         );
         assert_eq!(
@@ -79,19 +74,11 @@ fn empty_message_is_valid_but_null_required_arguments_are_rejected() {
             CITIZEN_SIGNER_OK
         );
         assert_eq!(
-            citizen_sr25519_derive_hard(
-                ptr::null(),
-                chain_code.as_ptr(),
-                derived.as_mut_ptr(),
-            ),
+            citizen_sr25519_derive_hard(ptr::null(), chain_code.as_ptr(), derived.as_mut_ptr(),),
             CITIZEN_SIGNER_ERR_NULL_ARG
         );
         assert_eq!(
-            citizen_sr25519_derive_hard(
-                child.as_ptr(),
-                ptr::null(),
-                derived.as_mut_ptr(),
-            ),
+            citizen_sr25519_derive_hard(child.as_ptr(), ptr::null(), derived.as_mut_ptr(),),
             CITIZEN_SIGNER_ERR_NULL_ARG
         );
         assert_eq!(

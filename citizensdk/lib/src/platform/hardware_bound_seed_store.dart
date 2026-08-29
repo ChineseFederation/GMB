@@ -11,7 +11,8 @@ import 'secure_blob_store.dart';
 /// 无根热钱包机密合同的移动端实现。
 ///
 /// 只持久化每账户 32 字节 child mini-secret。产品标识固定为
-/// `citizensdk`，宿主产品不得覆盖。
+/// `citizensdk`，宿主产品不得覆盖。KEK 由 wallet generation 独占；
+/// 每份密文及其 AAD 同时绑定 generation、secret owner、AccountId 和秘密类型。
 final class HardwareBoundSeedStore implements SecureSeedStore {
   HardwareBoundSeedStore({
     HardwareSecretVault? hardwareVault,
@@ -29,7 +30,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
         case HardwareSecretVaultAvailability.available:
           return SecureAuthStatus.available;
         case HardwareSecretVaultAvailability.noStrongBiometric:
-          return SecureAuthStatus.noDeviceLock;
+          return SecureAuthStatus.noStrongBiometric;
         case HardwareSecretVaultAvailability.unsupported:
           return SecureAuthStatus.unsupported;
       }
@@ -41,24 +42,29 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
   @override
   Future<void> putAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
     required Uint8List childMiniSecret,
   }) async {
     if (childMiniSecret.length != 32) {
       throw const SecureStoreUnavailable('账户 MiniSecretKey 必须为 32 字节');
     }
-    final key = CitizenSdkSecretBlobKeys.account(accountId);
-    final context = _context(walletIndex, accountId);
+    final key = CitizenSdkSecretBlobKeys.account(
+      walletGeneration: walletGeneration,
+      secretOwner: secretOwner,
+      accountId: accountId,
+    );
+    final context = _context(
+      walletIndex,
+      walletGeneration,
+      secretOwner,
+      accountId,
+    );
     Uint8List? encrypted;
     try {
-      encrypted = await _hardwareVault.encrypt(
-        context,
-        childMiniSecret,
-      );
-      await _writeBlobAndConfirm(
-        key: key,
-        value: base64Encode(encrypted),
-      );
+      encrypted = await _hardwareVault.encrypt(context, childMiniSecret);
+      await _writeBlobAndConfirm(key: key, value: base64Encode(encrypted));
     } on SecureSeedException {
       rethrow;
     } on HardwareSecretVaultException catch (error) {
@@ -66,9 +72,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
     } on PlatformException catch (error) {
       throw SecureStoreUnavailable(error.message ?? error.code);
     } on MissingPluginException catch (error) {
-      throw SecureStoreUnavailable(
-        error.message ?? 'CitizenSDK 移动存储插件不可用',
-      );
+      throw SecureStoreUnavailable(error.message ?? 'CitizenSDK 移动存储插件不可用');
     } on Object catch (error) {
       _throwMapped(error);
     } finally {
@@ -79,20 +83,28 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
   @override
   Future<Uint8List?> readAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
   }) async {
-    final key = CitizenSdkSecretBlobKeys.account(accountId);
+    final key = CitizenSdkSecretBlobKeys.account(
+      walletGeneration: walletGeneration,
+      secretOwner: secretOwner,
+      accountId: accountId,
+    );
     final stored = await _readBlob(key);
     if (stored == null) return null;
-    final context = _context(walletIndex, accountId);
+    final context = _context(
+      walletIndex,
+      walletGeneration,
+      secretOwner,
+      accountId,
+    );
 
     Uint8List? encrypted;
     try {
       encrypted = Uint8List.fromList(base64Decode(stored));
-      final plaintext = await _hardwareVault.decrypt(
-        context,
-        encrypted,
-      );
+      final plaintext = await _hardwareVault.decrypt(context, encrypted);
       if (plaintext.length != 32) {
         HardwareSecretVault.clearBytes(plaintext);
         throw const SecureStoreUnavailable('账户 MiniSecretKey 长度异常');
@@ -107,9 +119,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
     } on PlatformException catch (error) {
       throw SecureStoreUnavailable(error.message ?? error.code);
     } on MissingPluginException catch (error) {
-      throw SecureStoreUnavailable(
-        error.message ?? 'CitizenSDK 移动存储插件不可用',
-      );
+      throw SecureStoreUnavailable(error.message ?? 'CitizenSDK 移动存储插件不可用');
     } on Object catch (error) {
       _throwMapped(error);
     } finally {
@@ -118,31 +128,59 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
   }
 
   @override
-  Future<bool> hasAccountKey(String accountId) async =>
-      await _readBlob(CitizenSdkSecretBlobKeys.account(accountId)) != null;
+  Future<bool> hasAccountKey({
+    required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
+    required String accountId,
+  }) async =>
+      await _readBlob(
+        CitizenSdkSecretBlobKeys.account(
+          walletGeneration: walletGeneration,
+          secretOwner: secretOwner,
+          accountId: accountId,
+        ),
+      ) !=
+      null;
 
   @override
   Future<void> deleteAccountKey({
     required int walletIndex,
+    required String walletGeneration,
+    required String secretOwner,
     required String accountId,
   }) => _deleteBlobAndConfirmAbsent(
-    CitizenSdkSecretBlobKeys.account(accountId),
+    CitizenSdkSecretBlobKeys.account(
+      walletGeneration: walletGeneration,
+      secretOwner: secretOwner,
+      accountId: accountId,
+    ),
   );
 
   @override
-  Future<void> deleteWalletKey({required int walletIndex}) =>
-      _deleteWalletKeyAndConfirmAbsent(walletIndex);
+  Future<void> deleteWalletKey({
+    required int walletIndex,
+    required String walletGeneration,
+  }) => _deleteWalletKeyAndConfirmAbsent(walletIndex, walletGeneration);
 
   @override
-  Future<bool> hasWalletKey({required int walletIndex}) =>
-      _containsWalletKey(walletIndex);
+  Future<bool> hasWalletKey({
+    required int walletIndex,
+    required String walletGeneration,
+  }) => _containsWalletKey(walletIndex, walletGeneration);
 
-  static HardwareSecretContext _context(int walletIndex, String accountId) =>
-      HardwareSecretContext(
-        scope: walletIndex.toString(),
-        accountId: accountId,
-        secretType: HardwareSecretType.accountMiniSecret,
-      );
+  static HardwareSecretContext _context(
+    int walletIndex,
+    String walletGeneration,
+    String secretOwner,
+    String accountId,
+  ) => HardwareSecretContext(
+    scope: walletIndex.toString(),
+    keyGeneration: walletGeneration,
+    secretOwner: secretOwner,
+    accountId: accountId,
+    secretType: HardwareSecretType.accountMiniSecret,
+  );
 
   Future<String?> _readBlob(String key) async {
     try {
@@ -223,11 +261,14 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
     throw const SecureStoreUnavailable('账户硬件密文删除后仍存在');
   }
 
-  Future<void> _deleteWalletKeyAndConfirmAbsent(int walletIndex) async {
+  Future<void> _deleteWalletKeyAndConfirmAbsent(
+    int walletIndex,
+    String walletGeneration,
+  ) async {
     Object? deleteError;
     StackTrace? deleteStackTrace;
     try {
-      await _deleteWalletKey(walletIndex);
+      await _deleteWalletKey(walletIndex, walletGeneration);
     } on Object catch (error, stackTrace) {
       deleteError = error;
       deleteStackTrace = stackTrace;
@@ -235,7 +276,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
 
     bool exists;
     try {
-      exists = await _containsWalletKey(walletIndex);
+      exists = await _containsWalletKey(walletIndex, walletGeneration);
     } on Object catch (readError, readStackTrace) {
       if (deleteError != null) {
         Error.throwWithStackTrace(deleteError, deleteStackTrace!);
@@ -249,17 +290,29 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
     throw const SecureStoreUnavailable('钱包硬件 KEK 删除后仍存在');
   }
 
-  Future<void> _deleteWalletKey(int walletIndex) async {
+  Future<void> _deleteWalletKey(
+    int walletIndex,
+    String walletGeneration,
+  ) async {
     try {
-      await _hardwareVault.deleteKey(scope: walletIndex.toString());
+      await _hardwareVault.deleteKey(
+        scope: walletIndex.toString(),
+        keyGeneration: walletGeneration,
+      );
     } on Object catch (error) {
       _throwMapped(error);
     }
   }
 
-  Future<bool> _containsWalletKey(int walletIndex) async {
+  Future<bool> _containsWalletKey(
+    int walletIndex,
+    String walletGeneration,
+  ) async {
     try {
-      return await _hardwareVault.containsKey(scope: walletIndex.toString());
+      return await _hardwareVault.containsKey(
+        scope: walletIndex.toString(),
+        keyGeneration: walletGeneration,
+      );
     } on Object catch (error) {
       _throwMapped(error);
     }
@@ -273,7 +326,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
       case 'lockout':
         throw AuthCancelled(error.message);
       case 'notEnrolled':
-        throw NoDeviceCredential(error.message);
+        throw NoStrongBiometric(error.message);
       default:
         throw SecureStoreUnavailable(error.message);
     }
@@ -286,9 +339,7 @@ final class HardwareBoundSeedStore implements SecureSeedStore {
       throw SecureStoreUnavailable(error.message ?? error.code);
     }
     if (error is MissingPluginException) {
-      throw SecureStoreUnavailable(
-        error.message ?? 'CitizenSDK 移动存储插件不可用',
-      );
+      throw SecureStoreUnavailable(error.message ?? 'CitizenSDK 移动存储插件不可用');
     }
     throw SecureStoreUnavailable(error.toString());
   }

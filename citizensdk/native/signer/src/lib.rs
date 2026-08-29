@@ -1,15 +1,16 @@
-//! sr25519 原生签名 FFI（schnorrkel）—— **CitizenSDK 内部唯一实现**。
+//! sr25519 原生签名 FFI（schnorrkel）—— **GMB 全端唯一实现**。
 //!
-//! CitizenSDK 内部的 signer 与 smoldot FFI 都 `path` 依赖本 crate，不允许在 SDK 内
-//! 再复制第二份实现。现有 CitizenApp 与 CitizenWallet 在获准迁移前继续使用原共享
-//! signer；CitizenSDK 不通过运行时路径反向依赖旧产品源码。
+//! 单一真源：CitizenApp（热端，编入 `libsmoldot`）与 CitizenWallet（冷端，独立
+//! 小库）都 `path` 依赖本 crate，**物理上共用这一份源码**；任何一端另抄一份都
+//! 属违规——派生/签名口径一旦分叉，同一助记词会在两端算出不同账户。
 //!
-//! 本实现取代纯 Dart `sr25519`：纯 Dart 走 BigInt 软算标量乘，真机上一次
-//! 「派生 + 签名」实测 **8.2 秒**；schnorrkel 是 Substrate 采用的实现，同样的操作
-//! 是毫秒级（稳定来源实测 14~18 ms）。
+//! 取代两端原有的纯 Dart `sr25519`：纯 Dart 走 BigInt 软算标量乘，真机上一次
+//! 「派生 + 签名」实测 **8.2 秒**，会把主线程/用户直接晾在那里；schnorrkel 是
+//! Substrate 全家的官方实现，同样的活是毫秒级（实测 14~18 ms）。
 //!
-//! CitizenSDK 热钱包采用「无根」存储，只保存 child mini-secret；本 crate 只提供
-//! 密码学原语，不介入钱包、硬件金库或任何宿主产品的存储决策。
+//! 两端**存储模型不同、密码学相同**，这是有意为之：热端「无根」只存 child
+//! mini-secret（手机失守也拿不到主根）；冷端是持根方，只存母种子 + 助记词、
+//! 签名时现场硬派生。本 crate 只提供密码学原语，不介入任何一端的存储决策。
 //!
 //! ## 口径必须逐字节对齐（错一处钱包就变成另一个账户）
 //! - 扩展模式恒 `ExpansionMode::Ed25519`（对齐 Dart 侧 `MiniSecretKey.expandEd25519()`

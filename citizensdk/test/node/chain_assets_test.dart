@@ -1,10 +1,40 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:citizen_sdk/src/node/bootstrap_manifest.dart';
 import 'package:citizen_sdk/src/node/chain_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+const _bootnodeA =
+    '/dns4/nrcgch.crcfrcn.com/tcp/30333/wss/p2p/'
+    '12D3KooWHepcMGD3h9VC1XNWmrac3pXo63RimV5jhTU2nC2TLAyS';
+const _bootnodeB =
+    '/dns4/prczss.crcfrcn.com/tcp/30333/wss/p2p/'
+    '12D3KooWPjWNXvCzPv6PPuiGnF3J5uToW3ySfaB7rKkwUrN2CALv';
+const _bootnodeGzs =
+    '/dns4/prcgzs.crcfrcn.com/tcp/30333/wss/p2p/'
+    '12D3KooWC7t4V1Z2aQWS9HikBdXQgXEaTqeZ5YD78cnxtYBDn31M';
+const _bootnodeHes =
+    '/dns4/prches.crcfrcn.com/tcp/30333/wss/p2p/'
+    '12D3KooWSkKBEJ2KZXckFhzLvrqqbhpq4PVKeFuWsxdTF7hfzoGc';
+const _bootnodeHbs =
+    '/dns4/prchbs.crcfrcn.com/tcp/30333/wss/p2p/'
+    '12D3KooWMXQoZ9F6nxMuoC2ZnzxEKAn4z2qPKAugP2CZFEcXDqkT';
+
 void main() {
+  test('安装包 chainspec 只登记当前五个已部署 bootnode', () async {
+    final spec =
+        jsonDecode(await File('assets/chainspec.json').readAsString())
+            as Map<String, dynamic>;
+    expect(spec['bootNodes'], <String>[
+      _bootnodeA,
+      _bootnodeB,
+      _bootnodeGzs,
+      _bootnodeHes,
+      _bootnodeHbs,
+    ]);
+  });
+
   test('随包 chainspec 注入固定 #0 lightSyncState', () async {
     final bundle = CitizenChainAssets.combine(
       chainSpecJson: await File('assets/chainspec.json').readAsString(),

@@ -1,44 +1,19 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:shared_preferences/shared_preferences.dart';
-
 import '../wallet/models.dart';
 import '../wallet/wallet_error.dart';
 import '../wallet/wallet_repository.dart';
+import 'preferences_data_store.dart';
 
-/// 持久化适配与测试使用的最小字符串 preferences 合同。
-abstract interface class PreferencesDataStore {
-  Future<String?> getString(String key);
+export 'preferences_data_store.dart';
 
-  Future<void> setString(String key, String value);
-
-  Future<void> remove(String key);
-}
-
-final class SharedPreferencesDataStore implements PreferencesDataStore {
-  SharedPreferencesDataStore([SharedPreferencesAsync? preferences])
-    : _preferences = preferences ?? SharedPreferencesAsync();
-
-  final SharedPreferencesAsync _preferences;
-
-  @override
-  Future<String?> getString(String key) => _preferences.getString(key);
-
-  @override
-  Future<void> setString(String key, String value) =>
-      _preferences.setString(key, value);
-
-  @override
-  Future<void> remove(String key) => _preferences.remove(key);
-}
-
-/// 只持久化钱包公开事实和崩溃恢复清理计划。
+/// 只持久化钱包公开事实、秘密写入计划、active cleanup 和精确补偿队列。
 ///
 /// 同一 Dart isolate 内的所有仓储实例通过静态队列串行变更，并以
 /// 持久 revision 执行 compare-and-swap。SharedPreferences 不提供
-/// 跨 isolate 的 CAS；需要该范围的调用方必须注入具备更强原子合同
-/// 的数据存储。
+/// 跨 isolate 的 CAS；需要该范围的调用方必须同时提供强原子仓储与覆盖
+/// 整个钱包操作的单写协调。
 final class PreferencesWalletRepository implements WalletRepository {
   PreferencesWalletRepository({PreferencesDataStore? preferences})
     : _preferences = preferences ?? SharedPreferencesDataStore();
@@ -60,7 +35,9 @@ final class PreferencesWalletRepository implements WalletRepository {
   Future<WalletState> commit({
     required int expectedRevision,
     required WalletProfile? profile,
+    required WalletProvisioningPlan? provisioning,
     required WalletCleanupPlan? cleanup,
+    required List<WalletCleanupPlan> cleanupQueue,
   }) => _serialize(() async {
     final current = await load();
     if (current.revision != expectedRevision) {
@@ -69,7 +46,9 @@ final class PreferencesWalletRepository implements WalletRepository {
     final next = WalletState(
       revision: current.revision + 1,
       profile: profile,
+      provisioning: provisioning,
       cleanup: cleanup,
+      cleanupQueue: cleanupQueue,
     );
     final encoded = _encode(next);
     Object? writeError;
@@ -129,13 +108,18 @@ final class PreferencesWalletRepository implements WalletRepository {
     'schema': schema,
     'revision': state.revision,
     'profile': _encodeProfile(state.profile),
+    'provisioning': _encodeProvisioning(state.provisioning),
     'cleanup': _encodeCleanup(state.cleanup),
+    'cleanup_queue': state.cleanupQueue
+        .map(_encodeCleanup)
+        .toList(growable: false),
   });
 
   static Map<String, Object?>? _encodeProfile(WalletProfile? profile) {
     if (profile == null) return null;
     return <String, Object?>{
       'wallet_index': profile.walletIndex,
+      'wallet_generation': profile.walletGeneration,
       'master_account_id': profile.masterAccountId,
       'origin': profile.origin.name,
       'created_at_millis': profile.createdAtMillis,
@@ -145,6 +129,7 @@ final class PreferencesWalletRepository implements WalletRepository {
             (account) => <String, Object>{
               'index': account.index,
               'account_id': account.accountId,
+              'secret_owner': account.secretOwner,
               'ss58_address': account.ss58Address,
               'name': account.name,
               'created_at_millis': account.createdAtMillis,
@@ -154,14 +139,41 @@ final class PreferencesWalletRepository implements WalletRepository {
     };
   }
 
+  static Map<String, Object?>? _encodeProvisioning(
+    WalletProvisioningPlan? provisioning,
+  ) {
+    if (provisioning == null) return null;
+    return <String, Object?>{
+      'operation_id': provisioning.operationId,
+      'wallet_index': provisioning.walletIndex,
+      'wallet_generation': provisioning.walletGeneration,
+      'previous_profile': _encodeProfile(provisioning.previousProfile),
+      'secret_refs': provisioning.secretRefs
+          .map(_encodeSecretRef)
+          .toList(growable: false),
+      'delete_wallet_key_on_rollback': provisioning.deleteWalletKeyOnRollback,
+    };
+  }
+
   static Map<String, Object?>? _encodeCleanup(WalletCleanupPlan? cleanup) {
     if (cleanup == null) return null;
     return <String, Object?>{
+      'operation_id': cleanup.operationId,
       'wallet_index': cleanup.walletIndex,
-      'account_ids': cleanup.accountIds,
+      'wallet_generation': cleanup.walletGeneration,
+      'secret_refs': cleanup.secretRefs
+          .map(_encodeSecretRef)
+          .toList(growable: false),
       'delete_wallet_key': cleanup.deleteWalletKey,
     };
   }
+
+  static Map<String, Object> _encodeSecretRef(WalletSecretRef ref) =>
+      <String, Object>{
+        'wallet_generation': ref.walletGeneration,
+        'secret_owner': ref.secretOwner,
+        'account_id': ref.accountId,
+      };
 
   static WalletState _decode(String raw) {
     try {
@@ -170,7 +182,9 @@ final class PreferencesWalletRepository implements WalletRepository {
         'schema',
         'revision',
         'profile',
+        'provisioning',
         'cleanup',
+        'cleanup_queue',
       }, '钱包状态');
       if (root['schema'] != schema || root['revision'] is! int) {
         throw const FormatException('钱包状态 schema 或 revision 无效');
@@ -180,7 +194,9 @@ final class PreferencesWalletRepository implements WalletRepository {
       return WalletState(
         revision: revision,
         profile: _decodeProfile(root['profile']),
+        provisioning: _decodeProvisioning(root['provisioning']),
         cleanup: _decodeCleanup(root['cleanup']),
+        cleanupQueue: _decodeCleanupQueue(root['cleanup_queue']),
       );
     } on FormatException {
       rethrow;
@@ -193,6 +209,7 @@ final class PreferencesWalletRepository implements WalletRepository {
     if (value == null) return null;
     final map = _strictMap(value, const <String>{
       'wallet_index',
+      'wallet_generation',
       'master_account_id',
       'origin',
       'created_at_millis',
@@ -200,12 +217,14 @@ final class PreferencesWalletRepository implements WalletRepository {
       'accounts',
     }, '钱包资料');
     final walletIndex = map['wallet_index'];
+    final walletGeneration = map['wallet_generation'];
     final masterAccountId = map['master_account_id'];
     final originName = map['origin'];
     final createdAtMillis = map['created_at_millis'];
     final activeAccountId = map['active_account_id'];
     final accountsValue = map['accounts'];
     if (walletIndex is! int ||
+        walletGeneration is! String ||
         masterAccountId is! String ||
         originName is! String ||
         createdAtMillis is! int ||
@@ -220,6 +239,7 @@ final class PreferencesWalletRepository implements WalletRepository {
     final accounts = accountsValue.map(_decodeAccount).toList(growable: false);
     return WalletProfile(
       walletIndex: walletIndex,
+      walletGeneration: walletGeneration,
       masterAccountId: masterAccountId,
       origin: origin.single,
       createdAtMillis: createdAtMillis,
@@ -232,17 +252,20 @@ final class PreferencesWalletRepository implements WalletRepository {
     final map = _strictMap(value, const <String>{
       'index',
       'account_id',
+      'secret_owner',
       'ss58_address',
       'name',
       'created_at_millis',
     }, '钱包账户');
     final index = map['index'];
     final accountId = map['account_id'];
+    final secretOwner = map['secret_owner'];
     final ss58Address = map['ss58_address'];
     final name = map['name'];
     final createdAtMillis = map['created_at_millis'];
     if (index is! int ||
         accountId is! String ||
+        secretOwner is! String ||
         ss58Address is! String ||
         name is! String ||
         createdAtMillis is! int) {
@@ -251,32 +274,112 @@ final class PreferencesWalletRepository implements WalletRepository {
     return WalletAccount(
       index: index,
       accountId: accountId,
+      secretOwner: secretOwner,
       ss58Address: ss58Address,
       name: name,
       createdAtMillis: createdAtMillis,
     );
   }
 
+  static WalletProvisioningPlan? _decodeProvisioning(Object? value) {
+    if (value == null) return null;
+    final map = _strictMap(value, const <String>{
+      'operation_id',
+      'wallet_index',
+      'wallet_generation',
+      'previous_profile',
+      'secret_refs',
+      'delete_wallet_key_on_rollback',
+    }, '钱包 provision 计划');
+    final operationId = map['operation_id'];
+    final walletIndex = map['wallet_index'];
+    final walletGeneration = map['wallet_generation'];
+    final refsValue = map['secret_refs'];
+    final deleteWalletKeyOnRollback = map['delete_wallet_key_on_rollback'];
+    if (operationId is! String ||
+        walletIndex is! int ||
+        walletGeneration is! String ||
+        refsValue is! List<Object?> ||
+        deleteWalletKeyOnRollback is! bool) {
+      throw const FormatException('钱包 provision 计划字段类型无效');
+    }
+    return WalletProvisioningPlan(
+      operationId: operationId,
+      walletIndex: walletIndex,
+      walletGeneration: walletGeneration,
+      previousProfile: _decodeProfile(map['previous_profile']),
+      secretRefs: List<WalletSecretRef>.unmodifiable(
+        refsValue.map(_decodeSecretRef),
+      ),
+      deleteWalletKeyOnRollback: deleteWalletKeyOnRollback,
+    );
+  }
+
   static WalletCleanupPlan? _decodeCleanup(Object? value) {
     if (value == null) return null;
     final map = _strictMap(value, const <String>{
+      'operation_id',
       'wallet_index',
-      'account_ids',
+      'wallet_generation',
+      'secret_refs',
       'delete_wallet_key',
     }, '钱包清理计划');
+    final operationId = map['operation_id'];
     final walletIndex = map['wallet_index'];
-    final accountIdsValue = map['account_ids'];
+    final walletGeneration = map['wallet_generation'];
+    final refsValue = map['secret_refs'];
     final deleteWalletKey = map['delete_wallet_key'];
-    if (walletIndex is! int ||
-        accountIdsValue is! List<Object?> ||
-        deleteWalletKey is! bool ||
-        accountIdsValue.any((entry) => entry is! String)) {
+    if (operationId is! String ||
+        walletIndex is! int ||
+        walletGeneration is! String ||
+        refsValue is! List<Object?> ||
+        deleteWalletKey is! bool) {
       throw const FormatException('钱包清理计划字段类型无效');
     }
     return WalletCleanupPlan(
+      operationId: operationId,
       walletIndex: walletIndex,
-      accountIds: List<String>.unmodifiable(accountIdsValue.cast<String>()),
+      walletGeneration: walletGeneration,
+      secretRefs: List<WalletSecretRef>.unmodifiable(
+        refsValue.map(_decodeSecretRef),
+      ),
       deleteWalletKey: deleteWalletKey,
+    );
+  }
+
+  static List<WalletCleanupPlan> _decodeCleanupQueue(Object? value) {
+    if (value is! List<Object?>) {
+      throw const FormatException('钱包清理队列字段类型无效');
+    }
+    return List<WalletCleanupPlan>.unmodifiable(
+      value.map((entry) {
+        final cleanup = _decodeCleanup(entry);
+        if (cleanup == null) {
+          throw const FormatException('钱包清理队列元素无效');
+        }
+        return cleanup;
+      }),
+    );
+  }
+
+  static WalletSecretRef _decodeSecretRef(Object? value) {
+    final map = _strictMap(value, const <String>{
+      'wallet_generation',
+      'secret_owner',
+      'account_id',
+    }, '钱包秘密引用');
+    final walletGeneration = map['wallet_generation'];
+    final secretOwner = map['secret_owner'];
+    final accountId = map['account_id'];
+    if (walletGeneration is! String ||
+        secretOwner is! String ||
+        accountId is! String) {
+      throw const FormatException('钱包秘密引用字段类型无效');
+    }
+    return WalletSecretRef(
+      walletGeneration: walletGeneration,
+      secretOwner: secretOwner,
+      accountId: accountId,
     );
   }
 

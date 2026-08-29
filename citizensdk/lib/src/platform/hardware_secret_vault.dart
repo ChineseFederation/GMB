@@ -19,6 +19,8 @@ enum HardwareSecretType {
 final class HardwareSecretContext {
   HardwareSecretContext({
     required this.scope,
+    required this.keyGeneration,
+    required this.secretOwner,
     required this.secretType,
     this.accountId,
   }) {
@@ -29,6 +31,16 @@ final class HardwareSecretContext {
     if (value != null && !_accountIdPattern.hasMatch(value)) {
       throw ArgumentError.value(value, 'accountId', 'AccountId 格式无效');
     }
+    if (!_generationPattern.hasMatch(keyGeneration)) {
+      throw ArgumentError.value(
+        keyGeneration,
+        'keyGeneration',
+        '硬件密钥 generation 格式无效',
+      );
+    }
+    if (!_generationPattern.hasMatch(secretOwner)) {
+      throw ArgumentError.value(secretOwner, 'secretOwner', '硬件密文 owner 格式无效');
+    }
     if (secretType == HardwareSecretType.accountMiniSecret && value == null) {
       throw ArgumentError('账户 MiniSecretKey 必须绑定 AccountId');
     }
@@ -36,19 +48,24 @@ final class HardwareSecretContext {
 
   static final RegExp _scopePattern = RegExp(r'^[a-z0-9._:-]{1,80}$');
   static final RegExp _accountIdPattern = RegExp(r'^0x[0-9a-f]{64}$');
+  static final RegExp _generationPattern = RegExp(r'^[0-9a-f]{32}$');
 
   final String scope;
+  final String keyGeneration;
+  final String secretOwner;
   final String? accountId;
   final HardwareSecretType secretType;
 
   /// Hardware envelopes always belong to CitizenSDK, including when the SDK
   /// is embedded by another application. Hosts cannot override this identity.
-  String get keyScope => '${HardwareBoundProduct.identifier}:$scope';
+  String get keyScope =>
+      '${HardwareBoundProduct.identifier}:$scope:$keyGeneration';
 
   /// Preserves the stable GMB vault AAD domain and field order byte-for-byte.
   Uint8List associatedData() => Uint8List.fromList(
     utf8.encode(
       'GMB\n${HardwareBoundProduct.identifier}\n$scope\n'
+      '$keyGeneration\n$secretOwner\n'
       '${accountId ?? ''}\n${secretType.storageName}',
     ),
   );
@@ -131,8 +148,9 @@ final class HardwareSecretVault {
       throw ArgumentError.value(ciphertext, 'ciphertext', '密文不能为空');
     }
     final aad = context.associatedData();
+    Uint8List? borrowed;
     try {
-      final borrowed = await _channel.invokeMethod<Uint8List>('decrypt', {
+      borrowed = await _channel.invokeMethod<Uint8List>('decrypt', {
         'scope': context.keyScope,
         'keyNamespace': HardwareBoundProduct.identifier,
         'associatedData': aad,
@@ -140,6 +158,13 @@ final class HardwareSecretVault {
       });
       if (borrowed == null || borrowed.isEmpty) {
         throw const HardwareSecretVaultException('decryptFailed', '硬件金库返回空明文');
+      }
+      if (context.secretType != HardwareSecretType.mnemonic &&
+          borrowed.length != 32) {
+        throw const HardwareSecretVaultException(
+          'decryptFailed',
+          '硬件金库返回的 MiniSecretKey 长度异常',
+        );
       }
       return Uint8List.fromList(borrowed);
     } on PlatformException catch (error) {
@@ -153,13 +178,26 @@ final class HardwareSecretVault {
         error.message ?? 'CitizenSDK 硬件金库插件不可用',
       );
     } finally {
-      clearBytes(aad);
+      // StandardMessageCodec hands Dart a writable borrowed platform buffer.
+      // The caller owns only the copy returned above, so erase the borrowed
+      // bytes here even when validation or copying exits exceptionally.
+      try {
+        final value = borrowed;
+        if (value != null) clearBytes(value);
+      } finally {
+        clearBytes(aad);
+      }
     }
   }
 
-  Future<void> deleteKey({required String scope}) async {
+  Future<void> deleteKey({
+    required String scope,
+    required String keyGeneration,
+  }) async {
     final context = HardwareSecretContext(
       scope: scope,
+      keyGeneration: keyGeneration,
+      secretOwner: keyGeneration,
       secretType: HardwareSecretType.masterMiniSecret,
     );
     try {
@@ -180,9 +218,14 @@ final class HardwareSecretVault {
     }
   }
 
-  Future<bool> containsKey({required String scope}) async {
+  Future<bool> containsKey({
+    required String scope,
+    required String keyGeneration,
+  }) async {
     final context = HardwareSecretContext(
       scope: scope,
+      keyGeneration: keyGeneration,
+      secretOwner: keyGeneration,
       secretType: HardwareSecretType.masterMiniSecret,
     );
     try {

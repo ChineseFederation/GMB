@@ -32,15 +32,25 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: 安装固定 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 25.2.1
+
       - name: 校验代码来源与 CitizenSDK 依赖作用域
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/citizensdk/ci-sdk.mjs dependencies check --scope citizensdk
 
+      - name: 检查 CitizenSDK 发布闭集与归档合同
+        env:
+          CONSOLE_WORK_DIR: ${{ runner.temp }}/citizensdk/release-tests
+        run: node --test citizensdk/scripts/release.test.mjs
+
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
         with:
-          targets: aarch64-linux-android,aarch64-apple-ios
+          targets: aarch64-linux-android,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios,aarch64-apple-darwin,x86_64-apple-darwin
 
       - name: 安装固定 Cargo 审计工具
         run: cargo install cargo-audit --version 0.22.2 --locked
@@ -73,37 +83,190 @@ jobs:
       - name: 安装固定 Android NDK
         run: sdkmanager "ndk;28.2.13676358"
 
-      - name: 安装锁定 Flutter 依赖
-        working-directory: citizensdk
-        run: flutter pub get --enforce-lockfile
+      # 中文注释：Flutter、Dart 和 FFI 构建都会改写工程目录；完整源码快照隔离这些记录，
+      # 正式候选始终从未经工具改写的检出源码生成。
+      - name: 建立 CitizenSDK 隔离构建源码
+        run: |
+          build_source="$RUNNER_TEMP/citizensdk/build-source"
+          test ! -e "$build_source"
+          mkdir -p "$(dirname "$build_source")"
+          /usr/bin/ditto citizensdk "$build_source"
+
+      - name: 安装锁定 Dart 与 Flutter 依赖
+        working-directory: ${{ runner.temp }}/citizensdk/build-source
+        run: |
+          flutter pub get --enforce-lockfile
+          (cd native/smoldot/dart && dart pub get --enforce-lockfile)
 
       - name: 执行 CitizenSDK 依赖安全审计
         run: node .github/scripts/citizensdk/ci-sdk.mjs dependencies audit --scope citizensdk
 
       - name: 检查 Dart 与 Flutter 源码
-        working-directory: citizensdk
+        working-directory: ${{ runner.temp }}/citizensdk/build-source
         run: |
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
+          # 中文注释：嵌套包由固定闭集与逐文件哈希保护，禁止格式化改写来源字节。
+          (cd native/smoldot/dart && dart analyze --no-fatal-warnings)
 
       - name: 检查 Rust signer、FFI 与轻节点源码
         run: |
-          cargo test --manifest-path citizensdk/Cargo.toml --workspace --all-targets --locked
-          cargo test --manifest-path citizensdk/native/smoldot/ffi/Cargo.toml --all-targets --locked
-          cargo test --manifest-path citizensdk/native/smoldot/pow/Cargo.toml --workspace --all-targets --locked
+          build_source="$RUNNER_TEMP/citizensdk/build-source"
+          cargo test --manifest-path "$build_source/Cargo.toml" --workspace --all-targets --locked
+          cargo test --manifest-path "$build_source/native/smoldot/ffi/Cargo.toml" --all-targets --locked
+          cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked
 
       - name: 构建并核验移动原生核心
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
           CITIZENSDK_WORK_DIR: ${{ runner.temp }}/citizensdk/work
           CITIZENSDK_NATIVE_OUTPUT_DIR: ${{ runner.temp }}/citizensdk/native
-        run: citizensdk/scripts/build-native.sh all
+        run: $RUNNER_TEMP/citizensdk/build-source/scripts/build-native.sh all
 
-      - name: 运行 CitizenSDK Flutter 测试
-        working-directory: citizensdk
+      - name: 编译并运行 Android 与 iOS 插件测试
+        env:
+          CONSOLE_NATIVE_ANDROID_DIR: ${{ runner.temp }}/citizensdk/native/android
+          CONSOLE_NATIVE_IOS_DIR: ${{ runner.temp }}/citizensdk/native/ios
+          CONSOLE_NATIVE_IOS_SIMULATOR_DIR: ${{ runner.temp }}/citizensdk/native/ios-simulator
+          GRADLE_USER_HOME: ${{ runner.temp }}/citizensdk/gradle
+          TMPDIR: ${{ runner.temp }}/citizensdk/tmp
+        run: |
+          build_source="$RUNNER_TEMP/citizensdk/build-source"
+          hosts="$RUNNER_TEMP/citizensdk/platform-hosts"
+          mkdir -p "$hosts" "$GRADLE_USER_HOME" "$TMPDIR"
+
+          android_host="$hosts/android"
+          test ! -e "$android_host"
+          flutter create --platforms=android --org org.citizensdk.verify \
+            --project-name citizensdk_android_verify "$android_host"
+          flutter pub add --directory "$android_host" citizen_sdk --path "$build_source"
+          (cd "$android_host" && flutter build apk --debug --target-platform android-arm64)
+          (cd "$android_host/android" && ./gradlew :citizen_sdk:testDebugUnitTest --no-daemon)
+
+          ios_device_host="$hosts/ios-device"
+          ios_test_host="$hosts/ios-test"
+          for ios_host in "$ios_device_host" "$ios_test_host"; do
+            test ! -e "$ios_host"
+            flutter create --platforms=ios --org org.citizensdk.verify \
+              --project-name citizensdk_ios_verify "$ios_host"
+            flutter pub add --directory "$ios_host" citizen_sdk --path "$build_source"
+          done
+          python3 - \
+            "$ios_device_host/ios/Podfile" "$ios_device_host/ios/Runner.xcodeproj/project.pbxproj" \
+            "$ios_test_host/ios/Podfile" "$ios_test_host/ios/Runner.xcodeproj/project.pbxproj" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          arguments = sys.argv[1:]
+          if len(arguments) != 4:
+              raise SystemExit('iOS 宿主参数数量漂移')
+          for offset in range(0, len(arguments), 2):
+              podfile_path = Path(arguments[offset])
+              project_path = Path(arguments[offset + 1])
+              podfile = podfile_path.read_text(encoding='utf-8')
+              podfile, platform_count = re.subn(
+                  r"^#?\s*platform :ios, '[^']+'$",
+                  "platform :ios, '16.0'",
+                  podfile,
+                  count=1,
+                  flags=re.MULTILINE,
+              )
+              needle = "    flutter_additional_ios_build_settings(target)\n"
+              replacement = (
+                  needle
+                  + "    target.build_configurations.each do |config|\n"
+                  + "      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '16.0'\n"
+                  + "    end\n"
+              )
+              if platform_count != 1 or podfile.count(needle) != 1:
+                  raise SystemExit('生成的 iOS Podfile 结构漂移')
+              podfile_path.write_text(podfile.replace(needle, replacement), encoding='utf-8')
+              project = project_path.read_text(encoding='utf-8')
+              project, target_count = re.subn(
+                  r"IPHONEOS_DEPLOYMENT_TARGET = [^;]+;",
+                  "IPHONEOS_DEPLOYMENT_TARGET = 16.0;",
+                  project,
+              )
+              if target_count == 0:
+                  raise SystemExit('生成的 iOS deployment target 缺失')
+              project_path.write_text(project, encoding='utf-8')
+          PY
+          (cd "$ios_device_host" && flutter build ios --no-codesign --release)
+
+          # 正式 podspec 只接收 iOS ARM64 设备库。测试快照在设备构建通过后解除
+          # Simulator 架构排除，并注入仅测试的同宿主 Rust 静态库。
+          python3 - "$build_source/ios/citizen_sdk.podspec" \
+            "$build_source/ios/Tests/SecureEnclaveSecretVaultTests.swift" \
+            "$build_source/ios/Tests/VaultEnvelopeTests.swift" \
+            "$ios_test_host/ios/RunnerTests/RunnerTests.swift" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          podspec = Path(sys.argv[1])
+          source = podspec.read_text(encoding='utf-8')
+          source, count = re.subn(
+              r"^\s*'EXCLUDED_ARCHS\[sdk=iphonesimulator\*\]'\s*=>\s*'i386 x86_64',\n",
+              '',
+              source,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit('CitizenSDK iOS Simulator 架构合同漂移')
+          podspec.write_text(source, encoding='utf-8')
+          tests = [Path(sys.argv[2]), Path(sys.argv[3])]
+          Path(sys.argv[4]).write_text(
+              '\n'.join(path.read_text(encoding='utf-8') for path in tests),
+              encoding='utf-8',
+          )
+          PY
+          (
+            cd "$ios_test_host/ios"
+            CONSOLE_NATIVE_IOS_DIR="$CONSOLE_NATIVE_IOS_SIMULATOR_DIR" pod install
+          )
+          simulator_id="$(python3 - <<'PY'
+          import json
+          import subprocess
+
+          payload = json.loads(subprocess.check_output(
+              ['xcrun', 'simctl', 'list', 'devices', 'available', '--json'],
+              text=True,
+          ))
+          candidates = [
+              device
+              for devices in payload.get('devices', {}).values()
+              for device in devices
+              if device.get('isAvailable') and device.get('name', '').startswith('iPhone')
+          ]
+          if not candidates:
+              raise SystemExit('Runner 没有可用 iPhone Simulator')
+          print(candidates[-1]['udid'])
+          PY
+          )"
+          xcrun simctl boot "$simulator_id" 2>/dev/null || true
+          xcrun simctl bootstatus "$simulator_id" -b
+          xcodebuild test \
+            -workspace "$ios_test_host/ios/Runner.xcworkspace" \
+            -scheme Runner -configuration Debug \
+            -destination "platform=iOS Simulator,id=$simulator_id" \
+            -only-testing:RunnerTests CODE_SIGNING_ALLOWED=NO
+
+      - name: 运行 CitizenSDK Dart 与 Flutter 测试
+        working-directory: ${{ runner.temp }}/citizensdk/build-source
         env:
           DYLD_LIBRARY_PATH: ${{ runner.temp }}/citizensdk/native/host
-        run: flutter test
+        run: |
+          # smoldot 的冻结 Dart 装载器按工作目录查找库；只向隔离构建快照
+          # 注入双架构宿主测试库，绝不回写 CitizenSDK 包源码或正式候选。
+          /usr/bin/ditto "$RUNNER_TEMP/citizensdk/native/host/libsmoldot.dylib" \
+            "$RUNNER_TEMP/citizensdk/build-source/libsmoldot.dylib"
+          /usr/bin/ditto "$RUNNER_TEMP/citizensdk/native/host/libsmoldot.dylib" \
+            "$RUNNER_TEMP/citizensdk/build-source/native/smoldot/dart/libsmoldot.dylib"
+          flutter test
+          # 来源测试内部有 30 秒活链订阅窗口，runner 外层超时必须严格更长。
+          (cd native/smoldot/dart && dart test --timeout=2m)
 
       - name: 生成不可变 CitizenSDK 候选
         run: |

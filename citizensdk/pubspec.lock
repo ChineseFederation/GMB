@@ -629,6 +629,13 @@ packages:
     description: flutter
     source: sdk
     version: "0.0.0"
+  smoldot:
+    dependency: "direct main"
+    description:
+      path: "native/smoldot/dart"
+      relative: true
+    source: path
+    version: "0.1.1"
   source_span:
     dependency: transitive
     description:

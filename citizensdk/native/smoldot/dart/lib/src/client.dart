@@ -1,12 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
-
 import 'package:ffi/ffi.dart';
-
 import 'bindings.dart';
-import 'chain.dart';
 import 'types.dart';
+import 'chain.dart';
 
 /// Global callback registry for async FFI operations
 /// Maps callback ID to completer
@@ -85,7 +83,6 @@ class SmoldotClient {
   static void _dartCallback(int callbackId, int result, Pointer<Utf8> error) {
     final completer = _globalCallbackRegistry.remove(callbackId);
     if (completer == null) {
-      // ignore: avoid_print -- 保留移植真源对异常迟到回调的诊断行为。
       print('Warning: No completer found for callback ID $callbackId');
       return;
     }

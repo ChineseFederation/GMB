@@ -59,10 +59,31 @@ export interface CitizenSdkBootstrapResponse {
   schema: 'citizensdk.chain.bootstrap';
   generated_at: ChainBootstrapResponse['generated_at'];
   cache_ttl_seconds: ChainBootstrapResponse['cache_ttl_seconds'];
-  chain: ChainBootstrapResponse['chain'];
-  light_client: ChainBootstrapResponse['light_client'];
-  p2p: ChainBootstrapResponse['p2p'];
-  security: ChainBootstrapResponse['security'];
+  chain: {
+    chain_id: 'citizenchain';
+    protocol_id: 'citizenchain';
+    genesis_hash: string;
+    state_root: string;
+    ss58_format: 2027;
+    token_symbol: 'GMB';
+    token_decimals: 2;
+  };
+  light_client: {
+    mode: 'smoldot';
+    truth_source: 'p2p_finalized_storage';
+    api_is_truth: false;
+    bundled_assets_required: ['assets/chainspec.json', 'assets/light_sync_state.json'];
+  };
+  p2p: {
+    bootnodes: string[];
+    min_peer_count_hint: 1;
+  };
+  security: {
+    exposes_rpc_url: false;
+    rpc_proxy: false;
+    exposes_private_key_material: false;
+    validator_rpc_public: false;
+  };
 }
 
 export function chainBootstrapRoute(request: Request, env: Env): Response {
@@ -88,15 +109,38 @@ export function buildCitizenSdkBootstrapResponse(
   env: Env
 ): CitizenSdkBootstrapResponse {
   const current = buildChainBootstrapResponse(request, env);
+  // TypeScript 结构类型允许宽对象赋给窄接口；必须逐字段投影，不能把 CitizenApp
+  // 的 chain_name、chain_type、bootnodes_source 或未来宿主字段泄漏给 SDK exact schema。
   return {
     ok: true,
     schema: 'citizensdk.chain.bootstrap',
     generated_at: current.generated_at,
     cache_ttl_seconds: current.cache_ttl_seconds,
-    chain: current.chain,
-    light_client: current.light_client,
-    p2p: current.p2p,
-    security: current.security,
+    chain: {
+      chain_id: current.chain.chain_id,
+      protocol_id: current.chain.protocol_id,
+      genesis_hash: current.chain.genesis_hash,
+      state_root: current.chain.state_root,
+      ss58_format: current.chain.ss58_format,
+      token_symbol: current.chain.token_symbol,
+      token_decimals: current.chain.token_decimals,
+    },
+    light_client: {
+      mode: current.light_client.mode,
+      truth_source: current.light_client.truth_source,
+      api_is_truth: current.light_client.api_is_truth,
+      bundled_assets_required: current.light_client.bundled_assets_required,
+    },
+    p2p: {
+      bootnodes: current.p2p.bootnodes,
+      min_peer_count_hint: current.p2p.min_peer_count_hint,
+    },
+    security: {
+      exposes_rpc_url: current.security.exposes_rpc_url,
+      rpc_proxy: current.security.rpc_proxy,
+      exposes_private_key_material: current.security.exposes_private_key_material,
+      validator_rpc_public: current.security.validator_rpc_public,
+    },
   };
 }
 

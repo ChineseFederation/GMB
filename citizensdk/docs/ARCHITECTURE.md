@@ -1,103 +1,137 @@
 # CitizenSDK 技术架构
 
-## 产品原则
+## 单一产品原则
 
-CitizenSDK 是一个产品、一个版本和一条发布链。内部可以按技术职责分层，但不得拆成
-彼此独立演进的“轻节点 SDK”“钱包 SDK”或“签名 SDK”。Flutter/Dart 接口和原生 C ABI
-也只是同一产品的不同接入面。
+CitizenSDK 是一个产品、一个版本和一条分发链。轻节点、钱包和 signer 是内部能力层，
+不拆成可独立发布的第二套 SDK。Flutter/Dart API 与原生 C ABI 是同一产品的两个接入面。
 
-## 依赖方向
+依赖方向固定为：
 
-规划中的依赖只能从上向下：
+1. 宿主 App 依赖 `package:citizen_sdk/citizen_sdk.dart`。
+2. 公共门面组合轻节点、钱包、交易与公钥验签。
+3. 交易依赖本机轻节点 RPC 和钱包签名回调；钱包依赖公开事实仓储、安全存储及 signer。
+4. Android/iOS 适配层依赖系统硬件安全能力与统一原生核心。
+5. 原生核心依赖收编的 smoldot PoW 快照和 `schnorrkel` 等官方实现。
 
-1. 产品应用依赖 CitizenSDK 公共接口。
-2. 公共接口依赖轻节点、钱包和交易服务。
-3. 钱包与交易服务依赖安全金库抽象、sr25519 和轻节点 RPC。
-4. 平台实现依赖系统安全能力和统一原生核心。
-5. 原生核心依赖收编的 smoldot 快照、`schnorrkel` 等官方实现。
+原生核心与产品无关 Dart 层不得反向依赖 CitizenApp、CitizenWallet、TuyuLove、TuyuLife、
+TuyuBooking、聊天、广场、TUYU 协议、产品导航或产品数据库。
 
-原生核心、钱包或交易代码不得反向依赖 CitizenApp、TuyuLove、TuyuLife、TuyuBooking、
-聊天、广场、TUYU 协议或具体产品导航。
-
-## 当前目录与后续平台目录
+## 目录结构
 
 ```text
 citizensdk/
-├── lib/                 已建立的 Flutter/Dart 公共接口及业务无关实现
-├── native/              轻节点、sr25519 和稳定 C ABI
-├── android/             已建立的 Android 插件、硬件金库和测试源码
-├── ios/                 已建立的 iOS 插件、硬件金库和测试源码
-├── assets/              已固定的公民链 chain spec 与 #0 light sync state
-├── scripts/             外部产物目录构建入口与确定性 Release 打包器
-├── docs/                独立技术文档
-└── test/                已建立的 Dart/Flutter 测试源码
+├── lib/                    CitizenSDK 公共入口和产品无关编排
+├── native/
+│   ├── signer/             唯一 sr25519 原生实现
+│   └── smoldot/
+│       ├── dart/           独立嵌套 Dart smoldot 包
+│       ├── ffi/            轻节点与 signer 的稳定 C ABI
+│       └── pow/            PoW + GRANDPA 轻节点 Rust 快照
+├── android/                Android 插件与硬件金库
+├── ios/                    iOS 插件与硬件金库
+├── assets/                 chain spec 与 #0 light sync state
+├── scripts/                外部原生构建与确定性候选工具
+├── test/                   CitizenSDK Dart/Flutter 合同测试源码
+└── docs/                   产品技术文档
 ```
 
-`macos/`、`linux/`、`windows/` 与 Console 工具目录只有在相应步骤单独批准后才能新增；
-当前目录树不伪造这些平台的安全能力。
+根 Flutter 包通过 path dependency 使用 `native/smoldot/dart`。先前存在的
+`lib/src/smoldot` 镜像和 `test/smoldot` 镜像已经删除，避免同一绑定存在两个来源。
+嵌套包的 24 个来源文件由固定闭集和逐文件哈希保护；唯一额外文件是
+`native/smoldot/dart/example/README.md`。
 
-## 构建与 Release 依赖方向
+## 运行时分层
 
-CitizenSDK 没有第二套 CI/Release 系统。GMB 顶层唯一注册入口
-`.github/workflows/gmb-repository.yml` 路由到两份可审查的分组真源：
+- `CitizenSdk`：组合 `chain`、`rpc`、`wallet`、`transfers`、finalized 流水与 `signer`。
+- `CitizenLightClient`：管理 smoldot 生命周期、随包创世锚、bootnode、同步健康、
+  finalized database、JSON-RPC 与链头订阅。
+- `WalletService`：管理一只无根热钱包、`//0..//1989` 多账户、创建/导入/追加/删除、完整
+  可用性门禁、账户改名、本地任意载荷签名和用户主动的子账户私钥导出。
+- `ChainRpc`：只经本机轻节点读取 finalized 状态、提交 extrinsic、订阅状态并核对
+  `System.Events`；单/批读取 `System.Account` free/reserved，并从 runtime metadata 估算费用。
+- `SignedExtrinsicBuilder` / `TransferService`：使用实时 runtime version、nonce、immortal era、
+  sr25519 和公民链 `transfer_with_remark` 编码，并在广播前持久化本机 pending。
+- `FinalizedTransactionScanner` / `FinalizedTransactionHistory`：按账户持久游标增量扫描 finalized
+  转账，以 txHash、同 extrinsic index 的 System outcome 收敛本机 pending；每块事实原子提交。
+- `lib/src/platform`：Android/iOS 硬件金库、公开钱包状态及 finalized database 的标准装配。
 
-1. `.github/workflows/citizensdk/ci-sdk.yml` 检查锁定依赖、Dart/Flutter、三个 Rust
-   workspace、Android/iOS 原生核心和 Flutter 测试，再生成 CI 候选。
-2. `.github/workflows/citizensdk/release-sdk.yml` 用 `ci_run_id` 复核同产品、同目标、
-   同 workflow 的成功 CI 与准确 `source_sha`，重建候选后走统一原子 Release 事务。
-3. `.github/scripts/citizensdk/*.mjs` 按 GMB 既有规则内嵌逐字一致的公共依赖实现；
-   SDK 候选打包实现也内嵌在本产品两条动作入口中，防止 Release 工具跨产品导入。
-4. `citizensdk/scripts/build-native.sh` 和 `release.mjs` 只写调用方显式提供的外部目录。
-   GitHub 使用 `$RUNNER_TEMP/citizensdk`，Console 本机以后只允许使用
-   `/Users/rhett/Only/console/target/citizensdk`。
+交易成功分为三个事实：返回 txHash 只表示本机轻节点接受提交；`inBlock/finalized` 只表示
+包含；只有按 txHash 定位同一 extrinsic index 并读到该 index 的
+`System.ExtrinsicSuccess` 才是执行成功。`ExtrinsicFailed` 会返回明确失败；未取得明确事件时
+返回未核实，不把“没找到失败”猜成成功。submit-only 后台观察一旦收到有效 `finalized`，
+等待式交易一旦收到要求的 `inBlock/finalized`，终态所有权都移交给同块 `System.Events` 核对；
+交易池订阅此后的迟到消息、畸形状态、错误或关闭不得再制造第二个终态。
 
-CI 与 Release 是同一 `citizensdk` 产品、同一个 `sdk` 目标和同一条语义版本线，Tag 前缀
-固定为 `citizensdk-v`。宿主 macOS 动态库只供 `flutter_tester` 使用，不进入 Release
-平台声明，也不表示已经提供 macOS SDK 适配。
+runtime version 与 metadata 组成同一块的 `ChainRuntimeContext`。缓存身份绑定 `specVersion`；
+不同版本的 in-flight 请求互不复用，前一代请求迟到不得覆盖新 registry。构造签名交易、读取链上
+费率以及解码目标块事件都消费对应 context，避免长驻进程跨升级后拼接前一代 metadata 与新
+`transactionVersion`。状态回调和非阻塞订阅取消都按 best-effort 隔离异常，不拥有状态机。
 
-当前已创建 `native/signer`、净化后的 `native/smoldot/ffi`，逐字节迁入
-`native/smoldot/pow/light-base`，并在 `native/smoldot/pow/lib` 完成 chain、chain-spec、
-finality、header、verify、trie、executor、database、json-rpc、libp2p、network、sync 与
-transactions 原生源码闭包。`native/smoldot/pow` 是仅含 `lib` 和 `light-base` 的内部 Cargo
-workspace；根 signer workspace、FFI workspace 和 PoW workspace 各自保存固定 `Cargo.lock`，
-Dart/Flutter 依赖保存 `pubspec.lock`。锁文件只固定依赖，尚未执行编译或测试验收。
+批量余额先把 AccountId/公民 SS58 规范化为唯一 storage key，通过轻节点已有的 finalized
+batch storage 一次读取，再按原始输入顺序和重复项重建不可变结果；传输错误上抛，不能被
+“账户不存在即零余额”的规则吞掉。
 
-Dart 层使用 `package:citizen_sdk/citizen_sdk.dart` 作为唯一稳定入口：
+## 数据与安全隔离
 
-1. `CitizenSdk` 组合轻节点、钱包、转账和验签。
-2. `CitizenLightClient` 管理 smoldot、随包创世锚、bootnode 和 finalized database。
-3. `WalletService` 只依赖 `WalletRepository`、`SecureSeedStore` 与原生 signer。
-4. `ChainRpc`、`SignedExtrinsicBuilder`、`TransferService` 只依赖轻节点和签名回调。
-5. `lib/src/platform` 把 Android/iOS 硬件金库、公开钱包状态与 finalized database
-   装配成 `CitizenSdk.mobile()`，不承载任何宿主业务。
+| 数据 | 命名空间 | 内容 |
+|---|---|---|
+| 钱包公开事实 | `citizensdk.wallet.state.v1` | profile、revision、cleanup plan，不含秘密 |
+| 轻节点数据库 | `citizensdk.smoldot.database.v1` | 公开 finalized database |
+| 交易公开事实 | `citizensdk.transactions.state.v1` | finalized 流水、pending、逐账户游标，不含秘密 |
+| 账户密文 | `citizensdk.wallet.secret.*` | 硬件金库信封 |
 
-smoldot Dart 绑定保留在 `lib/src/smoldot` 内部，不作为第二个可独立版本化的软件包。
-现有 CitizenApp 的全局单例、Isar schema、日志、导航和服务端签名交易中继均未迁入。
+新硬件信封产品标识固定为 `citizensdk`。助记词和母种子不持久化；每个账户只保存 child
+mini-secret 的设备密文。libp2p Noise 的连接级临时传输密钥不是钱包、TUYU 或管理员身份，
+不进入钱包仓储或平台金库。
 
-移动端三类数据严格隔离：`citizensdk.wallet.state.v1` 只保存公开账户事实与清理计划，
-`citizensdk.smoldot.database.v1` 只保存公开链同步数据库，硬件密文写入
-`citizensdk.wallet.secret.*`。新硬件信封的产品标识恒为 `citizensdk`。
+SDK 暴露底层仓储接口供受控集成和测试注入，因此宿主进程属于信任边界。标准移动装配只用
+内置硬件金库；自行注入 `SecureSeedStore` 的宿主必须接受能够观察传入秘密的安全责任。
 
-根 `Cargo.toml`、PoW workspace 和 FFI workspace 是同一 CitizenSDK 产品内的构建边界，
-不是三个独立 SDK。保留 FFI 独立边界，是为了让其 `panic = "unwind"` 安全策略在最终链接
-时覆盖依赖，确保 signer 的 `catch_unwind` 能把 panic 转为错误码。
+## 原生边界
 
-`pow/lib` 的 `author` 和全节点 identity 私钥管理不属于轻客户端 SDK：出块逻辑不得进入
-移动轻节点，全节点 keystore 和 seed phrase 解析也不得成为热钱包之外的第二条私钥路径。
-仅保留 JSON-RPC 所需的 `identity::ss58` 公钥地址编解码；用户钱包统一依赖
-`native/signer` 与后续平台安全金库。
+根 signer workspace、FFI workspace 与 PoW workspace 都是 CitizenSDK 内部构建边界，不是
+三个 SDK。FFI 的 Release profile 保持 `panic = "unwind"`，使 signer 的 `catch_unwind`
+能够把 panic 转成错误码。
 
-SDK 从 `/chain/citizensdk/bootstrap` 读取只含链身份、轻节点、bootnode 和安全边界的启动清单，
-wire schema 固定为 `citizensdk.chain.bootstrap`。现有宿主产品 bootstrap、广场、聊天、媒体和
-交易中继配置不进入 SDK 清单；服务端只复用链身份数据，不形成第二条链状态真源。
+轻客户端不收编全节点 `author` 出块代码，以及 identity keystore/seed phrase 私钥入口；
+只保留 JSON-RPC 所需的 `identity::ss58` 公钥地址编解码。全节点 SQLite 数据库源码按上游
+快照保留并受 feature 控制，移动轻节点使用 finalized database 序列化。
 
-libp2p Noise 会使用连接级临时传输密钥。当前稳定实现为每条连接重新生成随机密钥并用
-`Zeroizing` 清理；它不是公民账户、钱包、TUYU 账户或商家管理员身份，不得持久化到钱包
-数据库或平台金库。
+## CI、Release 与平台边界
 
-## SDK 外部边界
+GMB 七个路由产品共有 24 条分组 CI/Release workflow，并由唯一顶层
+`.github/workflows/gmb-repository.yml` 注册。CitizenSDK 使用其中两条：
 
-- TUYU v1 继续由途遇账户体系实现；途遇客户端可以调用 SDK 的本地签名能力。
-- 广场和聊天继续由各产品及其服务边界实现。
-- CitizenWallet 冷钱包是独立产品，不迁入本 SDK。
-- CitizenApp 在 SDK 完成稳定验收前不改代码、不改依赖。
+- `.github/workflows/citizensdk/ci-sdk.yml`
+- `.github/workflows/citizensdk/release-sdk.yml`
+
+CI 与 Release 都从干净源码建立隔离构建快照，执行嵌套与根依赖锁检查、静态检查、Rust 与
+Dart/Flutter 测试、移动原生构建和候选验证。嵌套 smoldot Dart 包必须保持来源字节，因而
+只执行 `dart analyze --no-fatal-warnings`，不由当前 formatter 改写。Release 还会验证指定
+成功 CI 的 workflow、显示标题、产品目标、成功状态与准确 source SHA，不读取、下载或比较
+CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然一致作为发布成立条件。
+
+测试执行合同要求根 Flutter 230 项完整运行；冻结 smoldot Dart 51 项必须用
+`dart test --timeout=2m` 运行，以覆盖其中最长 30 秒的活链订阅窗口。交易执行确认使用带
+`System.Event`、`Phase` 与 `DispatchInfo` 类型的真实 Substrate v14 metadata 夹具，不得退回
+只能解常量的最小 metadata。Android 必须真实运行插件 JUnit，iOS 必须在 Simulator 上执行
+XCTest；编译成功不等于平台测试执行成功。这些是每个准确提交都要重新满足的测试合同，不是
+对尚未完成最终验收的日期性结论。
+
+2026-08-29 当前冻结源码的 Console `.work` 隔离快照已实际通过根 Flutter
+230/230 和冻结 smoldot Dart 51/51。signer Rust 6/6、FFI Rust 5/5、PoW Rust
+290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、Android JUnit 3/3
+与 Console 99/99 是同一次任务中的先前执行记录，相关生产字节未变；本轮禁止运行
+Git，因而不把内部调用 Git 的 GMB 完整仓库套件记为当前通过。iOS 的 2 项 XCTest
+已编译链接，但本机没有 Simulator runtime，未宣称本地执行成功；正式 workflow
+在 GitHub macOS Runner 上要求真实执行并失败关闭。
+
+当前正式候选只发布 Android `arm64-v8a` 与 iOS `arm64`。原生核心的分层允许以后增加
+macOS、Linux、Windows 适配，但这些平台当前没有已交付的插件、硬件金库和正式资产。
+
+## 产品外部边界
+
+- TUYU v1 由途遇账户体系编码和验证，可选择调用钱包本地签名，但不进入 SDK。
+- 广场和聊天由各产品及其 Cloudflare/服务端边界实现。
+- CitizenWallet 冷钱包保持独立。
+- CitizenApp 在单独批准切换前继续使用现有实现。
