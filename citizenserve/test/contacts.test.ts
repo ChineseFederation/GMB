@@ -50,6 +50,22 @@ describe('端到端加密通讯录 API', () => {
     ).rejects.toMatchObject({ code: 'device_time_invalid' });
   });
 
+  it('有效设备证明只验签且不为请求 nonce 写 D1', async () => {
+    const context = await buildContext();
+
+    const response = await call(
+      context,
+      context.accountA,
+      'GET',
+      '/square/contacts',
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      context.db.preparedSql.some((sql) => sql.includes('square_request_nonces')),
+    ).toBe(false);
+  });
+
   it('按 Session CID 隔离 CRUD，且 D1 不出现联系人账户或私人备注明文', async () => {
     const context = await buildContext();
     const secretContactAccount = '5ContactAccountMustNeverEnterCloudflare';
@@ -403,12 +419,6 @@ class ContactStmt {
   }
 
   async run(): Promise<{ meta: { changes: number } }> {
-    if (this.sql.includes('INSERT OR IGNORE INTO square_request_nonces')) {
-      const nonceHash = this.binds[0] as string;
-      if (this.db.requestNonces.has(nonceHash)) return { meta: { changes: 0 } };
-      this.db.requestNonces.add(nonceHash);
-      return { meta: { changes: 1 } };
-    }
     if (this.sql.includes('INSERT INTO square_contacts')) {
       const row: ContactCiphertextRow = {
         cid_number: this.binds[0] as string,
@@ -448,10 +458,11 @@ class ContactDb {
     binding_revision: number;
     account_id: string;
   }>();
-  readonly requestNonces = new Set<string>();
+  readonly preparedSql: string[] = [];
   rateAllowed = true;
 
   prepare(sql: string): ContactStmt {
+    this.preparedSql.push(sql);
     return new ContactStmt(this, sql);
   }
 }

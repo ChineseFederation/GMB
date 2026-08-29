@@ -187,6 +187,7 @@ describe("生产 API 路径契约(Worker ⇔ Flutter 无版本路由一致)", ()
 
   it("Worker 路由分发与资源白名单只登记无版本业务路径", () => {
     expect(workerRoutes).toContain('path === "/chain/bootstrap"');
+    expect(workerRoutes).toContain('path === "/chain/citizensdk/bootstrap"');
     expect(workerRoutes).toContain('path === "/square/creator/plan"');
     expect(routeCatalog).toContain("^\\/square\\/contacts$");
     expect(routeCatalog).toContain("^\\/chat\\/push-endpoint$");
@@ -287,7 +288,7 @@ describe("CitizenServe 最终结构和定时任务保持单一合同", () => {
     const { resolve } = await import("node:path");
     const schema = await readFile(resolve(process.cwd(), "schema/citizenserve.sql"), "utf8");
 
-    expect(schema.match(/CREATE TABLE IF NOT EXISTS /g)?.length).toBe(28);
+    expect(schema.match(/CREATE TABLE IF NOT EXISTS /g)?.length).toBe(27);
     expect(schema).not.toMatch(/CREATE TABLE (?!IF NOT EXISTS )/);
     expect(schema).not.toMatch(/CREATE (?:UNIQUE )?INDEX (?!IF NOT EXISTS )/);
     expect(schema).toContain("CREATE TABLE IF NOT EXISTS chat_attachments");

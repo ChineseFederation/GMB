@@ -153,15 +153,6 @@ CREATE TABLE IF NOT EXISTS square_device_subkeys (
 CREATE INDEX IF NOT EXISTS idx_square_device_subkeys_cid_account
   ON square_device_subkeys(cid_number, account_id);
 
-CREATE TABLE IF NOT EXISTS square_request_nonces (
-  nonce_hash TEXT PRIMARY KEY,
-  cid_number TEXT NOT NULL,
-  expires_at INTEGER NOT NULL,
-  created_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_square_request_nonces_expires
-  ON square_request_nonces(expires_at);
-
 -- 通讯录只保存端到端密文；联系人账户、名称和关系明文不得进入 Cloudflare。
 -- 属主始终是 cid_number；binding_revision + account_id 只标明密文使用哪一版钱包钥匙，
 -- 让换绑前后版本可并存并在 finalized 后原子切换读取，不构成第二身份主键。

@@ -14,8 +14,9 @@ import { assertRequestBodyLimit, readLimitedBytes } from '../limits/request';
 const REQUEST_TIME_HEADER = 'x-device-time';
 const REQUEST_NONCE_HEADER = 'x-device-nonce';
 const REQUEST_SIGNATURE_HEADER = 'x-device-signature';
-const REQUEST_MAX_SKEW_MS = 5 * 60 * 1000;
-const REQUEST_NONCE_TTL_MS = 15 * 60 * 1000;
+// 请求证明只接受一分钟内的签名。nonce 继续参与签名规范，但禁止为每次
+// App 请求写 D1；HTTPS、短时间窗、会话绑定、P-256 验签和边缘限流共同门禁。
+const REQUEST_MAX_SKEW_MS = 60 * 1000;
 const DEFAULT_WEB_ORIGIN = 'https://www.crcfrcn.com';
 
 interface RateWindowRow {
@@ -94,6 +95,7 @@ export async function guardRequest(request: Request, env: Env, path: string): Pr
   if (
     path === '/health' ||
     path === '/chain/bootstrap' ||
+    path === '/chain/citizensdk/bootstrap' ||
     path.startsWith('/security/')
   ) {
     // 这些简单公开路由不读 D1/R2 或外部服务；媒体由独立 R2 域直接交付。
@@ -271,14 +273,9 @@ async function requireDeviceProof(
     throw new HttpError(401, 'device_signature_invalid', '设备请求签名校验失败');
   }
 
-  const nonceHash = await sha256Hex(`${session.cid_number}:${nonce}`);
-  const inserted = await env.DB.prepare(
-    `INSERT OR IGNORE INTO square_request_nonces
-      (nonce_hash, cid_number, expires_at, created_at) VALUES (?, ?, ?, ?)`
-  ).bind(nonceHash, session.cid_number, nowMs() + REQUEST_NONCE_TTL_MS, nowMs()).run();
-  if ((inserted.meta?.changes ?? 0) !== 1) {
-    throw new HttpError(409, 'device_request_replayed', '设备请求已被使用');
-  }
+  // 禁止恢复服务端 nonce 台账：它会让每个只读、Chat 和业务请求至少写一行
+  // D1，过期清理再写一次，直接放大免费额度。nonce 仅作为签名唯一输入；业务
+  // 写入继续由各自既有业务唯一键收敛，边缘限流负责有界拒绝重复流量。
 }
 
 async function requestBodyHash(request: Request, path: string): Promise<string> {
@@ -356,7 +353,6 @@ export async function cleanupSecurityState(env: Env): Promise<void> {
   const now = nowMs();
   await env.DB.batch([
     env.DB.prepare('DELETE FROM square_login_challenges WHERE expires_at <= ?').bind(now),
-    env.DB.prepare('DELETE FROM square_request_nonces WHERE expires_at <= ?').bind(now),
     env.DB.prepare('DELETE FROM rate_windows WHERE expires_at <= ?').bind(now)
   ]);
 }
