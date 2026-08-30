@@ -58,6 +58,7 @@ class _ForegroundWakeChatRuntime extends ChatRuntime {
   Future<Future<void> Function()?> startRealtimeSync({
     required Future<void> Function() onNotice,
     Future<void> Function()? onDisconnected,
+    Future<void> Function(Map<String, dynamic> signal)? onSignal,
     bool retryOutgoingOnConnect = true,
   }) async {
     startCount += 1;
@@ -77,6 +78,7 @@ class _InitiallyFailingChatRuntime extends _ForegroundWakeChatRuntime {
   Future<Future<void> Function()?> startRealtimeSync({
     required Future<void> Function() onNotice,
     Future<void> Function()? onDisconnected,
+    Future<void> Function(Map<String, dynamic> signal)? onSignal,
     bool retryOutgoingOnConnect = true,
   }) async {
     startCount += 1;

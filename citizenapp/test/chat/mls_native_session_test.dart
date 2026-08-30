@@ -5,9 +5,7 @@ import 'dart:io';
 import 'package:citizenapp/chat/chat_flow.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
-import 'package:citizenapp/chat/crypto/mls_native.dart';
-import 'package:citizenapp/chat/crypto/mls_state_store.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/isar/chat_isar.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/chat/transport/chat_transport.dart';
@@ -15,7 +13,7 @@ import 'package:citizenapp/security/local_data_key.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../support/isar_test_env.dart';
-import '../support/smoldot_native_probe.dart';
+import '../support/chat_sdk_native_probe.dart';
 
 /// MLS 本地状态信封测试密钥（固定 32 字节，仅测试用）。
 final Uint8List _testStateKey = Uint8List.fromList(
@@ -33,18 +31,18 @@ const _genesisHash =
 void main() {
   useIsolatedIsar();
 
-  final skip = smoldotNativeSkipReason();
+  final skip = chatSdkNativeSkipReason();
 
   test('native HPKE 设备公钥以当前 CID 加密状态为唯一真源', () async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-identity-');
     addTearDown(() => root.delete(recursive: true));
     final store = MlsStateStore(
       Directory('${root.path}/alice'),
-      ownerCidNumber: _aliceCidNumber,
+      ownerUserId: _aliceCidNumber,
       stateKey: Uint8List.fromList(_testStateKey),
     );
     const bootstrap = ChatDevice(
-      cidNumber: _aliceCidNumber,
+      userId: _aliceCidNumber,
       deviceId: 'alice-phone',
       devicePublicKey: '00',
     );
@@ -56,7 +54,7 @@ void main() {
     expect(second, first);
 
     const wrongOwner = ChatDevice(
-      cidNumber: _bobCidNumber,
+      userId: _bobCidNumber,
       deviceId: 'bob-phone',
       devicePublicKey: '00',
     );
@@ -79,21 +77,21 @@ void main() {
       addTearDown(() => root.delete(recursive: true));
       final aliceStore = MlsStateStore(
         Directory('${root.path}/alice'),
-        ownerCidNumber: _aliceCidNumber,
+        ownerUserId: _aliceCidNumber,
         stateKey: _testStateKey,
       );
       final bobStore = MlsStateStore(
         Directory('${root.path}/bob'),
-        ownerCidNumber: _bobCidNumber,
+        ownerUserId: _bobCidNumber,
         stateKey: _testStateKey,
       );
       const alice = ChatDevice(
-        cidNumber: _aliceCidNumber,
+        userId: _aliceCidNumber,
         deviceId: 'alice-phone',
         devicePublicKey: 'aabbcc',
       );
       const bob = ChatDevice(
-        cidNumber: _bobCidNumber,
+        userId: _bobCidNumber,
         deviceId: 'bob-phone',
         devicePublicKey: 'ddeeff',
       );
@@ -105,7 +103,7 @@ void main() {
       );
       final first = await aliceCrypto.encrypt(
         conversationId: 'conv-alice-bob',
-        recipientCidNumber: _bobCidNumber,
+        recipientUserId: _bobCidNumber,
         recipientDevicePublicKey: bobDevicePublicKey,
         plaintext: utf8.encode('第一条消息'),
       );
@@ -126,7 +124,7 @@ void main() {
       );
       final second = await aliceAfterRestart.encrypt(
         conversationId: 'conv-alice-bob',
-        recipientCidNumber: _bobCidNumber,
+        recipientUserId: _bobCidNumber,
         recipientDevicePublicKey: bobDevicePublicKey,
         plaintext: utf8.encode('重启后的第二条消息'),
       );
@@ -143,12 +141,12 @@ void main() {
     final root = await Directory.systemTemp.createTemp('gmb-chat-direct-');
     addTearDown(() => root.delete(recursive: true));
     const alice = ChatDevice(
-      cidNumber: _aliceCidNumber,
+      userId: _aliceCidNumber,
       deviceId: 'alice-phone',
       devicePublicKey: 'aabbcc',
     );
     const bob = ChatDevice(
-      cidNumber: _bobCidNumber,
+      userId: _bobCidNumber,
       deviceId: 'bob-phone',
       devicePublicKey: 'ddeeff',
     );
@@ -156,7 +154,7 @@ void main() {
       identity: alice,
       stateStore: MlsStateStore(
         Directory('${root.path}/alice'),
-        ownerCidNumber: _aliceCidNumber,
+        ownerUserId: _aliceCidNumber,
         stateKey: _testStateKey,
       ),
     );
@@ -164,7 +162,7 @@ void main() {
       identity: bob,
       stateStore: MlsStateStore(
         Directory('${root.path}/bob'),
-        ownerCidNumber: _bobCidNumber,
+        ownerUserId: _bobCidNumber,
         stateKey: _testStateKey,
       ),
     );

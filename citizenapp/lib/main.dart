@@ -11,6 +11,10 @@ import 'package:citizenapp/citizen/citizen_tab_page.dart';
 import 'package:citizenapp/chat/chat_push_service.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/chat/chat_tab.dart';
+import 'package:citizenapp/chat/call/coordinator.dart';
+import 'package:citizenapp/chat/call/page.dart';
+import 'package:citizenapp/chat/call/scope.dart';
+import 'package:citizenapp/chat/call/transport.dart';
 import 'package:citizenapp/rpc/smoldot_client.dart';
 import 'package:citizenapp/security/app_lock_service.dart';
 import 'package:citizenapp/security/emergency_wipe_platform.dart';
@@ -787,6 +791,9 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
   final AppUpdateController _updateController = AppUpdateController.instance;
   late final ValueNotifier<int> _selectedTab;
   ChatRuntime? _chatRuntime;
+  late final CitizenCallCoordinator _callCoordinator;
+  StreamSubscription<CitizenCallHandle>? _incomingCallSubscription;
+  bool _openingIncomingCall = false;
   late int _currentIndex;
   int _pendingVoteCount = 0;
   int _squareNotifyCount = 0;
@@ -808,6 +815,13 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     super.initState();
     _currentIndex = widget.initialTabIndex;
     _selectedTab = ValueNotifier<int>(_currentIndex);
+    _callCoordinator = CitizenCallCoordinator(
+      transport: CitizenCallTransport.fromRuntime(_chatRuntimeForTab),
+      readLocalUserId: () async =>
+          await _chatRuntimeForTab.readCidNumber() ?? '',
+    );
+    _incomingCallSubscription =
+        _callCoordinator.incomingCalls.listen(_handleIncomingCall);
     WidgetsBinding.instance.addObserver(this);
     _updateController.addListener(_handleUpdateStateChanged);
     _checkRootStatus();
@@ -859,6 +873,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
         }
         _foregroundSignalStop = await _chatRuntimeForTab.startRealtimeSync(
           onNotice: () async {},
+          onSignal: _callCoordinator.handleFrame,
           retryOutgoingOnConnect: false,
         );
         _foregroundSignalRetry?.cancel();
@@ -910,6 +925,22 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
   }
 
+  void _handleIncomingCall(CitizenCallHandle handle) {
+    if (!mounted || _openingIncomingCall || handle.session.state.isTerminal) {
+      return;
+    }
+    _openingIncomingCall = true;
+    scheduleMicrotask(() async {
+      try {
+        if (mounted && !handle.session.state.isTerminal) {
+          await openIncomingCallPage(context, handle);
+        }
+      } finally {
+        _openingIncomingCall = false;
+      }
+    });
+  }
+
   void _openSquareTab() {
     if (!mounted || _currentIndex == 0) return;
     _selectedTab.value = 0;
@@ -926,6 +957,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     _queueForegroundSignals(false);
     _updateController.removeListener(_handleUpdateStateChanged);
     unawaited(_pushOpenSub?.cancel());
+    unawaited(_incomingCallSubscription?.cancel());
+    unawaited(_callCoordinator.dispose());
     _selectedTab.dispose();
     super.dispose();
   }
@@ -1170,7 +1203,10 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       key: const ValueKey('app-shell-system-ui-style'),
       value: AppShell.systemUiOverlayStyleForTab(_currentIndex),
-      child: scaffold,
+      child: ChatCallScope(
+        coordinator: _callCoordinator,
+        child: scaffold,
+      ),
     );
   }
 }

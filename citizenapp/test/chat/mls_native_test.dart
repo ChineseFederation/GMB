@@ -1,18 +1,18 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
-import 'package:citizenapp/chat/crypto/mls_native.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 
-import '../support/smoldot_native_probe.dart';
+import '../support/chat_sdk_native_probe.dart';
 
 void main() {
-  // 官方 CI 先构建宿主库；开发者在无 libsmoldot 的临时环境直跑时才跳过。
-  final skip = smoldotNativeSkipReason();
+  // 官方 CI 先构建宿主库；开发者在无 libchat_sdk 的临时环境直跑时才跳过。
+  final skip = chatSdkNativeSkipReason();
 
   test('native OpenMLS creates a real KeyPackage', () async {
     final crypto = NativeMlsCrypto();
     final keyPackage = await crypto.createKeyPackage(
       const ChatDevice(
-        cidNumber: 'CN220-CTZN2-100000001-2026',
+        userId: 'CN220-CTZN2-100000001-2026',
         deviceId: 'alice-phone',
         devicePublicKey: 'aabbcc',
       ),
@@ -37,7 +37,7 @@ void main() {
     final crypto = NativeMlsCrypto();
     final keyPackage = await crypto.createKeyPackage(
       const ChatDevice(
-        cidNumber: 'CN220-CTZN2-100000001-2026',
+        userId: 'CN220-CTZN2-100000001-2026',
         deviceId: 'alice-phone',
         devicePublicKey: 'aabbcc',
       ),

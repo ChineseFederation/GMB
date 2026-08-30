@@ -23,7 +23,7 @@ Widget _host({ChatSendTextCallback? onSendText}) => MaterialApp(
         ownerCidNumber: 'CN220-CTZN2-100000001-2026',
         accountId:
             '0x1111111111111111111111111111111111111111111111111111111111111111',
-        peerUserId:
+        peerCidNumber:
             '0x2222222222222222222222222222222222222222222222222222222222222222',
         title: 'Bob',
         store: _EmptyStore(),

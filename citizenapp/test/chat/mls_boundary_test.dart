@@ -1,11 +1,10 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
-import 'package:citizenapp/chat/crypto/mls_native.dart';
-import 'package:citizenapp/chat/crypto/mls_state_store.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/chat/storage/chat_crypto.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
@@ -36,7 +35,7 @@ void main() {
   group('ChatDevice', () {
     test('accepts CID as chat identity without wallet private key', () {
       const identity = ChatDevice(
-        cidNumber: 'CN220-CTZN2-100000001-2026',
+        userId: 'CN220-CTZN2-100000001-2026',
         deviceId: 'alice-phone',
         devicePublicKey: '0xaabbcc',
       );
@@ -48,7 +47,7 @@ void main() {
 
     test('rejects invalid device public key hex', () {
       const identity = ChatDevice(
-        cidNumber: 'CN220-CTZN2-100000001-2026',
+        userId: 'CN220-CTZN2-100000001-2026',
         deviceId: 'alice-phone',
         devicePublicKey: 'xyz',
       );
@@ -228,7 +227,7 @@ void main() {
   group('Chat 用户错误文案', () {
     test('未知 StateError 不泄漏 Bad state 或底层乱码', () {
       final message = chatUserErrorMessage(
-        StateError('native /tmp/libsmoldot \uFFFD\u0000 debug'),
+        StateError('native /tmp/libchat_sdk \uFFFD\u0000 debug'),
       );
 
       expect(message, '聊天暂时无法使用，请稍后重试');

@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:citizenapp/chat/media/attachment_vault.dart';
+import 'package:chat_sdk/media.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 附件本地静止态加密验收。

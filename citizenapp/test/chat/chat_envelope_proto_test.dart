@@ -1,4 +1,5 @@
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:chat_sdk/protocol.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -7,12 +8,12 @@ void main() {
     final envelope = ChatEnvelope(
       envelopeId: 'env-1',
       conversationId: 'conv-1',
-      senderCidNumber:
+      senderUserId:
           '0x1111111111111111111111111111111111111111111111111111111111111111',
-      recipientCidNumber:
+      recipientUserId:
           '0x2222222222222222222222222222222222222222222222222222222222222222',
       senderDeviceId: 'alice-phone',
-      mlsWireMessage: [0xaa, 0xbb, 0xcc],
+      mlsMessage: [0xaa, 0xbb, 0xcc],
       encryptedMetadata: [0x01, 0x02],
       createdAtMillis: Int64(1),
       ttlMillis: Int64(60000),
@@ -32,7 +33,7 @@ void main() {
 
   test('ChatRoute 只保存设备和近场路由', () {
     final route = ChatRoute(
-      peerCidNumber:
+      peerUserId:
           '0x2222222222222222222222222222222222222222222222222222222222222222',
       routeDisplayName: 'Bob',
       deviceId: 'bob-phone',

@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -6,7 +7,7 @@ import 'dart:typed_data';
 import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/protocol.dart';
 import 'package:citizenapp/chat/storage/chat_crypto.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/isar/chat_isar.dart';
@@ -1168,7 +1169,7 @@ void main() {
         return saveText(
           store,
           envelopeId,
-          '',
+          '建立记录后立即清空',
           conversationId: conversationId,
         );
       }

@@ -3,6 +3,7 @@
 // 本层不实现密码学;核心可注入 fake 单测。
 // 群消息流程由本模块测试固定。
 
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
@@ -10,9 +11,7 @@ import 'dart:math';
 import '../chat_flow.dart';
 import '../chat_models.dart';
 import '../chat_payload.dart';
-import '../crypto/mls_boundary.dart';
-import '../crypto/mls_group_boundary.dart';
-import '../proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import '../storage/chat_store.dart';
 import '../transport/chat_transport.dart';
 import 'group_control.dart';
@@ -368,17 +367,21 @@ class ChatGroupFlow {
         !pendingLocalMessageId.startsWith('pending:')) {
       throw StateError('Chat 群待发送消息编号不合法');
     }
-    final messageId = pendingLocalMessageId == null
-        ? '$groupId-msg-$nowMillis-${_nonce()}'
-        : '$groupId-msg-${pendingLocalMessageId.substring('pending:'.length)}';
     final envelopes = GroupFanout.fanOut(
       wire: wire,
       recipientCidNumbers: recipients,
       senderCidNumber: senderCidNumber,
       senderDeviceId: senderDeviceId,
-      messageId: messageId,
       nowMillis: nowMillis,
       ttlMillis: defaultTtlMillis,
+    );
+    // 群逻辑行直接由本次 OpenMLS 密文的既有字段确定，不再生成另一套消息编号。
+    final logicalEnvelopeId = EnvelopeId.derive(
+      conversationId: groupId,
+      senderUserId: senderCidNumber,
+      recipientUserId: senderCidNumber,
+      createdAtMillis: nowMillis,
+      encryptedMessage: wire.wireBytes,
     );
     await _store.saveOutgoingGroupMessage(
       bindingToken: _bindingToken,
@@ -387,7 +390,7 @@ class ChatGroupFlow {
       groupId: groupId,
       senderCidNumber: senderCidNumber,
       senderDeviceId: senderDeviceId,
-      logicalEnvelopeId: messageId,
+      logicalEnvelopeId: logicalEnvelopeId,
       messageKind: messageKind,
       payload: payload,
       createdAtMillis: nowMillis,
@@ -422,7 +425,7 @@ class ChatGroupFlow {
       await _store.markOutgoingDelivery(
         bindingToken: _bindingToken,
         ownerCidNumber: _ownerCidNumber,
-        envelopeId: messageId,
+        envelopeId: logicalEnvelopeId,
         state: anySent
             ? ChatMessageDeliveryState.sent
             : ChatMessageDeliveryState.queued,
@@ -653,13 +656,12 @@ class ChatGroupFlow {
     required int nowMillis,
     required String tag,
   }) async {
-    final messageId = '$groupId-$tag-$nowMillis-${_nonce()}';
+    if (tag.isEmpty) throw ArgumentError.value(tag, 'tag', '群握手类型不能为空');
     final envelopes = GroupFanout.fanOut(
       wire: wire,
       recipientCidNumbers: recipients,
       senderCidNumber: senderCidNumber,
       senderDeviceId: senderDeviceId,
-      messageId: messageId,
       nowMillis: nowMillis,
       ttlMillis: defaultTtlMillis,
     );

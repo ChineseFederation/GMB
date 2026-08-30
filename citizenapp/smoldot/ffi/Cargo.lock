@@ -505,6 +505,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "chat_sdk_native"
+version = "1.0.0"
+dependencies = [
+ "aes-gcm",
+ "base64",
+ "hex",
+ "hpke-rs",
+ "hpke-rs-rust-crypto",
+ "openmls",
+ "openmls_basic_credential",
+ "openmls_memory_storage",
+ "openmls_rust_crypto",
+ "openmls_traits",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3157,6 +3175,7 @@ dependencies = [
  "base64",
  "blake2-rfc",
  "cbindgen",
+ "chat_sdk_native",
  "citizen-signer",
  "env_logger",
  "futures",
@@ -3167,11 +3186,6 @@ dependencies = [
  "libc",
  "log",
  "once_cell",
- "openmls",
- "openmls_basic_credential",
- "openmls_memory_storage",
- "openmls_rust_crypto",
- "openmls_traits",
  "parking_lot",
  "serde",
  "serde_json",

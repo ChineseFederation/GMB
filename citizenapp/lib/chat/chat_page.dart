@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
@@ -23,10 +24,11 @@ import 'package:citizenapp/transaction/onchain-transaction/onchain_payment_page.
 import '../ui/app_theme.dart';
 import 'chat_ui_adapter.dart';
 import 'chat_flow.dart';
+import 'call/page.dart';
+import 'call/scope.dart';
 import 'chat_media_limits.dart';
 import 'chat_models.dart';
 import 'chat_payload.dart';
-import 'crypto/mls_native.dart';
 import 'compose/camera_capture_page.dart';
 import 'compose/composer_action_panel.dart';
 import 'compose/composer_bar.dart';
@@ -82,7 +84,7 @@ class ChatPage extends StatefulWidget {
     required this.conversationId,
     required this.ownerCidNumber,
     required this.accountId,
-    required this.peerUserId,
+    required this.peerCidNumber,
     required this.title,
     this.isGroup = false,
     ChatStore? store,
@@ -109,7 +111,7 @@ class ChatPage extends StatefulWidget {
   final String conversationId;
   final String ownerCidNumber;
   final String accountId;
-  final String peerUserId;
+  final String peerCidNumber;
   final String title;
 
   /// 群聊模式:入站消息按各自 `senderCidNumber` 归属并在气泡上方显示发送者名。
@@ -257,13 +259,13 @@ class _ChatPageState extends State<ChatPage> {
 
   void _onPeerProfileRevision() {
     final event = CitizenProfileCache.revision.value;
-    if (!mounted || event?.cidNumber != widget.peerUserId) return;
+    if (!mounted || event?.cidNumber != widget.peerCidNumber) return;
     unawaited(_readPeerProfileCache());
   }
 
   Future<void> _readPeerProfileCache() async {
-    if (widget.isGroup || widget.peerUserId.trim().isEmpty) return;
-    final cached = await _profileCache.read(widget.peerUserId);
+    if (widget.isGroup || widget.peerCidNumber.trim().isEmpty) return;
+    final cached = await _profileCache.read(widget.peerCidNumber);
     if (cached == null) return;
     final media = await _profileMediaCache.read(cached);
     if (!mounted) return;
@@ -276,7 +278,7 @@ class _ChatPageState extends State<ChatPage> {
 
   /// Chat 只按 CID 联合读取 User 公开资料，不把头像或会员字段写入 ChatIsar。
   Future<void> _loadPeerProfile() async {
-    if (widget.isGroup || widget.peerUserId.trim().isEmpty) return;
+    if (widget.isGroup || widget.peerCidNumber.trim().isEmpty) return;
     if (_peerProfile == null) {
       await _readPeerProfileCache();
     } else if (_peerProfileMedia.avatarPath == null) {
@@ -287,7 +289,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       session = await _sessionProvider.ensureSession();
       final profile = await _profileApi.fetchProfile(
-        widget.peerUserId,
+        widget.peerCidNumber,
         session: session,
       );
       final localMedia = await _profileMediaCache.read(profile);
@@ -778,7 +780,7 @@ class _ChatPageState extends State<ChatPage> {
         await sender(
           item.draft,
           // 媒体消息和发送方本地附件一旦安全落盘就立即刷新；不再等待云端
-          // 控制消息和 WebRTC 字节确认后才让语音气泡出现。
+          // 控制消息和 HTTPS 密文字节确认后才让语音气泡出现。
           onLocalCommitted: () async {
             if (reconciled) return;
             reconciled = true;
@@ -995,12 +997,25 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> _startCall({required bool video}) async {
+    if (widget.isGroup) return;
     final starter = widget.onStartCall;
-    if (starter == null) {
+    if (starter != null) {
+      await starter(video: video);
+      return;
+    }
+    final scope = ChatCallScope.maybeOf(context);
+    if (scope == null) {
       if (mounted) setState(() => _error = '通话链路尚未就绪');
       return;
     }
-    await starter(video: video);
+    await openOutgoingCallPage(
+      context,
+      coordinator: scope.coordinator,
+      localCidNumber: widget.ownerCidNumber,
+      peerCidNumber: widget.peerCidNumber,
+      title: widget.title,
+      video: video,
+    );
   }
 
   Future<void> _openTransfer() async {
@@ -1012,10 +1027,10 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final String ss58Address;
       if (widget.resolvePeerAddress != null) {
-        ss58Address = await widget.resolvePeerAddress!(widget.peerUserId);
+        ss58Address = await widget.resolvePeerAddress!(widget.peerCidNumber);
       } else {
         final binding = await CitizenIdentityChainReader()
-            .readBindingByCidNumber(widget.peerUserId);
+            .readBindingByCidNumber(widget.peerCidNumber);
         if (binding == null) {
           throw StateError('对方 CID 当前没有有效钱包绑定');
         }
@@ -1219,7 +1234,7 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _openPeerProfile() async {
     // Chat 路由主键本来就是对端 CID，普通打开主页不得再把它当成
     // account_id 去读 finalized 链。主页资料直接由 Cloudflare 持久用户提供。
-    final cidNumber = widget.peerUserId.trim();
+    final cidNumber = widget.peerCidNumber.trim();
     if (cidNumber.isEmpty || widget.isGroup) return;
     if (!mounted) return;
     await Navigator.of(context).push<void>(
@@ -1852,7 +1867,7 @@ class _ChatPageState extends State<ChatPage> {
   @override
   Widget build(BuildContext context) {
     final peerName = ProfilePresentation.forIdentityKey(
-      widget.peerUserId,
+      widget.peerCidNumber,
     ).resolveDisplayName(
       publicName: _peerProfile?.displayName ?? widget.title,
     );
@@ -1871,7 +1886,7 @@ class _ChatPageState extends State<ChatPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               ProfileAvatar(
-                seed: widget.peerUserId,
+                seed: widget.peerCidNumber,
                 size: AppLayout.scaled(context, 36),
                 imagePath: _peerProfileMedia.avatarPath,
                 imageUrl:
@@ -1910,7 +1925,7 @@ class _ChatPageState extends State<ChatPage> {
                       ),
                     ),
                     Text(
-                      _shortAccount(widget.peerUserId),
+                      _shortAccount(widget.peerCidNumber),
                       style: TextStyle(
                         fontSize: AppLayout.scaled(context, 12),
                         color: AppTheme.textSecondary,

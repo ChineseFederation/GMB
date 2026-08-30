@@ -1,10 +1,11 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:isar_community/isar.dart';
-import 'package:citizenapp/chat/crypto/mls_session.dart';
+import 'package:chat_sdk/chat_sdk.dart' hide ChatRoute;
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
 import 'package:citizenapp/chat/group/group_model.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart' as pb;
+import 'package:chat_sdk/protocol.dart' as pb;
 import 'package:citizenapp/isar/chat_isar.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/security/local_data_key.dart';
@@ -50,8 +51,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-store',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 10,
       ttlMillis: 60000,
@@ -161,8 +162,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-stale-action',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 10,
       ttlMillis: 60000,
@@ -239,8 +240,8 @@ void main() {
           messageKind: kind,
         ).toEnvelope(
           envelopeId: id,
-          senderCidNumber: _ownerCidNumber,
-          recipientCidNumber: _bobCidNumber,
+          senderUserId: _ownerCidNumber,
+          recipientUserId: _bobCidNumber,
           senderDeviceId: 'alice-phone',
           createdAtMillis: createdAt,
           ttlMillis: 60000,
@@ -289,8 +290,8 @@ void main() {
         messageKind: MlsMessageKind.application,
       ).toEnvelope(
         envelopeId: envelopeId,
-        senderCidNumber: _ownerCidNumber,
-        recipientCidNumber: _bobCidNumber,
+        senderUserId: _ownerCidNumber,
+        recipientUserId: _bobCidNumber,
         senderDeviceId: 'alice-phone',
         createdAtMillis: 10,
         ttlMillis: 60000,
@@ -327,8 +328,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-delete',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 10,
       ttlMillis: 60000,
@@ -340,8 +341,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-keep',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _carolCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _carolCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 20,
       ttlMillis: 60000,
@@ -514,8 +515,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-own',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 1,
       ttlMillis: 60000,
@@ -618,8 +619,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-isolate',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 10,
       ttlMillis: 60000,
@@ -744,8 +745,8 @@ void main() {
         messageKind: MlsMessageKind.application,
       ).toEnvelope(
         envelopeId: envelopeId,
-        senderCidNumber: sender,
-        recipientCidNumber: peer,
+        senderUserId: sender,
+        recipientUserId: peer,
         senderDeviceId: 'alice-phone',
         createdAtMillis: createdAtMillis,
         ttlMillis: 60000,

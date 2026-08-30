@@ -85,6 +85,8 @@ dependencies:
   emoji_picker_flutter: ^4.4.0
   # 文章正文富文本编辑器；11.5.1 实现 Flutter 3.44 新增的 TextInputClient.onFocusReceived。
   flutter_quill: 11.5.1
+  chat_sdk:
+    path: ../chatsdk
 dev_dependencies:
   flutter_test:
     sdk: flutter

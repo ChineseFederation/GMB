@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -8,8 +9,7 @@ import 'package:citizenapp/8964/services/square_request_signer.dart';
 import 'package:http/http.dart' as http;
 
 import '../chat_models.dart';
-import '../crypto/mls_boundary.dart';
-import '../proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'chat_transport.dart';
 
 const _chatServiceUnavailable = 'Chat 服务尚未配置';
@@ -872,7 +872,7 @@ MlsKeyPackage _keyPackageFromJson(Map<String, dynamic> value) {
     throw const FormatException('CitizenServe KeyPackage 不能为空');
   }
   return MlsKeyPackage(
-    cidNumber: value['cid_number'] as String,
+    userId: value['cid_number'] as String,
     deviceId: value['device_id'] as String,
     devicePublicKey: value['device_public_key_hex'] as String,
     keyPackageId: value['key_package_id'] as String,

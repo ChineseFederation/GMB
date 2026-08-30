@@ -25,13 +25,17 @@ void main() {
     expect(decoded.groupName, isNull);
   });
 
-  test('用户载荷不是控制，坏数据和未知 op 失败关闭', () {
+  test('非 JSON 用户载荷不被误判为群控制', () {
     expect(
       GroupControlCodec.tryDecode('{"kind":"text","text":"hi"}'),
       isNull,
     );
+    expect(GroupControlCodec.tryDecode('CgsKCeWkp-WutuWlvQ'), isNull);
+    expect(GroupControlCodec.tryDecode('随便一句话'), isNull);
+  });
+
+  test('JSON 控制载荷坏数据和未知 op 失败关闭', () {
     for (final raw in const <String>[
-      '随便一句话',
       '{"op":"unknown"}',
       '{"op":"leave_request","extra":true}',
       '{"op":"rename","name":""}',

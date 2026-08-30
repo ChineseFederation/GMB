@@ -1,13 +1,12 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'crypto/mls_boundary.dart';
-import 'media/attachment_vault.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'chat_media_limits.dart';
 import 'chat_models.dart';
 import 'chat_payload.dart';
-import 'proto/chat_envelope.pb.dart';
 import 'storage/chat_store.dart';
 import 'transport/chat_transport.dart';
 
@@ -170,7 +169,7 @@ class ChatFlow {
     final payload = ChatPayloadCodec.encode(ChatContent.text(text));
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
-      recipientCidNumber: recipientCidNumber,
+      recipientUserId: recipientCidNumber,
       recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
@@ -205,7 +204,7 @@ class ChatFlow {
     );
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
-      recipientCidNumber: recipientCidNumber,
+      recipientUserId: recipientCidNumber,
       recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
@@ -246,7 +245,7 @@ class ChatFlow {
     final payload = ChatPayloadCodec.encode(media);
     final outbound = await _crypto.encrypt(
       conversationId: conversationId,
-      recipientCidNumber: recipientCidNumber,
+      recipientUserId: recipientCidNumber,
       recipientDevicePublicKey: recipientDevicePublicKey,
       plaintext: utf8.encode(payload),
     );
@@ -299,8 +298,8 @@ class ChatFlow {
           nowMillis,
           envelopeIndex,
         ),
-        senderCidNumber: senderCidNumber,
-        recipientCidNumber: recipientCidNumber,
+        senderUserId: senderCidNumber,
+        recipientUserId: recipientCidNumber,
         senderDeviceId: senderDeviceId,
         createdAtMillis: nowMillis + envelopeIndex,
         ttlMillis: defaultTtlMillis,
@@ -508,7 +507,7 @@ class ChatFlow {
 
   /// 把一份本机文件导入 App 私有缓存(流式,零整块内存)。
   ///
-  /// [moveSource]=true 用于接收端把 WebRTC 落盘的临时文件**移动**进缓存(同卷
+  /// [moveSource]=true 用于接收端把 HTTPS 下载落盘的密文临时文件**移动**进缓存(同卷
   /// rename 零拷贝,跨卷回退流式复制后删源);=false 用于发送端把源文件**复制**
   /// 进缓存(保留源)。两者落到同一按 conversationId/attachmentId/fileName 派生
   /// 的缓存路径。

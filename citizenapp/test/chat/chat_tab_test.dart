@@ -138,7 +138,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '张三',
           store: store,
         ),
@@ -176,7 +176,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '张三',
           store: store,
           onMarkRead: (millis) async => readThrough.add(millis),
@@ -235,7 +235,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '张三',
           store: store,
           onSync: () => retry.future,
@@ -289,7 +289,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
           onResolveMediaPaths: (conversationId, contents) {
@@ -324,7 +324,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '旧昵称',
           store: _FakeChatStore(),
           initialProfile: _peerProfile,
@@ -373,7 +373,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '张三',
           store: _FakeChatStore(),
           onSendText: (text) {
@@ -422,7 +422,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: peerCidNumber,
+          peerCidNumber: peerCidNumber,
           title: peerAccount,
           store: store,
           onSync: () async => 0,
@@ -1049,7 +1049,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
           onSync: () async {
@@ -1087,7 +1087,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
           onSync: () async {
@@ -1127,8 +1127,7 @@ void main() {
     expect(realtimeStopCount, 1);
   });
 
-  testWidgets('历史坏密文隔离提示在心跳刷新期间保持稳定且有效消息不消失',
-      (tester) async {
+  testWidgets('历史坏密文隔离提示在心跳刷新期间保持稳定且有效消息不消失', (tester) async {
     final message = ChatStoredMessage(
       envelopeId: 'env-readable',
       conversationId: 'dm:me:peer',
@@ -1148,7 +1147,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: '张三',
           store: store,
           onSync: () async => 0,
@@ -1191,7 +1190,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
           pickMedia: () async => const ChatMediaDraft(
@@ -1265,7 +1264,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
           onDownloadAttachment: (conversationId, controlPlaintext) async {
@@ -1286,7 +1285,10 @@ void main() {
     await tester.tap(find.text('photo.txt'));
     await tester.pumpAndSettle();
 
-    expect(downloadedPlaintext, contains('"kind":"file"'));
+    expect(
+      ChatPayloadCodec.decode(downloadedPlaintext!).kind,
+      ChatMessageKind.file,
+    );
     expect(find.text('已保存：photo.txt'), findsOneWidget);
   });
 
@@ -1324,7 +1326,7 @@ void main() {
                         ownerCidNumber: _ownerCidNumber,
                         accountId:
                             '0x1111111111111111111111111111111111111111111111111111111111111111',
-                        peerUserId: _peerCidNumber,
+                        peerCidNumber: _peerCidNumber,
                         title: 'Bob',
                         store: store,
                         onDeleteConversation: () async {
@@ -1395,7 +1397,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
         ),
@@ -1427,7 +1429,7 @@ void main() {
           ownerCidNumber: _ownerCidNumber,
           accountId:
               '0x1111111111111111111111111111111111111111111111111111111111111111',
-          peerUserId: _peerCidNumber,
+          peerCidNumber: _peerCidNumber,
           title: 'Bob',
           store: store,
         ),
@@ -1916,6 +1918,7 @@ class _FakeRuntime extends ChatRuntime {
   Future<Future<void> Function()?> startRealtimeSync({
     required Future<void> Function() onNotice,
     Future<void> Function()? onDisconnected,
+    Future<void> Function(Map<String, dynamic> signal)? onSignal,
     bool retryOutgoingOnConnect = true,
   }) async {
     realtimeStartCount += 1;

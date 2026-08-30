@@ -38,7 +38,7 @@ Widget _host({
         ownerCidNumber: 'CN220-CTZN2-100000001-2026',
         accountId:
             '0x1111111111111111111111111111111111111111111111111111111111111111',
-        peerUserId: isGroup ? 'group:test' : 'CN220-CTZN2-100000002-2026',
+        peerCidNumber: isGroup ? 'group:test' : 'CN220-CTZN2-100000002-2026',
         title: isGroup ? '测试群' : '对方',
         isGroup: isGroup,
         store: _EmptyStore(),
@@ -319,7 +319,7 @@ void main() {
     expect(find.text('功能完善中，敬请期待'), findsNothing);
   });
 
-  testWidgets('群聊动作面板不创建转账按钮', (tester) async {
+  testWidgets('群聊移除转账并禁用语音视频通话', (tester) async {
     await _open(tester, isGroup: true);
     await tester.tap(find.byKey(const ValueKey('chat-actions-toggle')));
     await tester.pump();
@@ -330,8 +330,12 @@ void main() {
       greaterThanOrEqualTo(tester.getBottomRight(input).dy),
     );
     expect(find.byKey(const ValueKey('chat-action-transfer')), findsNothing);
-    expect(find.byKey(const ValueKey('chat-action-videoCall')), findsNothing);
-    expect(find.byKey(const ValueKey('chat-action-voiceCall')), findsNothing);
+    final videoCall = find.byKey(const ValueKey('chat-action-videoCall'));
+    final voiceCall = find.byKey(const ValueKey('chat-action-voiceCall'));
+    expect(videoCall, findsOneWidget);
+    expect(voiceCall, findsOneWidget);
+    expect(tester.widget<InkWell>(videoCall).onTap, isNull);
+    expect(tester.widget<InkWell>(voiceCall).onTap, isNull);
     expect(find.byKey(const ValueKey('chat-action-location')), findsOneWidget);
     expect(find.byKey(const ValueKey('chat-action-file')), findsOneWidget);
   });
@@ -340,7 +344,8 @@ void main() {
     ChatMediaLimits.applyMembershipLevel(null);
     await _open(tester);
 
-    expect(find.byKey(const ValueKey('chat-membership-required')), findsOneWidget);
+    expect(
+        find.byKey(const ValueKey('chat-membership-required')), findsOneWidget);
     expect(find.text('尚未开通会员，订阅任一会员后即可使用聊天'), findsOneWidget);
     expect(find.byKey(const ValueKey('chat-text-input')), findsNothing);
     expect(find.byKey(const ValueKey('chat-actions-toggle')), findsNothing);

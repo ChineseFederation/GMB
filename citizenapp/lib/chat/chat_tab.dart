@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -26,7 +27,6 @@ import 'chat_page.dart';
 import 'chat_media_limits.dart';
 import 'chat_payload.dart';
 import 'chat_runtime.dart';
-import 'crypto/mls_native.dart';
 import 'chat_models.dart';
 import 'chat_search_page.dart';
 import 'group/ui/group_create_page.dart';
@@ -1035,7 +1035,7 @@ class _ChatTabState extends State<ChatTab> {
               conversationId: preview.conversationId,
               ownerCidNumber: _cidNumber,
               accountId: _accountId,
-              peerUserId: preview.peerCidNumber,
+              peerCidNumber: preview.peerCidNumber,
               title: preview.title,
               store: widget.store,
               onSendText: widget.sendTextFactory?.call(

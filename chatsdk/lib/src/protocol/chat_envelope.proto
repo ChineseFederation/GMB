@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package gmb.chat;
+
+// 跨端 Chat 信封真源。字段编号承担 wire 演进，不另设版本化协议标识。
+//
+// OpenMLS 标准 wire bytes 放在内层；本文件定义手机端持久化和 聊天服务端 临时密文邮箱
+// 共同使用的外层 Envelope 与路由记录。聊天服务端 只保存序列化 Envelope，
+// 不解析 MLS 正文或持有密钥。Chat 身份只认 用户身份；当前钱包账户只在服务 Session
+// 完成签名授权，不进入 MLS 名册、会话 ID 或消息归属。
+
+message ChatRoute {
+  reserved 1;
+  string peer_user_id = 2;
+  string route_display_name = 3;
+  string device_id = 4;
+  string device_public_key = 5;
+  string safety_number = 6;
+  string nearby_peer_hint = 7;
+  uint64 created_at_millis = 8;
+  uint64 expires_at_millis = 9;
+}
+
+enum MlsWireMessageKind {
+  MLS_WIRE_MESSAGE_KIND_UNSPECIFIED = 0;
+  MLS_WIRE_MESSAGE_KIND_WELCOME = 1;
+  MLS_WIRE_MESSAGE_KIND_APPLICATION = 2;
+}
+
+message ChatEnvelope {
+  reserved 1;
+  string envelope_id = 2;
+  string conversation_id = 3;
+  string sender_user_id = 4;
+  string recipient_user_id = 5;
+  string sender_device_id = 6;
+  bytes mls_message = 7;
+  bytes encrypted_metadata = 8;
+  uint64 created_at_millis = 9;
+  uint64 ttl_millis = 10;
+  MlsWireMessageKind mls_message_kind = 11;
+  bytes ratchet_tree = 12;
+}

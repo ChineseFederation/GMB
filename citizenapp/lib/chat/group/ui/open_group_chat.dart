@@ -32,7 +32,7 @@ Future<void> openGroupChat(
         conversationId: groupId,
         ownerCidNumber: ownerCidNumber,
         accountId: accountId,
-        peerUserId: groupId,
+        peerCidNumber: groupId,
         title: title,
         isGroup: true,
         onSendText: (text) =>

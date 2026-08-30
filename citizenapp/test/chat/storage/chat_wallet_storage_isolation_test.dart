@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
@@ -6,7 +7,7 @@ import 'package:citizenapp/isar/social_isar.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/protocol.dart';
 import 'package:citizenapp/chat/storage/chat_crypto.dart';
 import 'package:citizenapp/isar/chat_isar.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';

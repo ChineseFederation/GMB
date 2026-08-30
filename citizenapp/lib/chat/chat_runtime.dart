@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,12 +16,8 @@ import '../rpc/chain_bootstrap_api.dart';
 import '../wallet/core/default_account_service.dart';
 import '../wallet/core/device_subkey.dart';
 import '../security/local_data_key.dart';
-import 'media/attachment_vault.dart';
 import '../wallet/core/wallet_manager.dart';
-import 'crypto/mls_boundary.dart';
-import 'crypto/mls_group_boundary.dart';
-import 'crypto/mls_native.dart';
-import 'crypto/mls_state_store.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'chat_flow.dart';
 import 'chat_media_limits.dart';
 import 'chat_models.dart';
@@ -28,7 +25,6 @@ import 'chat_payload.dart';
 import 'chat_push_service.dart';
 import 'group/group_flow.dart';
 import 'group/group_model.dart';
-import 'proto/chat_envelope.pb.dart';
 import 'storage/chat_store.dart';
 import 'transport/chat_cloud_transport.dart';
 import 'transport/chat_transport.dart';
@@ -261,10 +257,12 @@ class _ChatRealtimeListener {
   const _ChatRealtimeListener({
     required this.onNotice,
     required this.onDisconnected,
+    required this.onSignal,
   });
 
   final Future<void> Function() onNotice;
   final Future<void> Function()? onDisconnected;
+  final Future<void> Function(Map<String, dynamic> signal)? onSignal;
 }
 
 /// 一个账户在当前 isolate 内唯一的前台实时通道。聊天 Tab、私聊页和群聊页只
@@ -1255,14 +1253,14 @@ class _ChatBindingFencedMlsCrypto implements MlsCrypto, MlsGroupCrypto {
   @override
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
-    required String recipientCidNumber,
+    required String recipientUserId,
     required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) =>
       _run(
         () => _delegate.encrypt(
           conversationId: conversationId,
-          recipientCidNumber: recipientCidNumber,
+          recipientUserId: recipientUserId,
           recipientDevicePublicKey: recipientDevicePublicKey,
           plaintext: plaintext,
         ),
@@ -1406,7 +1404,7 @@ class _ChatAccountContext {
   }
 
   ChatDevice get identity => ChatDevice(
-        cidNumber: account.cidNumber,
+        userId: account.cidNumber,
         deviceId: deviceId,
         devicePublicKey: devicePublicKey,
       );
@@ -1590,8 +1588,7 @@ class ChatRuntime {
   static final Set<String> _mediaBytesInFlight = {};
   static bool _mediaUploadBusy = false;
   static final Map<String, int> _mediaUploadFailures = <String, int>{};
-  static final Map<String, DateTime> _mediaUploadRetryAt =
-      <String, DateTime>{};
+  static final Map<String, DateTime> _mediaUploadRetryAt = <String, DateTime>{};
 
   /// 正在下载的入站 R2 密文附件。相同账户、会话和 attachmentId 共用一个 Future，
   /// WSS、邮箱补拉、页面恢复和用户点击不得并发重复下载整块密文。
@@ -2805,7 +2802,7 @@ class ChatRuntime {
     final targetCopy = Uint8List.fromList(targetStateKey);
     final store = MlsStateStore(
       deviceDirectory,
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerCidNumber,
       stateKey: sourceCopy,
     );
     try {
@@ -5009,6 +5006,7 @@ class ChatRuntime {
   Future<Future<void> Function()?> startRealtimeSync({
     required Future<void> Function() onNotice,
     Future<void> Function()? onDisconnected,
+    Future<void> Function(Map<String, dynamic> signal)? onSignal,
     bool retryOutgoingOnConnect = true,
   }) async {
     _ensureActive();
@@ -5026,12 +5024,14 @@ class ChatRuntime {
       return startRealtimeSync(
         onNotice: onNotice,
         onDisconnected: onDisconnected,
+        onSignal: onSignal,
         retryOutgoingOnConnect: retryOutgoingOnConnect,
       );
     }
     final listener = _ChatRealtimeListener(
       onNotice: onNotice,
       onDisconnected: onDisconnected,
+      onSignal: onSignal,
     );
     hub.listeners.add(listener);
     hub.retryOutgoingOnConnect =
@@ -5053,6 +5053,48 @@ class ChatRuntime {
       hub.listeners.remove(listener);
       if (hub.listeners.isEmpty) await _closeRealtimeHub(hub);
     };
+  }
+
+  /// 通话复用当前账户唯一 WSS；没有前台信令连接时直接失败，不另开第二条连接。
+  Future<List<String>> readCallStunUrls() async {
+    final transport = await _requireCallRealtimeTransport();
+    final configuration = await transport.fetchIceConfiguration();
+    final urls = <String>[];
+    for (final server in configuration.iceServers) {
+      final value = server['urls'];
+      if (value is String) {
+        urls.add(value);
+      } else if (value is Iterable) {
+        urls.addAll(value.whereType<String>());
+      }
+    }
+    return urls;
+  }
+
+  /// 经现有 WSS 发送扁平通话信令；音视频字节绝不进入本方法或 CitizenServe。
+  Future<bool> sendCallSignal({
+    required String recipientCidNumber,
+    required Map<String, Object?> signal,
+  }) async {
+    final transport = await _requireCallRealtimeTransport();
+    return transport.sendSignal(
+      recipientCidNumber: recipientCidNumber,
+      signal: signal,
+    );
+  }
+
+  Future<ChatCloudTransport> _requireCallRealtimeTransport() async {
+    final account = await _readAccount();
+    final hub = _realtimeHubs[account.accountId];
+    if (hub == null || hub.closed || hub.listeners.isEmpty) {
+      throw StateError('Chat 账户级 WSS 尚未连接');
+    }
+    if (!await _ensureRealtimeHubConnected(hub)) {
+      throw StateError('Chat 账户级 WSS 尚未连接');
+    }
+    final transport = hub.transport;
+    if (transport == null) throw StateError('Chat 账户级 WSS 尚未连接');
+    return transport;
   }
 
   /// 系统点击通知时立即补拉密文邮箱；待发重试独立执行，不能阻塞收件。
@@ -5091,6 +5133,7 @@ class ChatRuntime {
       session: session,
       account: hub.account,
       onNotice: () => _notifyRealtimeHub(hub, disconnected: false),
+      onSignal: (signal) => _notifyRealtimeSignal(hub, signal),
       onDisconnected: () async {
         // 当前回调仍登记在 session 中，不能在这里同步 dispose 自己；放到下一个
         // microtask 后，session callback 先正常退出，再关闭旧资源并开始退避重连。
@@ -5125,6 +5168,20 @@ class ChatRuntime {
         }
       } catch (_) {
         // 一个页面已销毁或刷新失败不得中断其它订阅者与物理连接。
+      }
+    }
+  }
+
+  Future<void> _notifyRealtimeSignal(
+    _ChatRealtimeHub hub,
+    Map<String, dynamic> signal,
+  ) async {
+    final listeners = hub.listeners.toList(growable: false);
+    for (final listener in listeners) {
+      try {
+        await listener.onSignal?.call(signal);
+      } catch (_) {
+        // 一个界面拒绝坏信令不得中断同一账户的 WSS 或其它监听者。
       }
     }
   }
@@ -5200,6 +5257,7 @@ class ChatRuntime {
     required _ChatAccount account,
     required Future<void> Function() onNotice,
     required Future<void> Function()? onDisconnected,
+    required Future<void> Function(Map<String, dynamic> signal) onSignal,
     required bool retryOutgoingOnConnect,
     required void Function(ChatCloudTransport? transport) onTransportChanged,
   }) async {
@@ -5232,6 +5290,8 @@ class ChatRuntime {
                     ),
                   ],
                 );
+              } else if (type == 'citizen_chat_signal') {
+                await onSignal(message);
               }
             });
           } catch (_) {
@@ -5365,7 +5425,7 @@ class ChatRuntime {
       await prefs.setString(deviceIdKey, deviceId);
     }
     final identity = ChatDevice(
-      cidNumber: account.cidNumber,
+      userId: account.cidNumber,
       deviceId: deviceId,
       devicePublicKey: prefs.getString(
             devicePublicKeyCachePreferenceKey(account.cidNumber),
@@ -5548,7 +5608,7 @@ class ChatRuntime {
     var keepStateStore = false;
     try {
       final bootstrapIdentity = ChatDevice(
-        cidNumber: account.cidNumber,
+        userId: account.cidNumber,
         deviceId: deviceId,
         devicePublicKey:
             cachedDevicePublicKey.isEmpty ? '00' : cachedDevicePublicKey,
@@ -5572,7 +5632,7 @@ class ChatRuntime {
       }
       await prefs.setString(devicePublicKeyCacheKey, devicePublicKey);
       final identity = ChatDevice(
-        cidNumber: account.cidNumber,
+        userId: account.cidNumber,
         deviceId: deviceId,
         devicePublicKey: devicePublicKey,
       );
@@ -6122,7 +6182,7 @@ class ChatRuntime {
     // 设备数据钥金库静默解封，真实缺钥时才鉴权一次生成。
     return MlsStateStore(
       Directory('${bindingDirectory.path}/mls/$safeDevice'),
-      ownerCidNumber: binding.cidNumber,
+      ownerUserId: binding.cidNumber,
       stateKey: (await _walletManager.readDataKeysForBinding(
         binding,
         const <({LocalKeyPurpose purpose, String? context})>[

@@ -14,7 +14,7 @@ enum ChatComposerAction {
   file,
 }
 
-/// 输入栏下方四列动作网格。一对一为 4+3；群聊移除转账和未设计的群通话。
+/// 输入栏下方四列动作网格。群聊移除转账，并明确禁用语音、视频通话。
 class ComposerActionPanel extends StatelessWidget {
   const ComposerActionPanel({
     super.key,
@@ -45,11 +45,12 @@ class ComposerActionPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final items = [
       for (final item in _items)
-        if (!(isGroup &&
-            (item.action == ChatComposerAction.transfer ||
-                item.action == ChatComposerAction.videoCall ||
-                item.action == ChatComposerAction.voiceCall)))
-          item,
+        if (!(isGroup && item.action == ChatComposerAction.transfer))
+          item.copyWith(
+            disabled: isGroup &&
+                (item.action == ChatComposerAction.videoCall ||
+                    item.action == ChatComposerAction.voiceCall),
+          ),
     ];
     return ColoredBox(
       key: const ValueKey('chat-composer-action-panel'),
@@ -87,16 +88,21 @@ class _ActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final foreground = item.unavailable
+    final foreground = item.unavailable || item.disabled
         ? AppTheme.textSecondary.withValues(alpha: 0.48)
         : AppTheme.textPrimary;
     return Semantics(
       button: true,
-      label: item.unavailable ? '${item.label}，功能完善中' : item.label,
+      enabled: !item.disabled,
+      label: item.disabled
+          ? '${item.label}，群聊暂不支持'
+          : item.unavailable
+              ? '${item.label}，功能完善中'
+              : item.label,
       child: InkWell(
         key: ValueKey('chat-action-${item.action.name}'),
         borderRadius: BorderRadius.circular(AppLayout.scaled(context, 14)),
-        onTap: onTap,
+        onTap: item.disabled ? null : onTap,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -153,6 +159,7 @@ class _ActionItem {
     this.icon,
     this.label, {
     this.unavailable = false,
+    this.disabled = false,
     this.iconAsset,
   }) : assert(icon != null || iconAsset != null);
 
@@ -160,5 +167,15 @@ class _ActionItem {
   final IconData? icon;
   final String label;
   final bool unavailable;
+  final bool disabled;
   final String? iconAsset;
+
+  _ActionItem copyWith({bool? disabled}) => _ActionItem(
+        action,
+        icon,
+        label,
+        unavailable: unavailable,
+        disabled: disabled ?? this.disabled,
+        iconAsset: iconAsset,
+      );
 }

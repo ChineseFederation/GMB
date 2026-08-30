@@ -4,7 +4,7 @@ import 'package:citizenapp/chat/chat_ui_adapter.dart';
 import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart' as pb;
+import 'package:chat_sdk/protocol.dart' as pb;
 import 'package:citizenapp/chat/storage/chat_store.dart';
 
 const _aliceCidNumber = 'CN220-CTZN2-100000001-2026';
@@ -275,7 +275,7 @@ void main() {
         mime: 'image/jpeg',
         byteSize: ChatMediaLimits.maxBytesForLevel('freedom') + 1,
         cipherKey: _cipherKey,
-        cipherByteSize: 16384,
+        cipherByteSize: ChatMediaLimits.maxBytesForLevel('freedom') + 1024,
         cipherSha256: _cipherSha256,
       ),
     );

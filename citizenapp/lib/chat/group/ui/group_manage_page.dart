@@ -1,7 +1,7 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:flutter/material.dart';
 
 import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/crypto/mls_native.dart';
 import 'package:citizenapp/chat/group/group_model.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';

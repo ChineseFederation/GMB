@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/transport/chat_cloud_transport.dart';
 import 'package:citizenapp/chat/transport/chat_transport.dart';
@@ -314,8 +314,8 @@ dynamic _envelope() => const MlsWireMessage(
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-mailbox-1',
-      senderCidNumber: _aliceCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _aliceCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 1000,
       ttlMillis: 60000,
@@ -328,8 +328,8 @@ dynamic _incomingEnvelope(String envelopeId) => const MlsWireMessage(
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: envelopeId,
-      senderCidNumber: _bobCidNumber,
-      recipientCidNumber: _aliceCidNumber,
+      senderUserId: _bobCidNumber,
+      recipientUserId: _aliceCidNumber,
       senderDeviceId: 'bob-phone',
       createdAtMillis: 1000,
       ttlMillis: 60000,

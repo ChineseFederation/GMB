@@ -61,6 +61,9 @@ class GroupControlCodec {
   /// 用户消息（无 `op`）返回 null 交给 [ChatPayloadCodec]；一旦存在
   /// `op`，未知操作、多字段、缺字段和类型错误都抛 [FormatException]。
   static GroupControl? tryDecode(String raw) {
+    // ChatSDK 第一类消息是 protobuf 的规范 base64url；只有 JSON 对象前缀才可能
+    // 是群控制或媒体载荷，避免控制解码器抢先拒绝合法 basic 消息。
+    if (!raw.startsWith('{')) return null;
     late final Object? decoded;
     try {
       decoded = jsonDecode(raw);

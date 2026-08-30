@@ -1,3 +1,4 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 
@@ -12,7 +13,7 @@ import '../chat_models.dart';
 import '../../log/app_log.dart';
 import '../chat_payload.dart';
 import '../group/group_model.dart';
-import '../proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/protocol.dart';
 import 'chat_crypto.dart';
 
 /// 聊天窗口读取结果：只隔离无法通过本机认证解密的单条记录，不放宽严格存储接口。

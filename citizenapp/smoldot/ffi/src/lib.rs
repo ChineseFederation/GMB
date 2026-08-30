@@ -15,8 +15,6 @@ use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc};
-
-mod chat_mls;
 mod error;
 mod ffi_types;
 
@@ -602,6 +600,9 @@ pub unsafe extern "C" fn smoldot_free_string(ptr: *mut c_char) {
 /// - Returned string must be freed with `smoldot_free_string`
 #[no_mangle]
 pub unsafe extern "C" fn smoldot_version() -> *mut c_char {
+    #[cfg(target_os = "ios")]
+    // 中文注释：iOS 由同一个静态库保留 ChatSDK 全部 FFI，避免两套 Rust runtime 冲突。
+    chat_sdk::retain_ffi();
     let version = env!("CARGO_PKG_VERSION");
     CString::new(version)
         .unwrap_or_else(|_| CString::new("unknown").unwrap())
@@ -1766,16 +1767,6 @@ fn read_u128_le_string(bytes: &[u8], offset: usize) -> Result<String, String> {
         value |= (*byte as u128) << (index * 8);
     }
     Ok(value.to_string())
-}
-
-pub(crate) fn string_into_raw(value: String, error_out: *mut *mut c_char) -> *mut c_char {
-    match CString::new(value) {
-        Ok(string) => string.into_raw(),
-        Err(_) => {
-            unsafe { set_error(error_out, "Failed to build response string") };
-            std::ptr::null_mut()
-        }
-    }
 }
 
 fn json_storage_value_response_from_bytes(

@@ -289,6 +289,11 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
 echo "==> 编译 Rust 原生库（${PLATFORM}）..."
 "$SCRIPT_DIR/build-smoldot-native.sh" "$PLATFORM"
+# iOS 的 ChatSDK 已由 libsmoldot.a 在 Rust 层统一承载，避免同一 Runner 链接两套
+# Rust runtime；Android 的两个 .so 拥有独立链接空间，继续分别构建和装载。
+if [[ "$PLATFORM" == android ]]; then
+  "$SCRIPT_DIR/../../chatsdk/scripts/build-native.sh" android
+fi
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
 clean_platform_build_outputs

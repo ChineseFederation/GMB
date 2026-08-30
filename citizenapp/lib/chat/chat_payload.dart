@@ -1,17 +1,12 @@
 import 'dart:convert';
 
+import 'package:chat_sdk/chat_sdk.dart' as sdk;
+
 import 'chat_models.dart';
 
-/// 聊天消息载荷(即 OpenMLS 明文内容)的唯一编解码。
-///
-/// [ChatPayloadCodec] 是全仓消息类型与媒体元数据的单一真源:发送端编码、
-/// 接收端与展示端解码都只经此处。载荷只使用显式 `kind` 判别消息类型，
-/// 不存在额外类型别名、版本字段或另一套文本格式。
-///
-/// 本 JSON 只存在于 OpenMLS 端到端明文里。媒体字节先由发送手机使用独立随机密钥
-/// 加密，再直传私有 R2；CitizenServe 只能看到临时密文索引，不能取得这里的解密密钥。
-class ChatContent {
-  const ChatContent._({
+/// CitizenApp display model. Wire encoding and validation belong to ChatSDK.
+final class ChatContent {
+  const ChatContent({
     required this.kind,
     this.text,
     this.attachmentId,
@@ -22,329 +17,246 @@ class ChatContent {
     this.height,
     this.durationMs,
     this.blurhash,
+    this.packId,
+    this.stickerId,
     this.cipherKey,
     this.cipherByteSize,
     this.cipherSha256,
-    this.packId,
-    this.stickerId,
   });
 
-  /// 纯文本消息。
   factory ChatContent.text(String text) =>
-      ChatContent._(kind: ChatMessageKind.text, text: text);
+      ChatContent(kind: ChatMessageKind.text, text: text);
 
-  /// 媒体消息(image / video / file / audio)。字节另经附件通道传输,以 [attachmentId]
-  /// 关联;本结构只带控制元数据。
+  factory ChatContent.sticker({
+    required String packId,
+    required String stickerId,
+  }) =>
+      ChatContent(
+        kind: ChatMessageKind.sticker,
+        packId: packId,
+        stickerId: stickerId,
+      );
+
   factory ChatContent.media({
     required ChatMessageKind kind,
     required String attachmentId,
     required String fileName,
     required String mime,
     required int byteSize,
+    required String cipherKey,
+    required int cipherByteSize,
+    required String cipherSha256,
     int? width,
     int? height,
     int? durationMs,
     String? blurhash,
-    String? cipherKey,
-    int? cipherByteSize,
-    String? cipherSha256,
-  }) {
-    assert(
-      kind == ChatMessageKind.image ||
-          kind == ChatMessageKind.video ||
-          kind == ChatMessageKind.file ||
-          kind == ChatMessageKind.audio,
-      'ChatContent.media 只接受 image/video/file/audio',
-    );
-    return ChatContent._(
-      kind: kind,
-      attachmentId: attachmentId,
-      fileName: fileName,
-      mime: mime,
-      byteSize: byteSize,
-      width: width,
-      height: height,
-      durationMs: durationMs,
-      blurhash: blurhash,
-      cipherKey: cipherKey,
-      cipherByteSize: cipherByteSize,
-      cipherSha256: cipherSha256,
-    );
-  }
-
-  /// 贴纸消息:只承载内置贴纸包 id,不传任何字节。
-  factory ChatContent.sticker({
-    required String packId,
-    required String stickerId,
   }) =>
-      ChatContent._(
-        kind: ChatMessageKind.sticker,
-        packId: packId,
-        stickerId: stickerId,
+      ChatContent(
+        kind: kind,
+        attachmentId: attachmentId,
+        fileName: fileName,
+        mime: mime,
+        byteSize: byteSize,
+        width: width,
+        height: height,
+        durationMs: durationMs,
+        blurhash: blurhash,
+        cipherKey: cipherKey,
+        cipherByteSize: cipherByteSize,
+        cipherSha256: cipherSha256,
       );
 
   final ChatMessageKind kind;
-
-  /// kind=text。
   final String? text;
-
-  /// kind=image/video/file/audio:关联附件字节流的附件 ID。
   final String? attachmentId;
   final String? fileName;
   final String? mime;
   final int? byteSize;
-
-  /// image/video 像素宽高；video/audio 带 [durationMs]。
   final int? width;
   final int? height;
   final int? durationMs;
-
-  /// image/video 的低清占位串(blurhash),字节到达前先渲染占位。
   final String? blurhash;
-
-  /// 仅存在于 OpenMLS 明文中的附件传输密钥及密文完整性信息。
+  final String? packId;
+  final String? stickerId;
   final String? cipherKey;
   final int? cipherByteSize;
   final String? cipherSha256;
 
-  /// kind=sticker:内置贴纸包与贴纸 id。
-  final String? packId;
-  final String? stickerId;
-
-  /// 是否为带附件字节的媒体(image/video/file/audio)。
   bool get isMedia =>
       kind == ChatMessageKind.image ||
       kind == ChatMessageKind.video ||
       kind == ChatMessageKind.file ||
       kind == ChatMessageKind.audio;
 
-  /// 会话列表 / 通知用的简短摘要。
-  String get summary => switch (kind) {
-        ChatMessageKind.text => text ?? '',
-        ChatMessageKind.image => '[图片]',
-        ChatMessageKind.video => '[视频]',
-        ChatMessageKind.file =>
-          (fileName ?? '').isEmpty ? '[文件]' : '[文件] ${fileName!}',
-        ChatMessageKind.audio => '[语音]',
-        ChatMessageKind.sticker => '[贴纸]',
-      };
+  String get summary {
+    if (kind == ChatMessageKind.image) return '[图片]';
+    if (kind == ChatMessageKind.video) return '[视频]';
+    if (kind == ChatMessageKind.audio) return '[语音]';
+    if (kind == ChatMessageKind.file) {
+      return '[文件] ${fileName ?? ''}'.trim();
+    }
+    if (kind == ChatMessageKind.sticker) return '[贴纸]';
+    return text ?? '';
+  }
 }
 
-/// 载荷 JSON 的编解码器。
-class ChatPayloadCodec {
-  ChatPayloadCodec._();
+/// One canonical base64url wire target for basic and media protobuf payloads.
+final class ChatPayloadCodec {
+  const ChatPayloadCodec._();
 
   static String encode(ChatContent content) {
-    final map = <String, Object?>{
-      'kind': content.kind.name,
-    };
-    switch (content.kind) {
-      case ChatMessageKind.text:
-        map['text'] = content.text ?? '';
-      case ChatMessageKind.image:
-      case ChatMessageKind.video:
-      case ChatMessageKind.file:
-      case ChatMessageKind.audio:
-        map['attachment_id'] = content.attachmentId;
-        map['file_name'] = content.fileName;
-        map['mime'] = content.mime;
-        map['byte_size'] = content.byteSize;
-        if (content.width != null) map['width'] = content.width;
-        if (content.height != null) map['height'] = content.height;
-        if (content.durationMs != null) map['duration_ms'] = content.durationMs;
-        if (content.blurhash != null) map['blurhash'] = content.blurhash;
-        map['cipher_key'] = content.cipherKey;
-        map['cipher_byte_size'] = content.cipherByteSize;
-        map['cipher_sha256'] = content.cipherSha256;
-      case ChatMessageKind.sticker:
-        map['pack_id'] = content.packId;
-        map['sticker_id'] = content.stickerId;
+    if (content.isMedia) {
+      final media = sdk.MediaContent(
+        kind: _sdkMediaKind(content.kind),
+        attachmentId: content.attachmentId ?? '',
+        fileName: content.fileName ?? '',
+        mime: content.mime ?? '',
+        byteSize: content.byteSize ?? 0,
+        width: content.width,
+        height: content.height,
+        durationMs: content.durationMs,
+        blurhash: content.blurhash,
+        cipherKey: _decodeFixedBase64Url(
+          content.cipherKey ?? '',
+          field: 'cipher_key',
+          expectedBytes: 32,
+        ),
+        cipherByteSize: content.cipherByteSize ?? 0,
+        cipherSha256: _decodeHex(
+          content.cipherSha256 ?? '',
+          field: 'cipher_sha256',
+          expectedBytes: 32,
+        ),
+      );
+      return _encodeWire(sdk.MediaContentCodec.encode(media));
     }
-    final encoded = jsonEncode(map);
-    // 发送端同样走一次严格结构校验，禁止构造出本端自己也
-    // 不会接受的空附件 ID、负数尺寸或云端中继字段。
-    decode(encoded);
-    return encoded;
+
+    late final sdk.BasicContent basic;
+    if (content.kind == ChatMessageKind.sticker) {
+      basic = sdk.BasicContent.sticker(
+        packId: content.packId ?? '',
+        stickerId: content.stickerId ?? '',
+      );
+    } else if (content.kind == ChatMessageKind.text) {
+      basic = sdk.BasicContent.textInput(content.text ?? '');
+    } else {
+      throw const FormatException('unsupported chat content kind');
+    }
+    return _encodeWire(sdk.BasicContentCodec.encode(basic));
   }
 
-  /// 解码明文载荷。非 JSON、未知 `kind`、缺字段、多字段或类型不符
-  /// 全部失败关闭；禁止把异常结构伪装成可展示的文本消息。
-  static ChatContent decode(String raw) {
-    late final Object? decoded;
+  static ChatContent decode(String encoded) {
+    final bytes = _decodeWire(encoded);
     try {
-      decoded = jsonDecode(raw);
-    } on FormatException {
-      throw const FormatException('聊天载荷必须是完整 JSON');
-    }
-    if (decoded is! Map<String, dynamic>) {
-      throw const FormatException('聊天载荷必须是 JSON 对象');
-    }
-    final kind = _kindFromName(decoded['kind']);
-    return switch (kind) {
-      ChatMessageKind.text => _decodeText(decoded),
-      ChatMessageKind.image ||
-      ChatMessageKind.video ||
-      ChatMessageKind.file ||
-      ChatMessageKind.audio =>
-        _decodeMedia(decoded, kind),
-      ChatMessageKind.sticker => _decodeSticker(decoded),
-    };
-  }
-
-  static ChatMessageKind _kindFromName(Object? value) {
-    if (value is! String) {
-      throw const FormatException('聊天载荷 kind 缺失');
-    }
-    for (final kind in ChatMessageKind.values) {
-      if (kind.name == value) return kind;
-    }
-    throw FormatException('聊天载荷 kind 未知：$value');
-  }
-
-  static ChatContent _decodeText(Map<String, dynamic> map) {
-    _requireExactFieldSet(map, const <String>{'kind', 'text'});
-    final text = map['text'];
-    if (text is! String) {
-      throw const FormatException('文本消息 text 必须是字符串');
-    }
-    return ChatContent.text(text);
-  }
-
-  static ChatContent _decodeMedia(
-    Map<String, dynamic> map,
-    ChatMessageKind kind,
-  ) {
-    const requiredKeys = <String>{
-      'kind',
-      'attachment_id',
-      'file_name',
-      'mime',
-      'byte_size',
-      'cipher_key',
-      'cipher_byte_size',
-      'cipher_sha256',
-    };
-    const optionalKeys = <String>{
-      'width',
-      'height',
-      'duration_ms',
-      'blurhash',
-    };
-    _requireAllowedKeys(map, requiredKeys, optionalKeys);
-    final attachmentId = _requiredString(map, 'attachment_id');
-    final fileName = _requiredString(map, 'file_name');
-    final mime = _requiredString(map, 'mime');
-    final byteSize = _requiredNonNegativeInt(map, 'byte_size');
-    final width = _optionalNonNegativeInt(map, 'width');
-    final height = _optionalNonNegativeInt(map, 'height');
-    final durationMs = _optionalNonNegativeInt(map, 'duration_ms');
-    final blurhash = _optionalString(map, 'blurhash');
-    final cipherKey = _requiredString(map, 'cipher_key');
-    final cipherByteSize = _requiredNonNegativeInt(map, 'cipher_byte_size');
-    final cipherSha256 = _requiredString(map, 'cipher_sha256');
-    if (!_isTransportKey(cipherKey) ||
-        cipherByteSize <= 0 ||
-        !RegExp(r'^[0-9a-f]{64}$').hasMatch(cipherSha256)) {
-      throw const FormatException('附件传输密钥或密文完整性字段不合法');
-    }
-    if (kind == ChatMessageKind.audio) {
-      if (!mime.startsWith('audio/')) {
-        throw const FormatException('语音消息 mime 必须是 audio 类型');
-      }
-      if (byteSize <= 0) {
-        throw const FormatException('语音消息 byte_size 必须是正整数');
-      }
-      if (durationMs == null || durationMs <= 0 || durationMs > 180000) {
-        throw const FormatException('语音消息 duration_ms 必须在1至180000之间');
-      }
-      if (width != null || height != null || blurhash != null) {
-        throw const FormatException('语音消息不得携带图像元数据');
+      return _fromBasic(sdk.BasicContentCodec.decode(bytes));
+    } on Object {
+      try {
+        return _fromMedia(sdk.MediaContentCodec.decode(bytes));
+      } on Object {
+        throw const FormatException('invalid chat payload');
       }
     }
-    return ChatContent.media(
-      kind: kind,
-      attachmentId: attachmentId,
-      fileName: fileName,
-      mime: mime,
-      byteSize: byteSize,
-      width: width,
-      height: height,
-      durationMs: durationMs,
-      blurhash: blurhash,
-      cipherKey: cipherKey,
-      cipherByteSize: cipherByteSize,
-      cipherSha256: cipherSha256,
-    );
   }
 
-  static bool _isTransportKey(String value) {
-    try {
-      return base64Url.decode(value.padRight((value.length + 3) ~/ 4 * 4, '=')).length == 32;
-    } on FormatException {
-      return false;
+  static ChatContent _fromBasic(sdk.BasicContent content) {
+    if (content.kind == sdk.BasicContentKind.sticker) {
+      return ChatContent.sticker(
+        packId: content.packId ?? '',
+        stickerId: content.stickerId ?? '',
+      );
     }
+    return ChatContent.text(content.value ?? '');
   }
 
-  static ChatContent _decodeSticker(Map<String, dynamic> map) {
-    _requireExactFieldSet(
-      map,
-      const <String>{'kind', 'pack_id', 'sticker_id'},
-    );
-    return ChatContent.sticker(
-      packId: _requiredString(map, 'pack_id'),
-      stickerId: _requiredString(map, 'sticker_id'),
-    );
+  static ChatContent _fromMedia(sdk.MediaContent content) => ChatContent.media(
+        kind: _appMediaKind(content.kind),
+        attachmentId: content.attachmentId,
+        fileName: content.fileName,
+        mime: content.mime,
+        byteSize: content.byteSize,
+        width: content.width,
+        height: content.height,
+        durationMs: content.durationMs,
+        blurhash: content.blurhash,
+        cipherKey: _encodeWire(content.cipherKey),
+        cipherByteSize: content.cipherByteSize,
+        cipherSha256: _encodeHex(content.cipherSha256),
+      );
+
+  static sdk.MediaContentKind _sdkMediaKind(ChatMessageKind kind) {
+    if (kind == ChatMessageKind.image) return sdk.MediaContentKind.image;
+    if (kind == ChatMessageKind.video) return sdk.MediaContentKind.video;
+    if (kind == ChatMessageKind.file) return sdk.MediaContentKind.file;
+    if (kind == ChatMessageKind.audio) return sdk.MediaContentKind.audio;
+    throw const FormatException('chat content is not media');
   }
 
-  // 严格要求聊天载荷字段集合完全一致，拒绝缺失字段和未声明字段。
-  static void _requireExactFieldSet(
-    Map<String, dynamic> map,
-    Set<String> expected,
-  ) {
-    if (map.length != expected.length ||
-        !map.keys.toSet().containsAll(expected)) {
-      throw const FormatException('聊天载荷字段集不匹配');
+  static ChatMessageKind _appMediaKind(sdk.MediaContentKind kind) {
+    switch (kind) {
+      case sdk.MediaContentKind.image:
+        return ChatMessageKind.image;
+      case sdk.MediaContentKind.video:
+        return ChatMessageKind.video;
+      case sdk.MediaContentKind.file:
+        return ChatMessageKind.file;
+      case sdk.MediaContentKind.audio:
+        return ChatMessageKind.audio;
     }
-  }
-
-  static void _requireAllowedKeys(
-    Map<String, dynamic> map,
-    Set<String> required,
-    Set<String> optional,
-  ) {
-    final keys = map.keys.toSet();
-    if (!keys.containsAll(required) ||
-        keys.difference(<String>{...required, ...optional}).isNotEmpty) {
-      throw const FormatException('聊天载荷字段集不匹配');
-    }
-  }
-
-  static String _requiredString(Map<String, dynamic> map, String key) {
-    final value = map[key];
-    if (value is! String || value.isEmpty) {
-      throw FormatException('聊天载荷 $key 必须是非空字符串');
-    }
-    return value;
-  }
-
-  static String? _optionalString(Map<String, dynamic> map, String key) {
-    if (!map.containsKey(key)) return null;
-    return _requiredString(map, key);
-  }
-
-  static int _requiredNonNegativeInt(Map<String, dynamic> map, String key) {
-    final value = map[key];
-    if (value is! int || value < 0) {
-      throw FormatException('聊天载荷 $key 必须是非负整数');
-    }
-    return value;
-  }
-
-  static int? _optionalNonNegativeInt(
-    Map<String, dynamic> map,
-    String key,
-  ) {
-    if (!map.containsKey(key)) return null;
-    return _requiredNonNegativeInt(map, key);
   }
 }
+
+String _encodeWire(List<int> bytes) =>
+    base64UrlEncode(bytes).replaceAll('=', '');
+
+List<int> _decodeWire(String encoded) {
+  if (encoded.isEmpty ||
+      encoded.trim() != encoded ||
+      encoded.contains('=') ||
+      encoded.contains(RegExp(r'\s'))) {
+    throw const FormatException('chat payload is not canonical base64url');
+  }
+  try {
+    final padding = '=' * ((4 - encoded.length % 4) % 4);
+    final bytes = base64Url.decode('$encoded$padding');
+    if (_encodeWire(bytes) != encoded) {
+      throw const FormatException('chat payload is not canonical base64url');
+    }
+    return bytes;
+  } on FormatException {
+    rethrow;
+  } on Object {
+    throw const FormatException('chat payload is not valid base64url');
+  }
+}
+
+List<int> _decodeFixedBase64Url(
+  String encoded, {
+  required String field,
+  required int expectedBytes,
+}) {
+  final bytes = _decodeWire(encoded);
+  if (bytes.length != expectedBytes) {
+    throw FormatException('$field has an invalid length');
+  }
+  return bytes;
+}
+
+List<int> _decodeHex(
+  String encoded, {
+  required String field,
+  required int expectedBytes,
+}) {
+  if (encoded.length != expectedBytes * 2 ||
+      !RegExp(r'^[0-9a-f]+$').hasMatch(encoded)) {
+    throw FormatException('$field is not canonical lowercase hex');
+  }
+  return List<int>.generate(
+    expectedBytes,
+    (index) =>
+        int.parse(encoded.substring(index * 2, index * 2 + 2), radix: 16),
+    growable: false,
+  );
+}
+
+String _encodeHex(List<int> bytes) =>
+    bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();

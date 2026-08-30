@@ -1,10 +1,9 @@
-import 'package:citizenapp/chat/crypto/mls_group_boundary.dart';
-import 'package:citizenapp/chat/crypto/mls_session.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/chat/group/chat_group_limits.dart';
 import 'package:citizenapp/chat/group/group_epoch.dart';
 import 'package:citizenapp/chat/group/group_fanout.dart';
 import 'package:citizenapp/chat/group/group_membership.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -25,7 +24,6 @@ void main() {
         ],
         senderCidNumber: 'CN220-CTZN2-100000001-2026',
         senderDeviceId: 'devA',
-        messageId: 'msg-1',
         nowMillis: 1000,
         ttlMillis: 60,
       );
@@ -51,6 +49,22 @@ void main() {
       // envelope_id 唯一。
       final ids = envelopes.map((e) => e.envelopeId).toSet();
       expect(ids.length, 3);
+      final retried = GroupFanout.fanOut(
+        wire: wire,
+        recipientCidNumbers: const [
+          'CN220-CTZN2-100000004-2026',
+          'CN220-CTZN2-100000003-2026',
+          'CN220-CTZN2-100000005-2026',
+        ],
+        senderCidNumber: 'CN220-CTZN2-100000001-2026',
+        senderDeviceId: 'devA',
+        nowMillis: 1000,
+        ttlMillis: 60,
+      );
+      expect(
+        retried.map((envelope) => envelope.envelopeId),
+        envelopes.map((envelope) => envelope.envelopeId),
+      );
     });
 
     test('空收件人(仅自己)返回空扇出', () {
@@ -65,7 +79,6 @@ void main() {
         recipientCidNumbers: const [],
         senderCidNumber: 'CN220-CTZN2-100000001-2026',
         senderDeviceId: 'devA',
-        messageId: 'msg-2',
         nowMillis: 1,
         ttlMillis: 1,
       );
@@ -135,8 +148,8 @@ void main() {
       ChatEnvelope envelopeFor(int messageEpoch) =>
           commitWire(messageEpoch).toEnvelope(
             envelopeId: 'e$messageEpoch',
-            senderCidNumber: 'CN220-CTZN2-100000006-2026',
-            recipientCidNumber: 'CN220-CTZN2-100000007-2026',
+            senderUserId: 'CN220-CTZN2-100000006-2026',
+            recipientUserId: 'CN220-CTZN2-100000007-2026',
             senderDeviceId: 'devS',
             createdAtMillis: 0,
             ttlMillis: 0,

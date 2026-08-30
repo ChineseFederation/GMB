@@ -47,7 +47,7 @@ Future<void> openDirectChat(
         conversationId: conversationId,
         ownerCidNumber: ownerCidNumber,
         accountId: sender,
-        peerUserId: peerCidNumber,
+        peerCidNumber: peerCidNumber,
         title: title,
         onSendText: (text) => runtime.sendText(
           peerCidNumber: peerCidNumber,

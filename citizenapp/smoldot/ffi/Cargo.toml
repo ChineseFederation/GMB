@@ -26,11 +26,6 @@ log = "0.4"
 env_logger = "0.11"
 blake2-rfc = "0.2"
 hex = "0.4"
-openmls = "0.8.1"
-openmls_rust_crypto = "0.5.1"
-openmls_basic_credential = "0.5.0"
-openmls_traits = "0.5.0"
-openmls_memory_storage = { version = "0.5.0", features = ["persistence"] }
 # MLS 本地状态(设备签名私钥 + 群 ratchet 秘密)落盘信封加密。
 # 用 RustCrypto 官方实现，禁止自造 AEAD。
 aes-gcm = "0.10"
@@ -42,6 +37,10 @@ base64 = "0.22"
 citizen-signer = { path = "../../../shared/citizen-signer" }
 # 账户数据用途钥派生和冷钱包加密交付与 CitizenWallet 共用同一份实现。
 account-crypto = { path = "../../../shared/account-crypto" }
+
+[target.'cfg(target_os = "ios")'.dependencies]
+# iOS 主程序只能链接一套 Rust runtime；ChatSDK 由 libsmoldot.a 统一承载。
+chat_sdk = { package = "chat_sdk_native", path = "../../../chatsdk/native" }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"

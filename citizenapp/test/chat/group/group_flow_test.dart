@@ -1,14 +1,13 @@
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'dart:convert';
 
 import 'package:citizenapp/chat/chat_flow.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
-import 'package:citizenapp/chat/crypto/mls_group_boundary.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/chat/group/group_control.dart';
 import 'package:citizenapp/chat/group/group_flow.dart';
 import 'package:citizenapp/chat/group/group_membership.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/chat/transport/chat_transport.dart';
 import 'package:citizenapp/security/local_data_key.dart';
@@ -79,7 +78,7 @@ class _FakeGroupCrypto implements MlsGroupCrypto {
       groupId: groupId,
       epoch: _epoch[groupId]!,
       commit: _wire(groupId, 'commit'),
-      removedCidNumbers: memberCidNumbers,
+      removedUserIds: memberCidNumbers,
     );
   }
 
@@ -146,7 +145,7 @@ Future<ChatDeliveryResult> _okDeliverer(
     );
 
 MlsKeyPackage _keyPackage(String cidNumber, String device) => MlsKeyPackage(
-      cidNumber: cidNumber,
+      userId: cidNumber,
       deviceId: device,
       keyPackageId: 'kp-$cidNumber',
       keyPackageBytes: const [1, 2],
@@ -231,7 +230,10 @@ void main() {
     );
     final outgoing = afterSend.where((m) => m.direction == 'outgoing').toList();
     expect(outgoing.length, 1);
-    expect(outgoing.single.plaintext, contains('大家好'));
+    expect(
+      ChatPayloadCodec.decode(outgoing.single.plaintext ?? '').text,
+      '大家好',
+    );
 
     // 收到 B 的文本。
     final payload = ChatPayloadCodec.encode(ChatContent.text('收到'));
@@ -243,8 +245,8 @@ void main() {
     );
     final inbound = inboundWire.toEnvelope(
       envelopeId: 'in-1',
-      senderCidNumber: _cidB,
-      recipientCidNumber: _cidA,
+      senderUserId: _cidB,
+      recipientUserId: _cidA,
       senderDeviceId: 'devB',
       createdAtMillis: 100,
       ttlMillis: 60,
@@ -258,7 +260,10 @@ void main() {
     final incoming =
         afterIncoming.where((m) => m.direction == 'incoming').toList();
     expect(incoming.length, 1);
-    expect(incoming.single.plaintext, contains('收到'));
+    expect(
+      ChatPayloadCodec.decode(incoming.single.plaintext ?? '').text,
+      '收到',
+    );
 
     // 删除 C → 名册剩 A、B;Commit 扇给删前成员 B、C(减自己)。
     delivered.clear();
@@ -363,8 +368,8 @@ void main() {
     );
     final envelope = wire.toEnvelope(
       envelopeId: 'lr-1',
-      senderCidNumber: _cidB,
-      recipientCidNumber: _cidA,
+      senderUserId: _cidB,
+      recipientUserId: _cidA,
       senderDeviceId: 'devB',
       createdAtMillis: 1,
       ttlMillis: 60,
@@ -415,8 +420,8 @@ void main() {
     );
     final envelope = wire.toEnvelope(
       envelopeId: 'rn-1',
-      senderCidNumber: _cidA,
-      recipientCidNumber: _cidB,
+      senderUserId: _cidA,
+      recipientUserId: _cidB,
       senderDeviceId: 'devA',
       createdAtMillis: 1,
       ttlMillis: 60,

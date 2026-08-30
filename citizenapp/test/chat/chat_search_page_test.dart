@@ -92,9 +92,16 @@ class _FakeChatStore extends ChatStore {
   }) async {
     searchedKeywords.add(keyword);
     final needle = keyword.toLowerCase();
-    return messages
-        .where((item) => (item.plaintext ?? '').toLowerCase().contains(needle))
-        .toList(growable: false);
+    return messages.where((item) {
+      try {
+        return ChatPayloadCodec.decode(item.plaintext ?? '')
+            .summary
+            .toLowerCase()
+            .contains(needle);
+      } on FormatException {
+        return false;
+      }
+    }).toList(growable: false);
   }
 }
 

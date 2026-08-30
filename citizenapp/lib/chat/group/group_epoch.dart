@@ -7,9 +7,7 @@
 //   stale               → epoch 已过(密钥已 ratchet),丢弃
 // epoch 状态机由本模块测试固定。
 
-import '../crypto/mls_group_boundary.dart';
-import '../crypto/mls_session.dart';
-import '../proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 
 /// 处理一条 wire,返回 [GroupInbound]。
 typedef GroupProcessSeam = Future<GroupInbound> Function(MlsWireMessage wire);

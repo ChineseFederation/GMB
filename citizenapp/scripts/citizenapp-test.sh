@@ -125,5 +125,6 @@ cd "$CITIZENAPP_DIR"
 acquire_native_build_lock
 trap release_native_build_lock EXIT
 "$SCRIPT_DIR/build-smoldot-native.sh" host
+"$SCRIPT_DIR/../../chatsdk/scripts/build-native.sh" host
 "$FLUTTER_BIN" analyze --no-pub
 "$FLUTTER_BIN" test --no-pub --concurrency=1 "$@"

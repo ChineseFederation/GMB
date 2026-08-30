@@ -7,8 +7,7 @@ import 'package:citizenapp/chat/chat_media_limits.dart';
 import 'package:citizenapp/chat/chat_models.dart';
 import 'package:citizenapp/chat/chat_payload.dart';
 import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/crypto/mls_boundary.dart';
-import 'package:citizenapp/chat/proto/chat_envelope.pb.dart';
+import 'package:chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/chat/storage/chat_store.dart';
 import 'package:citizenapp/chat/transport/chat_transport.dart';
 import 'package:citizenapp/security/local_data_key.dart';
@@ -61,8 +60,8 @@ void main() {
     final restored = imMlsWireMessageFromEnvelope(
       wire.toEnvelope(
         envelopeId: 'env-formal',
-        senderCidNumber: _ownerCidNumber,
-        recipientCidNumber: _bobCidNumber,
+        senderUserId: _ownerCidNumber,
+        recipientUserId: _bobCidNumber,
         senderDeviceId: 'alice-phone',
         createdAtMillis: 1,
         ttlMillis: 60000,
@@ -170,7 +169,10 @@ void main() {
       currentAccountId: _aliceAccountId,
       conversationId: 'conv-local-first',
     );
-    expect(stored.single.plaintext, contains('本地先显示'));
+    expect(
+      ChatPayloadCodec.decode(stored.single.plaintext ?? '').text,
+      '本地先显示',
+    );
 
     await scheduledDelivery!.call();
     expect(deliveryCalls, 1, reason: '私信只投递一个 HPKE Application');
@@ -306,8 +308,8 @@ void main() {
       ratchetTreeBytes: [0x02],
     ).toEnvelope(
       envelopeId: 'env-first',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 1,
       ttlMillis: 60000,
@@ -321,8 +323,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-app',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 2,
       ttlMillis: 60000,
@@ -374,8 +376,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-hpke-reject',
-      senderCidNumber: _ownerCidNumber,
-      recipientCidNumber: _bobCidNumber,
+      senderUserId: _ownerCidNumber,
+      recipientUserId: _bobCidNumber,
       senderDeviceId: 'alice-phone',
       createdAtMillis: 2,
       ttlMillis: 60000,
@@ -782,8 +784,8 @@ void main() {
       messageKind: MlsMessageKind.application,
     ).toEnvelope(
       envelopeId: 'env-after-store',
-      senderCidNumber: _bobCidNumber,
-      recipientCidNumber: _ownerCidNumber,
+      senderUserId: _bobCidNumber,
+      recipientUserId: _ownerCidNumber,
       senderDeviceId: 'bob-phone',
       createdAtMillis: 2,
       ttlMillis: 60000,
@@ -816,7 +818,10 @@ void main() {
       currentAccountId: _aliceAccountId,
       conversationId: 'conv-after-store',
     );
-    expect(messages.single.plaintext, contains('附件后置失败也必须保留的消息'));
+    expect(
+      ChatPayloadCodec.decode(messages.single.plaintext ?? '').text,
+      '附件后置失败也必须保留的消息',
+    );
   });
 }
 
@@ -837,7 +842,7 @@ class _FakeMlsCrypto implements MlsCrypto {
   @override
   Future<MlsOutboundMessage> encrypt({
     required String conversationId,
-    required String recipientCidNumber,
+    required String recipientUserId,
     required String recipientDevicePublicKey,
     required List<int> plaintext,
   }) async {
@@ -924,7 +929,7 @@ const String _dummyRecipientDevicePublicKey =
     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 MlsKeyPackage _dummyKeyPackage() => const MlsKeyPackage(
-      cidNumber: _bobCidNumber,
+      userId: _bobCidNumber,
       deviceId: 'bob-phone',
       devicePublicKey: 'aabb',
       keyPackageId: 'kp-bob',
