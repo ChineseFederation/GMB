@@ -1825,8 +1825,22 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
       .replaceAll("${{ inputs.source_sha }}", "${{ env.GMB_SOURCE_SHA }}")
       .trim();
   };
-  assert5.equal(normalizedSteps(ci), normalizedSteps(registeredCi));
-  assert5.equal(normalizedSteps(release), normalizedSteps(registeredRelease));
+  assert5.equal(
+    normalizedSteps(ci),
+    normalizedSteps(registeredCi),
+    "CitizenSDK CI 产品真源与顶层登记步骤必须完整一致",
+  );
+  assert5.equal(
+    normalizedSteps(release),
+    normalizedSteps(registeredRelease),
+    "CitizenSDK Release 产品真源与顶层登记步骤必须完整一致",
+  );
+  assert5.match(registeredCi, /CI_CACHE_COMPONENT: check[\s\S]*CI_CACHE_JOB: check/);
+  assert5.match(
+    registeredCi,
+    /清理旧成功CI增量缓存/,
+    "CitizenSDK CI 缓存收口必须完整保留在 CI 登记内",
+  );
   assert5.ok(dependencies.dartApplications.includes("citizensdk"));
   assert5.equal(dependencies.dartApplications.includes("citizensdk/native/smoldot/dart"), false);
   for (const required of [

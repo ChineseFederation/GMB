@@ -6659,6 +6659,7 @@ jobs:
             --notes "公民网 ${GMB_SOFTWARE_VERSION}。" --latest false \
             --assets "$archive" "$candidate_dir/release-manifest.json" "$candidate_dir/SHA256SUMS"
 
+  # 中文注释：顶层登记必须完整复刻 CitizenSDK 产品 CI 的步骤和缓存身份。
   # ── .github/workflows/citizensdk/ci-sdk.yml ──
   citizensdk_ci_sdk__check:
     permissions:
@@ -6683,9 +6684,9 @@ jobs:
           CI_CACHE_PRODUCT: citizensdk
           CI_CACHE_PLATFORM: sdk
           CI_CACHE_ARCHITECTURE: sdk
-          CI_CACHE_COMPONENT: citizensdk-ci-sdk--check
+          CI_CACHE_COMPONENT: check
           CI_CACHE_WORKFLOW: citizensdk-sdk
-          CI_CACHE_JOB: citizensdk-ci-sdk--check
+          CI_CACHE_JOB: check
           CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
           CI_CACHE_PATHS: |
             cargo-home
@@ -6990,9 +6991,6 @@ jobs:
             ${{ runner.temp }}/citizensdk/citizensdk.tgz
             ${{ runner.temp }}/citizensdk/candidate/citizensdk-release.json
             ${{ runner.temp }}/citizensdk/candidate/SHA256SUMS
-
-
-  # ── .github/workflows/citizensdk/release-sdk.yml ──
       - name: 记录失败CI增量缓存
         if: ${{ failure() && !cancelled() }}
         env:
@@ -7042,6 +7040,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CI_CACHE_TERMINAL_STATE: success
         run: node .github/scripts/ci-cache.mjs prune
+
+
+  # ── .github/workflows/citizensdk/release-sdk.yml ──
   citizensdk_release_sdk__check:
     env: { CARGO_INCREMENTAL: "0" }
     permissions:
