@@ -3,7 +3,7 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
-import 'package:smoldot/smoldot.dart' show SmoldotPlatform;
+import '../smoldot/platform.dart' show SmoldotPlatform;
 
 /// sr25519 原生签名（schnorrkel）的 Dart 侧唯一入口。
 ///

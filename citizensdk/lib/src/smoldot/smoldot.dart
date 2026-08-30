@@ -10,12 +10,12 @@
 /// - **Async/Await**: Idiomatic Dart async APIs for all operations
 /// - **JSON-RPC**: Full JSON-RPC support with subscriptions
 /// - **Type-safe**: Comprehensive type definitions and error handling
-/// - **Cross-platform**: Works on Android, iOS, macOS, Linux, and Windows
+/// - **Mobile delivery**: CitizenSDK currently ships Android and iOS ARM64
 ///
 /// ## Usage
 ///
 /// ```dart
-/// import 'package:smoldot/smoldot.dart';
+/// import 'package:citizen_sdk/src/smoldot/smoldot.dart';
 ///
 /// void main() async {
 ///   // Create and initialize the client
@@ -111,13 +111,11 @@
 ///   print('Smoldot error: ${e.message}');
 /// }
 /// ```
-library smoldot;
-
-export 'src/chain.dart' show Chain;
-export 'src/client.dart' show SmoldotClient;
-export 'src/json_rpc.dart' show JsonRpcHandler, SubstrateRpcMethods;
-export 'src/platform.dart' show SmoldotPlatform;
-export 'src/types.dart'
+export 'chain.dart' show Chain;
+export 'client.dart' show SmoldotClient;
+export 'json_rpc.dart' show JsonRpcHandler, SubstrateRpcMethods;
+export 'platform.dart' show SmoldotPlatform;
+export 'types.dart'
     show
         SmoldotConfig,
         AddChainConfig,

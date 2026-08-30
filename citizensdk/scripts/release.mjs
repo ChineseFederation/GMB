@@ -78,19 +78,27 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': '28dcd8060665f366a2a80738b13fb0b7b26be0521af7bb30f90443701a4fb61d',
+  'scripts/release.test.mjs': 'f243f9ca40873cfaa1391720f4c29b57612f714246e3fb2a91e6f9b24bff8060',
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
   'test/node/bootstrap_client_test.dart': '6222fc540b079ebb5fa97bb196400f7dc64aaf3ae8866604970bdf69af88c59b',
   'test/node/chain_assets_test.dart': '655039fe80c27a703e4325dc17780b7bfa7ba1a84c243f16fcdb6d23d2fff99c',
   'test/node/citizensdk_bootstrap_manifest.json': '33bd8e2c7407abea376f21a7adf7c9df644aedb7a9e985211075bba6cde28a00',
-  'test/node/light_client_lifecycle_test.dart': '9773d47459f688e4f95f8e1b93499ce96c11fbf7ab02c58d2888e5831a15bd8e',
+  'test/node/light_client_lifecycle_test.dart': 'bd34cbed87eb29565d218fe78cf3beec16126c000a723beec8d66e04c5c8b1c0',
   'test/platform/hardware_bound_seed_store_test.dart': 'fb6c3a66f04d9dae6ffabb479d381c017f1a2ba5796ddfd407eb3dcd57480cb3',
   'test/platform/hardware_secret_vault_test.dart': '868cc66b5dc728e6b51186df4ea67c9e66743bf4e35f53a153252c4d3bf2f1f7',
   'test/platform/preferences_chain_database_store_test.dart': '032f34f0a0402444264db190b240b434e52021fe41894e4ed7e2606fca868139',
   'test/platform/preferences_finalized_transaction_repository_test.dart': '3797b1bc9630707765ad73a9c97633573d77e97eff1fac89d7cb8b27bf149530',
   'test/platform/preferences_wallet_repository_test.dart': 'a2b0a095ed96713fa087c5d9648671cadc944932bfc7773e252cdb5e68bdd890',
+  'test/smoldot/chain_info_test.dart': '5de74abf31c75c579716366d72a457e91339352972a4a118ec7fe18de005b158',
+  'test/smoldot/client_basic_test.dart': '4617fc86f8fc4a555e837f04ad747a25b501d93532532f8f0565e1d51e17a5cc',
+  'test/smoldot/ffi_basic_test.dart': 'd7f16ab19bfd842f4414f43e989a3536d6725a1ba9e2eab78ac6f53dd7fa6cef',
+  'test/smoldot/fixtures/polkadot.json': '1d5079040595c54f56f31900beea91254cf2a3a25e245bcdd26fe1ccc4672a9b',
+  'test/smoldot/fixtures/westend.json': '5457a3c8322b8f2a2d7c2c713c113a7e0b1ee7e646d3f00abc4fa21198ea879d',
+  'test/smoldot/json_rpc_test.dart': 'c61e7bf8eaebdc199a5cd2228e4de7f3b94e17715f7bdc7a53297b9be2e3fa94',
+  'test/smoldot/smoldot_test.dart': '144f3a7d3385e0f8ece9c28762ae19862cffa1e2db8e449b51ed6e56dbcf6cce',
+  'test/smoldot/subscription_test.dart': '18cce5adff77d300f4f6adb6e20db9237a1e0206a05f9308133689319636e677',
   'test/transaction/chain_rpc_test.dart': 'faeeb377f4bfc3608868594f0784a933a19f59814dacffd38405560a864ab733',
   'test/transaction/chain_transfer_event_decoder_test.dart': 'b1599e10a16401cf19beb4b1400f4c4ae52acf43a78ad7df1ac7670df4c736ad',
   'test/transaction/finalized_transaction_scanner_test.dart': 'e7dc85abf5ec51a3086de248a02c194ac74e1180d490075efc82e9c3738ab1b1',
@@ -104,35 +112,40 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'test/wallet/secure_seed_store_contract_test.dart': '01456c50783ded684eceb400242cd00afd2c2ddcb470ecfdae8dbc2935a982e4',
   'test/wallet/wallet_service_test.dart': '5f12a0a33bab91355072420f519a1aa6e72c04e2f57163692effe05a9fd643d8',
 });
-// 24 个来源文件必须与 CitizenApp 已验证的 smoldot Dart 包逐字节一致；
-// example/README.md 是唯一的 CitizenSDK 本地说明文件。固定闭集和哈希可防止
-// Release 在“文件还在”但内容或测试已经漂移时继续打包。
+// smoldot Dart 包边界已并入唯一 citizen_sdk 根包。三处迁移目录共同构成固定闭集：
+// 生产绑定、来源测试与历史审计资料缺一不可，且不允许重新出现第二份 pubspec 包边界。
+const SMOLDOT_DART_ROOTS = Object.freeze([
+  'docs/smoldot-dart',
+  'lib/src/smoldot',
+  'test/smoldot',
+]);
 const SMOLDOT_DART_FILES = Object.freeze({
-  'BUILD.md': '8260e070ee9b84eb2f4e4a51623aa93d25a820e7d7fd843839fb0910ef9286e8',
-  'CHANGELOG.md': 'd9adb01f7c62313a14bb86dbfd7f4077d925745e9c17a14f153eef79c45f8b94',
-  'LICENSE': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
-  'README.md': 'c024610fdaf73b3fbc8d68460c289d87297620dd2090d0c3ba1346b820f7b6be',
-  'UPSTREAM.md': 'ed3f21bc62a6c6dc76beb870bf6f224914123a2cc95bdbab8b5cb453c4767539',
-  'analysis_options.yaml': 'e67b963f89cf75f675a0ed25d258bae038d216832c22b84782e5e3a90b8d3076',
-  'example/README.md': '0a05f26276e9d30946f291a12bf9ab63985ebc0218011dfe5fa1974c21105b99',
-  'example/smoldot_example.dart': 'e0275ad18ca2aa5c982d0f67f2f2a8ca1b94acc01a0e90baf4ed7666374d9eb8',
-  'lib/smoldot.dart': 'c97dcab31dc04dd474cfe012052d8ee1f2e83712b18b04815a5aa36ec3f75ca8',
-  'lib/src/bindings.dart': '33d23827c203a0d3f92146f2da27de4615badb8e3732f23b56dbcd79596d31da',
-  'lib/src/chain.dart': '0d3e341d60cca0bb3161b8eeb3710e838aa5e1b33cc23f0e3c298b4ecb8eaba9',
-  'lib/src/client.dart': 'e238c48e78c5125a7a5b85bb0c06d0c7708128d4331f5d4d817959d37c3226e7',
-  'lib/src/json_rpc.dart': 'c81ed472e43ce2d9ccb56ce82477a2c4ff775de29932d26a0aef976d044ed53c',
-  'lib/src/platform.dart': '65f48e6cc98a47895973409e79543c4b15ba2311228959bc8a6e8895c4395b95',
-  'lib/src/types.dart': 'e20b6f97d0b6e289c2b492e12dd66afafc1133adc0fc5fe5a547106ed3338e89',
-  'pubspec.lock': '91ad4c26c8abdf6384292e1f01f335ba7ce50443a99b01b45e2f4efa72dab25a',
-  'pubspec.yaml': '408910b7b043d30aa29dc1f226f750f64dbee90ad343b1154478a7ee6ff3d83e',
-  'test/chain_info_test.dart': '25cf4677267e0d830f49895b123d975c9a4654e4e2f0b77cb9013ad5bd1f473f',
-  'test/client_basic_test.dart': '68001424dba93472bacc0aee665426c111c9bcba450323f02e4c72297522e616',
-  'test/ffi_basic_test.dart': 'ea6a411d1926b7ea5b9e4ee8d48a182a262fb8e8d798536a33931486b23be0a2',
-  'test/fixtures/polkadot.json': '1d5079040595c54f56f31900beea91254cf2a3a25e245bcdd26fe1ccc4672a9b',
-  'test/fixtures/westend.json': '5457a3c8322b8f2a2d7c2c713c113a7e0b1ee7e646d3f00abc4fa21198ea879d',
-  'test/json_rpc_test.dart': 'dbcf86e83dcf00eef70975f45fbf7ad07ff83b400209a2ee65a9a535578234b9',
-  'test/smoldot_test.dart': '969eb56ce52fac3c8cd11f6e9bfa7d4e09877d7d394821db954f90eb0ab06285',
-  'test/subscription_test.dart': '99e83be4875390059a70047b667b8814ddd2c7281dbc8977c152552f9dd14b43',
+  'docs/smoldot-dart/BUILD.md': '8260e070ee9b84eb2f4e4a51623aa93d25a820e7d7fd843839fb0910ef9286e8',
+  'docs/smoldot-dart/CHANGELOG.md': 'd9adb01f7c62313a14bb86dbfd7f4077d925745e9c17a14f153eef79c45f8b94',
+  'docs/smoldot-dart/INTEGRATION.md': '1ca0a278ebef38f7b795555afb432127865c6f73dc63a7104245526a1bf14e95',
+  'docs/smoldot-dart/LICENSE': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
+  'docs/smoldot-dart/README.md': 'c024610fdaf73b3fbc8d68460c289d87297620dd2090d0c3ba1346b820f7b6be',
+  'docs/smoldot-dart/UPSTREAM.md': 'ed3f21bc62a6c6dc76beb870bf6f224914123a2cc95bdbab8b5cb453c4767539',
+  'docs/smoldot-dart/example/README.md': 'af54d6387a644f9e032885dec88c8846bb37d738480ab7119e926ef7c889f640',
+  'docs/smoldot-dart/example/smoldot_example.dart': '60aea4e2d738ab7702fbd056626e6647f8c23174739f3c1b7e564133c80ee2e7',
+  'docs/smoldot-dart/source-analysis_options.yaml': 'e67b963f89cf75f675a0ed25d258bae038d216832c22b84782e5e3a90b8d3076',
+  'docs/smoldot-dart/source-pubspec.lock': '91ad4c26c8abdf6384292e1f01f335ba7ce50443a99b01b45e2f4efa72dab25a',
+  'docs/smoldot-dart/source-pubspec.yaml': '408910b7b043d30aa29dc1f226f750f64dbee90ad343b1154478a7ee6ff3d83e',
+  'lib/src/smoldot/bindings.dart': '23a5a2add0de238ee8218238acf312193fa349c0806edb4056ff6f63b8b459eb',
+  'lib/src/smoldot/chain.dart': '43f3fbc8420f61d335acb0c48ee471a7885ebbd71d320d8b820805b1537d8053',
+  'lib/src/smoldot/client.dart': '916fd74c20f4daefca2e17e668e8a2fb16c59219b8f3bdd3148d10454a71ddff',
+  'lib/src/smoldot/json_rpc.dart': 'c3a030b236814731f773bb8b1aa9dd1e5789bc7d0809f3c0dd7011d59b401d01',
+  'lib/src/smoldot/platform.dart': '640e88e465a80677fa5532f5c667758986dae3d3e801ce31bf82cf1c8b044a61',
+  'lib/src/smoldot/smoldot.dart': 'cb1b47bb6873081129fba69b0c64fceef77f69d6aeb354d1824994cbc51b9676',
+  'lib/src/smoldot/types.dart': 'e20b6f97d0b6e289c2b492e12dd66afafc1133adc0fc5fe5a547106ed3338e89',
+  'test/smoldot/chain_info_test.dart': '5de74abf31c75c579716366d72a457e91339352972a4a118ec7fe18de005b158',
+  'test/smoldot/client_basic_test.dart': '4617fc86f8fc4a555e837f04ad747a25b501d93532532f8f0565e1d51e17a5cc',
+  'test/smoldot/ffi_basic_test.dart': 'd7f16ab19bfd842f4414f43e989a3536d6725a1ba9e2eab78ac6f53dd7fa6cef',
+  'test/smoldot/fixtures/polkadot.json': '1d5079040595c54f56f31900beea91254cf2a3a25e245bcdd26fe1ccc4672a9b',
+  'test/smoldot/fixtures/westend.json': '5457a3c8322b8f2a2d7c2c713c113a7e0b1ee7e646d3f00abc4fa21198ea879d',
+  'test/smoldot/json_rpc_test.dart': 'c61e7bf8eaebdc199a5cd2228e4de7f3b94e17715f7bdc7a53297b9be2e3fa94',
+  'test/smoldot/smoldot_test.dart': '144f3a7d3385e0f8ece9c28762ae19862cffa1e2db8e449b51ed6e56dbcf6cce',
+  'test/smoldot/subscription_test.dart': '18cce5adff77d300f4f6adb6e20db9237a1e0206a05f9308133689319636e677',
 });
 // 两份锁文件都从 CitizenApp 已验证结果机械裁掉 SDK 明确排除的产品/全节点闭包后固定；
 // 保留的 registry 包必须继续使用 CitizenApp 已验证的版本与校验和，且不得在
@@ -145,7 +158,7 @@ const SMOLDOT_LOCK_FILES = Object.freeze({
 // 只能保证使用当前锁，必须再固定锁文件自身，才能阻止依赖身份随提交静默漂移。
 const SDK_ROOT_LOCK_FILES = Object.freeze({
   'Cargo.lock': '62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670',
-  'pubspec.lock': '805510ddae3c2b9283593487100c6b9e942e64ac9a01b0edeb2cf0b31b5d07f2',
+  'pubspec.lock': 'd71a06a3c9b899872e8f1ea28c4a871da02707e2f3ccb0a47a140d33d8465e06',
 });
 // 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
 // byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
@@ -156,12 +169,12 @@ const SMOLDOT_RUST_SOURCE_MANIFEST = Object.freeze({
 });
 // 这些文件位于各来源单元之外，但仍属于 Release 的正式输入：许可证、来源说明、
 // 公共 ABI 头文件以及由 light-base 示例通过 include_str! 编译引用的链规范。
-// 它们与来源清单、213 个 Rust 单元文件和 25 个冻结 Dart 文件共同组成
-// native/smoldot 的 248 文件完整闭集，任何未登记文件都必须失败关闭。
+// 它们与来源清单、213 个 Rust 单元文件共同组成 native/smoldot 的 223 文件完整闭集；
+// Dart 绑定已迁出本原生目录并由 SMOLDOT_DART_FILES 独立固定。
 const SMOLDOT_SUPPORT_FILES = Object.freeze({
   'native/smoldot/LICENSE': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
   'native/smoldot/LICENSE-APACHE-2.0': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
-  'native/smoldot/README.md': 'df5d26f25425d0216d948e04c89ee4d005e180a761fbd023d6cc4a47898d5780',
+  'native/smoldot/README.md': '00edbd5b7559d061e43b3d6e1d64e3d760340c28799dccd880af20a32c8a6b52',
   'native/smoldot/UPSTREAM.md': '9826a09529ebf2eabb253d05bcccbf8b2107e9c39950ee0aa200b06b5e4feb94',
   'native/smoldot/include/README.md': '2ae510563d3b87a852bc990d462ad940d92578b05fbe9809a9c82d63c16503bc',
   'native/smoldot/include/citizensdk.h': '18c476d67cd00822b1a14fe4317330d56195712a7f8e33f39a487d84ad1a0819',
@@ -303,13 +316,20 @@ function regularFiles(root) {
  * modified release manifest can hide source drift.
  */
 export function assertSmoldotDartSource(root) {
-  const packageRoot = join(resolve(root), 'native', 'smoldot', 'dart');
-  if (!existsSync(packageRoot)
-      || lstatSync(packageRoot).isSymbolicLink()
-      || !lstatSync(packageRoot).isDirectory()) {
-    fail('CitizenSDK 缺少普通目录 native/smoldot/dart');
+  const sourceRoot = resolve(root);
+  const actualPaths = [];
+  for (const relativeRoot of SMOLDOT_DART_ROOTS) {
+    const directory = join(sourceRoot, ...relativeRoot.split('/'));
+    if (!existsSync(directory)
+        || lstatSync(directory).isSymbolicLink()
+        || !lstatSync(directory).isDirectory()) {
+      fail(`CitizenSDK 缺少普通 smoldot Dart 迁移目录：${relativeRoot}`);
+    }
+    actualPaths.push(
+      ...regularFiles(directory).map((path) => `${relativeRoot}/${path}`),
+    );
   }
-  const actualPaths = regularFiles(packageRoot);
+  actualPaths.sort();
   const expectedPaths = Object.keys(SMOLDOT_DART_FILES).sort();
   if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
     const actual = new Set(actualPaths);
@@ -319,7 +339,7 @@ export function assertSmoldotDartSource(root) {
     fail(`smoldot Dart 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
   }
   for (const relativePath of expectedPaths) {
-    const actualHash = sha256File(join(packageRoot, ...relativePath.split('/')));
+    const actualHash = sha256File(join(sourceRoot, ...relativePath.split('/')));
     if (actualHash !== SMOLDOT_DART_FILES[relativePath]) {
       fail(`smoldot Dart 文件哈希漂移：${relativePath}`);
     }
@@ -505,7 +525,6 @@ export function assertSmoldotRustSource(root) {
     SMOLDOT_RUST_SOURCE_MANIFEST.path,
     ...manifestPaths,
     ...Object.keys(SMOLDOT_SUPPORT_FILES),
-    ...Object.keys(SMOLDOT_DART_FILES).map((path) => `native/smoldot/dart/${path}`),
   ].sort();
   if (new Set(expectedClosure).size !== expectedClosure.length) {
     fail('CitizenSDK smoldot 来源合同存在重复路径');
@@ -515,7 +534,7 @@ export function assertSmoldotRustSource(root) {
     const expected = new Set(expectedClosure);
     const missing = expectedClosure.filter((path) => !actual.has(path));
     const extra = actualClosure.filter((path) => !expected.has(path));
-    fail(`CitizenSDK smoldot 248 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    fail(`CitizenSDK smoldot 223 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
   }
 }
 

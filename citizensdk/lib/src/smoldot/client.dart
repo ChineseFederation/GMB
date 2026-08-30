@@ -1,3 +1,5 @@
+// ignore_for_file: avoid_print -- 保留已验证 FFI 回调缺失时的诊断输出。
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';

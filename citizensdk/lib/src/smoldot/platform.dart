@@ -1,6 +1,8 @@
 import 'dart:ffi';
 import 'dart:io';
+
 import 'package:path/path.dart' as path;
+
 import 'types.dart';
 
 /// Platform-specific library loading and path resolution
@@ -52,7 +54,7 @@ class SmoldotPlatform {
     }
 
     // flutter_tester 不会链接 iOS CocoaPods 的静态库；macOS 宿主测试只能
-    // dlopen `build-smoldot-native.sh host` 生成的 dylib。禁止退回当前进程句柄，
+    // dlopen 中央工作目录生成并注入隔离快照的 dylib。禁止退回当前进程句柄，
     // 否则“宿主库不存在”会被伪装成某一个 FFI 符号 lookup 失败。
     final libraryPath = _getPackageLibraryPath('lib$_libraryName.dylib');
     Object? packageError;
@@ -98,64 +100,11 @@ class SmoldotPlatform {
 
   /// Get the package library path for the given library name
   static String? _getPackageLibraryPath(String libraryName) {
-    // Common locations to search for native libraries
-    final searchPaths = <String>[
-      // Current directory
-      Directory.current.path,
-      // Parent directory (for package development)
-      path.join(Directory.current.path, '..'),
-      // Native directory
-      path.join(Directory.current.path, 'native'),
-      // Lib directory
-      path.join(Directory.current.path, 'lib'),
-      // Build directory
-      path.join(Directory.current.path, 'build'),
-      // CitizenApp 主工程执行 flutter test 时的真实 FFI 构建目录。
-      path.join(
-        Directory.current.path,
-        'smoldot',
-        'ffi',
-        'target',
-        'release',
-      ),
-      // smoldot/dart 包目录执行 dart test 时的真实 FFI 构建目录。
-      path.join(Directory.current.path, '..', 'ffi', 'target', 'release'),
-    ];
-
-    for (final searchPath in searchPaths) {
-      final libraryPath = path.join(searchPath, libraryName);
-      if (File(libraryPath).existsSync()) {
-        return libraryPath;
-      }
-
-      // Also check in subdirectories for platform-specific builds
-      final platformPath = path.join(
-        searchPath,
-        _getPlatformSubdir(),
-        libraryName,
-      );
-      if (File(platformPath).existsSync()) {
-        return platformPath;
-      }
-    }
-
-    return null;
-  }
-
-  /// Get platform-specific subdirectory name
-  static String _getPlatformSubdir() {
-    if (Platform.isAndroid) {
-      return 'android';
-    } else if (Platform.isIOS) {
-      return 'ios';
-    } else if (Platform.isMacOS) {
-      return 'macos';
-    } else if (Platform.isLinux) {
-      return 'linux';
-    } else if (Platform.isWindows) {
-      return 'windows';
-    }
-    return '';
+    // 中文注释：源码树禁止出现任何编译产物。宿主测试只允许把中央工作目录
+    // 生成的动态库注入隔离构建根目录，因此这里只检查当前工作目录；移动正式版
+    // 仍分别走 Android 系统库搜索与 iOS 当前进程符号。
+    final libraryPath = path.join(Directory.current.path, libraryName);
+    return File(libraryPath).existsSync() ? libraryPath : null;
   }
 
   /// Get the current platform name

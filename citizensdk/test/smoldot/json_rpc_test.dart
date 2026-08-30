@@ -1,6 +1,7 @@
 import 'dart:io';
-import 'package:test/test.dart';
-import 'package:smoldot/smoldot.dart';
+
+import 'package:citizen_sdk/src/smoldot/smoldot.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('JSON-RPC Tests', () {
@@ -8,25 +9,20 @@ void main() {
     late Chain chain;
 
     setUpAll(() async {
-      client = SmoldotClient(
-        config: SmoldotConfig(
-          maxLogLevel: 3,
-        ),
-      );
+      client = SmoldotClient(config: SmoldotConfig(maxLogLevel: 3));
       await client.initialize();
 
       // Load Westend chain spec
-      final westendSpecFile = File('test/fixtures/westend.json');
-      expect(westendSpecFile.existsSync(), isTrue,
-          reason:
-              'Westend chain spec not found. Run: curl -o test/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json');
+      final westendSpecFile = File('test/smoldot/fixtures/westend.json');
+      expect(
+        westendSpecFile.existsSync(),
+        isTrue,
+        reason:
+            'Westend chain spec not found. Run: curl -o test/smoldot/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json',
+      );
 
       final westendSpec = await westendSpecFile.readAsString();
-      chain = await client.addChain(
-        AddChainConfig(
-          chainSpec: westendSpec,
-        ),
-      );
+      chain = await client.addChain(AddChainConfig(chainSpec: westendSpec));
     });
 
     tearDownAll(() async {

@@ -93,9 +93,9 @@ CitizenSDK 复用 GMB 唯一顶层 Workflow 和现有产品流程：
 CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是来源绑定、独立重建与完整
 验证，不宣称不同 Runner、不同 run 的压缩包在所有环境下必然逐字节相同。
 
-两条流程的测试命令合同相同：根包以 `flutter test` 完整执行 230 项；冻结
-`native/smoldot/dart` 包以 `dart test --timeout=2m` 完整执行 51 项，外层两分钟超时必须长于
-来源测试内部的 30 秒活链订阅窗口。Android 在临时 Flutter 宿主中执行 Gradle
+两条流程的测试命令合同相同：根包把原有 230 项与迁入的 smoldot 51 项合并，并以
+`flutter test --timeout=2m` 统一执行；外层两分钟超时必须长于来源测试内部的 30 秒活链订阅
+窗口。Android 在临时 Flutter 宿主中执行 Gradle
 `:citizen_sdk:testDebugUnitTest`，iOS 启动可用 iPhone Simulator 后执行限定 `RunnerTests` 的
 `xcodebuild test`。平台测试必须实际启动测试运行器并取得成功终态，不能用 APK 构建、Pod
 链接、test discovery 或报告文件存在来代替。
@@ -120,6 +120,8 @@ tar/gzip 字节并逐字节比较归档，拒绝符号链接、路径穿越、�
 
 ## 分发边界
 
-GitHub Release 是 CitizenSDK 的正式分发终态：不设独立发布按钮，不接公民网下载，不更新
-CitizenServe/CitizenWeb/Cloudflare 下载指针，也不发布到 pub.dev。当前正式平台只有
-Android ARM64 与 iOS ARM64。
+GitHub Release 三件套继续作为来源审计、校验和离线留档；根 `citizen_sdk` 包已消除本地
+`path` 依赖，为 Hosted Package 直接解析做好源码结构准备。Hosted 发布门禁与正式 `1.0.0`
+发布属于后续独立步骤，在完成前当前 `0.1.0` 不得宣称已经可由
+`citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，也不更新
+CitizenServe/CitizenWeb/Cloudflare 下载指针。当前正式平台只有 Android ARM64 与 iOS ARM64。

@@ -2,8 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:meta/meta.dart' show visibleForTesting;
-import 'package:smoldot/smoldot.dart';
 
+import '../smoldot/smoldot.dart';
 import 'bootstrap_client.dart';
 import 'bootstrap_manifest.dart';
 import 'chain_assets.dart';

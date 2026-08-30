@@ -1,6 +1,9 @@
+// ignore_for_file: avoid_print -- 活链来源测试保留诊断输出，便于定位网络状态。
+
 import 'dart:io';
-import 'package:test/test.dart';
-import 'package:smoldot/smoldot.dart';
+
+import 'package:citizen_sdk/src/smoldot/smoldot.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('LightClientStatusSnapshot codec', () {
@@ -143,12 +146,12 @@ void main() {
       await client.initialize();
 
       // Load Westend chain spec
-      final westendSpecFile = File('test/fixtures/westend.json');
+      final westendSpecFile = File('test/smoldot/fixtures/westend.json');
       expect(
         westendSpecFile.existsSync(),
         isTrue,
         reason:
-            'Westend chain spec not found. Run: curl -o test/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json',
+            'Westend chain spec not found. Run: curl -o test/smoldot/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json',
       );
 
       final westendSpec = await westendSpecFile.readAsString();

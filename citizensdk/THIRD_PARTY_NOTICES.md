@@ -11,9 +11,10 @@ CitizenSDK 组合了不同许可证覆盖的源码。任何 GitHub Release、下
 
 ## smoldot Dart 与 FFI
 
-`native/smoldot/dart` 是 CitizenApp 已验证 Dart smoldot 包的独立源码快照；24 个来源文件
-保持逐字节一致，CitizenSDK 只额外增加 `example/README.md` 说明发布边界。该包的
-`pubspec.lock` 也随来源复制并由发布闭集校验。
+CitizenApp 已验证的 Dart smoldot 包已作为 CitizenSDK 内部实现并入 `lib/src/smoldot`，原六个
+测试和两个公开链夹具并入 `test/smoldot`。历史包清单、锁文件、许可证、说明和示例保存于
+`docs/smoldot-dart` 供审计；它们不再构成第二个 Dart 包或 `path` 依赖。迁移闭集继续由发布
+合同逐文件校验。
 
 `native/smoldot/ffi` 继承 CitizenApp 的 Apache-2.0 FFI 边界，保留轻节点和 signer C ABI，
 排除只供聊天使用的 OpenMLS/聊天信封与账户数据加密代码。Apache 2.0 许可证原文保存于

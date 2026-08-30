@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:smoldot/smoldot.dart';
+import 'package:citizen_sdk/src/smoldot/smoldot.dart';
 
 /// Example demonstrating the smoldot package
 ///
@@ -31,11 +31,11 @@ Future<void> basicExample() async {
     print('✓ Client initialized');
 
     // Load real Westend chain spec
-    final chainSpecFile = File('test/fixtures/westend.json');
+    final chainSpecFile = File('test/smoldot/fixtures/westend.json');
     if (!chainSpecFile.existsSync()) {
-      print('⚠ Westend chain spec not found at test/fixtures/westend.json');
+      print('⚠ Westend chain spec not found at test/smoldot/fixtures/westend.json');
       print(
-        '  Download it with: curl -o test/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json',
+        '  Download it with: curl -o test/smoldot/fixtures/westend.json https://raw.githubusercontent.com/smol-dot/smoldot/main/demo-chain-specs/westend.json',
       );
       return;
     }
@@ -77,7 +77,7 @@ Future<void> multiChainExample() async {
     print('✓ Client initialized');
 
     // Load Polkadot relay chain spec
-    final polkadotSpecFile = File('test/fixtures/polkadot.json');
+    final polkadotSpecFile = File('test/smoldot/fixtures/polkadot.json');
     if (!polkadotSpecFile.existsSync()) {
       print('⚠ Polkadot chain spec not found');
       print('  This example requires both Polkadot and Statemint chain specs');
@@ -124,7 +124,7 @@ Future<void> subscriptionExample() async {
     await client.initialize();
     print('✓ Client initialized');
 
-    final chainSpecFile = File('test/fixtures/westend.json');
+    final chainSpecFile = File('test/smoldot/fixtures/westend.json');
     if (!chainSpecFile.existsSync()) {
       print('⚠ Westend chain spec not found');
       return;
@@ -173,7 +173,7 @@ Future<void> jsonRpcExample() async {
     await client.initialize();
     print('✓ Client initialized');
 
-    final chainSpecFile = File('test/fixtures/westend.json');
+    final chainSpecFile = File('test/smoldot/fixtures/westend.json');
     if (!chainSpecFile.existsSync()) {
       print('⚠ Westend chain spec not found');
       return;
@@ -213,7 +213,7 @@ Future<void> chainInfoExample() async {
     await client.initialize();
     print('✓ Client initialized');
 
-    final chainSpecFile = File('test/fixtures/westend.json');
+    final chainSpecFile = File('test/smoldot/fixtures/westend.json');
     if (!chainSpecFile.existsSync()) {
       print('⚠ Westend chain spec not found');
       return;
@@ -270,7 +270,7 @@ Future<void> concurrentRequestsExample() async {
     await client.initialize();
     print('✓ Client initialized');
 
-    final chainSpecFile = File('test/fixtures/westend.json');
+    final chainSpecFile = File('test/smoldot/fixtures/westend.json');
     if (!chainSpecFile.existsSync()) {
       print('⚠ Westend chain spec not found');
       return;

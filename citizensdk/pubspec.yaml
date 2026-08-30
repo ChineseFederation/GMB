@@ -2,7 +2,6 @@ name: citizen_sdk
 description: Citizenchain light client, rootless hot wallet, sr25519 signing, and on-chain transaction SDK.
 version: 0.1.0
 repository: https://github.com/ChineseFederation/GMB
-publish_to: "none"
 
 environment:
   sdk: ^3.8.0
@@ -23,8 +22,6 @@ dependencies:
   polkadart_keyring: 0.7.1
   substrate_bip39: ^0.7.0
   shared_preferences: ^2.5.5
-  smoldot:
-    path: native/smoldot/dart
   unorm_dart: ^0.3.2
 
 dev_dependencies:

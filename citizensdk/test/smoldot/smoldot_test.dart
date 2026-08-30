@@ -1,5 +1,5 @@
-import 'package:smoldot/smoldot.dart';
-import 'package:test/test.dart';
+import 'package:citizen_sdk/src/smoldot/smoldot.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('SmoldotConfig', () {

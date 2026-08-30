@@ -20,25 +20,24 @@ TuyuBooking、聊天、广场、TUYU 协议、产品导航或产品数据库。
 
 ```text
 citizensdk/
-├── lib/                    CitizenSDK 公共入口和产品无关编排
+├── lib/                    唯一 citizen_sdk 包及内嵌 smoldot Dart 绑定
 ├── native/
 │   ├── signer/             唯一 sr25519 原生实现
 │   └── smoldot/
-│       ├── dart/           独立嵌套 Dart smoldot 包
 │       ├── ffi/            轻节点与 signer 的稳定 C ABI
 │       └── pow/            PoW + GRANDPA 轻节点 Rust 快照
 ├── android/                Android 插件与硬件金库
 ├── ios/                    iOS 插件与硬件金库
 ├── assets/                 chain spec 与 #0 light sync state
 ├── scripts/                外部原生构建与确定性候选工具
-├── test/                   CitizenSDK Dart/Flutter 合同测试源码
-└── docs/                   产品技术文档
+├── test/                   根包合同测试及迁入的 smoldot 测试
+└── docs/                   产品技术文档和 smoldot 来源记录
 ```
 
-根 Flutter 包通过 path dependency 使用 `native/smoldot/dart`。先前存在的
-`lib/src/smoldot` 镜像和 `test/smoldot` 镜像已经删除，避免同一绑定存在两个来源。
-嵌套包的 24 个来源文件由固定闭集和逐文件哈希保护；唯一额外文件是
-`native/smoldot/dart/example/README.md`。
+根 `pubspec.yaml` 是唯一有效包清单，不含仓库本地 `path` 依赖。原 smoldot Dart 生产绑定
+机械迁入 `lib/src/smoldot`，测试和夹具迁入 `test/smoldot`，历史包清单与来源说明归档到
+`docs/smoldot-dart`。smoldot 只作为 CitizenSDK 内部实现参与同一版本和同一发布，不形成
+第二个 SDK 或第二个源码真源。
 
 ## 运行时分层
 
@@ -105,24 +104,24 @@ GMB 七个路由产品共有 24 条分组 CI/Release workflow，并由唯一顶�
 - `.github/workflows/citizensdk/ci-sdk.yml`
 - `.github/workflows/citizensdk/release-sdk.yml`
 
-CI 与 Release 都从干净源码建立隔离构建快照，执行嵌套与根依赖锁检查、静态检查、Rust 与
-Dart/Flutter 测试、移动原生构建和候选验证。嵌套 smoldot Dart 包必须保持来源字节，因而
-只执行 `dart analyze --no-fatal-warnings`，不由当前 formatter 改写。Release 还会验证指定
+CI 与 Release 都从干净源码建立隔离构建快照，执行唯一根包依赖锁检查、静态检查、Rust 与
+Dart/Flutter 测试、移动原生构建和候选验证。smoldot Dart 绑定和来源测试现与根 Flutter
+包一起分析和执行。Release 还会验证指定
 成功 CI 的 workflow、显示标题、产品目标、成功状态与准确 source SHA，不读取、下载或比较
 CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然一致作为发布成立条件。
 
-测试执行合同要求根 Flutter 230 项完整运行；冻结 smoldot Dart 51 项必须用
-`dart test --timeout=2m` 运行，以覆盖其中最长 30 秒的活链订阅窗口。交易执行确认使用带
+测试执行合同要求根 Flutter 套件包含原 230 项和迁入的 smoldot 51 项，并统一使用
+`flutter test --timeout=2m`，以覆盖其中最长 30 秒的活链订阅窗口。交易执行确认使用带
 `System.Event`、`Phase` 与 `DispatchInfo` 类型的真实 Substrate v14 metadata 夹具，不得退回
 只能解常量的最小 metadata。Android 必须真实运行插件 JUnit，iOS 必须在 Simulator 上执行
 XCTest；编译成功不等于平台测试执行成功。这些是每个准确提交都要重新满足的测试合同，不是
 对尚未完成最终验收的日期性结论。
 
-2026-08-29 当前冻结源码的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
-230/230 和冻结 smoldot Dart 51/51。signer Rust 6/6、FFI Rust 5/5、PoW Rust
+2026-08-29 包边界重构前的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
+230/230 和独立 smoldot Dart 51/51。signer Rust 6/6、FFI Rust 5/5、PoW Rust
 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、Android JUnit 3/3
-与 ProgramConsole 99/99 是同一次任务中的先前执行记录，相关生产字节未变；本轮禁止运行
-Git，因而不把内部调用 Git 的 GMB 完整仓库套件记为当前通过。iOS 的 2 项 XCTest
+与 ProgramConsole 99/99 是同一次任务中的先前执行记录；这些历史结果不冒充包边界重构后的
+验证结论。iOS 的 2 项 XCTest
 已编译链接，但本机没有 Simulator runtime，未宣称本地执行成功；正式 workflow
 在 GitHub macOS Runner 上要求真实执行并失败关闭。
 

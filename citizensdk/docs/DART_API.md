@@ -18,6 +18,9 @@ import 'package:citizen_sdk/citizen_sdk.dart';
 - `transactionScanner`：可选的 finalized 增量扫描和本机 pending 收敛器。
 - `signer`：公钥验签。
 
+`CitizenLightClient` 公共方法使用的同步状态与账户快照类型由同一
+`package:citizen_sdk/citizen_sdk.dart` 入口导出；调用方不需要也不应导入内部 smoldot 路径。
+
 聊天、广场、TUYU v1 消息编码、旅行商品、预订和宿主导航不在公共 API 内。
 
 ## 构造与信任边界

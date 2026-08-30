@@ -464,7 +464,6 @@ class SmoldotBindings {
 
   @Deprecated('Use getStatusSnapshotAsync instead')
   // ──── 异步版本（不阻塞 Dart 主线程） ────
-
   void _invokeAsyncNoArg(
     SmoldotAsyncNoArgDart fn, {
     required int chainHandle,

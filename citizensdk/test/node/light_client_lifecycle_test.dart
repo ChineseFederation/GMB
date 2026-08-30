@@ -5,7 +5,6 @@ import 'dart:io';
 
 import 'package:citizen_sdk/citizen_sdk.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:smoldot/smoldot.dart';
 
 late _MemoryChainDatabaseStore _store;
 

@@ -39,27 +39,23 @@ CitizenApp、CitizenWallet 或上游 fork，必须列出两侧精确文件、分
 
 ## smoldot Dart 包
 
-`citizenapp/smoldot/dart` 的全部 24 个文件逐字节复制到
-`citizensdk/native/smoldot/dart`，包括：
+`citizenapp/smoldot/dart` 是初始来源。为使根 Flutter 包能够作为单一 Hosted Package 直接
+解析，Dart 包边界只做以下机械重排：
 
-- `pubspec.yaml`、`pubspec.lock`、许可证与上游说明；
-- `lib/smoldot.dart` 和全部 `lib/src/*` FFI 绑定；
-- 示例、6 个 Dart 测试及两个公开链 fixture。
+- `lib/smoldot.dart` 与 `lib/src/*` 迁入 `lib/src/smoldot/*`；
+- 6 个 Dart 测试和两个公开链 fixture 迁入 `test/smoldot`；
+- 包清单、锁文件、分析规则、许可证、上游说明和示例迁入 `docs/smoldot-dart` 作为历史记录。
 
-CitizenSDK 只额外增加 `native/smoldot/dart/example/README.md`，说明发布闭集与产物边界。
-发布器保存固定文件闭集和逐文件哈希，任何来源字节漂移都会失败。根 Flutter 包通过
-`path: native/smoldot/dart` 使用该包；先前存在的 `lib/src/smoldot` 和 `test/smoldot` 镜像已删除。
+根 `pubspec.yaml` 是唯一有效包清单，已经直接声明 smoldot 绑定需要的 `ffi`、`meta`、`path`
+和 `convert` 依赖，不再声明本地 `path` 包。历史清单使用 `source-` 前缀，禁止参与依赖解析。
+生产绑定除 import/export、移动测试夹具路径、移动平台测试加载路径、交付范围注释和根包
+formatter 归一外不改行为；
+发布器继续对迁移闭集逐文件固定哈希，并对 `native/smoldot` Rust/FFI 闭集反向枚举。
 
-该快照使用的分析规则早于当前根包工具链，允许产生上游 warning/info 基线。CI/Release 对
-它执行 `dart analyze --no-fatal-warnings`，但禁止运行 formatter 改写来源字节；这不是放宽
-根 `lib/` 与 `test/` 的分析要求。
-
-该 24 文件快照中的 `README.md`、`BUILD.md`、`UPSTREAM.md` 和平台注释是 CitizenApp 来源
-历史说明，其中的桌面平台、CitizenApp 路径及源码树内 `target` 命令不代表 CitizenSDK 当前
-交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前只交付 Android ARM64 与 iOS ARM64；
-arm64+x86_64 macOS 宿主动态库和与 Runner 同架构的 iOS Simulator 静态库只用于测试，且与
-全部生成记录一样只能写入 Runner 临时目录或 ProgramConsole 中央目录。实际指引以本文件、根 README
-和 `docs/NATIVE_PACKAGING.md` 为准。直接修改冻结文件会破坏逐字节来源闭集。
+历史 `README.md`、`BUILD.md`、`UPSTREAM.md` 中的桌面平台、CitizenApp 路径及源码树内
+`target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前只
+交付 Android ARM64 与 iOS ARM64；宿主测试库与全部生成记录只能写入 Runner 临时目录或
+ProgramConsole 中央目录。实际指引以本文件、根 README 和 `docs/NATIVE_PACKAGING.md` 为准。
 
 ## smoldot FFI
 
@@ -115,15 +111,16 @@ src/identity/seed_phrase.rs
 引入新身份。SDK 锁文件 SHA-256 为
 `6d832fb629bbf19ff6c2cce589c6285c3367cbcb3b55f4819beb7e733d9e038b`。
 
-Release 门禁把 `native/smoldot` 固定为 248 个普通文件的完整闭集：来源清单自身 1 个、清单
-四个单元中的 Rust/锁文件 213 个、冻结 Dart 包 25 个，以及以下 9 个单元外支持文件。门禁
-不仅逐文件校验哈希，还反向枚举整个目录；新增、删除、符号链接或单字节变化都会失败关闭。
+Release 门禁把 `native/smoldot` 固定为 223 个普通文件的完整闭集：来源清单自身 1 个、清单
+四个单元中的 Rust/锁文件 213 个，以及以下 9 个单元外支持文件。迁出的 Dart 生产、测试和
+来源记录另由跨目录闭集固定。门禁不仅逐文件校验哈希，还反向枚举目录；新增、删除、符号链接
+或单字节变化都会失败关闭。
 
 | 支持文件 | 来源分类 | SHA-256 |
 |---|---|---|
 | `LICENSE` | 与 `citizenapp/smoldot/pow/LICENSE` 逐字节一致 | `aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4` |
 | `LICENSE-APACHE-2.0` | 与 `citizenapp/smoldot/dart/LICENSE` 逐字节一致 | `4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78` |
-| `README.md` | CitizenSDK 边界说明 | `df5d26f25425d0216d948e04c89ee4d005e180a761fbd023d6cc4a47898d5780` |
+| `README.md` | CitizenSDK 边界说明 | `00edbd5b7559d061e43b3d6e1d64e3d760340c28799dccd880af20a32c8a6b52` |
 | `UPSTREAM.md` | CitizenSDK 上游与本地改动说明 | `9826a09529ebf2eabb253d05bcccbf8b2107e9c39950ee0aa200b06b5e4feb94` |
 | `include/README.md` | CitizenSDK 公共 ABI 说明 | `2ae510563d3b87a852bc990d462ad940d92578b05fbe9809a9c82d63c16503bc` |
 | `include/citizensdk.h` | CitizenSDK 聚合公共 ABI | `18c476d67cd00822b1a14fe4317330d56195712a7f8e33f39a487d84ad1a0819` |
@@ -203,46 +200,46 @@ CitizenSDK 的受控依赖输入包括：
 
 ```text
 pubspec.lock
-native/smoldot/dart/pubspec.lock
 Cargo.lock
 native/smoldot/ffi/Cargo.lock
 native/smoldot/pow/Cargo.lock
 ```
 
-根与嵌套 Dart 包、signer、FFI、PoW workspace 都在 CI/Release 使用 locked/enforce-lockfile
-模式。锁文件属于源码输入，不是编译产物。Release 还逐字节固定根 `Cargo.lock`（SHA-256
+唯一根 Dart 包、signer、FFI、PoW workspace 都在 CI/Release 使用 locked/enforce-lockfile
+模式。`docs/smoldot-dart/source-pubspec.lock` 只保存来源事实，不参与解析。锁文件属于源码输入，
+不是编译产物。Release 还逐字节固定根 `Cargo.lock`（SHA-256
 `62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670`）和根
 `pubspec.lock`（SHA-256
-`805510ddae3c2b9283593487100c6b9e942e64ac9a01b0edeb2cf0b31b5d07f2`）；其中根 Cargo 锁是
+`d71a06a3c9b899872e8f1ea28c4a871da02707e2f3ccb0a47a140d33d8465e06`）；其中根 Cargo 锁是
 CitizenSDK signer 独立 workspace 的已审查解析闭包，不宣称与 CitizenApp 整份锁逐字节相同。
 当前闭包的密码学核心 `schnorrkel 0.11.5`、`zeroize 1.9.0` 与已验证来源一致，独立解析得到的
 `syn 3.0.4` 作为 SDK workspace 适配身份明确固定。任何依赖升级都必须显式更新哈希与合同测试。
 Release 对 `native/signer` 做 6 个普通文件的逐字节哈希与反向闭集检查；两份生产真源、两份
 说明和两份合同测试缺一不可，额外 `build.rs`、`src/bin` 或其它文件也必须失败关闭。
 
-测试来源分三类：上游/CitizenApp 逐字节夹具与内联测试、逐字节复制的 Dart smoldot 测试、
+测试来源分三类：上游/CitizenApp 逐字节夹具与内联测试、迁入根套件的 Dart smoldot 测试、
 CitizenSDK 新增的来源闭集/能力边界/平台/钱包/轻节点/交易/发布合同测试。文档只记录测试
 来源和职责；实际通过数量必须由对应提交的执行报告产生，不能由文件数量或历史候选推断。
 
-Release 反向固定的 SDK 自有测试源码是 35 个普通文件：根 `test/` 24 个（19 个 Dart 测试、
-fixture README、3 份真实 metadata/events hex 与跨端 bootstrap JSON 1 个）、signer 2 个、Android
-6 个、iOS 2 个、`scripts/release.test.mjs` 1 个。Android 闭集准确固定
+Release 反向固定的 SDK 自有测试源码增加了 `test/smoldot` 的 6 个测试与两个公开链 fixture；
+其余根测试、signer、Android、iOS 和 `scripts/release.test.mjs` 继续处于同一反向闭集。Android 闭集准确固定
 `android/src/test/README.md`、`android/src/test/kotlin/README.md`、
 `android/src/test/kotlin/org/README.md`、`android/src/test/kotlin/org/citizen/README.md`，以及官方
 `org/citizen/sdk` 包目录中的 `HardwareSecretVaultTest.kt`、`VaultEnvelopeTest.kt`；扁平或其它包路径
-均属于闭集漂移。该 35 文件闭集与运行时测试数量是两项不同合同，均必须满足。
+均属于闭集漂移。文件闭集与运行时测试数量是两项不同合同，均必须满足。
 
-当前完整测试执行合同固定包含根 Flutter 230 项和冻结 smoldot Dart 51 项。根套件使用
-`flutter test`；冻结套件内部有 30 秒活链订阅窗口，必须使用
-`dart test --timeout=2m`，不能以默认外层超时截断。移动平台合同还必须在临时宿主中真实运行
+当前完整测试执行合同把原根 Flutter 230 项和 smoldot Dart 51 项合并到同一根套件，使用
+`flutter test --timeout=2m`，不能以默认外层超时截断其中的 30 秒活链订阅窗口。移动平台合同
+还必须在临时宿主中真实运行
 Android `:citizen_sdk:testDebugUnitTest` JUnit 与 iOS Simulator `xcodebuild test` XCTest；只编译
 插件、发现测试或生成测试报告都不能替代执行。上述数量和命令描述测试套件合同，不是尚未完成
 的某次最终验收结果。
 
-2026-08-29 当前冻结源码的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
-230/230、冻结 smoldot Dart 51/51、钱包定向 88/88、交易定向 85/85、signer Rust 6/6、
+2026-08-29 包边界重构前的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
+230/230、独立 smoldot Dart 51/51、钱包定向 88/88、交易定向 85/85、signer Rust 6/6、
 FFI Rust 5/5、PoW Rust 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、
-Android JUnit 3/3、Release 合同 18/18、ProgramConsole 99/99 与统一数据字典定向合同 2/2。
+Android JUnit 3/3、Release 合同 18/18、ProgramConsole 99/99 与统一数据字典定向合同 2/2；
+这些历史结果不冒充本次目录重构后的验证结论。
 Android 最终冻结副本与产品真源逐字节目录比较无差异，生成的 CitizenSDK AAR 只包含
 `arm64-v8a/libsmoldot.so`。iOS ARM64 设备 Release App 与 ARM64 Simulator 测试包均完成
 编译链接并保留全部 25 个轻节点/sr25519 导出符号；设备与 Simulator 静态归档各有 397 个

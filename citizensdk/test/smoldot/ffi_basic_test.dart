@@ -1,5 +1,7 @@
-import 'package:test/test.dart';
-import 'package:smoldot/src/bindings.dart';
+// ignore_for_file: avoid_print -- FFI 来源测试保留句柄和版本诊断输出。
+
+import 'package:citizen_sdk/src/smoldot/bindings.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   group('FFI Basic Tests', () {
@@ -13,7 +15,10 @@ void main() {
       final version = bindings.getVersion();
       print('Smoldot FFI version: $version');
       expect(version, isNotEmpty);
-      expect(version, equals('1.0.0')); // 与 CitizenApp 实际构建的 citizenapp/smoldot/ffi/Cargo.toml 一致。
+      expect(
+        version,
+        equals('1.0.0'),
+      ); // 与 CitizenApp 实际构建的 citizenapp/smoldot/ffi/Cargo.toml 一致。
     });
 
     test('should initialize client with config', () {

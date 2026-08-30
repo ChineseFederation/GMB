@@ -49,9 +49,12 @@ GMB 的唯一顶层 Workflow 路由 `公民SDK · CI · SDK` 与
 检查、测试、原生构建和候选生成。这是独立重建与重新验证，不把不同 Runner 的归档字节
 天然相同作为前提。
 
-正式分发只有 GitHub Release 三项资产：`citizensdk.tgz`、
-`citizensdk-release.json`、`SHA256SUMS`。CitizenSDK 不设置独立“发布”按钮、不接入公民网
-下载，也不发布到 pub.dev。
+根包已消除本地 `path` 依赖，目标 Hosted 依赖形式固定为 `citizen_sdk: ^1.0.0`。当前源码
+版本仍为 `0.1.0`，在完成 Hosted 发布门禁和正式 `1.0.0` 验收前不得冒充稳定版。
+
+GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，用于
+来源审计、校验和离线留档；Hosted Package 用于 Flutter 依赖解析。CitizenSDK 不设置独立
+“发布”按钮，也不接入公民网下载。
 
 本机 ProgramConsole 只允许把 CitizenSDK 生成记录写入
 `/Users/rhett/Only/ProgramConsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；

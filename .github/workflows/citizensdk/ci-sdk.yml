@@ -94,9 +94,7 @@ jobs:
 
       - name: 安装锁定 Dart 与 Flutter 依赖
         working-directory: ${{ runner.temp }}/citizensdk/build-source
-        run: |
-          flutter pub get --enforce-lockfile
-          (cd native/smoldot/dart && dart pub get --enforce-lockfile)
+        run: flutter pub get --enforce-lockfile
 
       - name: 执行 CitizenSDK 依赖安全审计
         run: node .github/scripts/citizensdk/ci-sdk.mjs dependencies audit --scope citizensdk
@@ -106,8 +104,6 @@ jobs:
         run: |
           dart format --output=none --set-exit-if-changed lib test
           flutter analyze
-          # 中文注释：嵌套包由固定闭集与逐文件哈希保护，禁止格式化改写来源字节。
-          (cd native/smoldot/dart && dart analyze --no-fatal-warnings)
 
       - name: 检查 Rust signer、FFI 与轻节点源码
         run: |
@@ -258,15 +254,12 @@ jobs:
         env:
           DYLD_LIBRARY_PATH: ${{ runner.temp }}/citizensdk/native/host
         run: |
-          # smoldot 的冻结 Dart 装载器按工作目录查找库；只向隔离构建快照
-          # 注入双架构宿主测试库，绝不回写 CitizenSDK 包源码或正式候选。
+          # smoldot Dart 绑定已经并入根包；宿主测试库只注入隔离构建根目录，
+          # 绝不回写 CitizenSDK 包源码或正式候选。
           /usr/bin/ditto "$RUNNER_TEMP/citizensdk/native/host/libsmoldot.dylib" \
             "$RUNNER_TEMP/citizensdk/build-source/libsmoldot.dylib"
-          /usr/bin/ditto "$RUNNER_TEMP/citizensdk/native/host/libsmoldot.dylib" \
-            "$RUNNER_TEMP/citizensdk/build-source/native/smoldot/dart/libsmoldot.dylib"
-          flutter test
-          # 来源测试内部有 30 秒活链订阅窗口，runner 外层超时必须严格更长。
-          (cd native/smoldot/dart && dart test --timeout=2m)
+          # 来源测试已迁入根 test/smoldot；两分钟外层超时覆盖其 30 秒活链窗口。
+          flutter test --timeout=2m
 
       - name: 生成不可变 CitizenSDK 候选
         run: |

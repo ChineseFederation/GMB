@@ -79,7 +79,7 @@ function assertIosDeploymentTargetContract(source) {
   return { deviceCommand, environmentPrefix, simulatorCommand };
 }
 
-test('smoldot Dart Release 合同固定 24 个来源文件和 1 个 SDK 说明文件', () => {
+test('smoldot Dart Release 合同固定根包生产、测试与来源记录迁移闭集', () => {
   assert.doesNotThrow(() => assertSmoldotDartSource(citizenSdkRoot));
 });
 
@@ -135,7 +135,7 @@ test('smoldot Rust 收编源码按离线清单固定完整闭集与逐文件哈�
   }
 });
 
-test('smoldot Release 合同覆盖根支持文件并拒绝 248 文件闭集漂移', () => {
+test('smoldot Release 合同覆盖根支持文件并拒绝 223 文件闭集漂移', () => {
   const root = mkdtempSync(join(workRoot, 'release-smoldot-closure-test-'));
   const source = join(citizenSdkRoot, 'native', 'smoldot');
   const copy = join(root, 'native', 'smoldot');
@@ -155,7 +155,7 @@ test('smoldot Release 合同覆盖根支持文件并拒绝 248 文件闭集漂�
     writeFileSync(join(copy, 'unexpected-release-input.txt'), 'extra\n');
     assert.throws(
       () => assertSmoldotRustSource(root),
-      /smoldot 248 文件闭集漂移.*额外=native\/smoldot\/unexpected-release-input\.txt/,
+      /smoldot 223 文件闭集漂移.*额外=native\/smoldot\/unexpected-release-input\.txt/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -371,19 +371,29 @@ test('smoldot Rust 锁文件合同拒绝内容漂移', () => {
 
 test('smoldot Dart Release 合同拒绝内容和闭集漂移', () => {
   const root = mkdtempSync(join(workRoot, 'release-smoldot-test-'));
-  const source = join(citizenSdkRoot, 'native', 'smoldot', 'dart');
-  const copy = join(root, 'native', 'smoldot', 'dart');
   try {
-    mkdirSync(join(root, 'native', 'smoldot'), { recursive: true });
-    cpSync(source, copy, { recursive: true });
-    writeFileSync(join(copy, 'README.md'), 'drift\n');
+    for (const relativeRoot of [
+      'docs/smoldot-dart',
+      'lib/src/smoldot',
+      'test/smoldot',
+    ]) {
+      const source = join(citizenSdkRoot, ...relativeRoot.split('/'));
+      const copy = join(root, ...relativeRoot.split('/'));
+      mkdirSync(dirname(copy), { recursive: true });
+      cpSync(source, copy, { recursive: true });
+    }
+    const bindings = join(root, 'lib', 'src', 'smoldot', 'bindings.dart');
+    writeFileSync(bindings, 'drift\n');
     assert.throws(
       () => assertSmoldotDartSource(root),
-      /smoldot Dart 文件哈希漂移：README\.md/,
+      /smoldot Dart 文件哈希漂移：lib\/src\/smoldot\/bindings\.dart/,
     );
 
-    copyFileSync(join(source, 'README.md'), join(copy, 'README.md'));
-    writeFileSync(join(copy, 'unexpected.txt'), 'extra\n');
+    copyFileSync(
+      join(citizenSdkRoot, 'lib', 'src', 'smoldot', 'bindings.dart'),
+      bindings,
+    );
+    writeFileSync(join(root, 'test', 'smoldot', 'unexpected.txt'), 'extra\n');
     assert.throws(
       () => assertSmoldotDartSource(root),
       /smoldot Dart 文件闭集漂移/,

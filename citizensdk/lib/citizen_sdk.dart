@@ -35,6 +35,13 @@ export 'src/platform/preferences_data_store.dart';
 export 'src/platform/preferences_finalized_transaction_repository.dart';
 export 'src/platform/preferences_wallet_repository.dart';
 export 'src/platform/secure_blob_store.dart';
+export 'src/smoldot/types.dart'
+    show
+        LightClientStatusSnapshot,
+        LightClientStartupFinalizedSource,
+        LightClientSyncPhase,
+        LightClientWarpFailure,
+        SystemAccountSnapshot;
 export 'src/transaction/chain_rpc.dart';
 export 'src/transaction/chain_transfer_event_decoder.dart';
 export 'src/transaction/finalized_transaction_models.dart';
