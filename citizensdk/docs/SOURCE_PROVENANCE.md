@@ -14,6 +14,17 @@ CitizenWallet 继续使用 `shared/citizen-signer`。CitizenSDK 稳定后如需�
 CitizenApp、CitizenWallet 或上游 fork，必须列出两侧精确文件、分别审查并用相同向量和行为
 测试验证；不做自动双向同步，也不维护 CI 时跨目录复制。
 
+## 版本权威
+
+`pubspec.yaml` 是 CitizenSDK 软件版本入口；`android/build.gradle` 与
+`ios/citizen_sdk.podspec` 必须保存同一版本。首个稳定源码版本冻结为 `1.0.0`。Release 请求的
+software version 必须等于该提交的源码版本，生成后 `citizensdk-release.json`、Dart pubspec、
+Android Gradle 和 iOS podspec 还会再次交叉核验。发布器不允许从 `0.1.0` 或其它旧版本源码在
+Runner 中临时改号成 `1.0.0`，未来升级也必须先提交准确版本源码。
+
+版本冻结只证明候选身份，不等于 Hosted Registry 已接受该版本；首次不可逆发布必须另行取得
+明确授权，并以对应 GitHub Release 的同一候选为输入。
+
 ## 许可证原文
 
 根 `LICENSE` 是 CitizenSDK 组件许可证入口，明确 SDK 自有代码、smoldot Dart/FFI 与

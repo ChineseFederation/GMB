@@ -67,7 +67,7 @@ const LICENSE_SOURCE_FILES = Object.freeze({
 // 原生库的 GitHub Release 候选，并由这份固定 .pubignore 只筛出运行时闭包。
 const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
   '.pubignore': '93386c3f344c122e1b4978b2074ebb2b7ae461d5cd6a1b9ea4562034777f834b',
-  'CHANGELOG.md': '4576ed39b1122fc4cdfdf3d030a68e9dfaca37de5d70394ceca093fdf0e6026c',
+  'CHANGELOG.md': '103237917c47d4393713d7182953b67af94f5594897a09eb61e07a9d14443bf8',
 });
 // 根 Flutter、signer、Android、iOS 与 Release 合同测试共同构成 SDK 自有测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
@@ -88,7 +88,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': '84cd56addf1e119a2ad5eac7e49a4f265006d3d863bff6a4cae0c997f00373da',
+  'scripts/release.test.mjs': '549c67a4b5a51dfc84d4e3f6ec866e92a05ebe042348481c8fcdecc7698eb1b5',
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
@@ -424,8 +424,8 @@ export function assertHostedPackageSource(root) {
     fail('CitizenSDK 缺少普通 Hosted Package pubspec.yaml');
   }
   const pubspec = readFileSync(pubspecPath, 'utf8');
-  if (!/^name: citizen_sdk$/m.test(pubspec)
-      || !/^version: \d+\.\d{1,2}\.\d{1,2}$/m.test(pubspec)) {
+  const pubspecVersion = pubspec.match(/^version: (\d+\.\d{1,2}\.\d{1,2})$/m)?.[1];
+  if (!/^name: citizen_sdk$/m.test(pubspec) || !pubspecVersion) {
     fail('CitizenSDK Hosted Package 身份或版本无效');
   }
   if (/^publish_to:\s*["']?none["']?\s*$/m.test(pubspec)) {
@@ -445,6 +445,24 @@ export function assertHostedPackageSource(root) {
       fail(`CitizenSDK Hosted Package 依赖约束漂移：${dependency}`);
     }
   }
+  const platformVersions = [
+    ['android/build.gradle', /^version = '(\d+\.\d{1,2}\.\d{1,2})'$/m],
+    ['ios/citizen_sdk.podspec', /^  s\.version\s+= '(\d+\.\d{1,2}\.\d{1,2})'$/m],
+  ].map(([relativePath, pattern]) => {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK 缺少普通平台版本文件：${relativePath}`);
+    }
+    const version = readFileSync(path, 'utf8').match(pattern)?.[1];
+    if (!version) fail(`CitizenSDK 平台版本字段无效：${relativePath}`);
+    return [relativePath, version];
+  });
+  for (const [relativePath, version] of platformVersions) {
+    if (version !== pubspecVersion) {
+      fail(`CitizenSDK 包版本不一致：pubspec.yaml=${pubspecVersion}；${relativePath}=${version}`);
+    }
+  }
+  return pubspecVersion;
 }
 
 export function assertSdkTestContracts(root) {
@@ -697,7 +715,7 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   assertChainAssets(candidate);
   assertSourceFixtures(candidate);
   assertLicenseSources(candidate);
-  assertHostedPackageSource(candidate);
+  const hostedSoftwareVersion = assertHostedPackageSource(candidate);
   assertSdkTestContracts(candidate);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const keys = Object.keys(manifest).sort();
@@ -705,6 +723,7 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   if (JSON.stringify(keys) !== JSON.stringify(expectedKeys)) fail('CitizenSDK 正式清单字段集合不正确');
   if (manifest.product_id !== PRODUCT_ID || manifest.package_name !== PACKAGE_NAME) fail('CitizenSDK 候选产品身份不正确');
   if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(manifest.software_version)) fail('CitizenSDK 候选版本无效');
+  if (manifest.software_version !== hostedSoftwareVersion) fail('CitizenSDK 候选 manifest 与包版本不一致');
   if (!/^[0-9a-f]{40}$/.test(manifest.git_commit_sha)) fail('CitizenSDK 候选 Git SHA 无效');
   if (expectedGitSha !== null && manifest.git_commit_sha !== expectedGitSha) fail('CitizenSDK 候选 Git SHA 不匹配');
   const expectedPlatforms = [
@@ -793,10 +812,13 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertChainAssets(source);
   assertSourceFixtures(source);
   assertLicenseSources(source);
-  assertHostedPackageSource(source);
+  const sourceSoftwareVersion = assertHostedPackageSource(source);
   assertSdkTestContracts(source);
   if (!/^[0-9a-f]{40}$/.test(gitCommitSha)) fail('Git commit SHA 必须是 40 位小写十六进制');
   if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(softwareVersion)) fail('CitizenSDK 软件版本无效');
+  if (softwareVersion !== sourceSoftwareVersion) {
+    fail(`CitizenSDK 发布版本必须与源码一致：源码=${sourceSoftwareVersion}；请求=${softwareVersion}`);
+  }
   assertLocalTarget(native, '原生产物目录');
   assertLocalTarget(output, '候选目录');
   assertLocalTarget(archive, '归档');

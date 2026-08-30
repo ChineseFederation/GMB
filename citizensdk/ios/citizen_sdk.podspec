@@ -16,7 +16,7 @@ raise 'exported_symbols.txt 为空，CitizenSDK 原生产物异常' if ffi_symbo
 
 Pod::Spec.new do |s|
   s.name             = 'citizen_sdk'
-  s.version          = '0.1.0'
+  s.version          = '1.0.0'
   s.summary          = 'Citizenchain light client, wallet, signing and transaction SDK'
   s.description      = <<-DESC
 CitizenSDK supplies the Citizenchain light client, rootless hot wallet,

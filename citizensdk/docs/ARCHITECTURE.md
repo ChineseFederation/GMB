@@ -131,9 +131,11 @@ XCTest；编译成功不等于平台测试执行成功。这些是每个准确�
 当前正式候选只发布 Android `arm64-v8a` 与 iOS `arm64`。原生核心的分层允许以后增加
 macOS、Linux、Windows 适配，但这些平台当前没有已交付的插件、硬件金库和正式资产。
 
-当前 `0.1.0` 只验证 Hosted 候选合同，不执行 Hosted 上传。正式 `1.0.0` 及其 Hosted
-身份、凭证和实际发布是后续独立步骤；现有 Release 仍只有 GitHub 正式分发动作，没有新增
-“发布”按钮。
+源码中的 Dart pubspec、Android Gradle 与 iOS podspec 版本已统一冻结为 `1.0.0`。发布器在
+复制前拒绝三者不一致，也拒绝 Release 请求版本与源码版本不同；复制后再核对候选 manifest、
+pubspec 与两个平台版本。因此 GitHub Release 和 Hosted Package 只能来自同一准确版本提交，
+不能在 Runner 中把旧源码临时改号。本步骤不执行 Hosted 上传；Hosted 身份、凭证和首次实际
+发布仍需另行明确授权。现有 Release 仍只有 GitHub 正式分发动作，没有新增“发布”按钮。
 
 ## 产品外部边界
 

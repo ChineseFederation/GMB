@@ -128,7 +128,8 @@ GitHub Release 三件套继续作为来源审计、校验和离线留档。Hoste
 链资产、移动原生库、README、CHANGELOG、第三方声明与全部适用许可证。CI 和 Release 都执行
 `dart pub publish --dry-run`，任何缺失文件、不允许的依赖源或官方校验问题都会失败关闭。
 
-当前 `0.1.0` 只建立和验证上述合同，不执行 Hosted 上传；正式 `1.0.0` 发布属于后续独立步骤。
-在完成前不得宣称已经可由 `citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，
-也不更新 CitizenServe/CitizenWeb/Cloudflare 下载指针。当前正式平台只有 Android ARM64 与
-iOS ARM64。
+源码中的 `pubspec.yaml`、`android/build.gradle` 与 `ios/citizen_sdk.podspec` 已统一冻结为
+`1.0.0`。发布器要求三者、请求软件版本及候选 manifest 完全一致；版本升级必须先形成新的
+源码提交，不能只向 Release 输入另一个版本。本步骤不执行 Hosted 上传，在首次发布完成前
+不得宣称已经可由 `citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，也不更新
+CitizenServe/CitizenWeb/Cloudflare 下载指针。当前正式平台只有 Android ARM64 与 iOS ARM64。

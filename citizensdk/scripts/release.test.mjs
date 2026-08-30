@@ -249,10 +249,32 @@ test('Release 固定根级许可证入口、GPL-3.0 与 MIT 权威许可证原�
 test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖边界', () => {
   const root = mkdtempSync(join(workRoot, 'release-hosted-package-test-'));
   try {
-    for (const path of ['.pubignore', 'CHANGELOG.md', 'pubspec.yaml']) {
-      copyFileSync(join(citizenSdkRoot, path), join(root, path));
+    for (const path of [
+      '.pubignore',
+      'CHANGELOG.md',
+      'android/build.gradle',
+      'ios/citizen_sdk.podspec',
+      'pubspec.yaml',
+    ]) {
+      const destination = join(root, path);
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(join(citizenSdkRoot, path), destination);
     }
     assert.doesNotThrow(() => assertHostedPackageSource(root));
+
+    const androidVersionPath = join(root, 'android', 'build.gradle');
+    writeFileSync(
+      androidVersionPath,
+      readFileSync(androidVersionPath, 'utf8').replace("version = '1.0.0'", "version = '1.0.1'"),
+    );
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /包版本不一致：pubspec\.yaml=1\.0\.0；android\/build\.gradle=1\.0\.1/,
+    );
+    copyFileSync(
+      join(citizenSdkRoot, 'android', 'build.gradle'),
+      androidVersionPath,
+    );
 
     writeFileSync(join(root, '.pubignore'), 'drift\n');
     assert.throws(
@@ -290,6 +312,30 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
       () => assertHostedPackageSource(root),
       /Hosted Package 禁止 publish_to: none/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Release 拒绝与源码包版本不一致的请求版本', () => {
+  const root = mkdtempSync(join(workRoot, 'release-version-drift-test-'));
+  try {
+    const native = writeNativeFixture(root);
+    const output = join(root, 'candidate');
+    const archive = join(root, 'citizensdk.tgz');
+    assert.throws(
+      () => buildCitizenSdkRelease({
+        sourcePath: citizenSdkRoot,
+        nativePath: native,
+        outputPath: output,
+        archivePath: archive,
+        gitCommitSha: '0'.repeat(40),
+        softwareVersion: '0.1.0',
+      }),
+      /发布版本必须与源码一致：源码=1\.0\.0；请求=0\.1\.0/,
+    );
+    assert.equal(existsSync(output), false);
+    assert.equal(existsSync(archive), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -484,7 +530,7 @@ test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', 
         outputPath: traversal,
         archivePath: archive,
         gitCommitSha: '0'.repeat(40),
-        softwareVersion: '0.1.0',
+        softwareVersion: '1.0.0',
       }),
       /绝对规范路径|\. 或 \.\./,
     );
@@ -501,7 +547,7 @@ test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', 
         outputPath: join(redirect, basename(sourceProbe)),
         archivePath: archive,
         gitCommitSha: '0'.repeat(40),
-        softwareVersion: '0.1.0',
+        softwareVersion: '1.0.0',
       }),
       /符号链接/,
     );
@@ -660,7 +706,7 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
       outputPath: output,
       archivePath: archive,
       gitCommitSha: '0'.repeat(40),
-      softwareVersion: '0.1.0',
+      softwareVersion: '1.0.0',
     });
     assert.doesNotThrow(() => verifyCitizenSdkRelease(output, archive, '0'.repeat(40)));
     const sums = readFileSync(join(output, 'SHA256SUMS'), 'utf8');
