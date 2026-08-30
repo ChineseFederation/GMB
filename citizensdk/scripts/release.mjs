@@ -21,8 +21,11 @@ const PACKAGE_NAME = 'citizen_sdk';
 const PROGRAM_CONSOLE_TARGET_ROOT = '/Users/rhett/Only/ProgramConsole/target/citizensdk';
 const ROOT_FILES = [
   '.gitignore',
+  '.pubignore',
   'Cargo.lock',
   'Cargo.toml',
+  'CHANGELOG.md',
+  'LICENSE',
   'LICENSE-GPL-3.0',
   'LICENSE-MIT',
   'README.md',
@@ -54,10 +57,17 @@ const SOURCE_FIXTURE_FILES = Object.freeze({
   'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
   'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
 });
-// Release 必须保留两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
+// Release 必须保留根级许可入口和两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
 const LICENSE_SOURCE_FILES = Object.freeze({
+  'LICENSE': '85cbc4861f93949326d45a484db8df26125af2c19ba78b35f2a9e51bcaa5042a',
   'LICENSE-GPL-3.0': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
   'LICENSE-MIT': '39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c',
+});
+// Hosted Package 不建立第二份候选：官方 Dart 发布工具直接读取已注入 Android/iOS
+// 原生库的 GitHub Release 候选，并由这份固定 .pubignore 只筛出运行时闭包。
+const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
+  '.pubignore': '93386c3f344c122e1b4978b2074ebb2b7ae461d5cd6a1b9ea4562034777f834b',
+  'CHANGELOG.md': '4576ed39b1122fc4cdfdf3d030a68e9dfaca37de5d70394ceca093fdf0e6026c',
 });
 // 根 Flutter、signer、Android、iOS 与 Release 合同测试共同构成 SDK 自有测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
@@ -78,7 +88,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': 'f243f9ca40873cfaa1391720f4c29b57612f714246e3fb2a91e6f9b24bff8060',
+  'scripts/release.test.mjs': '84cd56addf1e119a2ad5eac7e49a4f265006d3d863bff6a4cae0c997f00373da',
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
@@ -102,7 +112,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'test/transaction/chain_rpc_test.dart': 'faeeb377f4bfc3608868594f0784a933a19f59814dacffd38405560a864ab733',
   'test/transaction/chain_transfer_event_decoder_test.dart': 'b1599e10a16401cf19beb4b1400f4c4ae52acf43a78ad7df1ac7670df4c736ad',
   'test/transaction/finalized_transaction_scanner_test.dart': 'e7dc85abf5ec51a3086de248a02c194ac74e1180d490075efc82e9c3738ab1b1',
-  'test/transaction/fixtures/README.md': '4716126fe3a802cc637c28cf2add8988800e2de645bc8036c2ea0528804533d8',
+  'test/transaction/fixtures/README.md': '9a6538ac01a8b46b5012e5aa4df1eddab73e3a300d870704d51a10ae3841c01f',
   'test/transaction/fixtures/citizenchain-runtime-system-events.hex': '2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef',
   'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
   'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
@@ -404,6 +414,39 @@ export function assertLicenseSources(root) {
   assertPinnedFiles(root, LICENSE_SOURCE_FILES, '许可证原文');
 }
 
+export function assertHostedPackageSource(root) {
+  const sourceRoot = resolve(root);
+  assertPinnedFiles(sourceRoot, HOSTED_PACKAGE_SOURCE_FILES, 'Hosted Package 合同');
+  const pubspecPath = join(sourceRoot, 'pubspec.yaml');
+  if (!existsSync(pubspecPath)
+      || lstatSync(pubspecPath).isSymbolicLink()
+      || !lstatSync(pubspecPath).isFile()) {
+    fail('CitizenSDK 缺少普通 Hosted Package pubspec.yaml');
+  }
+  const pubspec = readFileSync(pubspecPath, 'utf8');
+  if (!/^name: citizen_sdk$/m.test(pubspec)
+      || !/^version: \d+\.\d{1,2}\.\d{1,2}$/m.test(pubspec)) {
+    fail('CitizenSDK Hosted Package 身份或版本无效');
+  }
+  if (/^publish_to:\s*["']?none["']?\s*$/m.test(pubspec)) {
+    fail('CitizenSDK Hosted Package 禁止 publish_to: none');
+  }
+  // 两格缩进的 `path` 可以是合法 Hosted 依赖包名；只有依赖声明内部四格以上的
+  // `path:`/`git:` 才表示 pub.dev 禁止的非 Hosted 来源。
+  if (/^[ \t]{4,}(?:git|path):/m.test(pubspec)) {
+    fail('CitizenSDK Hosted Package 禁止 git/path 依赖');
+  }
+  for (const [dependency, constraint] of [
+    ['bip39_mnemonic', '^4.0.1'],
+    ['polkadart_keyring', '^0.7.1'],
+  ]) {
+    const escaped = constraint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`^  ${dependency}: ${escaped}$`, 'm').test(pubspec)) {
+      fail(`CitizenSDK Hosted Package 依赖约束漂移：${dependency}`);
+    }
+  }
+}
+
 export function assertSdkTestContracts(root) {
   const sourceRoot = resolve(root);
   for (const relativeRoot of SDK_TEST_CONTRACT_ROOTS) {
@@ -654,6 +697,7 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   assertChainAssets(candidate);
   assertSourceFixtures(candidate);
   assertLicenseSources(candidate);
+  assertHostedPackageSource(candidate);
   assertSdkTestContracts(candidate);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const keys = Object.keys(manifest).sort();
@@ -687,7 +731,13 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   if (JSON.stringify(paths) !== JSON.stringify([...paths].sort()) || new Set(paths).size !== paths.length) {
     fail('CitizenSDK 候选文件顺序或唯一性无效');
   }
-  for (const required of ['pubspec.yaml', ...Object.keys(NATIVE_FILES)]) {
+  for (const required of [
+    '.pubignore',
+    'CHANGELOG.md',
+    'LICENSE',
+    'pubspec.yaml',
+    ...Object.keys(NATIVE_FILES),
+  ]) {
     if (!paths.includes(required)) fail(`CitizenSDK 候选缺少必需文件：${required}`);
   }
   const expectedFiles = [
@@ -743,6 +793,7 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertChainAssets(source);
   assertSourceFixtures(source);
   assertLicenseSources(source);
+  assertHostedPackageSource(source);
   assertSdkTestContracts(source);
   if (!/^[0-9a-f]{40}$/.test(gitCommitSha)) fail('Git commit SHA 必须是 40 位小写十六进制');
   if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(softwareVersion)) fail('CitizenSDK 软件版本无效');

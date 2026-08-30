@@ -1,0 +1,22 @@
+# CitizenSDK 的 Hosted Package 从已经注入移动原生库的同一 Release 候选生成。
+# 这里只过滤开发、审计和测试输入；运行时 Dart/Flutter、插件、链资产与移动原生库保留。
+/.gitignore
+/.pubignore
+/Cargo.lock
+/Cargo.toml
+/analysis_options.yaml
+/pubspec.lock
+/citizensdk-release.json
+/SHA256SUMS
+
+# 完整 Rust/测试/脚本/历史文档保留在 GitHub Release 审计包，不进入 Flutter 运行时包。
+/docs/
+/native/**
+/scripts/
+/test/
+/android/src/test/
+/ios/Tests/
+
+# 生产源码目录中的分层说明不是运行时文件；根 README 与法律声明继续保留。
+/lib/**/README.md
+/android/src/main/**/README.md

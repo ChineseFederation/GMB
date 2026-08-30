@@ -83,12 +83,12 @@ ProgramConsole 本机构建以 `.work/candidate-transaction.lock` 覆盖初始�
 CitizenSDK 复用 GMB 唯一顶层 Workflow 和现有产品流程：
 
 - CI 对准确 `github.sha` 重新安装锁定依赖、检查发布闭集、执行静态检查与测试、构建原生
-  核心，实际运行 Android JUnit、iOS Simulator XCTest、Dart/Flutter 与 Rust 测试，并上传
-  `CitizenSDK-CI` 三件套。
+  核心，实际运行 Android JUnit、iOS Simulator XCTest、Dart/Flutter 与 Rust 测试，在同一
+  注入后候选上执行 Hosted dry-run，并上传 `CitizenSDK-CI` 三件套。
 - Release 复核指定 CI 的 workflow、显示标题、产品 `citizensdk`、目标 `sdk`、成功状态和
   准确 `source_sha`，不读取、下载或比较 CI 资产；随后在隔离快照中重新执行依赖检查、测试、
-  原生构建与候选生成，并创建正式 GitHub Release。孤立 Tag 清理、主发布路径和响应中断恢复
-  三处都必须核验版本 Tag 精确锚定该成功 CI 的 `source_sha`。
+  原生构建、候选生成、反向验证与 Hosted dry-run，并创建正式 GitHub Release。孤立 Tag
+  清理、主发布路径和响应中断恢复三处都必须核验版本 Tag 精确锚定该成功 CI 的 `source_sha`。
 
 CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是来源绑定、独立重建与完整
 验证，不宣称不同 Runner、不同 run 的压缩包在所有环境下必然逐字节相同。
@@ -102,9 +102,9 @@ CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是�
 
 ## 正式候选格式
 
-`scripts/release.mjs` 从只读源码快照和外部原生产物构造规范 gzip/tar。归档内包含完整 SDK
-源码、Android/iOS 原生库与 `citizensdk-release.json`；外层 `SHA256SUMS` 不进入 tgz，避免
-对 tgz 自身形成循环哈希。
+`scripts/release.mjs` 从只读源码快照和外部原生产物构造唯一规范候选与 gzip/tar。GitHub
+归档内包含完整 SDK 源码、测试、文档、锁文件、Android/iOS 原生库与
+`citizensdk-release.json`；外层 `SHA256SUMS` 不进入 tgz，避免对 tgz 自身形成循环哈希。
 
 GitHub Release 三项资产固定为：
 
@@ -118,10 +118,17 @@ SHA256SUMS
 归档载荷逐文件 SHA-256。`SHA256SUMS` 精确覆盖外层 manifest 与 tgz。反向验证会重建规范
 tar/gzip 字节并逐字节比较归档，拒绝符号链接、路径穿越、未登记文件和常见私钥材料。
 
-## 分发边界
+## Hosted Package 与分发边界
 
-GitHub Release 三件套继续作为来源审计、校验和离线留档；根 `citizen_sdk` 包已消除本地
-`path` 依赖，为 Hosted Package 直接解析做好源码结构准备。Hosted 发布门禁与正式 `1.0.0`
-发布属于后续独立步骤，在完成前当前 `0.1.0` 不得宣称已经可由
-`citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，也不更新
-CitizenServe/CitizenWeb/Cloudflare 下载指针。当前正式平台只有 Android ARM64 与 iOS ARM64。
+GitHub Release 三件套继续作为来源审计、校验和离线留档。Hosted Package 不重新装配 SDK：
+官方 Dart 发布工具读取已经注入 Android ARM64 与 iOS ARM64 原生库并通过反向校验的同一
+候选的逐字节临时副本；副本只隔离 Dart 生成的 `.dart_tool`，不是第二份发布候选。根
+`.pubignore` 排除完整 Rust 源码、测试、脚本、审计文档、Cargo/Dart
+锁文件以及 GitHub 外层 manifest/checksums，只保留根 pubspec、运行时 Dart/Flutter、平台插件、
+链资产、移动原生库、README、CHANGELOG、第三方声明与全部适用许可证。CI 和 Release 都执行
+`dart pub publish --dry-run`，任何缺失文件、不允许的依赖源或官方校验问题都会失败关闭。
+
+当前 `0.1.0` 只建立和验证上述合同，不执行 Hosted 上传；正式 `1.0.0` 发布属于后续独立步骤。
+在完成前不得宣称已经可由 `citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，
+也不更新 CitizenServe/CitizenWeb/Cloudflare 下载指针。当前正式平台只有 Android ARM64 与
+iOS ARM64。

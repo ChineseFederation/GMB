@@ -313,6 +313,16 @@ jobs:
             --archive "$RUNNER_TEMP/citizensdk/citizensdk.tgz" \
             --expected-git-sha "$GMB_SOURCE_SHA"
 
+      # 中文注释：正式 GitHub Release 与未来 Hosted 发布共用唯一候选；这里只验证
+      # Hosted 可发布性，不在 Release workflow 内执行实际 Hosted 上传。验证在逐字节
+      # 临时副本执行，避免 Dart 写入 .dart_tool 后污染已反向核验的正式候选。
+      - name: 验证 CitizenSDK Hosted Package 正式候选
+        run: |
+          hosted_dry_run="$RUNNER_TEMP/citizensdk/hosted-dry-run"
+          test ! -e "$hosted_dry_run"
+          /usr/bin/ditto "$RUNNER_TEMP/citizensdk/candidate" "$hosted_dry_run"
+          dart pub publish --dry-run -C "$hosted_dry_run"
+
       - name: 签署 CitizenSDK 正式候选构建来源
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:

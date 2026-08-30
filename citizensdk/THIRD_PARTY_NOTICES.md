@@ -1,7 +1,9 @@
 # Third-party notices
 
-CitizenSDK 组合了不同许可证覆盖的源码。任何 GitHub Release、下载或再分发都必须保留
-本文件、对应许可证原文、来源说明和锁文件，不能只分发原生二进制。
+CitizenSDK 组合了不同许可证覆盖的源码。根 `LICENSE` 是组件许可证入口；任何分发都必须
+保留本文件及对应许可证原文，不能只分发原生二进制。GitHub Release 审计包另外保留完整源码、
+来源说明和锁文件；Hosted Package 只过滤开发输入，但继续携带本文件、根许可证入口、MIT、
+GPL with Classpath Exception 原文，以及根许可证入口中完整重现的 Apache-2.0 原文。
 
 ## sr25519 signer
 
@@ -18,8 +20,9 @@ CitizenApp 已验证的 Dart smoldot 包已作为 CitizenSDK 内部实现并入 
 
 `native/smoldot/ffi` 继承 CitizenApp 的 Apache-2.0 FFI 边界，保留轻节点和 signer C ABI，
 排除只供聊天使用的 OpenMLS/聊天信封与账户数据加密代码。Apache 2.0 许可证原文保存于
-`native/smoldot/LICENSE-APACHE-2.0`；FFI `Cargo.lock` 从 CitizenApp 已验证锁机械裁掉已排除
-产品闭包，并保持全部保留 registry 包的 name/version/checksum。
+`native/smoldot/LICENSE-APACHE-2.0`；Hosted 包排除 `native` 源码目录，但在根 `LICENSE`
+逐字重现同一原文。FFI `Cargo.lock` 从 CitizenApp 已验证锁机械裁掉已排除产品闭包，并保持
+全部保留 registry 包的 name/version/checksum。
 
 ## smoldot PoW 轻节点
 

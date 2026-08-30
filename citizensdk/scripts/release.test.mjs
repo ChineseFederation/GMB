@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assertChainAssets,
+  assertHostedPackageSource,
   assertLicenseSources,
   assertNoSecrets,
   assertSdkRootLocks,
@@ -217,10 +218,10 @@ test('真实 Runtime metadata/events 测试夹具由 Release 固定完整闭集'
   }
 });
 
-test('Release 固定 GPL-3.0 与 MIT 权威许可证原文字节', () => {
+test('Release 固定根级许可证入口、GPL-3.0 与 MIT 权威许可证原文字节', () => {
   const root = mkdtempSync(join(workRoot, 'release-license-test-'));
   try {
-    for (const license of ['LICENSE-GPL-3.0', 'LICENSE-MIT']) {
+    for (const license of ['LICENSE', 'LICENSE-GPL-3.0', 'LICENSE-MIT']) {
       copyFileSync(join(citizenSdkRoot, license), join(root, license));
     }
     assert.doesNotThrow(() => assertLicenseSources(root));
@@ -239,6 +240,55 @@ test('Release 固定 GPL-3.0 与 MIT 权威许可证原文字节', () => {
     assert.throws(
       () => assertLicenseSources(root),
       /许可证原文文件哈希漂移：LICENSE-MIT/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖边界', () => {
+  const root = mkdtempSync(join(workRoot, 'release-hosted-package-test-'));
+  try {
+    for (const path of ['.pubignore', 'CHANGELOG.md', 'pubspec.yaml']) {
+      copyFileSync(join(citizenSdkRoot, path), join(root, path));
+    }
+    assert.doesNotThrow(() => assertHostedPackageSource(root));
+
+    writeFileSync(join(root, '.pubignore'), 'drift\n');
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 合同文件哈希漂移：\.pubignore/,
+    );
+
+    copyFileSync(join(citizenSdkRoot, '.pubignore'), join(root, '.pubignore'));
+    writeFileSync(join(root, 'CHANGELOG.md'), 'drift\n');
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 合同文件哈希漂移：CHANGELOG\.md/,
+    );
+
+    copyFileSync(join(citizenSdkRoot, 'CHANGELOG.md'), join(root, 'CHANGELOG.md'));
+    const pubspecPath = join(root, 'pubspec.yaml');
+    const pubspec = readFileSync(pubspecPath, 'utf8');
+    writeFileSync(pubspecPath, pubspec.replace('bip39_mnemonic: ^4.0.1', 'bip39_mnemonic: 4.0.1'));
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 依赖约束漂移：bip39_mnemonic/,
+    );
+
+    writeFileSync(
+      pubspecPath,
+      pubspec.replace('  path: ^1.9.1', '  path: ^1.9.1\n  local_probe:\n    path: ..'),
+    );
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 禁止 git\/path 依赖/,
+    );
+
+    writeFileSync(pubspecPath, pubspec.replace('name: citizen_sdk', 'name: citizen_sdk\npublish_to: "none"'));
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 禁止 publish_to: none/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });

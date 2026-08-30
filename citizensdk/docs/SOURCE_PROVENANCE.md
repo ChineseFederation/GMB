@@ -16,13 +16,20 @@ CitizenApp、CitizenWallet 或上游 fork，必须列出两侧精确文件、分
 
 ## 许可证原文
 
-正式包保留并固定两份权威法律原文：`LICENSE-GPL-3.0` 与
+根 `LICENSE` 是 CitizenSDK 组件许可证入口，明确 SDK 自有代码、smoldot Dart/FFI 与
+smoldot PoW 的适用许可证边界，SHA-256 为
+`85cbc4861f93949326d45a484db8df26125af2c19ba78b35f2a9e51bcaa5042a`；它还完整重现 Apache-2.0
+原文，使过滤掉 `native` 源码目录的 Hosted 包仍携带适用条款。正式候选同时保留并固定
+两份权威法律原文：`LICENSE-GPL-3.0` 与
 `citizenapp/smoldot/pow/LICENSE` 逐字节一致，SHA-256 为
 `aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4`；`LICENSE-MIT`
 与 GMB 根 `LICENSE` 逐字节一致，SHA-256 为
 `39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c`。Release 来源守卫会拒绝
-删除或内容替换。`THIRD_PARTY_NOTICES.md` 是随已审查依赖演进的 CitizenSDK 自有归属清单，
-不冒充逐字节上游副本，但始终进入候选文件清单和最终归档哈希。
+删除或内容替换。Apache-2.0 原文由固定的 `native/smoldot/LICENSE-APACHE-2.0` 提供。
+`THIRD_PARTY_NOTICES.md` 是随已审查依赖演进的 CitizenSDK 自有归属清单，不冒充逐字节上游
+副本，但始终进入候选文件清单和最终归档哈希。Hosted 过滤合同继续保留根许可入口、两份根
+许可证原文和第三方声明；Apache-2.0 原文已内嵌于根许可入口，只把其 byte-identical 的
+`native` 来源副本、完整来源记录与锁文件留在 GitHub 审计包。
 
 ## sr25519 signer
 

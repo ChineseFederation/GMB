@@ -106,7 +106,10 @@ GMB 七个路由产品共有 24 条分组 CI/Release workflow，并由唯一顶�
 
 CI 与 Release 都从干净源码建立隔离构建快照，执行唯一根包依赖锁检查、静态检查、Rust 与
 Dart/Flutter 测试、移动原生构建和候选验证。smoldot Dart 绑定和来源测试现与根 Flutter
-包一起分析和执行。Release 还会验证指定
+包一起分析和执行。Android/iOS 原生库注入同一候选并完成确定性反向校验后，两条流程都从该
+目录建立逐字节临时验证副本并执行官方 `dart pub publish --dry-run`；Dart 生成的 `.dart_tool`
+因此不会污染正式候选。`.pubignore` 固定 Hosted 运行时闭包，禁止把 GitHub 审计包与 Hosted
+包实现成两个源码真源。Release 还会验证指定
 成功 CI 的 workflow、显示标题、产品目标、成功状态与准确 source SHA，不读取、下载或比较
 CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然一致作为发布成立条件。
 
@@ -127,6 +130,10 @@ XCTest；编译成功不等于平台测试执行成功。这些是每个准确�
 
 当前正式候选只发布 Android `arm64-v8a` 与 iOS `arm64`。原生核心的分层允许以后增加
 macOS、Linux、Windows 适配，但这些平台当前没有已交付的插件、硬件金库和正式资产。
+
+当前 `0.1.0` 只验证 Hosted 候选合同，不执行 Hosted 上传。正式 `1.0.0` 及其 Hosted
+身份、凭证和实际发布是后续独立步骤；现有 Release 仍只有 GitHub 正式分发动作，没有新增
+“发布”按钮。
 
 ## 产品外部边界
 

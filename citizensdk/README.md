@@ -49,12 +49,18 @@ GMB 的唯一顶层 Workflow 路由 `公民SDK · CI · SDK` 与
 检查、测试、原生构建和候选生成。这是独立重建与重新验证，不把不同 Runner 的归档字节
 天然相同作为前提。
 
-根包已消除本地 `path` 依赖，目标 Hosted 依赖形式固定为 `citizen_sdk: ^1.0.0`。当前源码
-版本仍为 `0.1.0`，在完成 Hosted 发布门禁和正式 `1.0.0` 验收前不得冒充稳定版。
+根包已消除本地 `path`/`git` 依赖，目标 Hosted 依赖形式固定为
+`citizen_sdk: ^1.0.0`。CI 与 Release 都在移动原生库注入唯一正式候选之后执行官方
+`dart pub publish --dry-run`；`.pubignore` 只从该候选过滤 Rust 源码、测试、脚本、锁文件和
+审计资料，不建立第二份候选或第二条发布流程。因为 Dart 工具会生成 `.dart_tool`，dry-run 在
+唯一候选的逐字节临时副本中执行，正式候选保持不可变。当前源码版本仍为 `0.1.0`，本步骤只
+建立可发布合同，不上传 Hosted Package；在完成正式 `1.0.0` 验收前不得冒充稳定版。
 
-GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，用于
-来源审计、校验和离线留档；Hosted Package 用于 Flutter 依赖解析。CitizenSDK 不设置独立
-“发布”按钮，也不接入公民网下载。
+GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，其中
+tgz 保留完整源码、测试、锁文件、文档与 Android/iOS 原生库，用于来源审计、校验和离线留档；
+Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、移动原生库、README 和完整法律声明。
+两种分发读取同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
+公民网下载。
 
 本机 ProgramConsole 只允许把 CitizenSDK 生成记录写入
 `/Users/rhett/Only/ProgramConsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；

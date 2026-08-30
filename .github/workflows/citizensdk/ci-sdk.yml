@@ -272,6 +272,16 @@ jobs:
             --git-sha "$GMB_SOURCE_SHA" \
             --software-version "$sdk_version"
 
+      # 中文注释：Hosted 校验直接读取同一已注入移动原生库的候选；本步骤只执行
+      # 官方发布 dry-run，不上传包，也不建立第二份打包或发布流程。Dart 会写
+      # .dart_tool，因此只允许改写一次性逐字节副本，正式候选保持可反向验证。
+      - name: 验证 CitizenSDK Hosted Package 候选
+        run: |
+          hosted_dry_run="$RUNNER_TEMP/citizensdk/hosted-dry-run"
+          test ! -e "$hosted_dry_run"
+          /usr/bin/ditto "$RUNNER_TEMP/citizensdk/candidate" "$hosted_dry_run"
+          dart pub publish --dry-run -C "$hosted_dry_run"
+
       - name: 上传 CitizenSDK 候选
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
