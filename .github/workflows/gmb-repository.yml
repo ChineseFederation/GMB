@@ -7596,6 +7596,9 @@ jobs:
         with:
           node-version: 25.2.1
 
+      - name: 安装固定 Cargo 审计工具
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
       - name: 验证 ChatSDK Release 来源与版本 Tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -7611,6 +7614,7 @@ jobs:
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
           node .github/scripts/chatsdk/release-sdk.mjs dependencies check --scope chatsdk
+          node .github/scripts/chatsdk/release-sdk.mjs dependencies audit --scope chatsdk
           node --test chatsdk/scripts/release.test.mjs
 
       - name: 下载准确成功 CI 的三端原生候选

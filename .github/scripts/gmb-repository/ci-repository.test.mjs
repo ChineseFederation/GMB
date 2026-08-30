@@ -1621,7 +1621,7 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   assert5.match(repositorySource, /CI 禁止接收 source_sha/);
   assert5.match(repositorySource, /Release 必须指定成功 CI 的准确 source_sha/);
   assert5.match(repositorySource, /actions\/upload-artifact/);
-  // \u8282\u70B9\u7AEF\u7684 CI \u4E0E Release \u5728\u552F\u4E00\u5165\u53E3\u4E2D\u4ECD\u662F\u72EC\u7ACB\u4EFB\u52A1\uFF0C\u5FC5\u987B\u4FDD\u7559\u5404\u81EA\u7684\u5E73\u53F0\u5E38\u91CF\u3002
+  // 节点端的 CI 与 Release 在唯一入口中仍是独立任务；平台常量可位于 env 任意登记项，但不能跨出对应任务。
   for (const [jobId, platform] of [
     ["citizenchain_ci_node_linux_amd__changes", "linux-amd"],
     ["citizenchain_ci_node_linux_arm__changes", "linux-arm"],
@@ -1632,8 +1632,9 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
     ["citizenchain_release_node_macos__changes", "macos"],
     ["citizenchain_release_node_windows__changes", "windows"]
   ]) {
-    assert5.ok(
-      repositorySource.includes(`  ${jobId}:\n    env:\n      GMB_NODE_PLATFORM: ${platform}\n`),
+    assert5.match(
+      repositorySource,
+      new RegExp(`^  ${jobId}:\\n    env:\\n(?:      [^\\n]+\\n)*      GMB_NODE_PLATFORM: ${platform}$`, "m"),
       `${jobId} \u7F3A\u5C11\u72EC\u7ACB\u5E73\u53F0\u5E38\u91CF ${platform}`
     );
   }
@@ -1665,6 +1666,8 @@ test5("ChatSDK 保持独立分组动作、三件套Release且没有发布入口"
   const ciScript = readFileSync7(new URL(".github/scripts/chatsdk/ci-sdk.mjs", root), "utf8");
   const releaseScript = readFileSync7(new URL(".github/scripts/chatsdk/release-sdk.mjs", root), "utf8");
   const packaging = readFileSync7(new URL("chatsdk/scripts/release.mjs", root), "utf8");
+  const cargoAuditInstall = "cargo install cargo-audit --version 0.22.2 --locked";
+  const dependencyAudit = "node .github/scripts/chatsdk/release-sdk.mjs dependencies audit --scope chatsdk";
   assert5.match(ci, /^name: 聊天SDK · CI · SDK/m);
   assert5.match(release, /^name: 聊天SDK · Release · SDK/m);
   assert5.doesNotMatch(ci, /software_version:|source_sha:/);
@@ -1674,6 +1677,10 @@ test5("ChatSDK 保持独立分组动作、三件套Release且没有发布入口"
   assert5.match(central, /^  chatsdk_release_sdk__check:/m);
   assert5.match(central, /inputs\.pipeline == '\.github\/workflows\/chatsdk\/ci-sdk\.yml'/);
   assert5.match(central, /inputs\.pipeline == '\.github\/workflows\/chatsdk\/release-sdk\.yml'/);
+  assert5.ok(release.includes(cargoAuditInstall), "ChatSDK 分组 Release 缺少固定 Cargo 审计工具");
+  assert5.ok(central.includes(cargoAuditInstall), "ChatSDK 顶层 Release 镜像缺少固定 Cargo 审计工具");
+  assert5.ok(release.includes(dependencyAudit), "ChatSDK 分组 Release 缺少依赖安全审计");
+  assert5.ok(central.includes(dependencyAudit), "ChatSDK 顶层 Release 镜像缺少依赖安全审计");
   assert5.equal(existsSync7(new URL(".github/workflows/chatsdk/publish-sdk.yml", root)), false);
   assert5.doesNotMatch(`${ciScript}\n${releaseScript}`, /citizensdk|CitizenSDK|公民SDK/);
   assert5.match(packaging, /const RELEASE_ASSETS = \[ARCHIVE_NAME, MANIFEST_NAME, CHECKSUMS_NAME\]/);
