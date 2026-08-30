@@ -108,8 +108,11 @@ CI 与 Release 都从干净源码建立隔离构建快照，执行唯一根包�
 Dart/Flutter 测试、移动原生构建和候选验证。smoldot Dart 绑定和来源测试现与根 Flutter
 包一起分析和执行。为保留已经验证的 smoldot 行为字节，静态分析继续报告迁入源码的既有
 warning/info，但使用 `--no-fatal-infos --no-fatal-warnings` 只让 analyzer error 阻断流程；
-格式检查、编译和完整测试仍失败关闭。Android/iOS 原生库注入同一候选并完成确定性反向校验
-后，两条流程都从该目录建立逐字节临时验证副本并执行官方 `dart pub publish --dry-run`；
+格式检查、编译和完整测试仍失败关闭。三个 Rust workspace 都执行锁定测试；PoW workspace
+另外使用 `cargo check --workspace --all-targets --locked` 编译包括 Criterion benchmark 在内的
+所有 target，但不把使用随机输入的性能基准误当作确定性测试运行。Android/iOS 原生库注入
+同一候选并完成确定性反向校验后，两条流程都从该目录建立逐字节临时验证副本并执行官方
+`dart pub publish --dry-run`；
 Dart 生成的 `.dart_tool`
 因此不会污染正式候选。`.pubignore` 固定 Hosted 运行时闭包，禁止把 GitHub 审计包与 Hosted
 包实现成两个源码真源。Release 还会验证指定

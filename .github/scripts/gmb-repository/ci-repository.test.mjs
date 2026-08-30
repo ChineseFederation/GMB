@@ -1709,6 +1709,8 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   const ci = readFileSync7(new URL("../../workflows/citizensdk/ci-sdk.yml", import.meta.url), "utf8");
   const release = readFileSync7(new URL("../../workflows/citizensdk/release-sdk.yml", import.meta.url), "utf8");
   const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
+  const powTests = 'cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --locked';
+  const powAllTargetsCheck = 'cargo check --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked';
   const dependencies = JSON.parse(readFileSync7(new URL("../../dependencies.json", import.meta.url), "utf8"));
   const nativeBuild = readFileSync7(new URL("../../../citizensdk/scripts/build-native.sh", import.meta.url), "utf8");
   const releaseTool = readFileSync7(new URL("../../../citizensdk/scripts/release.mjs", import.meta.url), "utf8");
@@ -1723,6 +1725,9 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     assert5.match(source, /flutter pub get --enforce-lockfile/);
     assert5.match(source, /dart format --output=none --set-exit-if-changed lib test/);
     assert5.match(source, /flutter analyze --no-fatal-infos --no-fatal-warnings/);
+    assert5.ok(source.includes(powTests), "CitizenSDK PoW workspace 必须完整运行确定性测试");
+    assert5.ok(source.includes(powAllTargetsCheck), "CitizenSDK PoW workspace 必须编译全部 target");
+    assert5.doesNotMatch(source, /cargo test[^\n]+native\/smoldot\/pow\/Cargo\.toml[^\n]+--all-targets/);
     assert5.match(source, /flutter test --timeout=2m/);
     assert5.doesNotMatch(source, /native\/smoldot\/dart/);
     assert5.match(source, /native\/host\/libsmoldot\.dylib/);
@@ -1747,8 +1752,11 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     "flutter pub get --enforce-lockfile",
     "dart format --output=none --set-exit-if-changed lib test",
     "flutter analyze --no-fatal-infos --no-fatal-warnings",
+    powTests,
+    powAllTargetsCheck,
     "flutter test --timeout=2m",
   ]) assert5.ok(registered.includes(expected), expected);
+  assert5.doesNotMatch(registered, /cargo test[^\n]+native\/smoldot\/pow\/Cargo\.toml[^\n]+--all-targets/);
   assert5.doesNotMatch(registered, /citizensdk\/native\/smoldot\/dart/);
   const registeredCiStart = registered.indexOf('  citizensdk_ci_sdk__check:');
   const registeredReleaseStart = registered.indexOf('  citizensdk_release_sdk__check:');

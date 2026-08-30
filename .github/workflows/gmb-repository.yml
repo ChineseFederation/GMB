@@ -5399,7 +5399,10 @@ jobs:
           build_source="$RUNNER_TEMP/citizensdk/build-source"
           cargo test --manifest-path "$build_source/Cargo.toml" --workspace --all-targets --locked
           cargo test --manifest-path "$build_source/native/smoldot/ffi/Cargo.toml" --all-targets --locked
-          cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked
+          # 中文注释：PoW workspace 的 Criterion 基准使用随机输入；完整运行测试，但只编译
+          # 所有 target，避免把性能基准误当成具有确定输入的测试执行。
+          cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --locked
+          cargo check --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked
 
       - name: 构建并核验移动原生核心
         env:
@@ -5706,7 +5709,10 @@ jobs:
           (cd "$build_source" && dart format --output=none --set-exit-if-changed lib test && flutter analyze --no-fatal-infos --no-fatal-warnings)
           cargo test --manifest-path "$build_source/Cargo.toml" --workspace --all-targets --locked
           cargo test --manifest-path "$build_source/native/smoldot/ffi/Cargo.toml" --all-targets --locked
-          cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked
+          # 中文注释：PoW workspace 的 Criterion 基准使用随机输入；完整运行测试，但只编译
+          # 所有 target，避免把性能基准误当成具有确定输入的测试执行。
+          cargo test --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --locked
+          cargo check --manifest-path "$build_source/native/smoldot/pow/Cargo.toml" --workspace --all-targets --locked
 
       - name: 构建并核验移动原生核心
         env:
