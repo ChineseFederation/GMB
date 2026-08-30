@@ -1720,13 +1720,13 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     assert5.match(source, /CITIZENSDK_WORK_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/work/);
     assert5.match(source, /CITIZENSDK_NATIVE_OUTPUT_DIR: \$\{\{ runner\.temp \}\}\/citizensdk\/native/);
     assert5.match(source, /\$RUNNER_TEMP\/citizensdk\/build-source/);
-    assert5.match(source, /native\/smoldot\/dart && dart pub get --enforce-lockfile/);
-    assert5.match(source, /dart analyze --no-fatal-warnings/);
-    assert5.doesNotMatch(source, /native\/smoldot\/dart[^\n]*dart format/);
-    assert5.match(source, /native\/smoldot\/dart && dart test --timeout=2m/);
+    assert5.match(source, /flutter pub get --enforce-lockfile/);
+    assert5.match(source, /dart format --output=none --set-exit-if-changed lib test/);
+    assert5.match(source, /flutter analyze/);
+    assert5.match(source, /flutter test --timeout=2m/);
+    assert5.doesNotMatch(source, /native\/smoldot\/dart/);
     assert5.match(source, /native\/host\/libsmoldot\.dylib/);
     assert5.match(source, /build-source\/libsmoldot\.dylib/);
-    assert5.match(source, /build-source\/native\/smoldot\/dart\/libsmoldot\.dylib/);
     assert5.match(source, /flutter create --platforms=android/);
     assert5.match(source, /flutter build apk --debug --target-platform android-arm64/);
     assert5.match(source, /:citizen_sdk:testDebugUnitTest --no-daemon/);
@@ -1744,10 +1744,12 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   }
   for (const expected of [
     "$RUNNER_TEMP/citizensdk/build-source",
-    "native/smoldot/dart && dart pub get --enforce-lockfile",
-    "dart analyze --no-fatal-warnings",
-    "native/smoldot/dart && dart test --timeout=2m",
+    "flutter pub get --enforce-lockfile",
+    "dart format --output=none --set-exit-if-changed lib test",
+    "flutter analyze",
+    "flutter test --timeout=2m",
   ]) assert5.ok(registered.includes(expected), expected);
+  assert5.doesNotMatch(registered, /citizensdk\/native\/smoldot\/dart/);
   const registeredCiStart = registered.indexOf('  citizensdk_ci_sdk__check:');
   const registeredReleaseStart = registered.indexOf('  citizensdk_release_sdk__check:');
   assert5.ok(registeredCiStart >= 0 && registeredReleaseStart > registeredCiStart);
@@ -1778,11 +1780,18 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   };
   assert5.equal(normalizedSteps(ci), normalizedSteps(registeredCi));
   assert5.equal(normalizedSteps(release), normalizedSteps(registeredRelease));
-  assert5.ok(dependencies.dartApplications.includes("citizensdk/native/smoldot/dart"));
+  assert5.ok(dependencies.dartApplications.includes("citizensdk"));
+  assert5.equal(dependencies.dartApplications.includes("citizensdk/native/smoldot/dart"), false);
   for (const required of [
-    "citizensdk/native/smoldot/dart/pubspec.yaml",
-    "citizensdk/native/smoldot/dart/pubspec.lock",
+    "citizensdk/pubspec.yaml",
+    "citizensdk/pubspec.lock",
   ]) assert5.ok(dependencies.scopes.citizensdk.requiredFiles.includes(required), required);
+  assert5.equal(
+    dependencies.scopes.citizensdk.requiredFiles.some(
+      (path) => path.startsWith("citizensdk/native/smoldot/dart/"),
+    ),
+    false,
+  );
   assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/ci-sdk\.yml'/);
   assert5.match(registered, /inputs\.pipeline == '\.github\/workflows\/citizensdk\/release-sdk\.yml'/);
   assert5.match(nativeBuild, /CITIZENSDK_WORK_DIR/);
@@ -1803,25 +1812,29 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   assert5.match(releaseTool, /citizensdk-release\.json/);
   assert5.match(releaseTool, /assertOutsideSource/);
   assert5.match(releaseTool, /\/Users\/rhett\/Only\/ProgramConsole\/target\/citizensdk/);
-  assert5.match(releaseTool, /'test\/subscription_test\.dart'/);
-  assert5.match(releaseTool, /'example\/README\.md'/);
+  assert5.match(releaseTool, /'test\/smoldot\/subscription_test\.dart'/);
+  assert5.match(releaseTool, /'docs\/smoldot-dart\/example\/README\.md'/);
   assert5.match(releaseWrapper, /const localRepositoryRoot = resolve\(dirname\(fileURLToPath\(import\.meta\.url\)\), '\.\.\/\.\.\/\.\.'\)/);
   assert5.match(releaseWrapper, /process\.env\.GITHUB_WORKSPACE[\s\S]*: localRepositoryRoot/);
-  const smoldotDartFiles = [
-    "BUILD.md", "CHANGELOG.md", "LICENSE", "README.md", "UPSTREAM.md",
-    "analysis_options.yaml", "pubspec.lock", "pubspec.yaml",
-    "example/smoldot_example.dart", "lib/smoldot.dart", "lib/src/bindings.dart",
-    "lib/src/chain.dart", "lib/src/client.dart", "lib/src/json_rpc.dart",
-    "lib/src/platform.dart", "lib/src/types.dart", "test/chain_info_test.dart",
-    "test/client_basic_test.dart", "test/ffi_basic_test.dart",
-    "test/fixtures/polkadot.json", "test/fixtures/westend.json",
-    "test/json_rpc_test.dart", "test/smoldot_test.dart", "test/subscription_test.dart",
-  ];
-  assert5.equal(smoldotDartFiles.length, 24);
-  for (const path of smoldotDartFiles) {
-    const source = readFileSync7(new URL(`../../../citizenapp/smoldot/dart/${path}`, import.meta.url));
-    const target = readFileSync7(new URL(`../../../citizensdk/native/smoldot/dart/${path}`, import.meta.url));
-    assert5.ok(source.equals(target), path);
+  // 中文注释：单包重构只允许移动无需适配的上游资料和夹具；这些文件继续逐字节
+  // 对齐 CitizenApp，生产绑定与测试中的适配文件则由 release.mjs 的固定哈希闭集约束。
+  const byteIdenticalSmoldotDartFiles = new Map([
+    ["BUILD.md", "docs/smoldot-dart/BUILD.md"],
+    ["CHANGELOG.md", "docs/smoldot-dart/CHANGELOG.md"],
+    ["LICENSE", "docs/smoldot-dart/LICENSE"],
+    ["README.md", "docs/smoldot-dart/README.md"],
+    ["UPSTREAM.md", "docs/smoldot-dart/UPSTREAM.md"],
+    ["analysis_options.yaml", "docs/smoldot-dart/source-analysis_options.yaml"],
+    ["pubspec.lock", "docs/smoldot-dart/source-pubspec.lock"],
+    ["pubspec.yaml", "docs/smoldot-dart/source-pubspec.yaml"],
+    ["lib/src/types.dart", "lib/src/smoldot/types.dart"],
+    ["test/fixtures/polkadot.json", "test/smoldot/fixtures/polkadot.json"],
+    ["test/fixtures/westend.json", "test/smoldot/fixtures/westend.json"],
+  ]);
+  for (const [sourcePath, targetPath] of byteIdenticalSmoldotDartFiles) {
+    const source = readFileSync7(new URL(`../../../citizenapp/smoldot/dart/${sourcePath}`, import.meta.url));
+    const target = readFileSync7(new URL(`../../../citizensdk/${targetPath}`, import.meta.url));
+    assert5.ok(source.equals(target), `${sourcePath} -> ${targetPath}`);
   }
   const eventMetadataSource = readFileSync7(new URL(
     "../../../citizenapp/smoldot/pow/full-node/tests/substrate-node-template-metadata.hex",
@@ -1898,17 +1911,31 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
   }
   const podspec = readFileSync7(new URL("../../../citizensdk/ios/citizen_sdk.podspec", import.meta.url), "utf8");
   assert5.match(podspec, /s\.test_spec 'Tests'/);
+  assert5.equal(
+    existsSync7(new URL("../../../citizensdk/native/smoldot/dart", import.meta.url)),
+    false,
+  );
   assert5.deepEqual(
-    readdirSync(new URL("../../../citizensdk/native/smoldot/dart", import.meta.url)).sort(),
-    ["BUILD.md", "CHANGELOG.md", "LICENSE", "README.md", "UPSTREAM.md",
-      "analysis_options.yaml", "example", "lib", "pubspec.lock", "pubspec.yaml", "test"],
+    readdirSync(new URL("../../../citizensdk/lib/src/smoldot", import.meta.url)).sort(),
+    ["bindings.dart", "chain.dart", "client.dart", "json_rpc.dart", "platform.dart", "smoldot.dart", "types.dart"],
+  );
+  assert5.deepEqual(
+    readdirSync(new URL("../../../citizensdk/test/smoldot", import.meta.url)).sort(),
+    ["chain_info_test.dart", "client_basic_test.dart", "ffi_basic_test.dart", "fixtures",
+      "json_rpc_test.dart", "smoldot_test.dart", "subscription_test.dart"],
   );
   const prefix2 = "const implementations = Object.freeze(";
   const repositoryAction = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
   const repositoryLine = repositoryAction.split("\n").find((candidate) => candidate.startsWith(prefix2));
   const guardrails = JSON.parse(repositoryLine.slice(prefix2.length, -2)).guardrails;
   assert5.match(guardrails, /citizensdk\/native\/smoldot\/pow\/\*/);
-  assert5.match(guardrails, /citizensdk\/native\/smoldot\/dart\/\*/);
+  assert5.match(guardrails, /citizensdk\/docs\/smoldot-dart\/\*/);
+  assert5.match(guardrails, /citizensdk\/lib\/src\/smoldot\/\*/);
+  assert5.match(guardrails, /citizensdk\/test\/smoldot\/\*/);
+  assert5.doesNotMatch(guardrails, /citizensdk\/native\/smoldot\/dart\/\*/);
+  assert5.ok(
+    guardrails.includes("grep -vE '^\\+const implementations = Object\\.freeze\\('")
+  );
   assert5.match(guardrails, /citizen_sdk\.smoldot\.database\.v1/);
   assert5.match(guardrails, /citizensdk-v\[0-9\]\+/);
   for (const action of ["ci-sdk.mjs", "release-sdk.mjs"]) {
