@@ -1,4 +1,5 @@
 name: 公民协议 · Release · WASM
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民协议 · Release · WASM
 
 # 中文注释：只能由编程控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。
@@ -62,6 +63,7 @@ env:
 
 jobs:
   build-wasm:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 编译 WASM
     runs-on: ubuntu-24.04
     steps:
@@ -166,8 +168,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 安装系统依赖
         # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，

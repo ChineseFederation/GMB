@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:crypto/crypto.dart' as crypto_hash;
 
 import '../8964/services/square_api_client.dart';
+import '../log/app_log.dart';
 import '../my/myid/current_user_context.dart';
 import '../rpc/chain_bootstrap_api.dart';
 import '../wallet/core/default_account_service.dart';
@@ -29,24 +30,26 @@ import 'storage/chat_store.dart';
 import 'transport/chat_cloud_transport.dart';
 import 'transport/chat_transport.dart';
 
-typedef ChatLoginSigner = Future<String> Function({
-  required String cidNumber,
-  required String accountId,
-  required Uint8List loginMessage,
-});
+typedef ChatLoginSigner =
+    Future<String> Function({
+      required String cidNumber,
+      required String accountId,
+      required Uint8List loginMessage,
+    });
 
-typedef ChatCloudTransportFactory = ChatCloudTransport Function({
-  required String accountId,
-  required String localCidNumber,
-  required String localDeviceId,
-  Uri? serviceBaseUrl,
-  String? sessionToken,
-});
+typedef ChatCloudTransportFactory =
+    ChatCloudTransport Function({
+      required String accountId,
+      required String localCidNumber,
+      required String localDeviceId,
+      Uri? serviceBaseUrl,
+      String? sessionToken,
+    });
 
 typedef ChatPushTokenProvider = Future<ChatPushToken> Function();
 
-typedef MlsStateStoreFactory = Future<MlsStateStore> Function(
-    String ownerCidNumber, String deviceId);
+typedef MlsStateStoreFactory =
+    Future<MlsStateStore> Function(String ownerCidNumber, String deviceId);
 
 /// Documents 根下持久擦除门闩的启动态。
 enum ChatPersistentWipeState { none, pending, complete }
@@ -321,8 +324,9 @@ class _ChatCrossIsolateCoordinator {
   ) async {
     if (cidNumber.isEmpty) throw StateError('Chat CID 文件协调键不能为空');
     await _throwIfCurrentProcessWipeRequested(documentsRoot);
-    final digest =
-        crypto_hash.sha256.convert(utf8.encode(cidNumber)).toString();
+    final digest = crypto_hash.sha256
+        .convert(utf8.encode(cidNumber))
+        .toString();
     final leaseFile = _directFile(
       documentsRoot,
       '$_cidMutationLeasePrefix$digest$_cidMutationLeaseSuffix',
@@ -786,8 +790,8 @@ class _ChatCrossIsolateCoordinator {
   }) async {
     await for (final entity in documentsRoot.list(followLinks: false)) {
       final name = _basename(entity.path);
-      final isProtocolArtifact = (name.startsWith(_leasePrefix) &&
-              name.endsWith(_leaseSuffix)) ||
+      final isProtocolArtifact =
+          (name.startsWith(_leasePrefix) && name.endsWith(_leaseSuffix)) ||
           (removeStagedComplete && name.startsWith('.$_completeMarkerName.'));
       final belongsToCurrentProcess = name.startsWith(_currentLeasePrefix);
       if (!isProtocolArtifact || belongsToCurrentProcess) continue;
@@ -1081,8 +1085,8 @@ class _ChatCidMutationLease {
     required File file,
     required _ChatCidLeaseOwner owner,
     required Duration heartbeatInterval,
-  })  : _file = file,
-        _owner = owner {
+  }) : _file = file,
+       _owner = owner {
     _heartbeat = Timer.periodic(heartbeatInterval, (_) => _scheduleHeartbeat());
   }
 
@@ -1096,19 +1100,21 @@ class _ChatCidMutationLease {
 
   void _scheduleHeartbeat() {
     if (_released || _heartbeatError != null) return;
-    _heartbeatTail = _heartbeatTail.then<void>((_) async {
-      if (_released || _heartbeatError != null) return;
-      final actual = await _ChatCrossIsolateCoordinator._readCidLeaseOwner(
-        _file,
-      );
-      if (actual?.encode() != _owner.encode()) {
-        throw StateError('Chat CID 文件协调 lease 所有权已变化');
-      }
-      await _file.setLastModified(DateTime.now());
-    }).catchError((Object error, StackTrace stackTrace) {
-      _heartbeatError = error;
-      _heartbeatStackTrace = stackTrace;
-    });
+    _heartbeatTail = _heartbeatTail
+        .then<void>((_) async {
+          if (_released || _heartbeatError != null) return;
+          final actual = await _ChatCrossIsolateCoordinator._readCidLeaseOwner(
+            _file,
+          );
+          if (actual?.encode() != _owner.encode()) {
+            throw StateError('Chat CID 文件协调 lease 所有权已变化');
+          }
+          await _file.setLastModified(DateTime.now());
+        })
+        .catchError((Object error, StackTrace stackTrace) {
+          _heartbeatError = error;
+          _heartbeatStackTrace = stackTrace;
+        });
   }
 
   Future<void> validateHealthy() async {
@@ -1215,9 +1221,9 @@ class _ChatBindingFencedMlsCrypto implements MlsCrypto, MlsGroupCrypto {
     required ChatRuntime runtime,
     required ChatBindingFenceToken bindingToken,
     required MlsCrypto delegate,
-  })  : _runtime = runtime,
-        _bindingToken = bindingToken,
-        _delegate = delegate;
+  }) : _runtime = runtime,
+       _bindingToken = bindingToken,
+       _delegate = delegate;
 
   final ChatRuntime _runtime;
   final ChatBindingFenceToken _bindingToken;
@@ -1256,15 +1262,14 @@ class _ChatBindingFencedMlsCrypto implements MlsCrypto, MlsGroupCrypto {
     required String recipientUserId,
     required String recipientDevicePublicKey,
     required List<int> plaintext,
-  }) =>
-      _run(
-        () => _delegate.encrypt(
-          conversationId: conversationId,
-          recipientUserId: recipientUserId,
-          recipientDevicePublicKey: recipientDevicePublicKey,
-          plaintext: plaintext,
-        ),
-      );
+  }) => _run(
+    () => _delegate.encrypt(
+      conversationId: conversationId,
+      recipientUserId: recipientUserId,
+      recipientDevicePublicKey: recipientDevicePublicKey,
+      plaintext: plaintext,
+    ),
+  );
 
   @override
   Future<List<int>> decrypt(MlsWireMessage message) =>
@@ -1282,22 +1287,19 @@ class _ChatBindingFencedMlsCrypto implements MlsCrypto, MlsGroupCrypto {
   Future<GroupCommitBundle> addMembers(
     String groupId,
     List<MlsKeyPackage> keyPackages,
-  ) =>
-      _run(() => _groupDelegate.addMembers(groupId, keyPackages));
+  ) => _run(() => _groupDelegate.addMembers(groupId, keyPackages));
 
   @override
   Future<GroupCommitBundle> removeMembers(
     String groupId,
     List<String> memberCidNumbers,
-  ) =>
-      _run(() => _groupDelegate.removeMembers(groupId, memberCidNumbers));
+  ) => _run(() => _groupDelegate.removeMembers(groupId, memberCidNumbers));
 
   @override
   Future<MlsWireMessage> groupCreateMessage(
     String groupId,
     List<int> plaintext,
-  ) =>
-      _run(() => _groupDelegate.groupCreateMessage(groupId, plaintext));
+  ) => _run(() => _groupDelegate.groupCreateMessage(groupId, plaintext));
 
   @override
   Future<GroupInbound> groupProcess(MlsWireMessage wire) =>
@@ -1313,8 +1315,8 @@ class _ChatCrossIsolateLease {
     required File file,
     required _ChatCidLeaseOwner owner,
     required Duration heartbeatInterval,
-  })  : _file = file,
-        _owner = owner {
+  }) : _file = file,
+       _owner = owner {
     _heartbeat = Timer.periodic(heartbeatInterval, (_) => _scheduleHeartbeat());
   }
 
@@ -1328,19 +1330,21 @@ class _ChatCrossIsolateLease {
 
   void _scheduleHeartbeat() {
     if (_released || _heartbeatError != null) return;
-    _heartbeatTail = _heartbeatTail.then<void>((_) async {
-      if (_released || _heartbeatError != null) return;
-      final actual = await _ChatCrossIsolateCoordinator._readLeaseOwner(
-        _file,
-      );
-      if (actual?.encode() != _owner.encode()) {
-        throw StateError('Chat 跨 isolate lease 所有权已变化');
-      }
-      await _file.setLastModified(DateTime.now());
-    }).catchError((Object error, StackTrace stackTrace) {
-      _heartbeatError = error;
-      _heartbeatStackTrace = stackTrace;
-    });
+    _heartbeatTail = _heartbeatTail
+        .then<void>((_) async {
+          if (_released || _heartbeatError != null) return;
+          final actual = await _ChatCrossIsolateCoordinator._readLeaseOwner(
+            _file,
+          );
+          if (actual?.encode() != _owner.encode()) {
+            throw StateError('Chat 跨 isolate lease 所有权已变化');
+          }
+          await _file.setLastModified(DateTime.now());
+        })
+        .catchError((Object error, StackTrace stackTrace) {
+          _heartbeatError = error;
+          _heartbeatStackTrace = stackTrace;
+        });
   }
 
   Future<void> release() async {
@@ -1404,10 +1408,10 @@ class _ChatAccountContext {
   }
 
   ChatDevice get identity => ChatDevice(
-        userId: account.cidNumber,
-        deviceId: deviceId,
-        devicePublicKey: devicePublicKey,
-      );
+    userId: account.cidNumber,
+    deviceId: deviceId,
+    devicePublicKey: devicePublicKey,
+  );
 }
 
 /// 前台常驻只持有账户、设备标识、会话与WSS传输，不打开ChatIsar或MLS。
@@ -1458,7 +1462,7 @@ class ChatRuntime {
     DeviceSubkey? deviceSubkey,
     MlsStateStoreFactory? stateStoreFactory,
     MlsCrypto Function(ChatDevice identity, MlsStateStore stateStore)?
-        cryptoFactory,
+    cryptoFactory,
     ChatCloudTransportFactory? cloudTransportFactory,
     ChatPushService? pushService,
     ChatPushTokenProvider? pushTokenProvider,
@@ -1467,25 +1471,25 @@ class ChatRuntime {
     Future<Directory> Function()? documentsDirectoryProvider,
     bool receiveOnly = false,
     @visibleForTesting bool debugUseIndependentCidMutationGate = false,
-  })  : _store = _initializeWhileProcessActive(() => store ?? ChatStore()),
-        _walletManager = walletManager ?? WalletManager(),
-        _currentUserContext = currentUserContext,
-        _bootstrapApi = bootstrapApi ?? ChainBootstrapApi(),
-        _preferences = preferences,
-        _squareApiClient = squareApiClient ?? SquareApiClient(),
-        _loginSigner = loginSigner,
-        _deviceSubkey = deviceSubkey ?? DeviceSubkey(),
-        _stateStoreFactory = stateStoreFactory,
-        _cryptoFactory = cryptoFactory,
-        _cloudTransportFactory = cloudTransportFactory,
-        _pushService = pushService ?? ChatPushService(),
-        _pushTokenProvider = pushTokenProvider,
-        _receiveOnly = receiveOnly,
-        _cidMutationGate = debugUseIndependentCidMutationGate
-            ? _ChatCidMutationGate()
-            : _sharedCidMutationGate,
-        _documentsDirectoryProvider =
-            documentsDirectoryProvider ?? getApplicationDocumentsDirectory {
+  }) : _store = _initializeWhileProcessActive(() => store ?? ChatStore()),
+       _walletManager = walletManager ?? WalletManager(),
+       _currentUserContext = currentUserContext,
+       _bootstrapApi = bootstrapApi ?? ChainBootstrapApi(),
+       _preferences = preferences,
+       _squareApiClient = squareApiClient ?? SquareApiClient(),
+       _loginSigner = loginSigner,
+       _deviceSubkey = deviceSubkey ?? DeviceSubkey(),
+       _stateStoreFactory = stateStoreFactory,
+       _cryptoFactory = cryptoFactory,
+       _cloudTransportFactory = cloudTransportFactory,
+       _pushService = pushService ?? ChatPushService(),
+       _pushTokenProvider = pushTokenProvider,
+       _receiveOnly = receiveOnly,
+       _cidMutationGate = debugUseIndependentCidMutationGate
+           ? _ChatCidMutationGate()
+           : _sharedCidMutationGate,
+       _documentsDirectoryProvider =
+           documentsDirectoryProvider ?? getApplicationDocumentsDirectory {
     if (debugUseIndependentCidMutationGate &&
         !Platform.environment.containsKey('FLUTTER_TEST')) {
       throw UnsupportedError('仅 Flutter 测试允许使用独立 Chat CID gate');
@@ -1572,7 +1576,7 @@ class ChatRuntime {
   final DeviceSubkey _deviceSubkey;
   final MlsStateStoreFactory? _stateStoreFactory;
   final MlsCrypto Function(ChatDevice identity, MlsStateStore stateStore)?
-      _cryptoFactory;
+  _cryptoFactory;
   final ChatCloudTransportFactory? _cloudTransportFactory;
   final ChatPushService _pushService;
   final ChatPushTokenProvider? _pushTokenProvider;
@@ -1599,6 +1603,7 @@ class ChatRuntime {
   final Set<String> _mailboxEnvelopeReceipts = <String>{};
   final Set<String> _outgoingRetryInFlight = <String>{};
   final Set<String> _groupKeyPackagePublications = <String>{};
+  final Set<String> _stateResetAccounts = <String>{};
   final Map<String, Timer> _outboundRetryTimers = <String, Timer>{};
   final Map<String, int> _outboundRetryAttempts = <String, int>{};
 
@@ -2120,6 +2125,7 @@ class ChatRuntime {
     _mailboxEnvelopeReceipts.clear();
     _outgoingRetryInFlight.clear();
     _groupKeyPackagePublications.clear();
+    _stateResetAccounts.clear();
 
     final failures = <String>[];
     // 第一阶段只停止所有实时生产源。session 会同步拒绝新 callback，关闭
@@ -2298,8 +2304,8 @@ class ChatRuntime {
     return _cidMutationGate.run(cidNumber, () async {
       final documentsRoot =
           await _ChatCrossIsolateCoordinator.resolveDocumentsRoot(
-        _documentsDirectoryProvider,
-      );
+            _documentsDirectoryProvider,
+          );
       final lease = await _ChatCrossIsolateCoordinator.acquireCidMutationLease(
         documentsRoot,
         // 文件目录本身按 safe path 分区；跨 isolate lease 必须使用同一物理分区键，
@@ -2574,8 +2580,7 @@ class ChatRuntime {
       const <({LocalKeyPurpose purpose, String? context})>[
         (purpose: LocalKeyPurpose.attachment, context: null),
       ],
-    ))
-        .single;
+    )).single;
   }
 
   /// 短命明文目录：解密出来的附件只落这里，与密文缓存物理分开。
@@ -2794,9 +2799,9 @@ class ChatRuntime {
     required Uint8List targetStateKey,
     MlsNativeBindings? bindings,
     void Function(Uint8List sourceCopy, Uint8List targetCopy)?
-        debugRunNativeRekey,
+    debugRunNativeRekey,
     Future<void> Function(MlsStateStore store, Uint8List targetCopy)?
-        debugStagePending,
+    debugStagePending,
   }) async {
     final sourceCopy = Uint8List.fromList(sourceStateKey);
     final targetCopy = Uint8List.fromList(targetStateKey);
@@ -2837,9 +2842,9 @@ class ChatRuntime {
     required Uint8List sourceStateKey,
     required Uint8List targetStateKey,
     required void Function(Uint8List sourceCopy, Uint8List targetCopy)
-        runNativeRekey,
+    runNativeRekey,
     required Future<void> Function(MlsStateStore store, Uint8List targetCopy)
-        stagePending,
+    stagePending,
   }) {
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
       return Future<void>.error(UnsupportedError('仅 Flutter 测试允许注入 MLS 换绑阶段'));
@@ -2970,8 +2975,9 @@ class ChatRuntime {
             state: _ChatFileHandoverState.committing,
           );
         }
-        final activeDirectory =
-            sourceExists ? sourceDirectory : targetDirectory;
+        final activeDirectory = sourceExists
+            ? sourceDirectory
+            : targetDirectory;
         await AttachmentVault.requireNoTransientDirectoriesForHandover(
           Directory('${activeDirectory.path}/attachments'),
         );
@@ -3300,13 +3306,12 @@ class ChatRuntime {
 
   static Map<String, Object> _fileHandoverBindingJson(
     AccountDataBinding binding,
-  ) =>
-      <String, Object>{
-        'genesis_hash': binding.genesisHash,
-        'cid_number': binding.cidNumber,
-        'binding_revision': binding.bindingRevision,
-        'account_id': binding.accountId,
-      };
+  ) => <String, Object>{
+    'genesis_hash': binding.genesisHash,
+    'cid_number': binding.cidNumber,
+    'binding_revision': binding.bindingRevision,
+    'account_id': binding.accountId,
+  };
 
   static String _fileHandoverPayloadJson({
     required _ChatFileHandoverState state,
@@ -3314,14 +3319,13 @@ class ChatRuntime {
     required AccountDataBinding target,
     required List<String> mlsDevicePaths,
     required List<_ChatFileHandoverInventoryItem> files,
-  }) =>
-      jsonEncode(<String, Object>{
-        'state': state.name,
-        'source': _fileHandoverBindingJson(source),
-        'target': _fileHandoverBindingJson(target),
-        'mls_devices': mlsDevicePaths,
-        'files': files.map((item) => item.toJson()).toList(growable: false),
-      });
+  }) => jsonEncode(<String, Object>{
+    'state': state.name,
+    'source': _fileHandoverBindingJson(source),
+    'target': _fileHandoverBindingJson(target),
+    'mls_devices': mlsDevicePaths,
+    'files': files.map((item) => item.toJson()).toList(growable: false),
+  });
 
   static String _fileHandoverMac(List<int> key, String payloadJson) =>
       crypto_hash.Hmac(
@@ -3347,8 +3351,9 @@ class ChatRuntime {
     if (!path.startsWith(prefix)) {
       throw StateError('Chat 文件交接清单路径越界');
     }
-    final relative =
-        path.substring(prefix.length).replaceAll(Platform.pathSeparator, '/');
+    final relative = path
+        .substring(prefix.length)
+        .replaceAll(Platform.pathSeparator, '/');
     if (relative.isEmpty ||
         relative.startsWith('/') ||
         relative
@@ -3414,13 +3419,14 @@ class ChatRuntime {
     required Directory bindingDirectory,
     required List<Directory> deviceDirectories,
   }) {
-    final paths = deviceDirectories
-        .map(
-          (directory) =>
-              _relativeFileHandoverPath(bindingDirectory, directory.path),
-        )
-        .toList(growable: false)
-      ..sort();
+    final paths =
+        deviceDirectories
+            .map(
+              (directory) =>
+                  _relativeFileHandoverPath(bindingDirectory, directory.path),
+            )
+            .toList(growable: false)
+          ..sort();
     if (paths.toSet().length != paths.length) {
       throw StateError('Chat MLS 设备目录清单存在重复项');
     }
@@ -3589,12 +3595,14 @@ class ChatRuntime {
     if (rawDevices is! List || rawFiles is! List) {
       throw const FormatException('Chat 文件交接 receipt 清单结构损坏');
     }
-    final devicePaths = rawDevices.map((value) {
-      if (value is! String || value.isEmpty || value.contains('..')) {
-        throw const FormatException('Chat 文件交接 MLS 设备路径损坏');
-      }
-      return value;
-    }).toList(growable: false);
+    final devicePaths = rawDevices
+        .map((value) {
+          if (value is! String || value.isEmpty || value.contains('..')) {
+            throw const FormatException('Chat 文件交接 MLS 设备路径损坏');
+          }
+          return value;
+        })
+        .toList(growable: false);
     final files = rawFiles
         .map((value) => _ChatFileHandoverInventoryItem.fromJson(value))
         .toList(growable: false);
@@ -3920,8 +3928,13 @@ class ChatRuntime {
           }
           _outboundRetryAttempts.remove(key);
         }),
-      ).catchError((Object _) {
-        // 失败原因已经以稳定阶段码保存在出站行；这里不输出账户、CID、URL 或异常原文。
+      ).catchError((Object error) {
+        AppLog.d(
+          '[ChatTrace] direction=outbound stage=context '
+          'code=${chatSdkDiagnosticCode(error)}',
+        );
+        // 本机状态已经完成单次重建仍失败时停止盲重试；其它网络失败继续有界退避。
+        if (error is MlsNativeException && error.requiresStateReset) return;
         _schedulePendingOutgoingRetry(
           key: key,
           account: account,
@@ -4061,21 +4074,19 @@ class ChatRuntime {
     ChatBindingFenceToken bindingToken,
     String conversationId,
     String attachmentId,
-  ) async =>
-      File(
-        '${(await _attachmentDirectoryForToken(bindingToken)).path}'
-        '/${_safePath(conversationId)}/.pending_upload/'
-        '${_safePath(attachmentId)}.cipher',
-      );
+  ) async => File(
+    '${(await _attachmentDirectoryForToken(bindingToken)).path}'
+    '/${_safePath(conversationId)}/.pending_upload/'
+    '${_safePath(attachmentId)}.cipher',
+  );
 
   Future<File> _pendingAttachmentUploadedMarker(
     ChatBindingFenceToken bindingToken,
     String conversationId,
     String attachmentId,
-  ) async =>
-      File(
-        '${(await _pendingAttachmentUploadFile(bindingToken, conversationId, attachmentId)).path}.uploaded',
-      );
+  ) async => File(
+    '${(await _pendingAttachmentUploadFile(bindingToken, conversationId, attachmentId)).path}.uploaded',
+  );
 
   /// 发送内置贴纸只走与文字相同的 HPKE 密文邮箱，不建立 WebRTC 连接。
   Future<List<ChatDeliveryResult>> sendSticker({
@@ -4308,10 +4319,10 @@ class ChatRuntime {
           _scheduleOutboundDelivery(context, conversationId, delivery),
       afterIncomingStore: (envelope, content) async =>
           _scheduleIncomingCloudAttachment(
-        context,
-        envelope.conversationId,
-        content,
-      ),
+            context,
+            envelope.conversationId,
+            content,
+          ),
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
           transport: context.transport,
@@ -4398,11 +4409,7 @@ class ChatRuntime {
     final bindingToken = context.bindingToken;
     final content = ChatPayloadCodec.decode(controlPlaintext);
     if (content.isMedia) {
-      await _downloadIncomingCloudAttachment(
-        context,
-        conversationId,
-        content,
-      );
+      await _downloadIncomingCloudAttachment(context, conversationId, content);
     }
     final cacheDirectory = await _attachmentDirectoryForToken(bindingToken);
     return ChatFlow.downloadAttachment(
@@ -4476,12 +4483,12 @@ class ChatRuntime {
         final prefs = await _prefs;
         final safeCid = _safePath(cidNumber);
         final staleKeys = prefs.getKeys().where(
-              (key) =>
-                  key == deviceIdPreferenceKey(cidNumber) ||
-                  key == devicePublicKeyCachePreferenceKey(cidNumber) ||
-                  (key.startsWith('$_kPushRegistrationPrefix.') &&
-                      key.contains('.$safeCid.')),
-            );
+          (key) =>
+              key == deviceIdPreferenceKey(cidNumber) ||
+              key == devicePublicKeyCachePreferenceKey(cidNumber) ||
+              (key.startsWith('$_kPushRegistrationPrefix.') &&
+                  key.contains('.$safeCid.')),
+        );
         for (final key in staleKeys.toList(growable: false)) {
           await prefs.remove(key);
         }
@@ -4579,7 +4586,12 @@ class ChatRuntime {
       }
       try {
         await _sendPendingOutgoing(context, item);
-      } catch (_) {
+      } on Object catch (error) {
+        AppLog.d(
+          '[ChatTrace] direction=outbound stage=envelope '
+          'code=${chatSdkDiagnosticCode(error)}',
+        );
+        if (error is MlsNativeException && error.requiresStateReset) rethrow;
         return true;
       }
     }
@@ -5427,7 +5439,8 @@ class ChatRuntime {
     final identity = ChatDevice(
       userId: account.cidNumber,
       deviceId: deviceId,
-      devicePublicKey: prefs.getString(
+      devicePublicKey:
+          prefs.getString(
             devicePublicKeyCachePreferenceKey(account.cidNumber),
           ) ??
           '',
@@ -5503,13 +5516,15 @@ class ChatRuntime {
     if (!_outgoingRetryInFlight.add(key)) return;
     unawaited(
       _runRuntimeOperation(() async {
-        await _readAccount(expectedAccountId: account.accountId);
-        await retryOutgoing(recipientCidNumber: senderCidNumber);
-      }).catchError((Object _) {
-        // 本机可靠队列保留到下一次推送、启动、恢复前台或发送调度。
-      }).whenComplete(() {
-        _outgoingRetryInFlight.remove(key);
-      }),
+            await _readAccount(expectedAccountId: account.accountId);
+            await retryOutgoing(recipientCidNumber: senderCidNumber);
+          })
+          .catchError((Object _) {
+            // 本机可靠队列保留到下一次推送、启动、恢复前台或发送调度。
+          })
+          .whenComplete(() {
+            _outgoingRetryInFlight.remove(key);
+          }),
     );
   }
 
@@ -5549,33 +5564,125 @@ class ChatRuntime {
 
     final generation = _accountGenerations[account.accountId] ?? 0;
     late final Future<_ChatAccountContext> created;
-    created = _buildAccountContext(account).then((context) async {
-      if (_processWipeRequested ||
-          _closedForWipe ||
-          (_accountGenerations[account.accountId] ?? 0) != generation) {
-        await _disposeContext(context);
-        throw StateError('CID 当前绑定已切换，本次旧初始化结果已丢弃');
-      }
-      final contextKey = _contextKey(
-        context.account,
-        context.identity,
-        context.bindingToken,
-      );
-      final previousKey = _accountContextKeys[account.accountId];
-      if (previousKey != null && previousKey != contextKey) {
-        final previous = _readyContexts.remove(previousKey);
-        if (previous != null) await _disposeContext(previous);
-      }
-      _accountContextKeys[account.accountId] = contextKey;
-      _readyContexts[contextKey] = context;
-      return context;
-    }).whenComplete(() {
-      if (identical(_readyFlights[flightKey], created)) {
-        _readyFlights.remove(flightKey);
-      }
-    });
+    created = _buildAccountContextWithStateReset(account)
+        .then((context) async {
+          if (_processWipeRequested ||
+              _closedForWipe ||
+              (_accountGenerations[account.accountId] ?? 0) != generation) {
+            await _disposeContext(context);
+            throw StateError('CID 当前绑定已切换，本次旧初始化结果已丢弃');
+          }
+          final contextKey = _contextKey(
+            context.account,
+            context.identity,
+            context.bindingToken,
+          );
+          final previousKey = _accountContextKeys[account.accountId];
+          if (previousKey != null && previousKey != contextKey) {
+            final previous = _readyContexts.remove(previousKey);
+            if (previous != null) await _disposeContext(previous);
+          }
+          _accountContextKeys[account.accountId] = contextKey;
+          _readyContexts[contextKey] = context;
+          return context;
+        })
+        .whenComplete(() {
+          if (identical(_readyFlights[flightKey], created)) {
+            _readyFlights.remove(flightKey);
+          }
+        });
     _readyFlights[flightKey] = created;
     return created;
+  }
+
+  /// 当前进程对同一账户最多执行一次 Chat 域重建，禁止认证失败进入五轮空转。
+  Future<_ChatAccountContext> _buildAccountContextWithStateReset(
+    _ChatAccount account,
+  ) async {
+    try {
+      return await _buildAccountContext(account);
+    } on MlsNativeException catch (error, stackTrace) {
+      if (!error.requiresStateReset ||
+          !_stateResetAccounts.add(account.accountId)) {
+        Error.throwWithStackTrace(error, stackTrace);
+      }
+      AppLog.d(
+        '[ChatTrace] direction=local stage=state_reset_start '
+        'code=${error.diagnosticCode}',
+      );
+      try {
+        await _resetLocalChatState(account);
+        final context = await _buildAccountContext(account);
+        _stateResetAccounts.remove(account.accountId);
+        AppLog.d(
+          '[ChatTrace] direction=local stage=state_reset_complete code=ok',
+        );
+        return context;
+      } on Object catch (resetError, resetStackTrace) {
+        AppLog.d(
+          '[ChatTrace] direction=local stage=state_reset_failed '
+          'code=${chatSdkDiagnosticCode(resetError)}',
+        );
+        Error.throwWithStackTrace(resetError, resetStackTrace);
+      }
+    }
+  }
+
+  /// 只重建当前用户的 Chat 本机域；钱包、CID、device_id、推送 Token、设备子钥和
+  /// 服务端会话均保持不动。确定性 HPKE 公钥随后以同值重新登记。
+  Future<void> _resetLocalChatState(_ChatAccount account) {
+    return _runCidFileMutation(
+      cidNumber: account.cidNumber,
+      operation: () async {
+        _ensureActive();
+        final binding = _bindingForAccount(account);
+        await _store.clearAllForCidNumber(account.cidNumber);
+
+        final prefs = await _prefs;
+        final deviceId = prefs.getString(
+          deviceIdPreferenceKey(account.cidNumber),
+        );
+        if (deviceId == null || deviceId.isEmpty) {
+          throw StateError('Chat 状态重建缺少当前设备标识');
+        }
+        final stateStore = await _stateStore(binding, deviceId);
+        try {
+          await stateStore.reset();
+        } finally {
+          stateStore.dispose();
+        }
+
+        final bindingDirectory = await _bindingDirectory(
+          cidNumber: account.cidNumber,
+          bindingRevision: account.bindingRevision,
+          accountId: account.accountId,
+        );
+        final attachments = Directory(
+          '${bindingDirectory.path}${Platform.pathSeparator}attachments',
+        ).absolute;
+        if (attachments.parent.path != bindingDirectory.absolute.path) {
+          throw StateError('Chat 附件清理目录越过当前绑定边界');
+        }
+        final attachmentType = await FileSystemEntity.type(
+          attachments.path,
+          followLinks: false,
+        );
+        if (attachmentType == FileSystemEntityType.link) {
+          await Link(attachments.path).delete();
+        } else if (attachmentType == FileSystemEntityType.directory) {
+          await attachments.delete(recursive: true);
+        } else if (attachmentType != FileSystemEntityType.notFound) {
+          throw StateError('Chat 附件缓存路径必须是目录');
+        }
+
+        // 公钥由同一状态钥、用户和 device_id 确定性派生；只清缓存以强制 native 回读。
+        await prefs.remove(
+          devicePublicKeyCachePreferenceKey(account.cidNumber),
+        );
+        final token = await _store.convergeFinalizedBinding(binding);
+        await _store.validateBindingFenceToken(token);
+      },
+    );
   }
 
   Future<_ChatAccountContext> _buildAccountContext(_ChatAccount account) async {
@@ -5610,11 +5717,12 @@ class ChatRuntime {
       final bootstrapIdentity = ChatDevice(
         userId: account.cidNumber,
         deviceId: deviceId,
-        devicePublicKey:
-            cachedDevicePublicKey.isEmpty ? '00' : cachedDevicePublicKey,
+        devicePublicKey: cachedDevicePublicKey.isEmpty
+            ? '00'
+            : cachedDevicePublicKey,
       );
-      final identityReader = _cryptoFactory?.call(
-              bootstrapIdentity, stateStore) ??
+      final identityReader =
+          _cryptoFactory?.call(bootstrapIdentity, stateStore) ??
           NativeMlsCrypto(identity: bootstrapIdentity, stateStore: stateStore);
       final devicePublicKey = await identityReader.readDevicePublicKey(
         bootstrapIdentity,
@@ -5636,7 +5744,8 @@ class ChatRuntime {
         deviceId: deviceId,
         devicePublicKey: devicePublicKey,
       );
-      final finalCrypto = _cryptoFactory?.call(identity, stateStore) ??
+      final finalCrypto =
+          _cryptoFactory?.call(identity, stateStore) ??
           NativeMlsCrypto(identity: identity, stateStore: stateStore);
       final service = await _ensureServiceReady(
         account: account,
@@ -5700,7 +5809,8 @@ class ChatRuntime {
         session.accountId != account.accountId) {
       throw StateError('聊天会话与 Cloudflare 当前用户投影不一致');
     }
-    final transport = _cloudTransportFactory?.call(
+    final transport =
+        _cloudTransportFactory?.call(
           accountId: account.accountId,
           localCidNumber: account.cidNumber,
           localDeviceId: identity.deviceId,
@@ -5929,7 +6039,7 @@ class ChatRuntime {
       // 避免同一 Envelope 被后台执行器和当前重试循环同时提交。
       deliveryScheduler: scheduleDelivery
           ? (conversationId, delivery) =>
-              _scheduleOutboundDelivery(context, conversationId, delivery)
+                _scheduleOutboundDelivery(context, conversationId, delivery)
           : (conversationId, delivery) {},
       deliverer: (envelope, _, recipientCidNumber) {
         return ChatFlow.deliverWithTransport(
@@ -5940,10 +6050,10 @@ class ChatRuntime {
       },
       afterIncomingStore: (envelope, content) async =>
           _scheduleIncomingCloudAttachment(
-        context,
-        envelope.conversationId,
-        content,
-      ),
+            context,
+            envelope.conversationId,
+            content,
+          ),
     );
   }
 
@@ -5954,8 +6064,11 @@ class ChatRuntime {
   ) {
     if (!content.isMedia || (content.attachmentId ?? '').isEmpty) return;
     unawaited(
-      _downloadIncomingCloudAttachment(context, conversationId, content)
-          .catchError((Object _) {
+      _downloadIncomingCloudAttachment(
+        context,
+        conversationId,
+        content,
+      ).catchError((Object _) {
         // 四次有界重试仍失败后保留本地控制消息；页面恢复或用户点击会再次补取。
       }),
     );
@@ -5972,36 +6085,37 @@ class ChatRuntime {
     if (existing != null) return existing;
 
     late final Future<void> task;
-    task = _runRuntimeOperation(() async {
-      Object? lastError;
-      for (var attempt = 0; attempt <= 4; attempt += 1) {
-        if (attempt > 0) {
-          await Future<void>.delayed(_outboundRetryDelays[attempt - 1]);
-        }
-        try {
-          await _cacheIncomingCloudAttachment(
-            context,
-            conversationId,
-            content,
-          );
-          final hub = _realtimeHubs[context.account.accountId];
-          if (hub != null && !hub.closed) {
-            await _notifyRealtimeHub(hub, disconnected: false);
+    task =
+        _runRuntimeOperation(() async {
+          Object? lastError;
+          for (var attempt = 0; attempt <= 4; attempt += 1) {
+            if (attempt > 0) {
+              await Future<void>.delayed(_outboundRetryDelays[attempt - 1]);
+            }
+            try {
+              await _cacheIncomingCloudAttachment(
+                context,
+                conversationId,
+                content,
+              );
+              final hub = _realtimeHubs[context.account.accountId];
+              if (hub != null && !hub.closed) {
+                await _notifyRealtimeHub(hub, disconnected: false);
+              }
+              return;
+            } catch (error) {
+              lastError = error;
+            }
           }
-          return;
-        } catch (error) {
-          lastError = error;
-        }
-      }
-      Error.throwWithStackTrace(
-        lastError ?? StateError('chat_attachment_download_failed'),
-        StackTrace.current,
-      );
-    }).whenComplete(() {
-      if (identical(_incomingAttachmentDownloads[key], task)) {
-        _incomingAttachmentDownloads.remove(key);
-      }
-    });
+          Error.throwWithStackTrace(
+            lastError ?? StateError('chat_attachment_download_failed'),
+            StackTrace.current,
+          );
+        }).whenComplete(() {
+          if (identical(_incomingAttachmentDownloads[key], task)) {
+            _incomingAttachmentDownloads.remove(key);
+          }
+        });
     _incomingAttachmentDownloads[key] = task;
     return task;
   }
@@ -6095,9 +6209,11 @@ class ChatRuntime {
         envelope.recipientCidNumber != context.account.cidNumber) {
       throw const FormatException('Chat 邮箱路由与 Envelope 身份不一致');
     }
-    final isApplication = envelope.mlsMessageKind ==
+    final isApplication =
+        envelope.mlsMessageKind ==
         MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION;
-    final alreadyStored = isApplication &&
+    final alreadyStored =
+        isApplication &&
         await _store.hasIncomingEnvelope(
           bindingToken: context.bindingToken,
           ownerCidNumber: context.account.cidNumber,
@@ -6137,7 +6253,8 @@ class ChatRuntime {
   Future<void> _ensureCurrentGroupKeyPackage(
     _ChatAccountContext context,
   ) async {
-    final publicationKey = '${context.account.cidNumber}|${context.deviceId}|'
+    final publicationKey =
+        '${context.account.cidNumber}|${context.deviceId}|'
         '${context.devicePublicKey.toLowerCase()}';
     if (_groupKeyPackagePublications.contains(publicationKey)) return;
     final lastResort = await context.crypto.createKeyPackage(
@@ -6188,8 +6305,7 @@ class ChatRuntime {
         const <({LocalKeyPurpose purpose, String? context})>[
           (purpose: LocalKeyPurpose.mls, context: null),
         ],
-      ))
-          .single,
+      )).single,
     );
   }
 }
@@ -6231,10 +6347,10 @@ class _ChatFileHandoverInventoryItem {
   final String sha256;
 
   Map<String, Object> toJson() => <String, Object>{
-        'relative_path': relativePath,
-        'byte_size': byteSize,
-        'sha256': sha256,
-      };
+    'relative_path': relativePath,
+    'byte_size': byteSize,
+    'sha256': sha256,
+  };
 
   static _ChatFileHandoverInventoryItem fromJson(Object? value) {
     if (value is! Map<String, dynamic> ||

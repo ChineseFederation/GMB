@@ -1,4 +1,5 @@
 name: 公民钱包 · CI · Android
+# CI_CACHE_PROTOCOL: ci-v1
 run-name: 公民钱包 · CI · Android
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 CI；
@@ -20,6 +21,7 @@ permissions:
 
 jobs:
   build-apk:
+    permissions: { actions: write, contents: read }
     name: 构建 公民钱包.apk
     runs-on: ubuntu-24.04
     steps:
@@ -29,6 +31,45 @@ jobs:
           ref: ${{ github.sha }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenwallet
+          CI_CACHE_PLATFORM: android
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: build-apk
+          CI_CACHE_WORKFLOW: citizenwallet-android
+          CI_CACHE_JOB: build-apk
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            gradle
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenwallet/rust/target=cargo-target
+            citizenwallet/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-linux-android/release/libsmoldot.so
+            flutter-build/app/outputs/flutter-apk
+            flutter-build/app/outputs/bundle
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -97,12 +138,6 @@ jobs:
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh android
 
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-android"
-          workspaces: citizenwallet/rust -> target
-
       - name: 分析代码
         working-directory: citizenwallet
         run: flutter analyze --no-fatal-infos
@@ -162,3 +197,52 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune

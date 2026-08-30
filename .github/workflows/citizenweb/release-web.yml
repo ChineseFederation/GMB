@@ -1,4 +1,5 @@
 name: 公民网 · Release · Web
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民网 · Release · Web
 
 # 中文注释：官网是独立产品，使用自己的 workflow、版本和候选产物；CI 只构建静态网站，
@@ -43,6 +44,7 @@ env:
 
 jobs:
   check:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 官网代码与正式构建检查
     runs-on: ubuntu-24.04
     steps:
@@ -95,8 +97,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenweb/package-lock.json
 
       - name: 安装官网锁定依赖
         working-directory: citizenweb

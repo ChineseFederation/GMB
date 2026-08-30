@@ -115,8 +115,14 @@ GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
     echo "    [error] 公民链中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2
     exit 1
 }
-TARGET_DIR="$PROGRAM_CONSOLE_WORK_DIR/cargo"
+INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?公民链本机编译缺少中央增量缓存目录}"
+[[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
+    echo "    [error] 公民链增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
+    exit 1
+}
+TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
 export CARGO_TARGET_DIR="$TARGET_DIR"
+export npm_config_cache="$INCREMENTAL_CACHE_DIR/npm"
 NODE_FRONTEND_DIST="$PROGRAM_CONSOLE_WORK_DIR/node-frontend"
 ONCHINA_BUILD_DIST="$PROGRAM_CONSOLE_WORK_DIR/onchina-frontend/dist"
 PACKAGE_RESOURCES="$PROGRAM_CONSOLE_WORK_DIR/resources"
@@ -132,7 +138,7 @@ unset WASM_FILE
 # Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
 # 本任务不迁移、不删除正式 gmb 数据，也不让编程控制台启动的软件争用正式安装版 RocksDB。
 export CITIZENCHAIN_DATA_PROFILE=dev
-mkdir -p "$TARGET_DIR" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onchina-frontend"
+mkdir -p "$TARGET_DIR" "$npm_config_cache" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onchina-frontend"
 
 # ── OnChina 控制台本机配置 ──
 # 启动节点不需要任何机构鉴权/身份。这里只让本机能跑起链上中国平台服务:
@@ -140,7 +146,7 @@ mkdir -p "$TARGET_DIR" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onch
 #   ② DB 用内嵌私有 PG(方案 A):借本机 PostgreSQL 二进制起一个 onchina 专属实例(127.0.0.1)。
 # 本机构的"系统签名钥 / 机构身份"是可选配置(签登录 QR / 签发凭证才需要),非启动前提。
 echo "==> 构建 OnChina 本机优化二进制 + 前端..."
-( cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 cargo build --release -p onchina )
+( cd "$REPO_ROOT" && CARGO_INCREMENTAL=1 cargo build --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
 ( cd "$REPO_ROOT/onchina/frontend" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
 cp "$TARGET_DIR/release/onchina" "$PACKAGE_RESOURCES/onchina-bin/onchina"
@@ -189,13 +195,13 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     # Tauri 2 的 build 默认使用优化 profile；--debug 才会切换为调试产物。
     # 编译与封装分离，时间戳瞬时失败时只重试封装签名，不重复整轮 Rust 编译。
     tauri_override="$(python3 -c 'import json,sys; print(json.dumps({"build":{"frontendDist":sys.argv[1]},"bundle":{"resources":{sys.argv[2]+"/":"",sys.argv[3]+"/":"",sys.argv[4]:"china.sqlite"}}}))' "$NODE_FRONTEND_DIST" "$PACKAGE_RESOURCES" "$REPO_ROOT/node/resources" "$REPO_ROOT/onchina/src/cid/china/china.sqlite")"
-    CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=0 \
+    CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=1 \
         node frontend/node_modules/@tauri-apps/cli/tauri.js build --config "$tauri_override" \
         --no-bundle --ci -- --locked
     MACOS_APP_PENDING=1
     bundle_macos_app() {
         rm -rf -- "$app_bundle"
-        CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=0 \
+        CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=1 \
             node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --config "$tauri_override" \
             --bundles app --ci
     }

@@ -34,10 +34,21 @@ const GMB_MLS_CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128
 /// MLS 本地状态信封的 AAD 域,把密文钉死在用途上,防止两个文件互换。
 const STATE_AAD_STORAGE: &[u8] = b"chatsdk/mls|openmls_storage";
 const STATE_AAD_DEVICE: &[u8] = b"chatsdk/mls|device_record";
+const ERROR_STORAGE_READ: &str = "CHAT_MLS_STORAGE_READ_FAILED";
+const ERROR_STORAGE_AUTH: &str = "CHAT_MLS_STORAGE_AUTH_FAILED";
+const ERROR_DEVICE_READ: &str = "CHAT_MLS_DEVICE_READ_FAILED";
+const ERROR_DEVICE_AUTH: &str = "CHAT_MLS_DEVICE_AUTH_FAILED";
+const ERROR_STATE_INVALID: &str = "CHAT_MLS_STATE_INVALID";
+const ERROR_SIGNER_MISSING: &str = "CHAT_MLS_SIGNER_MISSING";
 /// GCM nonce 固定 12 字节;密文布局 = nonce || ciphertext || tag(16)。
 const STATE_NONCE_LEN: usize = 12;
 const DIRECT_WIRE_VERSION: u8 = 1;
 const DIRECT_ENCAPSULATED_KEY_LEN: usize = 32;
+
+/// FFI 只依赖稳定阶段码分类，本地路径和底层错误只保留在技术信息中。
+fn state_error(code: &str, message: impl std::fmt::Display) -> String {
+    format!("{code}:{message}")
+}
 
 /// 解析 Dart 侧下传的 32 字节 MLS 状态密钥(小写 hex)。
 ///
@@ -795,17 +806,31 @@ struct SerializableMlsStorage {
 }
 
 fn load_provider(state_dir: &Path, state_key: &[u8; 32]) -> Result<MlsProvider, String> {
-    fs::create_dir_all(state_dir).map_err(|error| format!("创建 MLS 状态目录失败: {error}"))?;
+    fs::create_dir_all(state_dir).map_err(|error| {
+        state_error(
+            ERROR_STORAGE_READ,
+            format!("创建 MLS 状态目录失败: {error}"),
+        )
+    })?;
 
     let storage = MemoryStorage::default();
     let storage_path = storage_path(state_dir);
     if storage_path.exists() {
         use base64::Engine;
-        let blob = fs::read(&storage_path)
-            .map_err(|error| format!("读取 OpenMLS storage 失败: {error}"))?;
-        let clear = open_state(state_key, &blob, STATE_AAD_STORAGE)?;
-        let parsed: SerializableMlsStorage = serde_json::from_slice(&clear)
-            .map_err(|error| format!("解析 OpenMLS storage 失败: {error}"))?;
+        let blob = fs::read(&storage_path).map_err(|error| {
+            state_error(
+                ERROR_STORAGE_READ,
+                format!("读取 OpenMLS storage 失败: {error}"),
+            )
+        })?;
+        let clear = open_state(state_key, &blob, STATE_AAD_STORAGE)
+            .map_err(|error| state_error(ERROR_STORAGE_AUTH, error))?;
+        let parsed: SerializableMlsStorage = serde_json::from_slice(&clear).map_err(|error| {
+            state_error(
+                ERROR_STATE_INVALID,
+                format!("解析 OpenMLS storage 失败: {error}"),
+            )
+        })?;
         let mut values = storage
             .values
             .write()
@@ -813,10 +838,20 @@ fn load_provider(state_dir: &Path, state_key: &[u8; 32]) -> Result<MlsProvider, 
         for (key, value) in parsed.values {
             let key = base64::prelude::BASE64_STANDARD
                 .decode(key)
-                .map_err(|error| format!("OpenMLS storage 键解码失败: {error}"))?;
+                .map_err(|error| {
+                    state_error(
+                        ERROR_STATE_INVALID,
+                        format!("OpenMLS storage 键解码失败: {error}"),
+                    )
+                })?;
             let value = base64::prelude::BASE64_STANDARD
                 .decode(value)
-                .map_err(|error| format!("OpenMLS storage 值解码失败: {error}"))?;
+                .map_err(|error| {
+                    state_error(
+                        ERROR_STATE_INVALID,
+                        format!("OpenMLS storage 值解码失败: {error}"),
+                    )
+                })?;
             values.insert(key, value);
         }
     }
@@ -865,20 +900,33 @@ fn ensure_device_signer(
     let record_path = device_record_path(state_dir);
     let signature_algorithm = GMB_MLS_CIPHERSUITE.signature_algorithm();
     if record_path.exists() {
-        let blob =
-            fs::read(&record_path).map_err(|error| format!("读取 MLS 设备记录失败: {error}"))?;
-        let clear = open_state(state_key, &blob, STATE_AAD_DEVICE)?;
-        let record: DeviceRecord = serde_json::from_slice(&clear)
-            .map_err(|error| format!("解析 MLS 设备记录失败: {error}"))?;
+        let blob = fs::read(&record_path).map_err(|error| {
+            state_error(ERROR_DEVICE_READ, format!("读取 MLS 设备记录失败: {error}"))
+        })?;
+        let clear = open_state(state_key, &blob, STATE_AAD_DEVICE)
+            .map_err(|error| state_error(ERROR_DEVICE_AUTH, error))?;
+        let record: DeviceRecord = serde_json::from_slice(&clear).map_err(|error| {
+            state_error(
+                ERROR_STATE_INVALID,
+                format!("解析 MLS 设备记录失败: {error}"),
+            )
+        })?;
         if record.user_id != user_id || record.device_id != device_id {
             return Err(
-                "CHAT_MLS_STATE_OWNER_MISMATCH:MLS 状态目录已绑定到其他 用户身份 或设备".to_string(),
+                "CHAT_MLS_STATE_OWNER_MISMATCH:MLS 状态目录已绑定到其他 用户身份 或设备"
+                    .to_string(),
             );
         }
         let public_key =
-            decode_hex_field("signature_public_key_hex", &record.signature_public_key_hex)?;
+            decode_hex_field("signature_public_key_hex", &record.signature_public_key_hex)
+                .map_err(|error| state_error(ERROR_STATE_INVALID, error))?;
         let signer = SignatureKeyPair::read(provider.storage(), &public_key, signature_algorithm)
-            .ok_or_else(|| "MLS 设备签名密钥不在 OpenMLS storage 中".to_string())?;
+            .ok_or_else(|| {
+            state_error(
+                ERROR_SIGNER_MISSING,
+                "MLS 设备签名密钥不在 OpenMLS storage 中",
+            )
+        })?;
         let credential = credential_with_public_key(user_id, device_id, public_key);
         return Ok((credential, signer));
     }
@@ -1002,10 +1050,6 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })
 }
 
-/// 清除历史遗留的**明文** MLS 状态文件。
-///
-/// 这两个文件曾以明文 JSON 保存设备签名私钥与群 ratchet 秘密,留在磁盘上等于
-/// 加密白做。开发期零用户,直接删除、不做迁移与兼容读取。
 fn require_non_empty(field_name: &str, value: &str) -> Result<(), String> {
     if value.trim().is_empty() {
         return Err(format!("OpenMLS 字段 {field_name} 不能为空"));
@@ -1665,9 +1709,9 @@ mod tests {
     use super::{
         atomic_write, create_key_package_json, device_hpke_key_pair, direct_hpke, direct_info,
         group_add_members_json, group_create_json, group_create_message_json, group_process_json,
-        group_remove_members_json, group_state_json, open_state, parse_state_key,
-        purge_legacy_plaintext_state, seal_state, two_party_smoke_json, STATE_AAD_DEVICE,
-        STATE_AAD_STORAGE,
+        group_remove_members_json, group_state_json, open_state, parse_state_key, seal_state,
+        two_party_smoke_json, ERROR_DEVICE_AUTH, ERROR_STATE_INVALID, ERROR_STORAGE_AUTH,
+        STATE_AAD_DEVICE, STATE_AAD_STORAGE,
     };
     use std::ffi::CString;
     use std::fs;
@@ -1860,7 +1904,10 @@ mod tests {
         assert_eq!(added["epoch"].as_u64(), Some(1));
 
         // B / C 处理 Welcome 入群,名册应为 3 人。
-        for (dir, owner, dev) in [(&dir_b, "用户身份-B", "devB"), (&dir_c, "用户身份-C", "devC")] {
+        for (dir, owner, dev) in [
+            (&dir_b, "用户身份-B", "devB"),
+            (&dir_c, "用户身份-C", "devC"),
+        ] {
             let joined = invoke(
                 group_process_json,
                 json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(dir.as_path()), "user_id": owner, "device_id": dev, "group_id": group_id, "wire_message_hex": welcome_hex, "ratchet_tree_hex": tree_hex}),
@@ -1876,7 +1923,10 @@ mod tests {
             json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(&dir_a), "user_id": "用户身份-A", "device_id": "devA", "group_id": group_id, "plaintext_hex": plaintext_hex}),
         );
         let app_hex = msg["application_wire_hex"].as_str().unwrap().to_string();
-        for (dir, owner, dev) in [(&dir_b, "用户身份-B", "devB"), (&dir_c, "用户身份-C", "devC")] {
+        for (dir, owner, dev) in [
+            (&dir_b, "用户身份-B", "devB"),
+            (&dir_c, "用户身份-C", "devC"),
+        ] {
             let got = invoke(
                 group_process_json,
                 json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(dir.as_path()), "user_id": owner, "device_id": dev, "group_id": group_id, "wire_message_hex": app_hex}),
@@ -1970,14 +2020,42 @@ mod tests {
     }
 
     #[test]
-    fn legacy_plaintext_state_is_purged() {
-        let dir = std::env::temp_dir().join(format!("chat_sdk_mls_purge_{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        fs::write(dir.join("openmls_storage.json"), b"plain").expect("write legacy");
-        fs::write(dir.join("device.json"), b"plain").expect("write legacy");
-        assert!(!dir.join("openmls_storage.json").exists());
-        assert!(!dir.join("device.json").exists());
-        let _ = fs::remove_dir_all(&dir);
+    fn local_state_failures_have_stable_codes() {
+        let base =
+            std::env::temp_dir().join(format!("chat_sdk_mls_state_codes_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+
+        let storage_dir = base.join("storage");
+        fs::create_dir_all(&storage_dir).expect("create storage dir");
+        let storage_blob = seal_state(&[1u8; 32], b"{}", STATE_AAD_STORAGE).expect("seal");
+        fs::write(storage_dir.join("openmls_storage.bin"), storage_blob).expect("write");
+        let storage_error = match super::load_provider(&storage_dir, &[2u8; 32]) {
+            Ok(_) => panic!("wrong storage key must fail"),
+            Err(error) => error,
+        };
+        assert!(storage_error.starts_with(ERROR_STORAGE_AUTH));
+
+        let invalid_dir = base.join("invalid");
+        fs::create_dir_all(&invalid_dir).expect("create invalid dir");
+        let invalid_blob = seal_state(&[3u8; 32], b"not-json", STATE_AAD_STORAGE).expect("seal");
+        fs::write(invalid_dir.join("openmls_storage.bin"), invalid_blob).expect("write");
+        let invalid_error = match super::load_provider(&invalid_dir, &[3u8; 32]) {
+            Ok(_) => panic!("invalid storage must fail"),
+            Err(error) => error,
+        };
+        assert!(invalid_error.starts_with(ERROR_STATE_INVALID));
+
+        let device_dir = base.join("device");
+        fs::create_dir_all(&device_dir).expect("create device dir");
+        let device_blob = seal_state(&[4u8; 32], b"{}", STATE_AAD_DEVICE).expect("seal");
+        fs::write(device_dir.join("device.bin"), device_blob).expect("write");
+        let provider = super::load_provider(&device_dir, &[5u8; 32]).expect("empty provider");
+        let device_error =
+            super::ensure_device_signer(&provider, &device_dir, "user-a", "device-a", &[5u8; 32])
+                .expect_err("wrong device key must fail");
+        assert!(device_error.starts_with(ERROR_DEVICE_AUTH));
+
+        fs::remove_dir_all(&base).expect("temporary state must be removed");
     }
 
     #[test]

@@ -45,6 +45,26 @@ class MlsStateStore {
     }
   }
 
+  /// 删除当前设备的全部 ChatSDK 密码状态并立即建立空目录。
+  ///
+  /// 调用方仍持有同一 [stateKey]，因此同一 `user_id + device_id` 会重新得到同一
+  /// HPKE 公开钥；OpenMLS 签名者、群状态和 pending 队列则从唯一空状态重建。
+  Future<void> reset() async {
+    final target = directory.absolute;
+    if (target.path == target.parent.path) {
+      throw StateError('ChatSDK 状态目录不能是文件系统根目录');
+    }
+    final type = await FileSystemEntity.type(target.path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      await Link(target.path).delete();
+    } else if (type == FileSystemEntityType.directory) {
+      await target.delete(recursive: true);
+    } else if (type != FileSystemEntityType.notFound) {
+      throw StateError('ChatSDK 状态路径必须是目录');
+    }
+    await target.create(recursive: true);
+  }
+
   File get _pendingFile => _pendingFileFor(directory);
 
   File get _pendingRekeyFile => _pendingRekeyFileFor(directory);

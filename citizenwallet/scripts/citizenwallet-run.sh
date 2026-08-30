@@ -30,12 +30,18 @@ esac
   echo "公民钱包本机编译只能在ProgramConsole中央源码快照中运行：$CITIZENWALLET_DIR" >&2
   exit 1
 }
-BUILD_DIR="$PROGRAM_CONSOLE_WORK_DIR/build"
+INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少ProgramConsole本机增量缓存目录}"
+[[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
+  echo "CitizenWallet本机增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
+  exit 1
+}
+BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
 ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenwallet"
 export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
-export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/android"
-export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/ios"
-export XDG_CONFIG_HOME="$PROGRAM_CONSOLE_WORK_DIR/flutter-config"
+export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
+export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
+export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
+export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
 mkdir -p "$XDG_CONFIG_HOME"
 build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$CITIZENWALLET_DIR")"
 flutter config --build-dir="$build_dir_relative" >/dev/null
@@ -49,9 +55,12 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
   exit 1
 }
 
-# 与CitizenApp相同，两个平台使用独立中央工作目录，产品仓库不得恢复`build/`。
+# 与CitizenApp相同，两个平台使用独立中央缓存，中间产物可复用但最终包必须重建。
 clean_platform_build_outputs() {
-  rm -rf "$BUILD_DIR"
+  case "$PLATFORM" in
+    ios) rm -rf "$BUILD_DIR/ios/iphoneos/Runner.app" ;;
+    android) rm -f "$BUILD_DIR/app/outputs/flutter-apk/"*.apk ;;
+  esac
   mkdir -p "$BUILD_DIR"
 }
 

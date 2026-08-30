@@ -1,4 +1,5 @@
 name: 公民网 · CI · Web
+# CI_CACHE_PROTOCOL: ci-v1
 run-name: 公民网 · CI · Web
 
 # 中文注释：官网是独立产品，使用自己的 workflow、版本和候选产物；CI 只构建静态网站，
@@ -22,6 +23,7 @@ env:
 
 jobs:
   check:
+    permissions: { actions: write, contents: read }
     name: 官网代码与正式构建检查
     runs-on: ubuntu-24.04
     steps:
@@ -30,6 +32,36 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenweb
+          CI_CACHE_PLATFORM: web
+          CI_CACHE_ARCHITECTURE: web
+          CI_CACHE_COMPONENT: check
+          CI_CACHE_WORKFLOW: citizenweb-web
+          CI_CACHE_JOB: check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            npm
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: ""
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -39,8 +71,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenweb/package-lock.json
 
       - name: 安装官网锁定依赖
         working-directory: citizenweb
@@ -85,3 +115,52 @@ jobs:
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: ${{ runner.temp }}/citizenweb-release.tgz
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune

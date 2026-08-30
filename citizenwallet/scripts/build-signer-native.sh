@@ -21,7 +21,9 @@ LIB_NAME="libcitizenwallet_signer"
 TARGET="${1:-all}"
 
 if [[ "$TARGET" == ios || "$TARGET" == android ]]; then
-  if [[ -n "${PROGRAM_CONSOLE_WORK_DIR:-}" ]]; then
+  if [[ -n "${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:-}" ]]; then
+    export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
+  elif [[ -n "${PROGRAM_CONSOLE_WORK_DIR:-}" ]]; then
     export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/cargo"
   elif [[ "${CI:-}" == true ]]; then
     export CARGO_TARGET_DIR="$RUST_DIR/target"

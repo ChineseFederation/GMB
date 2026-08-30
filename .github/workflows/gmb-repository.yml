@@ -1,8 +1,10 @@
 name: GMB · 全仓统一
+# RELEASE_BUILD_MODE: full-v1
+# CI_CACHE_PROTOCOL: ci-v1
 run-name: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
 
 # 中文注释：GitHub 只注册 workflows 顶层文件。本文件是唯一注册入口；分组目录下的
-# 24 份文件继续作为可审查的产品流水线真源，不移动、不复制成额外顶层文件。
+# 26 份文件继续作为可审查的产品流水线真源，不移动、不复制成额外顶层文件。
 on:
   push:
     branches:
@@ -78,8 +80,6 @@ env:
 jobs:
   validate_dispatch:
     if: ${{ github.event_name == 'workflow_dispatch' }}
-    permissions:
-      actions: read
     runs-on: ubuntu-24.04
     steps:
       - name: 校验统一入口路由身份
@@ -102,6 +102,8 @@ jobs:
             ['.github/workflows/citizenwallet/release-android.yml', '公民钱包 · Release · Android'],
             ['.github/workflows/citizensdk/ci-sdk.yml', '公民SDK · CI · SDK'],
             ['.github/workflows/citizensdk/release-sdk.yml', '公民SDK · Release · SDK'],
+            ['.github/workflows/chatsdk/ci-sdk.yml', '聊天SDK · CI · SDK'],
+            ['.github/workflows/chatsdk/release-sdk.yml', '聊天SDK · Release · SDK'],
             ['.github/workflows/citizenserve/ci-cloudflare.yml', '公民服务端 · CI · Cloudflare'],
             ['.github/workflows/citizenserve/release-cloudflare.yml', '公民服务端 · Release · Cloudflare'],
             ['.github/workflows/citizenweb/ci-web.yml', '公民网 · CI · Web'],
@@ -132,32 +134,6 @@ jobs:
             throw new Error('Release 必须指定成功 CI 的准确 source_sha');
           }
           NODE
-
-      - name: 校验产品 CI 的全仓成功基线
-        if: ${{ contains(inputs.pipeline, '/ci-') }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          gh api --paginate --slurp \
-            "repos/${REPOSITORY}/actions/workflows/gmb-repository.yml/runs?branch=main&per_page=100" \
-            | node -e '
-              let source = "";
-              process.stdin.setEncoding("utf8");
-              process.stdin.on("data", (chunk) => { source += chunk; });
-              process.stdin.on("end", () => {
-                const pages = JSON.parse(source);
-                const rows = pages.flatMap((page) => Array.isArray(page?.workflow_runs) ? page.workflow_runs : [])
-                  .filter((item) => item?.event === "push" || item?.display_title === "GMB · 全仓统一")
-                  .sort((left, right) => Number(right?.id || 0) - Number(left?.id || 0));
-                const latest = rows[0];
-                if (!latest || latest.status !== "completed" || latest.conclusion !== "success") {
-                  throw new Error("GMB 最近一次全仓门禁不是成功，禁止发起产品 CI");
-                }
-                process.stdout.write("GMB 全仓成功基线：" + latest.id + "\n");
-              });
-            '
 
   retain-current-run:
     permissions:
@@ -391,6 +367,7 @@ jobs:
   # ── 代码检查 ──
   citizenapp_ci_android__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -405,6 +382,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenapp
+          CI_CACHE_PLATFORM: android
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenapp-ci-android--check
+          CI_CACHE_WORKFLOW: citizenapp-android
+          CI_CACHE_JOB: citizenapp-ci-android--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            gradle
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenapp/smoldot/ffi/target=cargo-target
+            citizenapp/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-linux-android/release/libsmoldot.so
+            flutter-build/app/outputs/flutter-apk
+            flutter-build/app/outputs/bundle
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -452,8 +468,58 @@ jobs:
         run: ./scripts/citizenapp-test.sh
 
   # ── Android APK 打包 ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenapp_ci_android__android:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -468,6 +534,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenapp
+          CI_CACHE_PLATFORM: android
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenapp-ci-android--android
+          CI_CACHE_WORKFLOW: citizenapp-android
+          CI_CACHE_JOB: citizenapp-ci-android--android
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            gradle
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenapp/smoldot/ffi/target=cargo-target
+            citizenapp/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-linux-android/release/libsmoldot.so
+            flutter-build/app/outputs/flutter-apk
+            flutter-build/app/outputs/bundle
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -517,12 +622,6 @@ jobs:
       - name: 编译 smoldot native library (Android ARM64)
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh android
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-android"
-          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 安装 Flutter 依赖
         working-directory: citizenapp
@@ -590,8 +689,58 @@ jobs:
 
   # ── .github/workflows/citizenapp/ci-ios.yml ──
   # ── 代码检查 ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenapp_ci_ios__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -606,6 +755,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenapp
+          CI_CACHE_PLATFORM: ios
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenapp-ci-ios--check
+          CI_CACHE_WORKFLOW: citizenapp-ios
+          CI_CACHE_JOB: citizenapp-ci-ios--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            cocoapods
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenapp/smoldot/ffi/target=cargo-target
+            citizenapp/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-apple-ios/release/libsmoldot.a
+            flutter-build/ios/iphoneos/Runner.app
+            flutter-build/release-candidate
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -653,8 +841,58 @@ jobs:
         run: ./scripts/citizenapp-test.sh
 
   # ── Android APK 打包 ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenapp_ci_ios__ios:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -669,6 +907,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
           submodules: recursive
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenapp
+          CI_CACHE_PLATFORM: ios
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenapp-ci-ios--ios
+          CI_CACHE_WORKFLOW: citizenapp-ios
+          CI_CACHE_JOB: citizenapp-ci-ios--ios
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            cocoapods
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenapp/smoldot/ffi/target=cargo-target
+            citizenapp/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-apple-ios/release/libsmoldot.a
+            flutter-build/ios/iphoneos/Runner.app
+            flutter-build/release-candidate
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -715,12 +992,6 @@ jobs:
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh ios
 
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-ios"
-          workspaces: citizenapp/smoldot/ffi -> target
-
       - name: 构建 iOS Release 候选
         working-directory: citizenapp
         run: flutter build ios --release --no-codesign
@@ -765,7 +1036,57 @@ jobs:
 
   # ── .github/workflows/citizenapp/release-android.yml ──
   # Release 在同一个受控 runner 内完成构建、正式签名、验签和正式资产发布。
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenapp_release_android__android:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -838,6 +1159,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       - name: 安装 Java 17
@@ -864,12 +1186,6 @@ jobs:
       - name: 编译 smoldot native library (Android ARM64)
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh android
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-android"
-          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 安装 Flutter 依赖
         working-directory: citizenapp
@@ -1012,6 +1328,7 @@ jobs:
   # Release 在同一个 GitHub macOS runner 内完成构建、Apple Distribution 签名和 GitHub Release 固化；
   # App Store 发布只允许由本机编程控制台执行。
   citizenapp_release_ios__ios:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -1084,6 +1401,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       # 与 android job 同一道门禁：chainspec 是轻节点创世真源，两端都不得绕过。
@@ -1106,12 +1424,6 @@ jobs:
       - name: 编译 smoldot native library (iOS arm64)
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh ios
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-ios"
-          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 构建 iOS Release 正式包
         working-directory: citizenapp
@@ -1289,6 +1601,7 @@ jobs:
 
   citizenchain_ci_node_linux_amd__verify:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1305,6 +1618,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: linux-amd
+          CI_CACHE_ARCHITECTURE: x86-64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-linux-amd--verify
+          CI_CACHE_WORKFLOW: citizenchain-linux-amd
+          CI_CACHE_JOB: citizenchain-ci-node-linux-amd--verify
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
         with:
@@ -1325,11 +1674,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: |
-            shared/scanner-react/package-lock.json
-            citizenchain/node/frontend/package-lock.json
-            citizenchain/onchina/frontend/package-lock.json
 
       # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
       - name: 验证仓库级 React 扫码适配器
@@ -1337,12 +1681,6 @@ jobs:
           npm --prefix shared/scanner-react ci
           npm --prefix shared/scanner-react run check
           npm --prefix shared/scanner-react test
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: citizenchain-workspace
-          workspaces: citizenchain -> target
 
       - name: 校验宪法创世 SCALE 解码器
         run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
@@ -1374,13 +1712,58 @@ jobs:
       # 复用上一步已装好的依赖,不重复 npm ci。
       - name: 测试 OnChina 前端
         run: npm --prefix citizenchain/onchina/frontend test
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
-      - name: 清理本次 Rust 增量缓存
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
         if: ${{ success() }}
-        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_linux_amd__build_desktop:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1401,6 +1784,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: linux-amd
+          CI_CACHE_ARCHITECTURE: x86-64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-linux-amd--build-desktop
+          CI_CACHE_WORKFLOW: citizenchain-linux-amd
+          CI_CACHE_JOB: citizenchain-ci-node-linux-amd--build-desktop
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用节点候选版本
         shell: bash
         run: |
@@ -1427,8 +1846,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -1479,12 +1896,6 @@ jobs:
             echo "LIBCLANG_PATH=$(llvm-config --libdir)"
             echo "PROTOC=$(command -v protoc)"
           } >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 安装前端依赖并构建
         run: |
@@ -1541,6 +1952,55 @@ jobs:
           subject-path: citizenchain-release/*
 
   # ── .github/workflows/citizenchain/ci-node-linux-arm.yaml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_linux_arm__changes:
     env:
       GMB_NODE_PLATFORM: linux-arm
@@ -1581,6 +2041,7 @@ jobs:
 
   citizenchain_ci_node_linux_arm__verify:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1597,6 +2058,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: linux-arm
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-linux-arm--verify
+          CI_CACHE_WORKFLOW: citizenchain-linux-arm
+          CI_CACHE_JOB: citizenchain-ci-node-linux-arm--verify
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
         with:
@@ -1617,11 +2114,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: |
-            shared/scanner-react/package-lock.json
-            citizenchain/node/frontend/package-lock.json
-            citizenchain/onchina/frontend/package-lock.json
 
       # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
       - name: 验证仓库级 React 扫码适配器
@@ -1629,12 +2121,6 @@ jobs:
           npm --prefix shared/scanner-react ci
           npm --prefix shared/scanner-react run check
           npm --prefix shared/scanner-react test
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: citizenchain-workspace
-          workspaces: citizenchain -> target
 
       - name: 校验宪法创世 SCALE 解码器
         run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
@@ -1666,13 +2152,58 @@ jobs:
       # 复用上一步已装好的依赖,不重复 npm ci。
       - name: 测试 OnChina 前端
         run: npm --prefix citizenchain/onchina/frontend test
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
-      - name: 清理本次 Rust 增量缓存
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
         if: ${{ success() }}
-        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_linux_arm__build_desktop:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1693,6 +2224,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: linux-arm
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-linux-arm--build-desktop
+          CI_CACHE_WORKFLOW: citizenchain-linux-arm
+          CI_CACHE_JOB: citizenchain-ci-node-linux-arm--build-desktop
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用节点候选版本
         shell: bash
         run: |
@@ -1719,8 +2286,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -1771,12 +2336,6 @@ jobs:
             echo "LIBCLANG_PATH=$(llvm-config --libdir)"
             echo "PROTOC=$(command -v protoc)"
           } >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 安装前端依赖并构建
         run: |
@@ -1833,6 +2392,55 @@ jobs:
           subject-path: citizenchain-release/*
 
   # ── .github/workflows/citizenchain/ci-node-macos.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_macos__changes:
     env:
       GMB_NODE_PLATFORM: macos
@@ -1872,6 +2480,7 @@ jobs:
 
   citizenchain_ci_node_macos__verify:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1887,6 +2496,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: macos
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-macos--verify
+          CI_CACHE_WORKFLOW: citizenchain-macos
+          CI_CACHE_JOB: citizenchain-ci-node-macos--verify
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
         with:
@@ -1908,11 +2553,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: |
-            shared/scanner-react/package-lock.json
-            citizenchain/node/frontend/package-lock.json
-            citizenchain/onchina/frontend/package-lock.json
 
       # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
       - name: 验证仓库级 React 扫码适配器
@@ -1920,12 +2560,6 @@ jobs:
           npm --prefix shared/scanner-react ci
           npm --prefix shared/scanner-react run check
           npm --prefix shared/scanner-react test
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: citizenchain-workspace
-          workspaces: citizenchain -> target
 
       - name: 校验宪法创世 SCALE 解码器
         run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
@@ -1957,13 +2591,58 @@ jobs:
       # 复用上一步已装好的依赖,不重复 npm ci。
       - name: 测试 OnChina 前端
         run: npm --prefix citizenchain/onchina/frontend test
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
-      - name: 清理本次 Rust 增量缓存
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
         if: ${{ success() }}
-        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_macos__build_desktop:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -1983,6 +2662,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: macos
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-macos--build-desktop
+          CI_CACHE_WORKFLOW: citizenchain-macos
+          CI_CACHE_JOB: citizenchain-ci-node-macos--build-desktop
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain
+            cargo-target/release/onchina
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用节点候选版本
         shell: bash
         run: |
@@ -2009,8 +2724,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -2066,12 +2779,6 @@ jobs:
           # 有完整且可验证的签名。显式使用 Tauri 官方的 ad-hoc 身份，避免 bundler 自动
           # 生成只有资源封套声明、却缺少 CodeResources 的残缺签名。
           echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 安装前端依赖并构建
         run: |
@@ -2168,6 +2875,55 @@ jobs:
           subject-path: citizenchain-release/*
 
   # ── .github/workflows/citizenchain/ci-node-windows.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_windows__changes:
     env:
       GMB_NODE_PLATFORM: windows
@@ -2207,6 +2963,7 @@ jobs:
 
   citizenchain_ci_node_windows__verify:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -2222,6 +2979,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: windows
+          CI_CACHE_ARCHITECTURE: x86-64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-windows--verify
+          CI_CACHE_WORKFLOW: citizenchain-windows
+          CI_CACHE_JOB: citizenchain-ci-node-windows--verify
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain.exe
+            cargo-target/release/onchina.exe
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
         with:
@@ -2243,11 +3036,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: |
-            shared/scanner-react/package-lock.json
-            citizenchain/node/frontend/package-lock.json
-            citizenchain/onchina/frontend/package-lock.json
 
       # React 两端的扫码设备层独立于产品工程，必须先验证唯一 jsQR + canvas 路线。
       - name: 验证仓库级 React 扫码适配器
@@ -2255,12 +3043,6 @@ jobs:
           npm --prefix shared/scanner-react ci
           npm --prefix shared/scanner-react run check
           npm --prefix shared/scanner-react test
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: citizenchain-workspace
-          workspaces: citizenchain -> target
 
       - name: 校验宪法创世 SCALE 解码器
         run: python3 citizenchain/scripts/check-constitution-genesis.py --self-test
@@ -2292,13 +3074,58 @@ jobs:
       # 复用上一步已装好的依赖,不重复 npm ci。
       - name: 测试 OnChina 前端
         run: npm --prefix citizenchain/onchina/frontend test
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
-      - name: 清理本次 Rust 增量缓存
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
         if: ${{ success() }}
-        run: find citizenchain/target -type d -name incremental -prune -exec rm -rf {} +
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_node_windows__build_desktop:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -2318,6 +3145,42 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: windows
+          CI_CACHE_ARCHITECTURE: x86-64
+          CI_CACHE_COMPONENT: citizenchain-ci-node-windows--build-desktop
+          CI_CACHE_WORKFLOW: citizenchain-windows
+          CI_CACHE_JOB: citizenchain-ci-node-windows--build-desktop
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/bundle
+            cargo-target/release/citizenchain.exe
+            cargo-target/release/onchina.exe
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用节点候选版本
         shell: bash
         run: |
@@ -2344,8 +3207,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -2390,12 +3251,6 @@ jobs:
           choco install protoc -y
           choco install llvm -y
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> "$env:GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 安装前端依赖并构建
         run: |
@@ -2446,8 +3301,58 @@ jobs:
           subject-path: citizenchain-release/*
 
   # ── .github/workflows/citizenchain/ci-runtime-wasm.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_ci_runtime_wasm__build_wasm:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -2461,6 +3366,41 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenchain
+          CI_CACHE_PLATFORM: runtime-wasm
+          CI_CACHE_ARCHITECTURE: wasm
+          CI_CACHE_COMPONENT: citizenchain-ci-runtime-wasm--build-wasm
+          CI_CACHE_WORKFLOW: citizenchain-runtime-wasm
+          CI_CACHE_JOB: citizenchain-ci-runtime-wasm--build-wasm
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            npm
+            xdg
+          CI_CACHE_LINKS: |
+            citizenchain/target=cargo-target
+          CI_CACHE_FINALS: |
+            cargo-target/release/wbuild
+            cargo-target/release/citizenchain
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源与 Runtime 源码版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -2509,8 +3449,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 安装系统依赖
         # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，
@@ -2559,12 +3497,6 @@ jobs:
               ):
                   out.write(f"\n### {label}\n\n```\n{command_output(*command)}\n```\n")
           PY
-
-      - name: 删除全部旧编译产物
-        working-directory: citizenchain
-        run: |
-          rm -rf target
-          echo "已删除全部 target 目录，从零开始编译"
 
       - name: 校验正式 WASM 构建特性
         working-directory: citizenchain
@@ -2661,8 +3593,58 @@ jobs:
   # CI 诊断产物不进入正式 Release，也不作为链上升级来源。
 
   # ── .github/workflows/citizenchain/release-node-linux-amd.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenchain_release_node_linux_amd__changes:
     env:
+      CARGO_INCREMENTAL: "0"
       GMB_NODE_PLATFORM: linux-amd
     permissions:
       actions: read
@@ -2723,6 +3705,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"linux-amd","name":"LinuxAMD","os":"ubuntu-24.04","artifact":"公民链AMD","installer_name":"citizenchain-node-linux-amd64.deb","manual_bundle_targets":"deb,appimage","updater_asset_name":"citizenchain-node-linux-amd64.AppImage","updater_manifest_name":"citizenchain-node-latest-linux-amd64.json","expected_runner_arch":"X64","deb_arch":"amd64","cache_key":"citizenchain-linux-amd"}]' >> "$GITHUB_OUTPUT"
 
   citizenchain_release_node_linux_amd__build_desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -2782,8 +3765,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -2840,12 +3821,6 @@ jobs:
             echo "LIBCLANG_PATH=$(llvm-config --libdir)"
             echo "PROTOC=$(command -v protoc)"
           } >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         run: node release-tool/.github/scripts/citizenchain/release-node-linux-amd.mjs node-version lock "$GMB_SOFTWARE_VERSION"
@@ -2942,6 +3917,7 @@ jobs:
   # ── .github/workflows/citizenchain/release-node-linux-arm.yml ──
   citizenchain_release_node_linux_arm__changes:
     env:
+      CARGO_INCREMENTAL: "0"
       GMB_NODE_PLATFORM: linux-arm
     permissions:
       actions: read
@@ -3002,6 +3978,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"linux-arm","name":"LinuxARM","os":"ubuntu-24.04-arm","artifact":"公民链ARM","installer_name":"citizenchain-node-linux-arm64.deb","manual_bundle_targets":"deb,appimage","updater_asset_name":"citizenchain-node-linux-arm64.AppImage","updater_manifest_name":"citizenchain-node-latest-linux-arm64.json","expected_runner_arch":"ARM64","deb_arch":"arm64","cache_key":"citizenchain-linux-arm"}]' >> "$GITHUB_OUTPUT"
 
   citizenchain_release_node_linux_arm__build_desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -3061,8 +4038,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -3119,12 +4094,6 @@ jobs:
             echo "LIBCLANG_PATH=$(llvm-config --libdir)"
             echo "PROTOC=$(command -v protoc)"
           } >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         run: node release-tool/.github/scripts/citizenchain/release-node-linux-arm.mjs node-version lock "$GMB_SOFTWARE_VERSION"
@@ -3221,6 +4190,7 @@ jobs:
   # ── .github/workflows/citizenchain/release-node-macos.yml ──
   citizenchain_release_node_macos__changes:
     env:
+      CARGO_INCREMENTAL: "0"
       GMB_NODE_PLATFORM: macos
     permissions:
       actions: read
@@ -3280,6 +4250,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"macos","name":"macOS Apple","os":"macos-15","artifact":"公民链macOS","installer_name":"citizenchain-node-macos-arm64.dmg","manual_bundle_targets":"dmg","updater_asset_name":"citizenchain-node-macos-arm64.app.tar.gz","updater_manifest_name":"citizenchain-node-latest-macos-arm64.json","expected_runner_arch":"ARM64","cache_key":"citizenchain-macos-apple"}]' >> "$GITHUB_OUTPUT"
 
   citizenchain_release_node_macos__build_desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -3338,8 +4309,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -3401,12 +4370,6 @@ jobs:
           # 签名由本 workflow 的独立 Tauri 私钥完成。显式使用 Tauri 官方 ad-hoc 身份，避免 bundler 自动
           # 生成只有资源封套声明、却缺少 CodeResources 的残缺签名。
           echo 'APPLE_SIGNING_IDENTITY=-' >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         run: node release-tool/.github/scripts/citizenchain/release-node-macos.mjs node-version lock "$GMB_SOFTWARE_VERSION"
@@ -3543,6 +4506,7 @@ jobs:
   # ── .github/workflows/citizenchain/release-node-windows.yml ──
   citizenchain_release_node_windows__changes:
     env:
+      CARGO_INCREMENTAL: "0"
       GMB_NODE_PLATFORM: windows
     permissions:
       actions: read
@@ -3602,6 +4566,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"windows","name":"Windows","os":"windows-2025","artifact":"公民链Windows","installer_name":"citizenchain-node-windows-x86_64.exe","manual_bundle_targets":"nsis","updater_manifest_name":"citizenchain-node-latest-windows-x86_64.json","expected_runner_arch":"X64","cache_key":"citizenchain-windows"}]' >> "$GITHUB_OUTPUT"
 
   citizenchain_release_node_windows__build_desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -3660,8 +4625,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -3712,12 +4675,6 @@ jobs:
           choco install protoc -y
           choco install llvm -y
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> "$env:GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         # Windows 默认 shell 是 PowerShell；统一版本脚本使用 POSIX 环境变量语法，必须固定 Bash。
@@ -3804,6 +4761,7 @@ jobs:
 
   # ── .github/workflows/citizenchain/release-runtime-wasm.yml ──
   citizenchain_release_runtime_wasm__build_wasm:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -3915,8 +4873,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 安装系统依赖
         # NodeGuard 行为探针会编译完整 node/Tauri 宿主；依赖必须与 Linux 节点 CI 对齐，
@@ -4085,6 +5041,7 @@ jobs:
   # ── .github/workflows/citizenserve/ci-cloudflare.yml ──
   citizenserve_ci_cloudflare__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -4098,6 +5055,36 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenserve
+          CI_CACHE_PLATFORM: cloudflare
+          CI_CACHE_ARCHITECTURE: worker
+          CI_CACHE_COMPONENT: citizenserve-ci-cloudflare--check
+          CI_CACHE_WORKFLOW: citizenserve-cloudflare
+          CI_CACHE_JOB: citizenserve-ci-cloudflare--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            npm
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: ""
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -4107,8 +5094,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenserve/package-lock.json
 
       - name: 安装后端锁定依赖
         working-directory: citizenserve
@@ -4177,7 +5162,57 @@ jobs:
           subject-path: ${{ runner.temp }}/citizenserve-cloudflare-release.tgz
 
   # ── .github/workflows/citizenserve/release-cloudflare.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenserve_release_cloudflare__check:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -4237,8 +5272,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenserve/package-lock.json
 
       - name: 安装后端锁定依赖
         working-directory: citizenserve
@@ -4314,6 +5347,7 @@ jobs:
   # ── .github/workflows/citizenwallet/ci-android.yml ──
   citizenwallet_ci_android__build_apk:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -4328,6 +5362,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenwallet
+          CI_CACHE_PLATFORM: android
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenwallet-ci-android--build-apk
+          CI_CACHE_WORKFLOW: citizenwallet-android
+          CI_CACHE_JOB: citizenwallet-ci-android--build-apk
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            gradle
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenwallet/rust/target=cargo-target
+            citizenwallet/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-linux-android/release/libsmoldot.so
+            flutter-build/app/outputs/flutter-apk
+            flutter-build/app/outputs/bundle
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -4396,12 +5469,6 @@ jobs:
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh android
 
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-android"
-          workspaces: citizenwallet/rust -> target
-
       - name: 分析代码
         working-directory: citizenwallet
         run: flutter analyze --no-fatal-infos
@@ -4463,8 +5530,58 @@ jobs:
           subject-path: citizenwallet/build/app/outputs/flutter-apk/公民钱包-CI.apk
 
   # ── .github/workflows/citizenwallet/ci-ios.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenwallet_ci_ios__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -4479,6 +5596,45 @@ jobs:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
       # 全产品 Logo 只允许由 shared/branding/logo.png 唯一母版生成。
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenwallet
+          CI_CACHE_PLATFORM: ios
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenwallet-ci-ios--check
+          CI_CACHE_WORKFLOW: citizenwallet-ios
+          CI_CACHE_JOB: citizenwallet-ci-ios--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            cocoapods
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenwallet/rust/target=cargo-target
+            citizenwallet/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-apple-ios/release/libsmoldot.a
+            flutter-build/ios/iphoneos/Runner.app
+            flutter-build/release-candidate
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验 Logo 唯一真源派生物
         run: node scripts/generate-logo-assets.mjs --check
 
@@ -4543,9 +5699,58 @@ jobs:
       - name: 运行测试
         working-directory: citizenwallet
         run: flutter test
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
 
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenwallet_ci_ios__ios:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -4559,6 +5764,45 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenwallet
+          CI_CACHE_PLATFORM: ios
+          CI_CACHE_ARCHITECTURE: arm64
+          CI_CACHE_COMPONENT: citizenwallet-ci-ios--ios
+          CI_CACHE_WORKFLOW: citizenwallet-ios
+          CI_CACHE_JOB: citizenwallet-ci-ios--ios
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            cocoapods
+            flutter-build
+            xdg
+          CI_CACHE_LINKS: |
+            citizenwallet/rust/target=cargo-target
+            citizenwallet/build=flutter-build
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-apple-ios/release/libsmoldot.a
+            flutter-build/ios/iphoneos/Runner.app
+            flutter-build/release-candidate
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -4604,12 +5848,6 @@ jobs:
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh ios
 
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-ios"
-          workspaces: citizenwallet/rust -> target
-
       - name: 构建 iOS Release 候选
         working-directory: citizenwallet
         run: flutter build ios --release --no-codesign
@@ -4646,7 +5884,57 @@ jobs:
           subject-path: citizenwallet/build/release-candidate/ios/*.app.zip
 
   # ── .github/workflows/citizenwallet/release-android.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenwallet_release_android__build_apk:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -4713,6 +6001,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       - name: 安装 Java 17
@@ -4754,12 +6043,6 @@ jobs:
       - name: 编译原生签名库 (Android ARM64)
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh android
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-android"
-          workspaces: citizenwallet/rust -> target
 
       - name: 构建 Android Release 正式包
         working-directory: citizenwallet
@@ -4883,6 +6166,7 @@ jobs:
 
   # ── .github/workflows/citizenwallet/release-ios.yml ──
   citizenwallet_release_ios__ios:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -4960,6 +6244,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       # 与 build-apk 调同一个脚本：冷钱包离线签名，索引与链端脱节没有任何编译期信号。
@@ -4980,12 +6265,6 @@ jobs:
       - name: 编译原生签名库 (iOS arm64)
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh ios
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-ios"
-          workspaces: citizenwallet/rust -> target
 
       - name: 构建 iOS Release 正式包
         working-directory: citizenwallet
@@ -5121,6 +6400,7 @@ jobs:
   # ── .github/workflows/citizenweb/ci-web.yml ──
   citizenweb_ci_web__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -5134,6 +6414,36 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizenweb
+          CI_CACHE_PLATFORM: web
+          CI_CACHE_ARCHITECTURE: web
+          CI_CACHE_COMPONENT: citizenweb-ci-web--check
+          CI_CACHE_WORKFLOW: citizenweb-web
+          CI_CACHE_JOB: citizenweb-ci-web--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            npm
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: ""
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 校验代码来源并应用候选版本
         run: |
           test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
@@ -5143,8 +6453,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenweb/package-lock.json
 
       - name: 安装官网锁定依赖
         working-directory: citizenweb
@@ -5191,7 +6499,57 @@ jobs:
           subject-path: ${{ runner.temp }}/citizenweb-release.tgz
 
   # ── .github/workflows/citizenweb/release-web.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizenweb_release_web__check:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -5251,8 +6609,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenweb/package-lock.json
 
       - name: 安装官网锁定依赖
         working-directory: citizenweb
@@ -5306,6 +6662,7 @@ jobs:
   # ── .github/workflows/citizensdk/ci-sdk.yml ──
   citizensdk_ci_sdk__check:
     permissions:
+      actions: write
       contents: read
       id-token: write
       attestations: write
@@ -5319,6 +6676,46 @@ jobs:
         with:
           ref: ${{ env.GMB_SOURCE_SHA }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizensdk
+          CI_CACHE_PLATFORM: sdk
+          CI_CACHE_ARCHITECTURE: sdk
+          CI_CACHE_COMPONENT: citizensdk-ci-sdk--check
+          CI_CACHE_WORKFLOW: citizensdk-sdk
+          CI_CACHE_JOB: citizensdk-ci-sdk--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            native-work
+            dart-pub
+            gradle
+            cocoapods
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: |
+            cargo-target/release
+            native-work/cargo/aarch64-linux-android/release/libsmoldot.so
+            native-work/cargo/aarch64-apple-ios/release/libsmoldot.a
+            native-work/cargo/aarch64-apple-darwin/release/libsmoldot.dylib
+            native-work/cargo/x86_64-apple-darwin/release/libsmoldot.dylib
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装固定 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -5596,7 +6993,57 @@ jobs:
 
 
   # ── .github/workflows/citizensdk/release-sdk.yml ──
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
   citizensdk_release_sdk__check:
+    env: { CARGO_INCREMENTAL: "0" }
     permissions:
       actions: read
       contents: write
@@ -5671,6 +7118,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       - name: 安装 Java 17
@@ -5910,3 +7358,305 @@ jobs:
             --latest false \
             --assets "$RUNNER_TEMP/citizensdk/citizensdk.tgz" \
               "$candidate/citizensdk-release.json" "$candidate/SHA256SUMS"
+
+
+
+  # ── ChatSDK 独立 SDK 流程 ──
+  chatsdk_ci_sdk__check:
+    if: ${{ inputs.pipeline == '.github/workflows/chatsdk/ci-sdk.yml' && needs.validate_dispatch.result == 'success' }}
+    needs: validate_dispatch
+    permissions:
+      actions: write
+      contents: read
+      id-token: write
+      attestations: write
+    name: SDK 源码、原生核心与三端候选检查
+    runs-on: macos-15
+    steps:
+      - name: 拉取当前 main 代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: chatsdk
+          CI_CACHE_PLATFORM: sdk
+          CI_CACHE_ARCHITECTURE: sdk
+          CI_CACHE_COMPONENT: chatsdk-ci-sdk--check
+          CI_CACHE_WORKFLOW: chatsdk-sdk
+          CI_CACHE_JOB: chatsdk-ci-sdk--check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            dart-pub
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: |
+            cargo-target/aarch64-linux-android/release/libchat_sdk.so
+            cargo-target/aarch64-apple-ios/release/libchat_sdk.a
+            cargo-target/aarch64-apple-darwin/release/libchat_sdk.dylib
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
+      - name: 安装固定 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 25.2.1
+
+      - name: 校验代码来源与 ChatSDK 依赖作用域
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/chatsdk/ci-sdk.mjs dependencies check --scope chatsdk
+          node --test chatsdk/scripts/release.test.mjs
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5 # Rust 1.97.1
+        with:
+          targets: aarch64-linux-android,aarch64-apple-ios,aarch64-apple-darwin
+
+      - name: 安装固定 Cargo 审计工具
+        run: cargo install cargo-audit --version 0.22.2 --locked
+
+      - name: 读取 Flutter 版本
+        id: flutter-version
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          from pathlib import Path
+
+          value = json.loads(Path('.github/dependencies.json').read_text(encoding='utf-8'))
+          print(f"version={value['toolchains']['flutter']}")
+          PY
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ steps.flutter-version.outputs.version }}
+
+      - name: 配置 Android SDK
+        uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+
+      - name: 安装固定 Android NDK
+        run: sdkmanager "ndk;28.2.13676358"
+
+      - name: 建立 ChatSDK 隔离构建源码
+        run: |
+          build_source="$RUNNER_TEMP/chatsdk/build-source"
+          test ! -e "$build_source"
+          mkdir -p "$(dirname "$build_source")"
+          /usr/bin/ditto chatsdk "$build_source"
+
+      - name: 检查 Dart、Flutter 与 Rust 源码
+        working-directory: ${{ runner.temp }}/chatsdk/build-source
+        run: |
+          flutter pub get --enforce-lockfile
+          dart format --output=none --set-exit-if-changed lib test
+          flutter analyze
+          cargo test --manifest-path native/Cargo.toml --all-targets --locked
+          flutter test
+
+      - name: 执行 ChatSDK 依赖安全审计
+        run: node .github/scripts/chatsdk/ci-sdk.mjs dependencies audit --scope chatsdk
+
+      - name: 构建 Android、iOS 与 macOS ARM64 原生核心
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+          CARGO_TARGET_DIR: $CI_INCREMENTAL_ROOT/cargo-target
+        run: |
+          build_source="$RUNNER_TEMP/chatsdk/build-source"
+          native_output="$RUNNER_TEMP/chatsdk/native"
+          ndk_host="$(find "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+          test -x "$ndk_host/bin/aarch64-linux-android24-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$ndk_host/bin/aarch64-linux-android24-clang"
+          export CC_aarch64_linux_android="$ndk_host/bin/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$ndk_host/bin/llvm-ar"
+          cargo build --manifest-path "$build_source/native/Cargo.toml" --target aarch64-linux-android --release --locked
+          cargo build --manifest-path "$build_source/native/Cargo.toml" --target aarch64-apple-ios --release --locked
+          cargo build --manifest-path "$build_source/native/Cargo.toml" --target aarch64-apple-darwin --release --locked
+          mkdir -p "$native_output/android" "$native_output/ios" "$native_output/macos"
+          cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/libchat_sdk.so" "$native_output/android/libchat_sdk.so"
+          cp "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libchat_sdk.a" "$native_output/ios/libchat_sdk.a"
+          cp "$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libchat_sdk.dylib" "$native_output/macos/libchat_sdk.dylib"
+          printf '%s\n' "$GMB_SOURCE_SHA" > "$RUNNER_TEMP/chatsdk/source-sha.txt"
+
+      - name: 上传 ChatSDK 三端原生候选
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ChatSDK-CI
+          path: |
+            ${{ runner.temp }}/chatsdk/native/android/libchat_sdk.so
+            ${{ runner.temp }}/chatsdk/native/ios/libchat_sdk.a
+            ${{ runner.temp }}/chatsdk/native/macos/libchat_sdk.dylib
+            ${{ runner.temp }}/chatsdk/source-sha.txt
+          retention-days: 30
+          overwrite: true
+          if-no-files-found: error
+
+      - name: 签署 ChatSDK 三端原生候选构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/chatsdk/native/android/libchat_sdk.so
+            ${{ runner.temp }}/chatsdk/native/ios/libchat_sdk.a
+            ${{ runner.temp }}/chatsdk/native/macos/libchat_sdk.dylib
+            ${{ runner.temp }}/chatsdk/source-sha.txt
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune
+  chatsdk_release_sdk__check:
+    env: { CARGO_INCREMENTAL: "0" }
+    if: ${{ inputs.pipeline == '.github/workflows/chatsdk/release-sdk.yml' && needs.validate_dispatch.result == 'success' }}
+    needs: validate_dispatch
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    name: SDK 正式三件套验真与固化
+    runs-on: macos-15
+    steps:
+      - name: 拉取成功 CI 的代码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+
+      - name: 拉取 Release 事务工具
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          path: release-tool
+          sparse-checkout: |
+            .github/scripts/chatsdk/release-sdk.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: 安装固定 Node.js
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 25.2.1
+
+      - name: 验证 ChatSDK Release 来源与版本 Tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node release-tool/.github/scripts/chatsdk/release-sdk.mjs version-tag verify-release-source
+          --ci-run-id "$GMB_CI_RUN_ID"
+          --version-tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA"
+          --software-version "$GMB_SOFTWARE_VERSION"
+          --prefix chatsdk-v --product-id chatsdk
+          --target sdk --workflow chatsdk/ci-sdk.yml
+
+      - name: 校验 ChatSDK 依赖作用域与发布闭集
+        run: |
+          test "$(git rev-parse HEAD)" = "$GMB_SOURCE_SHA"
+          node .github/scripts/chatsdk/release-sdk.mjs dependencies check --scope chatsdk
+          node --test chatsdk/scripts/release.test.mjs
+
+      - name: 下载准确成功 CI 的三端原生候选
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          native_root="$RUNNER_TEMP/chatsdk/ci"
+          mkdir -p "$native_root"
+          gh run download "$GMB_CI_RUN_ID" --name ChatSDK-CI --dir "$native_root"
+          test "$(cat "$native_root/source-sha.txt")" = "$GMB_SOURCE_SHA"
+          test -s "$native_root/native/android/libchat_sdk.so"
+          test -s "$native_root/native/ios/libchat_sdk.a"
+          test -s "$native_root/native/macos/libchat_sdk.dylib"
+
+      - name: 生成并复核 ChatSDK 正式三件套
+        run: |
+          output="$RUNNER_TEMP/chatsdk/release"
+          node chatsdk/scripts/release.mjs \
+            --source chatsdk \
+            --native "$RUNNER_TEMP/chatsdk/ci/native" \
+            --output "$output" \
+            --archive "$output/chatsdk.tgz" \
+            --git-sha "$GMB_SOURCE_SHA" \
+            --software-version "$GMB_SOFTWARE_VERSION"
+          node chatsdk/scripts/release.mjs --verify-assets "$output" \
+            --expected-git-sha "$GMB_SOURCE_SHA" \
+            --software-version "$GMB_SOFTWARE_VERSION"
+
+      - name: 签署 ChatSDK 正式三件套构建来源
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-path: |
+            ${{ runner.temp }}/chatsdk/release/chatsdk.tgz
+            ${{ runner.temp }}/chatsdk/release/chatsdk-release.json
+            ${{ runner.temp }}/chatsdk/release/SHA256SUMS
+
+      - name: 固化 ChatSDK 正式 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          output="$RUNNER_TEMP/chatsdk/release"
+          test "$(git -C release-tool rev-parse HEAD)" = "$GITHUB_SHA"
+          node release-tool/.github/scripts/chatsdk/release-sdk.mjs github-release \
+            --tag "$GMB_VERSION_TAG" --source-sha "$GMB_SOURCE_SHA" \
+            --title '聊天SDK · Release · SDK' \
+            --notes "聊天SDK ${GMB_SOFTWARE_VERSION}，包含 Android ARM64、iOS ARM64 与 macOS ARM64。\n+              GMB_RELEASE_CI_RUN_ID:${GMB_CI_RUN_ID}\n+              GMB_RELEASE_RUN_ID:${GITHUB_RUN_ID}" \
+            --latest false \
+            --assets "$output/chatsdk.tgz" \
+              "$output/chatsdk-release.json" "$output/SHA256SUMS"

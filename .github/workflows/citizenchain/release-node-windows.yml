@@ -1,4 +1,5 @@
 name: 公民链 · Release · Windows
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民链 · Release · Windows
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
@@ -49,6 +50,7 @@ env:
 
 jobs:
   changes:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 锁定公民链节点构建范围
     runs-on: ubuntu-24.04
     outputs:
@@ -100,6 +102,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"windows","name":"Windows","os":"windows-2025","artifact":"公民链Windows","installer_name":"citizenchain-node-windows-x86_64.exe","manual_bundle_targets":"nsis","updater_manifest_name":"citizenchain-node-latest-windows-x86_64.json","expected_runner_arch":"X64","cache_key":"citizenchain-windows"}]' >> "$GITHUB_OUTPUT"
 
   build-desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: changes
     # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
@@ -153,8 +156,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -205,12 +206,6 @@ jobs:
           choco install protoc -y
           choco install llvm -y
           echo "LIBCLANG_PATH=C:\Program Files\LLVM\lib" >> "$env:GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         # Windows 默认 shell 是 PowerShell；统一版本脚本使用 POSIX 环境变量语法，必须固定 Bash。

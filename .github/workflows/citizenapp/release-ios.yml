@@ -1,4 +1,5 @@
 name: 公民 · Release · iOS
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民 · Release · iOS
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
@@ -45,6 +46,7 @@ jobs:
   # Release 在同一个 GitHub macOS runner 内完成构建、Apple Distribution 签名和 GitHub Release 固化；
   # App Store 发布只允许由本机编程控制台执行。
   ios:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 签名并固化公民 iOS Release
     runs-on: macos-15
     steps:
@@ -110,6 +112,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       # 与 android job 同一道门禁：chainspec 是轻节点创世真源，两端都不得绕过。
@@ -132,12 +135,6 @@ jobs:
       - name: 编译 smoldot native library (iOS arm64)
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh ios
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-ios"
-          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 构建 iOS Release 正式包
         working-directory: citizenapp

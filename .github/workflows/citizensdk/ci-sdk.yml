@@ -1,4 +1,5 @@
 name: 公民SDK · CI · SDK
+# CI_CACHE_PROTOCOL: ci-v1
 run-name: 公民SDK · CI · SDK
 
 # 中文注释：CitizenSDK 是单一产品和单一版本线；当前候选只交付已实现的 Android ARM64
@@ -24,6 +25,7 @@ env:
 
 jobs:
   check:
+    permissions: { actions: write, contents: read }
     name: SDK 源码、原生核心与候选检查
     runs-on: macos-15
     steps:
@@ -32,6 +34,46 @@ jobs:
         with:
           ref: ${{ github.sha }}
 
+      - name: 准备统一CI增量缓存
+        id: ci_cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_PRODUCT: citizensdk
+          CI_CACHE_PLATFORM: sdk
+          CI_CACHE_ARCHITECTURE: sdk
+          CI_CACHE_COMPONENT: check
+          CI_CACHE_WORKFLOW: citizensdk-sdk
+          CI_CACHE_JOB: check
+          CI_CACHE_TOOLCHAIN_FINGERPRINT: ${{ hashFiles('.github/dependencies.json', 'Cargo.lock', '**/Cargo.lock', '**/pubspec.lock', '**/package-lock.json') }}
+          CI_CACHE_PATHS: |
+            cargo-home
+            cargo-target
+            native-work
+            dart-pub
+            gradle
+            cocoapods
+            xdg
+          CI_CACHE_LINKS: ""
+          CI_CACHE_FINALS: |
+            cargo-target/release
+            native-work/cargo/aarch64-linux-android/release/libsmoldot.so
+            native-work/cargo/aarch64-apple-ios/release/libsmoldot.a
+            native-work/cargo/aarch64-apple-darwin/release/libsmoldot.dylib
+            native-work/cargo/x86_64-apple-darwin/release/libsmoldot.dylib
+        run: node .github/scripts/ci-cache.mjs prepare
+
+      - name: 恢复上一次成功的CI增量缓存
+        continue-on-error: true
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.restore_key }}
+
+      - name: 接入受控生成目录
+        run: node .github/scripts/ci-cache.mjs wire
+
+      - name: 清理缓存中的最终产物
+        run: node .github/scripts/ci-cache.mjs sanitize
       - name: 安装固定 Node.js
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -306,3 +348,52 @@ jobs:
             ${{ runner.temp }}/citizensdk/citizensdk.tgz
             ${{ runner.temp }}/citizensdk/candidate/citizensdk-release.json
             ${{ runner.temp }}/citizensdk/candidate/SHA256SUMS
+      - name: 记录失败CI增量缓存
+        if: ${{ failure() && !cancelled() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: failure
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次失败的CI增量缓存
+        id: ci_cache_save_failure
+        if: ${{ failure() && !cancelled() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.failure_paths }}
+          key: ${{ steps.ci_cache.outputs.failure_key }}
+
+      - name: 清理旧失败CI增量缓存
+        if: ${{ failure() && !cancelled() && steps.ci_cache_save_failure.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: failure
+        run: node .github/scripts/ci-cache.mjs prune
+
+      - name: 准备成功CI增量缓存
+        if: ${{ success() }}
+        env:
+          CI_CACHE_TERMINAL_STATE: success
+        run: |
+          node .github/scripts/ci-cache.mjs sanitize
+          node .github/scripts/ci-cache.mjs record
+
+      - name: 保存本次成功的CI增量缓存
+        id: ci_cache_save_success
+        if: ${{ success() }}
+        continue-on-error: true
+        uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: ${{ steps.ci_cache.outputs.success_paths }}
+          key: ${{ steps.ci_cache.outputs.success_key }}
+
+      - name: 清理旧成功CI增量缓存
+        if: ${{ success() && steps.ci_cache_save_success.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_CACHE_TERMINAL_STATE: success
+        run: node .github/scripts/ci-cache.mjs prune

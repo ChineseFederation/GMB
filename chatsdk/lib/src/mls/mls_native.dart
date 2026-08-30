@@ -659,7 +659,12 @@ DynamicLibrary _loadChatSdkLibrary() {
 /// native 路径、Dart `Bad state` 前缀或不可控底层文本直接交给用户。
 enum MlsNativeErrorCode {
   stateOwnerMismatch,
-  stateUnreadable,
+  storageReadFailed,
+  storageAuthFailed,
+  deviceReadFailed,
+  deviceAuthFailed,
+  stateInvalid,
+  signerMissing,
   libraryUnavailable,
   invalidRequest,
   invalidResponse,
@@ -673,10 +678,23 @@ class MlsNativeException implements Exception {
     if (message.contains('CHAT_MLS_STATE_OWNER_MISMATCH')) {
       return MlsNativeException(MlsNativeErrorCode.stateOwnerMismatch, message);
     }
-    if (message.contains('OpenMLS storage') ||
-        message.contains('MLS 状态') ||
-        message.contains('MLS 设备记录')) {
-      return MlsNativeException(MlsNativeErrorCode.stateUnreadable, message);
+    if (message.contains('CHAT_MLS_STORAGE_READ_FAILED')) {
+      return MlsNativeException(MlsNativeErrorCode.storageReadFailed, message);
+    }
+    if (message.contains('CHAT_MLS_STORAGE_AUTH_FAILED')) {
+      return MlsNativeException(MlsNativeErrorCode.storageAuthFailed, message);
+    }
+    if (message.contains('CHAT_MLS_DEVICE_READ_FAILED')) {
+      return MlsNativeException(MlsNativeErrorCode.deviceReadFailed, message);
+    }
+    if (message.contains('CHAT_MLS_DEVICE_AUTH_FAILED')) {
+      return MlsNativeException(MlsNativeErrorCode.deviceAuthFailed, message);
+    }
+    if (message.contains('CHAT_MLS_STATE_INVALID')) {
+      return MlsNativeException(MlsNativeErrorCode.stateInvalid, message);
+    }
+    if (message.contains('CHAT_MLS_SIGNER_MISSING')) {
+      return MlsNativeException(MlsNativeErrorCode.signerMissing, message);
     }
     return MlsNativeException(MlsNativeErrorCode.operationFailed, message);
   }
@@ -684,9 +702,41 @@ class MlsNativeException implements Exception {
   final MlsNativeErrorCode code;
   final String technicalMessage;
 
+  /// 只有本机 ChatSDK 状态自身无法认证或解析时才允许清空 Chat 域重建。
+  bool get requiresStateReset => switch (code) {
+    MlsNativeErrorCode.stateOwnerMismatch ||
+    MlsNativeErrorCode.storageReadFailed ||
+    MlsNativeErrorCode.storageAuthFailed ||
+    MlsNativeErrorCode.deviceReadFailed ||
+    MlsNativeErrorCode.deviceAuthFailed ||
+    MlsNativeErrorCode.stateInvalid ||
+    MlsNativeErrorCode.signerMissing => true,
+    _ => false,
+  };
+
+  /// 脱敏诊断只记录该稳定码，不记录用户、账户、路径、密钥或底层文本。
+  String get diagnosticCode => switch (code) {
+    MlsNativeErrorCode.stateOwnerMismatch => 'state_owner_mismatch',
+    MlsNativeErrorCode.storageReadFailed => 'storage_read_failed',
+    MlsNativeErrorCode.storageAuthFailed => 'storage_auth_failed',
+    MlsNativeErrorCode.deviceReadFailed => 'device_read_failed',
+    MlsNativeErrorCode.deviceAuthFailed => 'device_auth_failed',
+    MlsNativeErrorCode.stateInvalid => 'state_invalid',
+    MlsNativeErrorCode.signerMissing => 'signer_missing',
+    MlsNativeErrorCode.libraryUnavailable => 'library_unavailable',
+    MlsNativeErrorCode.invalidRequest => 'invalid_request',
+    MlsNativeErrorCode.invalidResponse => 'invalid_response',
+    MlsNativeErrorCode.operationFailed => 'operation_failed',
+  };
+
   String get userMessage => switch (code) {
     MlsNativeErrorCode.stateOwnerMismatch => '当前用户身份的聊天设备状态属于其他用户，请重新切换账户后再试',
-    MlsNativeErrorCode.stateUnreadable => '当前 用户身份 的聊天加密状态无法读取，请勿清除应用数据并稍后重试',
+    MlsNativeErrorCode.storageReadFailed ||
+    MlsNativeErrorCode.storageAuthFailed ||
+    MlsNativeErrorCode.deviceReadFailed ||
+    MlsNativeErrorCode.deviceAuthFailed ||
+    MlsNativeErrorCode.stateInvalid ||
+    MlsNativeErrorCode.signerMissing => '当前用户身份的聊天加密状态无法恢复，请重新进入公民',
     MlsNativeErrorCode.libraryUnavailable => '聊天安全组件加载失败，请重新安装当前版本',
     MlsNativeErrorCode.invalidRequest ||
     MlsNativeErrorCode.invalidResponse ||
@@ -696,6 +746,10 @@ class MlsNativeException implements Exception {
   @override
   String toString() => technicalMessage;
 }
+
+/// 返回可持久记录的脱敏错误码；非 native 错误统一收敛，不读取异常原文。
+String chatSdkDiagnosticCode(Object error) =>
+    error is MlsNativeException ? error.diagnosticCode : 'operation_failed';
 
 /// 将 Chat/OpenMLS 异常收敛为可公开展示的固定中文文案。
 ///

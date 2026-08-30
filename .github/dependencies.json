@@ -215,6 +215,23 @@
         ".github/scripts/citizenweb/ci-web.mjs",
         ".github/scripts/citizenweb/release-web.mjs"
       ]
+    },
+    "chatsdk": {
+      "workflows": [
+        ".github/workflows/chatsdk/ci-sdk.yml",
+        ".github/workflows/chatsdk/release-sdk.yml"
+      ],
+      "requiredFiles": [
+        "chatsdk/pubspec.yaml",
+        "chatsdk/pubspec.lock",
+        "chatsdk/native/Cargo.toml",
+        "chatsdk/native/Cargo.lock",
+        "chatsdk/README.md",
+        "chatsdk/scripts/release.mjs",
+        "chatsdk/scripts/release.test.mjs",
+        ".github/scripts/chatsdk/ci-sdk.mjs",
+        ".github/scripts/chatsdk/release-sdk.mjs"
+      ]
     }
   },
   "npmProjects": [
@@ -231,7 +248,8 @@
     "citizensdk",
     "citizenwallet",
     "shared/hardware-secretvault",
-    "shared/wallet-password"
+    "shared/wallet-password",
+    "chatsdk"
   ],
   "cargoProjects": [
     ".",
@@ -241,13 +259,15 @@
     "citizensdk",
     "citizensdk/native/smoldot/ffi",
     "citizensdk/native/smoldot/pow",
-    "citizenwallet/rust"
+    "citizenwallet/rust",
+    "chatsdk/native"
   ],
   "auditedScopes": [
     "citizensdk",
     "citizenserve",
     "citizenwallet",
-    "citizenweb"
+    "citizenweb",
+    "chatsdk"
   ],
   "sharedDartDependencies": [
     "polkadart_keyring",

@@ -70,6 +70,35 @@ void main() {
     );
   }, skip: skip);
 
+  test('native 状态重建保持同一设备 HPKE 公钥', () async {
+    final root = await Directory.systemTemp.createTemp('gmb-chat-reset-');
+    addTearDown(() async {
+      if (await root.exists()) await root.delete(recursive: true);
+    });
+    final store = MlsStateStore(
+      Directory('${root.path}/alice'),
+      ownerUserId: _aliceCidNumber,
+      stateKey: Uint8List.fromList(_testStateKey),
+    );
+    const identity = ChatDevice(
+      userId: _aliceCidNumber,
+      deviceId: 'alice-phone',
+      devicePublicKey: '00',
+    );
+    final first = await NativeMlsCrypto(
+      identity: identity,
+      stateStore: store,
+    ).readDevicePublicKey(identity);
+
+    await store.reset();
+
+    final second = await NativeMlsCrypto(
+      identity: identity,
+      stateStore: store,
+    ).readDevicePublicKey(identity);
+    expect(second, first);
+  }, skip: skip);
+
   test(
     'native HPKE uses the recipient device key for every direct message',
     () async {

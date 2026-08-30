@@ -1542,13 +1542,13 @@ test5("Release 公共工具禁止预建 Tag 并精确锚定成功 CI 源提交",
   assert5.match(source, /async deleteTag/);
   assert5.match(source, /Tag 回滚失败/);
 });
-test5("GitHub \u53EA\u4FDD\u7559 24 \u6761 CI/Release workflow\uFF0C\u4E0D\u5B58\u5728\u8FDC\u7A0B\u53D1\u5E03\u5165\u53E3", () => {
+test5("GitHub \u53EA\u4FDD\u7559 26 \u6761 CI/Release workflow\uFF0C\u4E0D\u5B58\u5728\u8FDC\u7A0B\u53D1\u5E03\u5165\u53E3", () => {
   const repositoryRoot = new URL("../../../", import.meta.url);
   const contract = JSON.parse(readFileSync7(new URL(".github/dependencies.json", repositoryRoot), "utf8"));
   const productWorkflows = Object.entries(contract.scopes)
     .filter(([name]) => name !== "repository")
     .flatMap(([, scope]) => scope.workflows);
-  assert5.equal(productWorkflows.length, 24);
+  assert5.equal(productWorkflows.length, 26);
   assert5.ok(productWorkflows.every((workflow) => /\/(?:ci|release)-[^/]+\.ya?ml$/.test(workflow)));
   for (const path of [
     ".github/workflows/citizenapp/publish-android.yml",
@@ -1591,7 +1591,7 @@ test5("iOS Release \u4E0D\u4F9D\u8D56 runner \u94A5\u5319\u4E32\u89E3\u5305\u63C
     assert5.doesNotMatch(source, /security cms -D/);
   }
 });
-test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\u95E8\u7981\u5E76\u8DEF\u7531 24 \u6761\u5206\u7EC4\u4EA7\u54C1\u6D41\u6C34\u7EBF", () => {
+test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\u95E8\u7981\u5E76\u8DEF\u7531 26 \u6761\u5206\u7EC4\u4EA7\u54C1\u6D41\u6C34\u7EBF", () => {
   const workflowsUrl = new URL("../../workflows/", import.meta.url);
   const repositoryWorkflow = "gmb-repository.yml";
   const repositorySource = readFileSync7(new URL(repositoryWorkflow, workflowsUrl), "utf8");
@@ -1610,10 +1610,8 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   assert5.match(repositorySource, /retain-terminal-run:/);
   assert5.match(repositorySource, /continue-on-error: true/);
   assert5.match(repositorySource, /success_count[\s\S]*failure_count/);
-  assert5.match(repositorySource, /校验产品 CI 的全仓成功基线/);
-  assert5.match(repositorySource, /actions\/workflows\/gmb-repository\.yml\/runs\?branch=main/);
-  assert5.match(repositorySource, /latest\.status !== "completed" \|\| latest\.conclusion !== "success"/);
-  assert5.match(repositorySource, /GMB 最近一次全仓门禁不是成功，禁止发起产品 CI/);
+  assert5.doesNotMatch(repositorySource, /校验产品 CI 的全仓成功基线/);
+  assert5.doesNotMatch(repositorySource, /最近一次全仓门禁不是成功，禁止发起产品 CI/);
   assert5.ok(repositorySource.includes('.conclusion // \\"failure\\"'));
   assert5.match(repositorySource, /actions\/artifacts\/\$\{artifact_id\}/);
   assert5.match(repositorySource, /actions\/runs\/\$\{run_id\}/);
@@ -1643,7 +1641,7 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
   const productWorkflows = Object.entries(contract.scopes)
     .filter(([name]) => name !== "repository")
     .flatMap(([, scope]) => scope.workflows);
-  assert5.equal(productWorkflows.length, 24);
+  assert5.equal(productWorkflows.length, 26);
   for (const workflow of productWorkflows) {
     assert5.ok(repositorySource.includes(`inputs.pipeline == '${workflow}'`), `\u7EDF\u4E00\u5165\u53E3\u7F3A\u5C11\u8DEF\u7531\uFF1A${workflow}`);
   }
@@ -1659,6 +1657,28 @@ test5("\u9876\u5C42\u552F\u4E00\u6CE8\u518C\u5165\u53E3\u4FDD\u7559\u4ED3\u5E93\
     ]) assert5.ok(!source.includes(command), `${file} \u7981\u6B62\u91CD\u590D\u8C03\u7528\u4ED3\u5E93\u95E8\u7981 ${command}`);
   }
 });
+test5("ChatSDK 保持独立分组动作、三件套Release且没有发布入口", () => {
+  const root = new URL("../../../", import.meta.url);
+  const ci = readFileSync7(new URL(".github/workflows/chatsdk/ci-sdk.yml", root), "utf8");
+  const release = readFileSync7(new URL(".github/workflows/chatsdk/release-sdk.yml", root), "utf8");
+  const central = readFileSync7(new URL(".github/workflows/gmb-repository.yml", root), "utf8");
+  const ciScript = readFileSync7(new URL(".github/scripts/chatsdk/ci-sdk.mjs", root), "utf8");
+  const releaseScript = readFileSync7(new URL(".github/scripts/chatsdk/release-sdk.mjs", root), "utf8");
+  const packaging = readFileSync7(new URL("chatsdk/scripts/release.mjs", root), "utf8");
+  assert5.match(ci, /^name: 聊天SDK · CI · SDK/m);
+  assert5.match(release, /^name: 聊天SDK · Release · SDK/m);
+  assert5.doesNotMatch(ci, /software_version:|source_sha:/);
+  assert5.match(release, /gh run download "\$GMB_CI_RUN_ID" --name ChatSDK-CI/);
+  assert5.match(release, /chatsdk\.tgz[\s\S]*chatsdk-release\.json[\s\S]*SHA256SUMS/);
+  assert5.match(central, /^  chatsdk_ci_sdk__check:/m);
+  assert5.match(central, /^  chatsdk_release_sdk__check:/m);
+  assert5.match(central, /inputs\.pipeline == '\.github\/workflows\/chatsdk\/ci-sdk\.yml'/);
+  assert5.match(central, /inputs\.pipeline == '\.github\/workflows\/chatsdk\/release-sdk\.yml'/);
+  assert5.equal(existsSync7(new URL(".github/workflows/chatsdk/publish-sdk.yml", root)), false);
+  assert5.doesNotMatch(`${ciScript}\n${releaseScript}`, /citizensdk|CitizenSDK|公民SDK/);
+  assert5.match(packaging, /const RELEASE_ASSETS = \[ARCHIVE_NAME, MANIFEST_NAME, CHECKSUMS_NAME\]/);
+});
+
 test5("\u516C\u5F00\u4ED3\u5E93\u95E8\u7981\u7981\u6B62\u65B0\u589E\u660E\u6587\u7F51\u7EDC\u534F\u8BAE", () => {
   const source = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
   assert5.match(source, /\u660E\u6587\u7F51\u7EDC\u534F\u8BAE/);
@@ -1968,15 +1988,15 @@ test5("CitizenApp Android 本机只接管固定中央 Gradle 产物", () => {
   assert5.match(localRun, /if ! flutter build apk[\s\S]*\[\[ -f "\$ANDROID_APK" \]\]/);
   assert5.doesNotMatch(localRun, /find [^\n]*app-release\.apk|cp [^\n]*ANDROID_APK[^\n]*build\//);
 });
-test5("CitizenApp \u5BBF\u4E3B\u6D4B\u8BD5\u53EA\u4ECE smoldot/ffi \u65B0\u76EE\u5F55\u52A0\u8F7D\u539F\u751F\u5E93", () => {
+test5("CitizenApp轻节点与ChatSDK聊天原生库分别从各自目录加载", () => {
   const platform = readFileSync7(new URL("../../../citizenapp/smoldot/dart/lib/src/platform.dart", import.meta.url), "utf8");
-  const mls = readFileSync7(new URL("../../../citizenapp/lib/chat/crypto/mls_native.dart", import.meta.url), "utf8");
+  const mls = readFileSync7(new URL("../../../chatsdk/lib/src/mls/mls_native.dart", import.meta.url), "utf8");
   const testEntry = readFileSync7(new URL("../../../citizenapp/scripts/citizenapp-test.sh", import.meta.url), "utf8");
   assert5.ok(platform.includes("'smoldot',\n        'ffi',\n        'target',\n        'release'"));
   assert5.ok(platform.includes("'..', 'ffi', 'target', 'release'"));
-  // 中文注释：只锁定目录段顺序，不把 Dart 格式化后的换行方式误当成目录变更。
-  assert5.match(mls, /'smoldot',\s*'ffi',\s*'target',\s*'release'/u);
-  assert5.doesNotMatch(`${platform}\n${mls}`, /(?:'native'|'rust'),\s*'target'/u);
+  assert5.match(mls, /'native',\s*'target',\s*'release',\s*'libchat_sdk\.dylib'/u);
+  assert5.match(mls, /'chatsdk',\s*'native',\s*'target',\s*'release'/u);
+  assert5.doesNotMatch(mls, /'smoldot',\s*'ffi'/u);
   assert5.match(testEntry, /build-smoldot-native\.sh" host[\s\S]*FLUTTER_BIN" test/u);
 });
 test5("\u672C\u5730\u516C\u6C11\u94FE\u5165\u53E3\u7EDF\u4E00\u51C6\u5907\u7CBE\u786E\u5DE5\u5177\u94FE\u4E0E\u9501\u5B9A\u4F9D\u8D56", () => {
@@ -2126,8 +2146,8 @@ test5("节点 Release 前置验证与正式构建统一使用隔离工具", () =
   }
 });
 
-// 中文注释：仓库级 Latest 不能表达产品、端、动作的独立最新版本，12 个 Release 必须统一禁用该标记。
-test5("12 个 Release 分组真源与登记入口统一禁用仓库级 Latest", () => {
+// 中文注释：仓库级 Latest 不能表达产品、端、动作的独立最新版本，13 个 Release 必须统一禁用该标记。
+test5("13 个 Release 分组真源与登记入口统一禁用仓库级 Latest", () => {
   const workflows = [
     "citizenapp/release-ios.yml",
     "citizenapp/release-android.yml",
@@ -2140,6 +2160,7 @@ test5("12 个 Release 分组真源与登记入口统一禁用仓库级 Latest", 
     "citizenchain/release-runtime-wasm.yml",
     "citizenserve/release-cloudflare.yml",
     "citizensdk/release-sdk.yml",
+    "chatsdk/release-sdk.yml",
     "citizenweb/release-web.yml",
   ];
   for (const workflow of workflows) {
@@ -2148,7 +2169,7 @@ test5("12 个 Release 分组真源与登记入口统一禁用仓库级 Latest", 
     assert5.doesNotMatch(source, /--latest true/);
   }
   const registered = readFileSync7(new URL("../../workflows/gmb-repository.yml", import.meta.url), "utf8");
-  assert5.equal((registered.match(/--latest false/g) ?? []).length, 12);
+  assert5.equal((registered.match(/--latest false/g) ?? []).length, 13);
   assert5.doesNotMatch(registered, /--latest true/);
 });
 

@@ -1,4 +1,5 @@
 name: 公民钱包 · Release · iOS
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民钱包 · Release · iOS
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
@@ -41,6 +42,7 @@ permissions:
 
 jobs:
   ios:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 签名并固化公民钱包 iOS Release
     runs-on: macos-15
     steps:
@@ -111,6 +113,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       # 与 build-apk 调同一个脚本：冷钱包离线签名，索引与链端脱节没有任何编译期信号。
@@ -131,12 +134,6 @@ jobs:
       - name: 编译原生签名库 (iOS arm64)
         working-directory: citizenwallet
         run: ./scripts/build-signer-native.sh ios
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenwallet-rust-ios"
-          workspaces: citizenwallet/rust -> target
 
       - name: 构建 iOS Release 正式包
         working-directory: citizenwallet

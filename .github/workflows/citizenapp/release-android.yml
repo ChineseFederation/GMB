@@ -1,4 +1,5 @@
 name: 公民 · Release · Android
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民 · Release · Android
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
@@ -44,6 +45,7 @@ env:
 jobs:
   # Release 在同一个受控 runner 内完成构建、正式签名、验签和正式资产发布。
   android:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 签名并固化公民 Android Release
     runs-on: ubuntu-24.04
     steps:
@@ -109,6 +111,7 @@ jobs:
       - name: 安装 Flutter
         uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
+          cache: false
           flutter-version: ${{ steps.flutter-version.outputs.version }}
 
       - name: 安装 Java 17
@@ -135,12 +138,6 @@ jobs:
       - name: 编译 smoldot native library (Android ARM64)
         working-directory: citizenapp
         run: ./scripts/build-smoldot-native.sh android
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: "citizenapp-rust-android"
-          workspaces: citizenapp/smoldot/ffi -> target
 
       - name: 安装 Flutter 依赖
         working-directory: citizenapp

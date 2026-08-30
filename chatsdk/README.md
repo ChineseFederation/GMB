@@ -64,3 +64,13 @@ ChatSDK 统一拥有私聊与群聊的语音消息、照片、视频消息和文
 ChatSDK 通过 `call.dart` 提供部署无关的一对一通话状态机。部署端只实现 STUN 读取与加密 WSS 信令转发，音视频只经过 WebRTC `RTCPeerConnection`，禁止 TURN、DataChannel 媒体传输和服务端音视频中转。信令沿用既有 `connection_id`、Offer、Answer、ICE、Hangup、ICE Restart 与 Peer Ready，不创建第二套编号或协议版本。
 
 群聊当前只在产品界面显示禁用的语音、视频图标，不包含群通话实现。
+
+## ProgramConsole 与正式 Release
+
+ChatSDK 在 ProgramConsole 的“编程控制台”流程页中作为独立产品显示，产品标识为 `chatsdk`，平台标识为 `sdk`。它只提供以下三个相互独立的动作：
+
+- `chatsdk-build-sdk`：在本机隔离快照中验证 Dart、Flutter 与 Rust，并生成三件套到 `/Users/rhett/Only/ProgramConsole/target/chatsdk`。
+- `chatsdk-ci-sdk`：使用任务创建时 GitHub 锁定的最新 `main` 提交完成检查和 Android、iOS、macOS ARM64 原生构建；CI 不读取、生成或持久化软件版本。
+- `chatsdk-release-sdk`：只消费准确成功 CI 的提交和原生候选，按 `chatsdk-v<software_version>` 固化正式 Release。
+
+正式 GitHub Release 必须且只能包含 `chatsdk.tgz`、`chatsdk-release.json`、`SHA256SUMS`。归档内外 manifest 必须逐字节一致，manifest 固定登记 Android ARM64、iOS ARM64 和 macOS ARM64 三个平台及全部文件摘要。ChatSDK 当前没有 LinuxARM 服务端安装包，也没有独立“发布”动作；正式 GitHub Release 是当前 SDK 分发终态。

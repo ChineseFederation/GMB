@@ -1,4 +1,5 @@
 name: 公民链 · Release · LinuxARM
+# RELEASE_BUILD_MODE: full-v1
 run-name: 公民链 · Release · LinuxARM
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；
@@ -48,6 +49,7 @@ env:
 
 jobs:
   changes:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 锁定公民链 LinuxARM 构建范围
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 20
@@ -100,6 +102,7 @@ jobs:
           echo 'desktop_matrix=[{"platform":"linux-arm","name":"LinuxARM","os":"ubuntu-24.04-arm","artifact":"公民链ARM","installer_name":"citizenchain-node-linux-arm64.deb","manual_bundle_targets":"deb,appimage","updater_asset_name":"citizenchain-node-linux-arm64.AppImage","updater_manifest_name":"citizenchain-node-latest-linux-arm64.json","expected_runner_arch":"ARM64","deb_arch":"arm64","cache_key":"citizenchain-linux-arm"}]' >> "$GITHUB_OUTPUT"
 
   build-desktop:
+    env: { CARGO_INCREMENTAL: "0" }
     name: 打包公民链桌面端 (${{ matrix.name }})
     needs: changes
     # 中文注释：CI 来源已由 ProgramConsole 锁定；Release 只构建本平台正式候选。
@@ -154,8 +157,6 @@ jobs:
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 25.2.1
-          cache: npm
-          cache-dependency-path: citizenchain/node/frontend/package-lock.json
 
       - name: 同步桌面端版本
         shell: bash
@@ -212,12 +213,6 @@ jobs:
             echo "LIBCLANG_PATH=$(llvm-config --libdir)"
             echo "PROTOC=$(command -v protoc)"
           } >> "$GITHUB_ENV"
-
-      - name: 缓存 Rust 依赖
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        with:
-          shared-key: ${{ matrix.cache_key }}
-          workspaces: citizenchain -> target
 
       - name: 同步并锁定节点候选版本
         run: node release-tool/.github/scripts/citizenchain/release-node-linux-arm.mjs node-version lock "$GMB_SOFTWARE_VERSION"

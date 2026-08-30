@@ -35,12 +35,18 @@ if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
     echo "公民本机编译只能在ProgramConsole中央源码快照中运行：$APP_ROOT" >&2
     exit 1
   }
-  BUILD_DIR="$PROGRAM_CONSOLE_WORK_DIR/build"
+  INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少ProgramConsole本机增量缓存目录}"
+  [[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
+    echo "CitizenApp本机增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
+    exit 1
+  }
+  BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
   ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenapp"
   export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
-  export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/android"
-  export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/ios"
-  export XDG_CONFIG_HOME="$PROGRAM_CONSOLE_WORK_DIR/flutter-config"
+  export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
+  export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
+  export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
+  export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
   mkdir -p "$XDG_CONFIG_HOME"
   build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
   flutter config --build-dir="$build_dir_relative" >/dev/null
@@ -55,9 +61,12 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
   exit 1
 }
 
-# iOS 与 Android 使用两个独立中央工作目录，禁止在产品仓库创建或清理 `build/`。
+# iOS 与 Android 使用独立中央缓存。中间产物保留，最终候选包每轮必须重新生成。
 clean_platform_build_outputs() {
-  rm -rf "$BUILD_DIR"
+  case "$PLATFORM" in
+    ios) rm -rf "$BUILD_DIR/ios/iphoneos/Runner.app" ;;
+    android) rm -f "$BUILD_DIR/app/outputs/flutter-apk/"*.apk ;;
+  esac
   mkdir -p "$BUILD_DIR"
 }
 

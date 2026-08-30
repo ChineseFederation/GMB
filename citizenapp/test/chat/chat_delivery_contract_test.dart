@@ -11,9 +11,7 @@ void main() {
     final prepareStart = source.indexOf(
       'Future<ChatContent> _prepareEncryptedMedia',
     );
-    final schedulerStart = source.indexOf(
-      'void _schedulePendingMediaUpload',
-    );
+    final schedulerStart = source.indexOf('void _schedulePendingMediaUpload');
     final uploadStart = source.indexOf(
       'Future<void> _uploadPendingDirectMedia',
     );
@@ -34,10 +32,7 @@ void main() {
     expect(source, contains('uploadEncryptedAttachment('));
     expect(flushBody, contains('_schedulePendingMediaUpload('));
     expect(flushBody, contains('continue;'));
-    expect(
-      source,
-      contains('Chat 附件密文仍在后台上传'),
-    );
+    expect(source, contains('Chat 附件密文仍在后台上传'));
     expect(
       source,
       isNot(contains('Future<ChatContent> _uploadEncryptedMedia')),
@@ -118,10 +113,43 @@ void main() {
     );
   });
 
+  test('本机状态认证失败只重建Chat域且停止盲重试', () {
+    final source = File('lib/chat/chat_runtime.dart').readAsStringSync();
+    final resetStart = source.indexOf('Future<void> _resetLocalChatState');
+    final resetEnd = source.indexOf(
+      'Future<_ChatAccountContext> _buildAccountContext',
+      resetStart,
+    );
+    final resetBody = source.substring(resetStart, resetEnd);
+    final scheduleStart = source.indexOf('void _schedulePendingOutgoing');
+    final scheduleEnd = source.indexOf(
+      'void _schedulePendingOutgoingRetry',
+      scheduleStart,
+    );
+    final scheduleBody = source.substring(scheduleStart, scheduleEnd);
+
+    expect(source, contains('_buildAccountContextWithStateReset(account)'));
+    expect(resetBody, contains('await _store.clearAllForCidNumber'));
+    expect(resetBody, contains('await stateStore.reset();'));
+    expect(resetBody, contains('await _store.convergeFinalizedBinding'));
+    expect(resetBody, contains('devicePublicKeyCachePreferenceKey'));
+    expect(
+      resetBody,
+      isNot(contains('prefs.remove(deviceIdPreferenceKey(account.cidNumber))')),
+    );
+    expect(resetBody, isNot(contains('_kPushRegistrationPrefix')));
+    expect(
+      scheduleBody,
+      contains('error is MlsNativeException && error.requiresStateReset'),
+    );
+    expect(source, contains('stage=state_reset_complete code=ok'));
+  });
+
   test('附件上传失败按附件退避且只由transport中止一次', () {
     final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
-    final transport =
-        File('lib/chat/transport/chat_cloud_transport.dart').readAsStringSync();
+    final transport = File(
+      'lib/chat/transport/chat_cloud_transport.dart',
+    ).readAsStringSync();
     final uploadStart = runtime.indexOf(
       'Future<void> _uploadPendingDirectMedia',
     );
@@ -133,10 +161,7 @@ void main() {
 
     expect(runtime, contains('_mediaUploadRetryAt[attachmentId]'));
     expect(runtime, contains('static bool _mediaUploadBusy = false;'));
-    expect(
-      runtime,
-      contains('static final Set<String> _mediaBytesInFlight'),
-    );
+    expect(runtime, contains('static final Set<String> _mediaBytesInFlight'));
     expect(runtime, contains('receiveOnly: true'));
     expect(runtime, contains('if (_receiveOnly) return false;'));
     expect(runtime, contains('1 => const Duration(seconds: 5)'));
@@ -144,12 +169,17 @@ void main() {
     expect(runtime, contains('3 => const Duration(minutes: 1)'));
     expect(runtime, contains('_ => const Duration(minutes: 5)'));
     final headersAt = transport.indexOf('..headers.addAll(');
-    final lengthAt = transport.indexOf('..contentLength = byteSize;', headersAt);
+    final lengthAt = transport.indexOf(
+      '..contentLength = byteSize;',
+      headersAt,
+    );
     expect(headersAt, greaterThanOrEqualTo(0));
     expect(lengthAt, greaterThan(headersAt));
     expect(
       uploadBody,
-      isNot(contains('context.transport\n          .abortAttachment(attachmentId)')),
+      isNot(
+        contains('context.transport\n          .abortAttachment(attachmentId)'),
+      ),
     );
   });
 }
