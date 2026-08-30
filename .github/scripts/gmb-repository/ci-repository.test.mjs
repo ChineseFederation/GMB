@@ -1679,6 +1679,18 @@ test5("ChatSDK 保持独立分组动作、三件套Release且没有发布入口"
   assert5.match(packaging, /const RELEASE_ASSETS = \[ARCHIVE_NAME, MANIFEST_NAME, CHECKSUMS_NAME\]/);
 });
 
+// 中文注释：缓存恢复和显式保存是同一官方Action的两个准确入口，必须共同登记并锁定同一提交。
+test5("GMB全部CI缓存入口使用依赖真源登记的同一固定Action提交", () => {
+  const root = new URL("../../../", import.meta.url);
+  const contract = JSON.parse(readFileSync7(new URL(".github/dependencies.json", root), "utf8"));
+  const cacheSHA = "5a3ec84eff668545956fd18022155c47e93e2684";
+  assert5.equal(contract.actions["actions/cache"], cacheSHA);
+  assert5.equal(contract.actions["actions/cache/save"], cacheSHA);
+  const chatSDKCI = readFileSync7(new URL(".github/workflows/chatsdk/ci-sdk.yml", root), "utf8");
+  assert5.match(chatSDKCI, new RegExp(`actions/cache@${cacheSHA}`));
+  assert5.match(chatSDKCI, new RegExp(`actions/cache/save@${cacheSHA}`));
+});
+
 test5("\u516C\u5F00\u4ED3\u5E93\u95E8\u7981\u7981\u6B62\u65B0\u589E\u660E\u6587\u7F51\u7EDC\u534F\u8BAE", () => {
   const source = readFileSync7(new URL("ci-repository.mjs", import.meta.url), "utf8");
   assert5.match(source, /\u660E\u6587\u7F51\u7EDC\u534F\u8BAE/);

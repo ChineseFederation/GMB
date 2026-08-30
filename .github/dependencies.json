@@ -29,6 +29,8 @@
     "windows-2025"
   ],
   "actions": {
+    "actions/cache": "5a3ec84eff668545956fd18022155c47e93e2684",
+    "actions/cache/save": "5a3ec84eff668545956fd18022155c47e93e2684",
     "actions/checkout": "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09",
     "actions/setup-node": "a0853c24544627f65ddf259abe73b1d18a591444",
     "actions/setup-java": "03ad4de0992f5dab5e18fcb136590ce7c4a0ac95",
