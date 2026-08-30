@@ -12,6 +12,7 @@ import {
   selectLatestCache,
 } from './ci-cache.mjs';
 
+// 固定向量覆盖缓存身份、恢复和收口边界，保证不同产品端互不污染。
 const identity = cacheIdentity({
   repository: 'ChineseFederation/GMB',
   product: 'CitizenApp',

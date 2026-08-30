@@ -28,6 +28,7 @@ const _bobAccountId =
 const _genesisHash =
     '0x4242424242424242424242424242424242424242424242424242424242424242';
 
+// 原生会话测试使用隔离身份与固定测试密钥验证 MLS 状态边界。
 void main() {
   useIsolatedIsar();
 

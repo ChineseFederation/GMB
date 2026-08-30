@@ -2,7 +2,7 @@
 
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { lstatSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
 const root = resolve(process.env.GMB_REPOSITORY_ROOT || process.cwd());
@@ -31,8 +31,10 @@ function fail(message) {
 
 function read(path) {
   const absolute = resolve(root, path);
-  const status = lstatSync(absolute, { throwIfNoEntry: false });
-  if (!status?.isFile() || status.isSymbolicLink()) fail(`缺少普通依赖文件：${path}`);
+  // 先显式判断存在性，避免把 Node 文件系统选项误识别成第一方契约字段。
+  if (!existsSync(absolute)) fail(`缺少普通依赖文件：${path}`);
+  const status = lstatSync(absolute);
+  if (!status.isFile() || status.isSymbolicLink()) fail(`缺少普通依赖文件：${path}`);
   return readFileSync(absolute, 'utf8');
 }
 
@@ -240,8 +242,9 @@ function tagCommitSHA(tag) {
 function verifyLocalAssets(paths, tag, sourceSHA) {
   const byName = Object.create(null);
   for (const path of paths) {
-    const status = lstatSync(path, { throwIfNoEntry: false });
-    if (!status?.isFile() || status.isSymbolicLink() || status.size <= 0) fail(`ChatSDK 正式资产无效：${path}`);
+    if (!existsSync(path)) fail(`ChatSDK 正式资产无效：${path}`);
+    const status = lstatSync(path);
+    if (!status.isFile() || status.isSymbolicLink() || status.size <= 0) fail(`ChatSDK 正式资产无效：${path}`);
     const name = basename(path);
     if (byName[name]) fail(`ChatSDK 正式资产重名：${name}`);
     byName[name] = { path, bytes: readFileSync(path) };

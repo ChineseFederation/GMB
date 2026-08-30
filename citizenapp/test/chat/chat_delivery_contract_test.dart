@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+// 源码合同锁定私信持久化、附件传输和可靠队列的先后顺序。
 void main() {
   test('媒体先持久落库且R2上传不得阻塞同会话后续消息', () {
     final source = File('lib/chat/chat_runtime.dart').readAsStringSync();

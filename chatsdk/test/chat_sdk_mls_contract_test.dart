@@ -5,6 +5,7 @@ import 'package:chat_sdk/chat_sdk.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+// 合同测试锁定 ChatSDK 的中性身份、状态清理边界和脱敏错误码。
 void main() {
   test('protocol uses deployment-neutral user identifiers', () {
     final route = ChatRoute(

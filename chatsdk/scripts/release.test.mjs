@@ -9,6 +9,7 @@ import { buildRelease, verifyReleaseAssets } from './release.mjs';
 
 const SHA = '0123456789abcdef0123456789abcdef01234567';
 
+// 每个夹具都使用隔离临时目录，验证完成后必须连同伪造产物一起清理。
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'chatsdk-release-test-'));
   const source = join(root, 'source');

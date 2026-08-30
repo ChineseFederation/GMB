@@ -27,8 +27,10 @@ function fail(message) {
 
 function read(path) {
   const absolute = resolve(root, path);
-  const status = lstatSync(absolute, { throwIfNoEntry: false });
-  if (!status?.isFile() || status.isSymbolicLink()) fail(`缺少普通依赖文件：${path}`);
+  // 先显式判断存在性，避免把 Node 文件系统选项误识别成第一方契约字段。
+  if (!existsSync(absolute)) fail(`缺少普通依赖文件：${path}`);
+  const status = lstatSync(absolute);
+  if (!status.isFile() || status.isSymbolicLink()) fail(`缺少普通依赖文件：${path}`);
   return readFileSync(absolute, 'utf8');
 }
 

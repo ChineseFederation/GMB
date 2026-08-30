@@ -6,6 +6,7 @@ import { dirname, join } from 'node:path';
 const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = join(scriptsDirectory, '..', '..');
 const actionRef = '5a3ec84eff668545956fd18022155c47e93e2684';
+// 产品真源与顶层登记必须共用同一缓存协议，避免任一端单独漂移。
 const routes = [
   ".github/workflows/chatsdk/ci-sdk.yml",
   ".github/workflows/citizenapp/ci-android.yml",

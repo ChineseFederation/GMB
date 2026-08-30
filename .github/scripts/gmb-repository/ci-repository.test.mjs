@@ -1683,6 +1683,10 @@ test5("ChatSDK 保持独立分组动作、三件套Release且没有发布入口"
   assert5.ok(central.includes(dependencyAudit), "ChatSDK 顶层 Release 镜像缺少依赖安全审计");
   assert5.equal(existsSync7(new URL(".github/workflows/chatsdk/publish-sdk.yml", root)), false);
   assert5.doesNotMatch(`${ciScript}\n${releaseScript}`, /citizensdk|CitizenSDK|公民SDK/);
+  // Node 官方文件系统选项不是第一方数据合同；动作必须用显式存在性检查避免误登记字段。
+  assert5.doesNotMatch(`${ciScript}\n${releaseScript}`, /throwIfNoEntry/);
+  assert5.match(ciScript, /existsSync\(absolute\)/);
+  assert5.match(releaseScript, /existsSync\((?:absolute|path)\)/);
   assert5.match(packaging, /const RELEASE_ASSETS = \[ARCHIVE_NAME, MANIFEST_NAME, CHECKSUMS_NAME\]/);
 });
 
