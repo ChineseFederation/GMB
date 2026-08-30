@@ -1,5 +1,6 @@
 name: 公民协议 · CI · WASM
-# CI_CACHE_PROTOCOL: ci-v1
+# CI_CACHE: enabled
+# 中文注释：CI 只复用可再生成缓存，最终候选产物在保存前清除。
 run-name: 公民协议 · CI · WASM
 
 # 中文注释：只能由编程控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。

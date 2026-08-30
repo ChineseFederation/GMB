@@ -1,5 +1,6 @@
 name: 公民协议 · Release · WASM
-# RELEASE_BUILD_MODE: full-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
 run-name: 公民协议 · Release · WASM
 
 # 中文注释：只能由编程控制台协议行「运行 CI / Release」按钮经 workflow_dispatch 发起。

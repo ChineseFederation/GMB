@@ -1,5 +1,6 @@
 name: 公民SDK · Release · SDK
-# RELEASE_BUILD_MODE: full-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
 run-name: 公民SDK · Release · SDK
 
 # 中文注释：Release 只重建并固化与成功 CI 完全相同 source_sha 的单一 SDK 候选；

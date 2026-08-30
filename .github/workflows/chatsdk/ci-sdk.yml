@@ -1,5 +1,6 @@
 name: 聊天SDK · CI · SDK
-# CI_CACHE_PROTOCOL: ci-v1
+# CI_CACHE: enabled
+# 中文注释：CI 只复用可再生成缓存，最终候选产物在保存前清除。
 run-name: 聊天SDK · CI · SDK
 
 # 中文注释：ChatSDK CI 只验证当前 main 提交并生成三端原生候选；CI 不生成、递增或持久化软件版本。

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -25,10 +26,10 @@ const identity = cacheIdentity({
 });
 
 test('固定向量生成稳定且分端隔离的CI缓存身份', () => {
-  assert.equal(CI_CACHE_SCHEMA, 'ci-v1');
+  assert.equal(CI_CACHE_SCHEMA, 'ci');
   assert.equal(
     identity.baseKey,
-    'ci-v1-chinesefederation.gmb-citizenapp-android-arm64-build-linux-arm64-0123456789abcdef',
+    'ci-chinesefederation.gmb-citizenapp-android-arm64-build-linux-arm64-0123456789abcdef',
   );
   assert.deepEqual(cacheKeys(identity, '90210', '3'), {
     successPrefix: `${identity.baseKey}-success-`,
@@ -119,4 +120,10 @@ test('缓存身份拒绝路径、超长标识和非SHA256工具链指纹', () =>
     runnerArch: 'arm64',
     toolchainFingerprint: 'not-a-sha256',
   }));
+});
+
+test('GitHub缓存请求使用无版本语义的固定客户端身份', () => {
+  const source = readFileSync(new URL('./ci-cache.mjs', import.meta.url), 'utf8');
+  assert.match(source, /'User-Agent': 'ci-cache'/);
+  assert.doesNotMatch(source, /cache[-_.]v[0-9]+/i);
 });

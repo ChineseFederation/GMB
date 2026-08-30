@@ -1,5 +1,6 @@
 name: 公民链 · Release · LinuxARM
-# RELEASE_BUILD_MODE: full-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
 run-name: 公民链 · Release · LinuxARM
 
 # 中文注释：本软件不设 push 触发；main push 只运行独立仓库门禁，不启动本 Release；

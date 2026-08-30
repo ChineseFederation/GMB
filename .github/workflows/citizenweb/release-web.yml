@@ -1,5 +1,6 @@
 name: 公民网 · Release · Web
-# RELEASE_BUILD_MODE: full-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
 run-name: 公民网 · Release · Web
 
 # 中文注释：官网是独立产品，使用自己的 workflow、版本和候选产物；CI 只构建静态网站，

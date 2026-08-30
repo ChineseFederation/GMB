@@ -1,5 +1,6 @@
 name: 公民SDK · CI · SDK
-# CI_CACHE_PROTOCOL: ci-v1
+# CI_CACHE: enabled
+# 中文注释：CI 只复用可再生成缓存，最终候选产物在保存前清除。
 run-name: 公民SDK · CI · SDK
 
 # 中文注释：CitizenSDK 是单一产品和单一版本线；当前候选只交付已实现的 Android ARM64

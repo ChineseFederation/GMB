@@ -1,5 +1,6 @@
 name: 聊天SDK · Release · SDK
-# RELEASE_BUILD_MODE: full-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
 run-name: 聊天SDK · Release · SDK
 
 # 中文注释：Release 只接收准确成功 CI 的 source_sha 和三端候选，一次生成并固化正式三件套。

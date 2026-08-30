@@ -13,7 +13,8 @@ import {
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const CI_CACHE_SCHEMA = 'ci-v1';
+// 缓存身份使用固定语义前缀，不把内部实现误当成版本化协议。
+export const CI_CACHE_SCHEMA = 'ci';
 
 function required(value, label) {
   const normalized = String(value ?? '').trim();
@@ -264,7 +265,7 @@ function githubHeaders(tokenValue) {
     Accept: 'application/vnd.github+json',
     Authorization: `Bearer ${required(tokenValue, 'GitHub Actions令牌')}`,
     'X-GitHub-Api-Version': '2022-11-28',
-    'User-Agent': 'citizen-ci-cache-v1',
+    'User-Agent': 'ci-cache',
   };
 }
 

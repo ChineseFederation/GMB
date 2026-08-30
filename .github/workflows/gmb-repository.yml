@@ -1,6 +1,8 @@
 name: GMB · 全仓统一
-# RELEASE_BUILD_MODE: full-v1
-# CI_CACHE_PROTOCOL: ci-v1
+# RELEASE_BUILD: full
+# 中文注释：Release 始终全量构建，不读取 CI 或本机缓存。
+# CI_CACHE: enabled
+# 中文注释：CI 只复用可再生成缓存，最终候选产物在保存前清除。
 run-name: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
 
 # 中文注释：GitHub 只注册 workflows 顶层文件。本文件是唯一注册入口；分组目录下的
