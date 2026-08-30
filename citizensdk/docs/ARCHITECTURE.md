@@ -106,8 +106,11 @@ GMB 七个路由产品共有 24 条分组 CI/Release workflow，并由唯一顶�
 
 CI 与 Release 都从干净源码建立隔离构建快照，执行唯一根包依赖锁检查、静态检查、Rust 与
 Dart/Flutter 测试、移动原生构建和候选验证。smoldot Dart 绑定和来源测试现与根 Flutter
-包一起分析和执行。Android/iOS 原生库注入同一候选并完成确定性反向校验后，两条流程都从该
-目录建立逐字节临时验证副本并执行官方 `dart pub publish --dry-run`；Dart 生成的 `.dart_tool`
+包一起分析和执行。为保留已经验证的 smoldot 行为字节，静态分析继续报告迁入源码的既有
+warning/info，但使用 `--no-fatal-infos --no-fatal-warnings` 只让 analyzer error 阻断流程；
+格式检查、编译和完整测试仍失败关闭。Android/iOS 原生库注入同一候选并完成确定性反向校验
+后，两条流程都从该目录建立逐字节临时验证副本并执行官方 `dart pub publish --dry-run`；
+Dart 生成的 `.dart_tool`
 因此不会污染正式候选。`.pubignore` 固定 Hosted 运行时闭包，禁止把 GitHub 审计包与 Hosted
 包实现成两个源码真源。Release 还会验证指定
 成功 CI 的 workflow、显示标题、产品目标、成功状态与准确 source SHA，不读取、下载或比较

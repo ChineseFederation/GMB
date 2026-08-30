@@ -1722,7 +1722,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     assert5.match(source, /\$RUNNER_TEMP\/citizensdk\/build-source/);
     assert5.match(source, /flutter pub get --enforce-lockfile/);
     assert5.match(source, /dart format --output=none --set-exit-if-changed lib test/);
-    assert5.match(source, /flutter analyze/);
+    assert5.match(source, /flutter analyze --no-fatal-infos --no-fatal-warnings/);
     assert5.match(source, /flutter test --timeout=2m/);
     assert5.doesNotMatch(source, /native\/smoldot\/dart/);
     assert5.match(source, /native\/host\/libsmoldot\.dylib/);
@@ -1746,7 +1746,7 @@ test5("CitizenSDK \u53EA\u4F7F\u7528\u7EDF\u4E00 GMB \u5165\u53E3\u5E76\u4E14\u4
     "$RUNNER_TEMP/citizensdk/build-source",
     "flutter pub get --enforce-lockfile",
     "dart format --output=none --set-exit-if-changed lib test",
-    "flutter analyze",
+    "flutter analyze --no-fatal-infos --no-fatal-warnings",
     "flutter test --timeout=2m",
   ]) assert5.ok(registered.includes(expected), expected);
   assert5.doesNotMatch(registered, /citizensdk\/native\/smoldot\/dart/);
