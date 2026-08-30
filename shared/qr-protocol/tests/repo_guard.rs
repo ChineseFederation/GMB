@@ -295,8 +295,9 @@ fn product_ci_runs_shared_scanner_gates() {
         let path = repo_root.join(workflow);
         let text = fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", path.display()));
+        // 统一缓存指纹覆盖全部 npm 锁文件；以下命令继续验证共享适配器与两个消费者。
         for required in [
-            "shared/scanner-react/package-lock.json",
+            "**/package-lock.json",
             "npm --prefix shared/scanner-react ci",
             "npm --prefix shared/scanner-react run check",
             "npm --prefix shared/scanner-react test",
