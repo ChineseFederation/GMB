@@ -13,12 +13,12 @@ SCHEME="RunnerUITests"
 TARGET_BUNDLE_ID="ios.citizenapp"
 TEST_HOST_BUNDLE_ID="ios.citizenapp.UITestHost"
 TEST_RUNNER_BUNDLE_ID="ios.citizenapp.UITests.xctrunner"
-PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/ProgramConsole/target}"
+PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/programconsole/target}"
 BUILD_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-ios-ui-test"
 DERIVED_DATA="$BUILD_ROOT/DerivedData"
 RESULT_BUNDLE="$BUILD_ROOT/RunnerUITests.xcresult"
 
-[[ "$BUILD_ROOT" == /Users/rhett/Only/ProgramConsole/target/.work/citizenapp-ios-ui-test ]] || {
+[[ "$BUILD_ROOT" == /Users/rhett/Only/programconsole/target/.work/citizenapp-ios-ui-test ]] || {
   echo "UI 测试产物目录越界，拒绝清理：$BUILD_ROOT" >&2
   exit 1
 }

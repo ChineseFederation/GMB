@@ -38,10 +38,6 @@ citizen-signer = { path = "../../../shared/citizen-signer" }
 # 账户数据用途钥派生和冷钱包加密交付与 CitizenWallet 共用同一份实现。
 account-crypto = { path = "../../../shared/account-crypto" }
 
-[target.'cfg(target_os = "ios")'.dependencies]
-# iOS 主程序只能链接一套 Rust runtime；ChatSDK 由 libsmoldot.a 统一承载。
-chat_sdk = { package = "chat_sdk_native", path = "../../../chatsdk/native" }
-
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 android_logger = "0.14"

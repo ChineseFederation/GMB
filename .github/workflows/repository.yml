@@ -1,0 +1,79 @@
+# GitHub要求的仓库固定入口；不得承载产品流程实现。
+name: GMB · 全仓统一
+run-name: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      pipeline:
+        description: 规范流程身份
+        required: true
+        type: string
+      run_title:
+        description: 编程控制台展示标题
+        required: true
+        type: string
+      source_sha:
+        description: 成功 CI 准确提交（仅 Release）
+        required: false
+        type: string
+      ci_run_id:
+        description: 对应成功 CI run id（仅 Release）
+        required: false
+        type: string
+      version_tag:
+        description: 正式版本 Tag（仅 Release）
+        required: false
+        type: string
+      software_version:
+        description: 候选软件版本
+        required: false
+        type: string
+      spec_version:
+        description: Runtime spec_version
+        required: false
+        type: string
+      chain_spec_version:
+        description: 当前链上 spec_version
+        required: false
+        type: string
+      genesis_hash:
+        description: 当前链 genesis hash
+        required: false
+        type: string
+      finalized_head:
+        description: 当前链 finalized head
+        required: false
+        type: string
+
+
+permissions:
+  actions: write
+  attestations: write
+  contents: write
+  id-token: write
+
+jobs:
+  flow:
+    name: 统一流程
+    uses: ./.github/workflows/flow.yml
+    permissions:
+      actions: write
+      attestations: write
+      contents: write
+      id-token: write
+    with:
+      pipeline: ${{ github.event_name == 'push' && 'repository' || inputs.pipeline }}
+      run_title: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
+      source_sha: ${{ inputs.source_sha || '' }}
+      ci_run_id: ${{ inputs.ci_run_id || '' }}
+      version_tag: ${{ inputs.version_tag || '' }}
+      software_version: ${{ inputs.software_version || '' }}
+      spec_version: ${{ inputs.spec_version || '' }}
+      chain_spec_version: ${{ inputs.chain_spec_version || '' }}
+      genesis_hash: ${{ inputs.genesis_hash || '' }}
+      finalized_head: ${{ inputs.finalized_head || '' }}
+    secrets: inherit

@@ -4,13 +4,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/chat_models.dart';
-import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:chat_sdk/protocol.dart';
-import 'package:citizenapp/chat/storage/chat_crypto.dart';
-import 'package:citizenapp/isar/chat_isar.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/isar/app_isar.dart';
 import 'package:citizenapp/isar/isar_core_bootstrap.dart';
 import 'package:citizenapp/isar/user_isar.dart';
@@ -27,16 +21,34 @@ import 'package:isar_community/isar.dart';
 
 import '../../support/isar_test_env.dart';
 
+class _TestBinding extends AccountDataBinding implements ChatDataBinding {
+  const _TestBinding({
+    required super.genesisHash,
+    required super.cidNumber,
+    required super.bindingRevision,
+    required super.accountId,
+  });
+
+  @override
+  String get keyDomain => genesisHash;
+
+  @override
+  String get userId => cidNumber;
+
+  @override
+  String get id => '$keyDomain|$userId|$bindingRevision|$accountId';
+}
+
 const Duration _shortQueueTimeout = Duration(seconds: 1);
 const Duration _wipeTimeout = Duration(seconds: 8);
 const String _accountId =
     '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-const String _ownerCidNumber = 'CN220-CTZN2-100000001-2026';
-const String _peerCidNumber = 'CN220-CTZN2-100000002-2026';
-const AccountDataBinding _binding = AccountDataBinding(
+const String _ownerUserId = 'CN220-CTZN2-100000001-2026';
+const String _peerUserId = 'CN220-CTZN2-100000002-2026';
+const _TestBinding _binding = _TestBinding(
   genesisHash:
       '0x1111111111111111111111111111111111111111111111111111111111111111',
-  cidNumber: _ownerCidNumber,
+  cidNumber: _ownerUserId,
   bindingRevision: 7,
   accountId: _accountId,
 );
@@ -67,9 +79,7 @@ class _WalletIsarReadingManager extends WalletManager {
   }
 
   @override
-  Future<AccountDataBinding> accountDataBindingForAccountId(
-    String accountId,
-  ) {
+  Future<_TestBinding> accountDataBindingForAccountId(String accountId) {
     return _readThroughWalletIsar(() {
       bindingReadCount += 1;
       if (accountId != _binding.accountId) {
@@ -107,14 +117,13 @@ class _WalletIsarReadingManager extends WalletManager {
   }
 }
 
-ChatEnvelope _incomingEnvelope() {
-  return ChatEnvelope()
-    ..envelopeId = 'env-storage-isolation'
+EncryptedMessage _incomingMessage() {
+  return EncryptedMessage()
+    ..messageId = 'env-storage-isolation'
     ..conversationId = 'conv-storage-isolation'
-    ..senderCidNumber = _peerCidNumber
-    ..recipientCidNumber = _ownerCidNumber
+    ..senderUserId = _peerUserId
+    ..recipientCidNumber = _ownerUserId
     ..senderDeviceId = 'device-storage-isolation'
-    ..mlsMessageKind = MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION
     ..createdAtMillis = Int64(1700000000000);
 }
 
@@ -131,9 +140,9 @@ void main() {
 
   setUp(() async {
     chatDocumentsRoot = await Directory.systemTemp.createTemp(
-      'citizenapp_chat_documents_',
+      'chat_sdk_chat_documents_',
     );
-    await ChatRuntime.debugResetProcessWipeForTest(
+    await ChatRuntimeCore.debugResetProcessWipeForTest(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     AppLockService.debugResetForTest();
@@ -141,7 +150,7 @@ void main() {
 
   tearDown(() async {
     AppLockService.debugResetForTest();
-    await ChatRuntime.debugResetProcessWipeForTest(
+    await ChatRuntimeCore.debugResetProcessWipeForTest(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     if (await chatDocumentsRoot.exists()) {
@@ -182,10 +191,7 @@ void main() {
         final row = await isar.walletAttestationEntitys.get(0);
         return row?.lastRequestPayload;
       });
-      expect(
-        await walletRead.timeout(_shortQueueTimeout),
-        'wallet-ready',
-      );
+      expect(await walletRead.timeout(_shortQueueTimeout), 'wallet-ready');
       expect(ChatIsar.instance.hasActiveOperation, isTrue);
     } finally {
       // 即使断言或超时失败，也先放行 Chat，避免污染本文件后续测试的队列。
@@ -199,7 +205,7 @@ void main() {
   test('启动明文附件清扫不构造 ChatRuntime，也不等待 WalletIsar', () async {
     await WalletIsar.instance.db();
     final plain = File(
-      '${chatDocumentsRoot.path}/chat/by_cid/cid-fixture/by_binding/7/'
+      '${chatDocumentsRoot.path}/chat/by_user/cid-fixture/by_binding/7/'
       '$_accountId/attachments/.plain/visible.bin',
     );
     final cipher = File('${plain.parent.parent.path}/cipher.enc');
@@ -215,14 +221,14 @@ void main() {
     });
     try {
       await walletEntered.future.timeout(_shortQueueTimeout);
-      final liveRuntimeCount = ChatRuntime.debugLiveInstanceCount;
+      final liveRuntimeCount = ChatRuntimeCore.debugLiveInstanceCount;
       await ChatRuntime.purgePlainAttachmentsWithoutAccount(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ).timeout(_shortQueueTimeout);
       expect(plain.existsSync(), isFalse);
       expect(cipher.existsSync(), isTrue);
       expect(
-        ChatRuntime.debugLiveInstanceCount,
+        ChatRuntimeCore.debugLiveInstanceCount,
         lessThanOrEqualTo(liveRuntimeCount),
       );
     } finally {
@@ -245,19 +251,17 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(
-        crypto: ChatCrypto(walletManager: manager),
-      );
+      final store = ChatStore(crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)));
       final bindingToken = await store.activateBindingFence(_binding);
       const messageText = '聊天和钱包独立队列回归消息';
       final plaintext = ChatPayloadCodec.encode(ChatContent.text(messageText));
 
       await store
-          .saveIncomingEnvelope(
-            ownerCidNumber: _ownerCidNumber,
+          .saveIncomingMessage(
+            ownerUserId: _ownerUserId,
             currentAccountId: _accountId,
-            envelope: _incomingEnvelope(),
-            envelopeBytes: const <int>[1, 2, 3, 4],
+            message: _incomingMessage(),
+            messageBytes: const <int>[1, 2, 3, 4],
             messageKind: ChatMessageKind.text,
             plaintext: plaintext,
             bindingToken: bindingToken,
@@ -265,8 +269,8 @@ void main() {
           .timeout(_shortQueueTimeout);
 
       final raw = await ChatIsar.instance.read((isar) async {
-        return isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-          _ownerCidNumber,
+        return isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          _ownerUserId,
           'env-storage-isolation',
         );
       });
@@ -276,7 +280,7 @@ void main() {
 
       final previews = await store
           .readConversationPreviews(
-            ownerCidNumber: _ownerCidNumber,
+            ownerUserId: _ownerUserId,
             currentAccountId: _accountId,
           )
           .timeout(_shortQueueTimeout);
@@ -284,7 +288,7 @@ void main() {
 
       final messages = await store
           .readMessages(
-            ownerCidNumber: _ownerCidNumber,
+            ownerUserId: _ownerUserId,
             currentAccountId: _accountId,
             conversationId: 'conv-storage-isolation',
           )
@@ -293,13 +297,14 @@ void main() {
 
       final hits = await store
           .searchMessages(
-            ownerCidNumber: _ownerCidNumber,
+            ownerUserId: _ownerUserId,
             currentAccountId: _accountId,
             keyword: '独立队列',
           )
           .timeout(_shortQueueTimeout);
-      expect(hits.map((message) => message.envelopeId),
-          <String>['env-storage-isolation']);
+      expect(hits.map((message) => message.messageId), <String>[
+        'env-storage-isolation',
+      ]);
 
       expect(manager.bindingReadCount, greaterThanOrEqualTo(4));
       expect(manager.keyReadCount, greaterThanOrEqualTo(7));
@@ -346,16 +351,13 @@ void main() {
   test('同名 ChatIsar 已打开但 schema 不完整时失败关闭且不重开', () async {
     final incomplete = await Isar.open(
       <CollectionSchema<dynamic>>[ChatConversationEntitySchema],
-      name: 'citizenapp_chat',
+      name: 'chat_sdk_chat',
       directory: await IsarCoreBootstrap.resolveDirectory(),
     );
     try {
-      await expectLater(
-        ChatIsar.instance.db(),
-        throwsA(isA<StateError>()),
-      );
+      await expectLater(ChatIsar.instance.db(), throwsA(isA<StateError>()));
       expect(incomplete.isOpen, isTrue, reason: '失败关闭不得静默关闭/重开别人的实例');
-      expect(Isar.getInstance('citizenapp_chat'), same(incomplete));
+      expect(Isar.getInstance('chat_sdk_chat'), same(incomplete));
     } finally {
       if (incomplete.isOpen) {
         await incomplete.close(deleteFromDisk: true);
@@ -381,7 +383,7 @@ void main() {
       await isar.chatAccountHandoverEntitys.put(
         ChatAccountHandoverEntity()
           ..handoverKey = handoverKey
-          ..ownerCidNumber = _ownerCidNumber
+          ..ownerUserId = _ownerUserId
           ..sourceBindingRevision = 6
           ..sourceAccountId = _accountId
           ..targetBindingRevision = 7
@@ -420,26 +422,11 @@ void main() {
     await UserIsar.instance.closeAndDeleteFromDisk().timeout(_wipeTimeout);
     await AppIsar.instance.closeAndDeleteFromDisk().timeout(_wipeTimeout);
 
-    await expectLater(
-      WalletIsar.instance.db(),
-      throwsA(isA<StateError>()),
-    );
-    await expectLater(
-      ChatIsar.instance.db(),
-      throwsA(isA<StateError>()),
-    );
-    await expectLater(
-      SocialIsar.instance.db(),
-      throwsA(isA<StateError>()),
-    );
-    await expectLater(
-      UserIsar.instance.db(),
-      throwsA(isA<StateError>()),
-    );
-    await expectLater(
-      AppIsar.instance.db(),
-      throwsA(isA<StateError>()),
-    );
+    await expectLater(WalletIsar.instance.db(), throwsA(isA<StateError>()));
+    await expectLater(ChatIsar.instance.db(), throwsA(isA<StateError>()));
+    await expectLater(SocialIsar.instance.db(), throwsA(isA<StateError>()));
+    await expectLater(UserIsar.instance.db(), throwsA(isA<StateError>()));
+    await expectLater(AppIsar.instance.db(), throwsA(isA<StateError>()));
     expect(
       () => WalletIsar.instance.read<void>((_) async {}),
       throwsA(isA<StateError>()),
@@ -474,12 +461,14 @@ void main() {
       return isar.chatAccountHandoverEntitys.getByHandoverKey(handoverKey);
     });
     final socialCheckpoint = await SocialIsar.instance.read((isar) async {
-      return isar.squarePostSyncCheckpointEntitys
-          .getByCidNumber(socialCidNumber);
+      return isar.squarePostSyncCheckpointEntitys.getByCidNumber(
+        socialCidNumber,
+      );
     });
     final userBadge = await UserIsar.instance.read((isar) async {
-      return isar.userIdentityBadgeSnapshotEntitys
-          .getByCidNumber(userCidNumber);
+      return isar.userIdentityBadgeSnapshotEntitys.getByCidNumber(
+        userCidNumber,
+      );
     });
     final appMarker = await AppIsar.instance.read((isar) async {
       return isar.appDataVersionEntitys.getByNamespace(appNamespace);
@@ -513,7 +502,7 @@ void main() {
       await chat.chatAccountHandoverEntitys.putByHandoverKey(
         ChatAccountHandoverEntity()
           ..handoverKey = handoverKey
-          ..ownerCidNumber = _ownerCidNumber
+          ..ownerUserId = _ownerUserId
           ..sourceBindingRevision = 6
           ..sourceAccountId = _accountId
           ..targetBindingRevision = 7
@@ -545,8 +534,9 @@ void main() {
           ..updatedAtMillis = 1,
       );
     });
-    final socialMediaMarker =
-        File('${chatDocumentsRoot.path}/square_drafts/cid/draft/marker.bin');
+    final socialMediaMarker = File(
+      '${chatDocumentsRoot.path}/square_drafts/cid/draft/marker.bin',
+    );
     await socialMediaMarker.create(recursive: true);
     await socialMediaMarker.writeAsBytes(<int>[1, 2, 3]);
 
@@ -557,7 +547,7 @@ void main() {
     expect(await user.close(), isTrue);
     expect(await app.close(), isTrue);
     expect(Isar.getInstance('citizenapp_wallet'), isNull);
-    expect(Isar.getInstance('citizenapp_chat'), isNull);
+    expect(Isar.getInstance('chat_sdk_chat'), isNull);
     expect(Isar.getInstance('citizenapp_social'), isNull);
     expect(Isar.getInstance('citizenapp_user'), isNull);
     expect(Isar.getInstance('citizenapp_app'), isNull);
@@ -587,12 +577,14 @@ void main() {
       return isar.chatAccountHandoverEntitys.getByHandoverKey(handoverKey);
     });
     final socialCheckpoint = await SocialIsar.instance.read((isar) async {
-      return isar.squarePostSyncCheckpointEntitys
-          .getByCidNumber(socialCidNumber);
+      return isar.squarePostSyncCheckpointEntitys.getByCidNumber(
+        socialCidNumber,
+      );
     });
     final userBadge = await UserIsar.instance.read((isar) async {
-      return isar.userIdentityBadgeSnapshotEntitys
-          .getByCidNumber(userCidNumber);
+      return isar.userIdentityBadgeSnapshotEntitys.getByCidNumber(
+        userCidNumber,
+      );
     });
     final appMarker = await AppIsar.instance.read((isar) async {
       return isar.appDataVersionEntitys.getByNamespace(appNamespace);
@@ -675,7 +667,7 @@ void main() {
     );
     expect(disposeCalls, 1);
     expect(await chatRoot.exists(), isTrue, reason: '上下文未关闭时不得先删 Chat 根');
-    expect(ChatRuntime.debugPendingCloseInstanceCount, 1);
+    expect(ChatRuntimeCore.debugPendingCloseInstanceCount, 1);
 
     // 模拟 UI 放弃最后一个强引用；静态 pending-close 集合仍必须保活失败实例。
     runtime = null;
@@ -685,7 +677,7 @@ void main() {
     );
     expect(disposeCalls, 2, reason: '二次擦除必须重新执行关闭，不得复用失败 Future');
     expect(await chatRoot.exists(), isFalse);
-    expect(ChatRuntime.debugPendingCloseInstanceCount, 0);
+    expect(ChatRuntimeCore.debugPendingCloseInstanceCount, 0);
 
     await ChatRuntime.closeAndDeleteLocalFiles(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
@@ -859,7 +851,7 @@ void main() {
 
   test('后台 cleanup 失败保留孤儿 lease，全量擦除必须有界失败不得误报成功', () async {
     await expectLater(
-      ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+      ChatRuntimeCore.debugRunBackgroundLeaseForTest<void>(
         () async => throw StateError('background-cleanup-failed'),
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
@@ -871,7 +863,7 @@ void main() {
           (entity) => entity.path
               .split(Platform.pathSeparator)
               .last
-              .startsWith('.citizenapp_chat_lease_${pid}_'),
+              .startsWith('.chat_sdk_chat_lease_${pid}_'),
         )
         .toList();
     expect(orphanLeases, hasLength(1));
@@ -902,7 +894,7 @@ void main() {
   test('跨 isolate lease 封住平台清理竞态，complete 后新后台任务仍被拒绝', () async {
     final backgroundEntered = Completer<void>();
     final releaseBackground = Completer<void>();
-    final background = ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+    final background = ChatRuntimeCore.debugRunBackgroundLeaseForTest<void>(
       () async {
         backgroundEntered.complete();
         await releaseBackground.future;
@@ -940,7 +932,7 @@ void main() {
 
     var lateBackgroundRan = false;
     await expectLater(
-      ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+      ChatRuntimeCore.debugRunBackgroundLeaseForTest<void>(
         () async => lateBackgroundRan = true,
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
@@ -949,9 +941,9 @@ void main() {
     expect(lateBackgroundRan, isFalse);
 
     // 模拟新进程：complete 只有在当前 PID 无孤儿 lease 时才能清理。
-    await ChatRuntime.debugResetProcessWipeForTest();
+    await ChatRuntimeCore.debugResetProcessWipeForTest();
     final staleLease = File(
-      '${chatDocumentsRoot.path}/.citizenapp_chat_lease_${pid}_stale.lease',
+      '${chatDocumentsRoot.path}/.chat_sdk_chat_lease_${pid}_stale.lease',
     );
     await staleLease.create();
     expect(
@@ -1001,7 +993,7 @@ void main() {
   test('普通启动没有 wipe marker 时不等待正在运行的后台收件 lease', () async {
     final entered = Completer<void>();
     final release = Completer<void>();
-    final background = ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+    final background = ChatRuntimeCore.debugRunBackgroundLeaseForTest<void>(
       () async {
         entered.complete();
         await release.future;
@@ -1024,9 +1016,9 @@ void main() {
 
   // 覆盖安装先放行启动，再由显式恢复入口退役旧进程 lease，绝不删除聊天密文。
   test('覆盖安装后的新进程立即退役上一 PID 的新鲜 CID lease 且保留 Chat 数据', () async {
-    final digest = crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
+    final digest = crypto.sha256.convert(_ownerUserId.codeUnits).toString();
     final orphanLease = File(
-      '${chatDocumentsRoot.path}/.citizenapp_chat_cid_'
+      '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
       '$digest.mutation_lease',
     );
     await orphanLease.writeAsString(
@@ -1035,7 +1027,7 @@ void main() {
     );
     await orphanLease.setLastModified(DateTime.now());
     final retainedCiphertext = File(
-      '${chatDocumentsRoot.path}/chat/by_cid/retained/ciphertext.bin',
+      '${chatDocumentsRoot.path}/chat/by_user/retained/ciphertext.bin',
     );
     await retainedCiphertext.parent.create(recursive: true);
     await retainedCiphertext.writeAsBytes(const <int>[7, 8, 9], flush: true);
@@ -1051,10 +1043,7 @@ void main() {
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     expect(await orphanLease.exists(), isFalse);
-    expect(
-      await retainedCiphertext.readAsBytes(),
-      const <int>[7, 8, 9],
-    );
+    expect(await retainedCiphertext.readAsBytes(), const <int>[7, 8, 9]);
     expect(
       await ChatRuntime.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
@@ -1066,8 +1055,8 @@ void main() {
   test('普通启动遇到当前进程 CID lease 时放行且不删除活锁', () async {
     final leaseEntered = Completer<void>();
     final releaseLease = Completer<void>();
-    final heldLease = ChatRuntime.debugRunCidMutationLeaseForTest<void>(
-      cidNumber: _ownerCidNumber,
+    final heldLease = ChatRuntimeCore.debugRunUserMutationLeaseForTest<void>(
+      userId: _ownerUserId,
       documentsDirectoryProvider: () async => chatDocumentsRoot,
       operation: () async {
         leaseEntered.complete();
@@ -1082,11 +1071,12 @@ void main() {
         ).timeout(_shortQueueTimeout),
         AppDataWipeStartupResult.ready,
       );
-      final digest =
-          crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
+      final digest = crypto.sha256
+          .convert(_ownerUserId.codeUnits)
+          .toString();
       expect(
         File(
-          '${chatDocumentsRoot.path}/.citizenapp_chat_cid_'
+          '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
           '$digest.mutation_lease',
         ).existsSync(),
         isTrue,
@@ -1098,14 +1088,14 @@ void main() {
   });
 
   test('普通启动遇到损坏的 CID lease 时放行且后台整理失败关闭', () async {
-    final digest = crypto.sha256.convert(_ownerCidNumber.codeUnits).toString();
+    final digest = crypto.sha256.convert(_ownerUserId.codeUnits).toString();
     final damagedLease = File(
-      '${chatDocumentsRoot.path}/.citizenapp_chat_cid_'
+      '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
       '$digest.mutation_lease',
     );
     await damagedLease.writeAsString('damaged-owner', flush: true);
     final retainedCiphertext = File(
-      '${chatDocumentsRoot.path}/chat/by_cid/retained/ciphertext.bin',
+      '${chatDocumentsRoot.path}/chat/by_user/retained/ciphertext.bin',
     );
     await retainedCiphertext.parent.create(recursive: true);
     await retainedCiphertext.writeAsBytes(const <int>[4, 5, 6], flush: true);
@@ -1123,10 +1113,7 @@ void main() {
       throwsA(isA<StateError>()),
     );
     expect(await damagedLease.readAsString(), 'damaged-owner');
-    expect(
-      await retainedCiphertext.readAsBytes(),
-      const <int>[4, 5, 6],
-    );
+    expect(await retainedCiphertext.readAsBytes(), const <int>[4, 5, 6]);
   });
 
   test('普通启动无法读取 marker 时只 fail-closed，不得猜测 pending 并擦除', () async {
@@ -1164,10 +1151,10 @@ void main() {
       ChatPersistentWipeState.pending,
     );
 
-    await ChatRuntime.debugResetProcessWipeForTest();
+    await ChatRuntimeCore.debugResetProcessWipeForTest();
     var backgroundRan = false;
     await expectLater(
-      ChatRuntime.debugRunBackgroundLeaseForTest<void>(
+      ChatRuntimeCore.debugRunBackgroundLeaseForTest<void>(
         () async => backgroundRan = true,
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
@@ -1255,14 +1242,8 @@ void main() {
         );
       }
 
-      await expectLater(
-        WalletIsar.instance.db(),
-        throwsA(isA<StateError>()),
-      );
-      await expectLater(
-        ChatIsar.instance.db(),
-        throwsA(isA<StateError>()),
-      );
+      await expectLater(WalletIsar.instance.db(), throwsA(isA<StateError>()));
+      await expectLater(ChatIsar.instance.db(), throwsA(isA<StateError>()));
 
       releaseChat.complete();
       await expectLater(blockedChat, throwsA(isA<StateError>()));
@@ -1272,8 +1253,9 @@ void main() {
         WalletIsar.instance.resetForTest(),
         ChatIsar.instance.resetForTest(),
       ]).timeout(_wipeTimeout);
-      final walletMarker =
-          await WalletIsar.instance.read<String?>((isar) async {
+      final walletMarker = await WalletIsar.instance.read<String?>((
+        isar,
+      ) async {
         return (await isar.walletAttestationEntitys.get(0))?.lastRequestPayload;
       });
       expect(walletMarker, isNull);
@@ -1337,10 +1319,7 @@ void main() {
         newWalletEntered.future,
       ]).timeout(_shortQueueTimeout);
 
-      final oldChatRejected = expectLater(
-        oldChat,
-        throwsA(isA<StateError>()),
-      );
+      final oldChatRejected = expectLater(oldChat, throwsA(isA<StateError>()));
       final oldWalletRejected = expectLater(
         oldWallet,
         throwsA(isA<StateError>()),

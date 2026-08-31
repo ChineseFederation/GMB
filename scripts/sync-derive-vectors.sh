@@ -18,7 +18,7 @@ set -euo pipefail
 # 仓库根(本脚本位于 <repo>/scripts/)。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/ProgramConsole/target}"
+PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/programconsole/target}"
 SHARED_WORK_DIR="${PROGRAM_CONSOLE_WORK_DIR:-${PROGRAM_CONSOLE_TARGET_ROOT}/.work/shared-repository}"
 [[ "$SHARED_WORK_DIR" == "${PROGRAM_CONSOLE_TARGET_ROOT}/.work/shared-repository" ]] \
   || { echo "[sync] 共享仓库中央工作目录不合法：${SHARED_WORK_DIR}" >&2; exit 1; }

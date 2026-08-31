@@ -600,9 +600,6 @@ pub unsafe extern "C" fn smoldot_free_string(ptr: *mut c_char) {
 /// - Returned string must be freed with `smoldot_free_string`
 #[no_mangle]
 pub unsafe extern "C" fn smoldot_version() -> *mut c_char {
-    #[cfg(target_os = "ios")]
-    // 中文注释：iOS 由同一个静态库保留 ChatSDK 全部 FFI，避免两套 Rust runtime 冲突。
-    chat_sdk::retain_ffi();
     let version = env!("CARGO_PKG_VERSION");
     CString::new(version)
         .unwrap_or_else(|_| CString::new("unknown").unwrap())

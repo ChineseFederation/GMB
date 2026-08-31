@@ -2,7 +2,7 @@
 enum ChatSdkErrorCode {
   invalidContent,
   contentTooLarge,
-  invalidEnvelope,
+  invalidMessage,
   routeMismatch,
   expired,
   recipientKeyUnavailable,

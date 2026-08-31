@@ -10,7 +10,7 @@ import 'package:http/testing.dart';
 import 'package:citizenapp/8964/chain/square_chain_service.dart';
 import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
+import 'package:citizenapp/chat/chat_product_policy.dart';
 import 'package:citizenapp/my/membership/membership_page.dart';
 import 'package:citizenapp/my/membership/membership_revision.dart';
 import 'package:citizenapp/my/membership/subscription_service.dart';

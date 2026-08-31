@@ -12,10 +12,10 @@ REPO_ROOT="$(dirname "$CITIZENAPP_DIR")"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 
 if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
-  PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/ProgramConsole/target}"
+  PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/programconsole/target}"
   PROGRAM_CONSOLE_WORK_DIR="$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-test"
-  helper=/Users/rhett/Only/ProgramConsole/actions/local-build.sh
-  [[ -f "$helper" && "$PROGRAM_CONSOLE_WORK_DIR" == /Users/rhett/Only/ProgramConsole/target/.work/citizenapp-test ]] \
+  helper=/Users/rhett/Only/programconsole/actions/local-build.sh
+  [[ -f "$helper" && "$PROGRAM_CONSOLE_WORK_DIR" == /Users/rhett/Only/programconsole/target/.work/citizenapp-test ]] \
     || { echo '本机CitizenApp测试缺少ProgramConsole中央快照入口' >&2; exit 1; }
   /usr/bin/find "$PROGRAM_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
   mkdir -p "$PROGRAM_CONSOLE_WORK_DIR"
@@ -23,13 +23,11 @@ if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
   # shellcheck disable=SC1090
   source "$helper"
   snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
-  # CitizenApp 的跨产品契约测试直接读取链端 SCALE 金标和 CitizenServe 推送实现，
-  # 不在应用目录保存镜像副本。中央快照必须携带这些只读真源，避免本机测试因
-  # 快照缺文件而失败，同时继续保证测试读取的是本次仓库源码而非过期复制品。
+  # CitizenApp 只保留必须与链运行时一致的 SCALE 金标；ChatSDK 与 ChatServer
+  # 各自在产品目录验证自己的实现，应用测试不得再复制或读取聊天服务源码。
   snapshot_truth_sources=(
     citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json
     citizenchain/runtime/tests/fixtures/role_permission.json
-    citizenserve/src/chat/push.ts
   )
   for relative_path in "${snapshot_truth_sources[@]}"; do
     source_path="$REPO_ROOT/$relative_path"
@@ -53,6 +51,12 @@ fi
 if [[ "${CI:-}" != true ]]; then
   [[ "$CITIZENAPP_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
     || { echo "CitizenApp本机测试源码不在ProgramConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
+  # 中央快照中的本机测试直接消费同一快照内 ChatSDK；覆盖文件随快照统一清理。
+  cat > "$CITIZENAPP_DIR/pubspec_overrides.yaml" <<'YAML'
+dependency_overrides:
+  gmb_chat_sdk:
+    path: ../chatsdk
+YAML
 fi
 
 if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then
@@ -124,6 +128,10 @@ release_native_build_lock() {
 cd "$CITIZENAPP_DIR"
 acquire_native_build_lock
 trap release_native_build_lock EXIT
+if rg -n --hidden --glob '!target/**' 'chat_sdk' "$CITIZENAPP_DIR/smoldot"; then
+  echo '错误: CitizenApp Smoldot 目录仍包含 ChatSDK 编译或链接依赖' >&2
+  exit 1
+fi
 "$SCRIPT_DIR/build-smoldot-native.sh" host
 "$SCRIPT_DIR/../../chatsdk/scripts/build-native.sh" host
 "$FLUTTER_BIN" analyze --no-pub

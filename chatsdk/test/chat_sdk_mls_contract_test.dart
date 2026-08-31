@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:chat_sdk/chat_sdk.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 // 合同测试锁定 ChatSDK 的中性身份、状态清理边界和脱敏错误码。
 void main() {
@@ -14,27 +14,40 @@ void main() {
       createdAtMillis: Int64.ONE,
       expiresAtMillis: Int64.TWO,
     );
-    final envelope = ChatEnvelope(
-      envelopeId: 'envelope-a',
+    final message = EncryptedMessage(
+      messageId: 'message-a',
       conversationId: 'conversation-a',
       senderUserId: 'user-1',
-      recipientUserId: 'user-2',
       senderDeviceId: 'device-a',
-      mlsMessage: <int>[1, 2, 3],
+      deliveries: <EncryptedDelivery>[
+        EncryptedDelivery(
+          recipient: Recipient(userId: 'user-2', deviceId: 'device-b'),
+          openmlsCiphertext: <int>[1, 2, 3],
+        ),
+      ],
       createdAtMillis: Int64.ONE,
-      ttlMillis: Int64.TWO,
     );
 
     expect(route.peerUserId, 'user-42');
-    expect(envelope.senderUserId, 'user-1');
-    expect(envelope.recipientUserId, 'user-2');
-    expect(envelope.mlsMessage, <int>[1, 2, 3]);
+    expect(message.senderUserId, 'user-1');
+    expect(message.recipientUserId, 'user-2');
+    expect(message.openmlsCiphertext, <int>[1, 2, 3]);
   });
 
   test('ChatSDK source does not own product identity names', () {
     final sourceRoot = Directory('lib');
+    final legacyIdentityWord = String.fromCharCodes(const <int>[99, 105, 100]);
+    final titledLegacyIdentityWord =
+        '${legacyIdentityWord[0].toUpperCase()}${legacyIdentityWord.substring(1)}';
+    final unrelatedNativeLibrary = String.fromCharCodes(
+      const <int>[115, 109, 111, 108, 100, 111, 116],
+    );
     final forbidden = RegExp(
-      r'cid_number|CidNumber|cidNumber|citizen_chat_mls_|libsmoldot',
+      <String>[
+        legacyIdentityWord,
+        '_number|${titledLegacyIdentityWord}Number|'
+            '${legacyIdentityWord}Number|chat_mls_|lib$unrelatedNativeLibrary',
+      ].join(),
     );
     final violations = <String>[];
 

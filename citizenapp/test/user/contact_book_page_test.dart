@@ -11,7 +11,7 @@ import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/profile/user_profile_page.dart';
 import 'package:citizenapp/8964/profile/widgets/profile_avatar.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/open_direct_chat.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/my/user/contact_book_page.dart';
@@ -509,11 +509,11 @@ void main() {
     String? openedTitle;
     Future<void> opener(
       BuildContext context, {
-      required String peerCidNumber,
+      required String peerUserId,
       required String title,
     }) async {
       // 注入只用于断言路由参数，不替代正式 openDirectChat 实现。
-      openedPeerCidNumber = peerCidNumber;
+      openedPeerCidNumber = peerUserId;
       openedTitle = title;
     }
 
@@ -533,10 +533,10 @@ void main() {
     String? openedTitle;
     Future<void> opener(
       BuildContext context, {
-      required String peerCidNumber,
+      required String peerUserId,
       required String title,
     }) async {
-      openedPeerCidNumber = peerCidNumber;
+      openedPeerCidNumber = peerUserId;
       openedTitle = title;
     }
 

@@ -4,14 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/chat_models.dart';
-import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:chat_sdk/protocol.dart';
-import 'package:citizenapp/chat/storage/chat_crypto.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
-import 'package:citizenapp/isar/chat_isar.dart';
-import 'package:citizenapp/security/local_cipher.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -21,33 +14,61 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../../support/isar_test_env.dart';
 
-class _HandoverWalletManager extends WalletManager {
-  _HandoverWalletManager(AccountDataBinding sourceBinding)
-      : sourceBinding = sourceBinding,
-        activeBinding = sourceBinding;
+class _TestBinding extends AccountDataBinding implements ChatDataBinding {
+  const _TestBinding({
+    required super.genesisHash,
+    required super.cidNumber,
+    required super.bindingRevision,
+    required super.accountId,
+  });
 
-  final AccountDataBinding sourceBinding;
-  AccountDataBinding activeBinding;
+  @override
+  String get keyDomain => genesisHash;
+
+  @override
+  String get userId => cidNumber;
+
+  @override
+  String get id => '$keyDomain|$userId|$bindingRevision|$accountId';
+
+  @override
+  Map<String, Object> toJson() => <String, Object>{
+    'key_domain': keyDomain,
+    'user_id': userId,
+    'binding_revision': bindingRevision,
+    'account_id': accountId,
+  };
+}
+
+class _HandoverWalletManager extends WalletManager {
+  _HandoverWalletManager(_TestBinding sourceBinding)
+    : sourceBinding = sourceBinding,
+      activeBinding = sourceBinding;
+
+  final _TestBinding sourceBinding;
+  _TestBinding activeBinding;
 
   Uint8List _key(String accountId, LocalKeyPurpose purpose) {
     if (accountId == sourceBinding.accountId) {
       final fixed = debugChatKeys[purpose];
       if (fixed != null) return Uint8List.fromList(fixed);
-      return Uint8List.fromList(List<int>.generate(
-        32,
-        (index) => (0x20 + purpose.index * 13 + index) & 0xff,
-      ));
+      return Uint8List.fromList(
+        List<int>.generate(
+          32,
+          (index) => (0x20 + purpose.index * 13 + index) & 0xff,
+        ),
+      );
     }
-    return Uint8List.fromList(List<int>.generate(
-      32,
-      (index) => (0x80 + purpose.index * 13 + index) & 0xff,
-    ));
+    return Uint8List.fromList(
+      List<int>.generate(
+        32,
+        (index) => (0x80 + purpose.index * 13 + index) & 0xff,
+      ),
+    );
   }
 
   @override
-  Future<AccountDataBinding> accountDataBindingForAccountId(
-    String accountId,
-  ) async {
+  Future<_TestBinding> accountDataBindingForAccountId(String accountId) async {
     if (activeBinding.accountId != accountId) {
       throw StateError('测试账户不是当前绑定账户');
     }
@@ -59,24 +80,21 @@ class _HandoverWalletManager extends WalletManager {
     String accountId,
     LocalKeyPurpose purpose, {
     String? context,
-  }) async =>
-      _key(accountId, purpose);
+  }) async => _key(accountId, purpose);
 
   @override
   Future<List<Uint8List>> readDataKeysForBinding(
     AccountDataBinding binding,
     List<({String? context, LocalKeyPurpose purpose})> requests,
-  ) async =>
-      requests
-          .map((request) => _key(binding.accountId, request.purpose))
-          .toList(growable: false);
+  ) async => requests
+      .map((request) => _key(binding.accountId, request.purpose))
+      .toList(growable: false);
 
   @override
   Future<List<Uint8List>> deriveDataKeysForBindingHandover(
     AccountDataBinding binding,
     List<({String? context, LocalKeyPurpose purpose})> requests,
-  ) =>
-      readDataKeysForBinding(binding, requests);
+  ) => readDataKeysForBinding(binding, requests);
 }
 
 class _FailingTargetHandoverWalletManager extends _HandoverWalletManager {
@@ -111,14 +129,14 @@ class _FailingTargetHandoverWalletManager extends _HandoverWalletManager {
 
 class _FailOnceCommitChatStore extends ChatStore {
   _FailOnceCommitChatStore({required ChatCrypto crypto})
-      : super(crypto: crypto);
+    : super(crypto: crypto);
 
   int commitCalls = 0;
 
   @override
   Future<void> commitAccountHandover({
-    required AccountDataBinding source,
-    required AccountDataBinding target,
+    required ChatDataBinding source,
+    required ChatDataBinding target,
   }) async {
     commitCalls += 1;
     if (commitCalls == 1) {
@@ -131,7 +149,7 @@ class _FailOnceCommitChatStore extends ChatStore {
 /// 把一条来源绑定消息暂停在摘要已加密、尚未写入 ChatIsar 的窗口。
 class _PausingSummaryChatCrypto extends ChatCrypto {
   _PausingSummaryChatCrypto(WalletManager walletManager)
-      : super(walletManager: walletManager);
+    : super(CitizenChatStorageKeyProvider(walletManager));
 
   Completer<void>? _paused;
   Completer<void>? _resume;
@@ -140,7 +158,7 @@ class _PausingSummaryChatCrypto extends ChatCrypto {
   void pauseNextMessageBeforeWrite() {
     _paused = Completer<void>();
     _resume = Completer<void>();
-    // saveIncomingEnvelope 先加密正文，再加密会话摘要。
+    // saveIncomingMessage 先加密正文，再加密会话摘要。
     _remainingEncryptions = 2;
   }
 
@@ -153,14 +171,14 @@ class _PausingSummaryChatCrypto extends ChatCrypto {
 
   @override
   Future<String> encryptText({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String recordId,
     required String plaintext,
     ChatCipherBinding? binding,
   }) async {
     final cipher = await super.encryptText(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: currentAccountId,
       recordId: recordId,
       plaintext: plaintext,
@@ -184,9 +202,9 @@ class _FailIfEmptyChatOpensKeys extends ChatCrypto {
 
   @override
   Future<ChatCipherBinding> resolveCipherBinding({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
-    String? expectedGenesisHash,
+    String? expectedKeyDomain,
   }) async {
     bindingResolveCount += 1;
     throw StateError('空会话不应解析钱包绑定');
@@ -194,7 +212,7 @@ class _FailIfEmptyChatOpensKeys extends ChatCrypto {
 
   @override
   Future<ChatCipherSession> openCipherSession({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     ChatCipherBinding? binding,
   }) async {
@@ -210,53 +228,52 @@ class _FailIfEmptyChatOpensKeys extends ChatCrypto {
 void main() {
   useIsolatedIsar();
 
-  const accountId = '0x'
+  const accountId =
+      '0x'
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-  const ownerCidNumber = 'CN220-CTZN2-100000001-2026';
-  const peerCidNumber = 'CN220-CTZN2-100000002-2026';
+  const ownerUserId = 'CN220-CTZN2-100000001-2026';
+  const peerUserId = 'CN220-CTZN2-100000002-2026';
   const handoverGenesisHash =
       '0x1111111111111111111111111111111111111111111111111111111111111111';
   const handoverTargetAccountId =
       '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-  const handoverSource = AccountDataBinding(
+  const handoverSource = _TestBinding(
     genesisHash: handoverGenesisHash,
-    cidNumber: ownerCidNumber,
+    cidNumber: ownerUserId,
     bindingRevision: 1,
     accountId: accountId,
   );
-  const handoverTarget = AccountDataBinding(
+  const handoverTarget = _TestBinding(
     genesisHash: handoverGenesisHash,
-    cidNumber: ownerCidNumber,
+    cidNumber: ownerUserId,
     bindingRevision: 2,
     accountId: handoverTargetAccountId,
   );
 
-  Directory bindingDirectory(
-    Directory root,
-    AccountDataBinding binding,
-  ) =>
-      Directory(
-        '${root.path}/chat/by_cid/${binding.cidNumber}/by_binding/'
-        '${binding.bindingRevision}/${binding.accountId}',
-      );
+  Directory bindingDirectory(Directory root, _TestBinding binding) => Directory(
+    '${root.path}/chat/by_user/${binding.cidNumber}/by_binding/'
+    '${binding.bindingRevision}/${binding.accountId}',
+  );
 
-  Map<String, dynamic> receiptEnvelope(File marker) =>
+  Map<String, dynamic> receiptMessage(File marker) =>
       jsonDecode(marker.readAsStringSync()) as Map<String, dynamic>;
 
   Map<String, dynamic> receiptPayload(File marker) =>
-      jsonDecode(receiptEnvelope(marker)['payload_json'] as String)
+      jsonDecode(receiptMessage(marker)['payload_json'] as String)
           as Map<String, dynamic>;
 
   Future<
-      ({
-        Directory root,
-        Directory sourceDirectory,
-        Directory targetDirectory,
-        File receipt,
-        _HandoverWalletManager manager,
-        ChatStore store,
-        ChatRuntime runtime,
-      })> createRuntimeHandoverFixture({
+    ({
+      Directory root,
+      Directory sourceDirectory,
+      Directory targetDirectory,
+      File receipt,
+      _HandoverWalletManager manager,
+      ChatStore store,
+      ChatRuntime runtime,
+    })
+  >
+  createRuntimeHandoverFixture({
     ChatStore Function(_HandoverWalletManager manager)? createStore,
   }) async {
     final root = await Directory.systemTemp.createTemp('gmb-chat-binding-');
@@ -264,8 +281,9 @@ void main() {
       if (root.existsSync()) await root.delete(recursive: true);
     });
     final manager = _HandoverWalletManager(handoverSource);
-    final store = createStore?.call(manager) ??
-        ChatStore(crypto: ChatCrypto(walletManager: manager));
+    final store =
+        createStore?.call(manager) ??
+        ChatStore(crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)));
     await store.activateBindingFence(handoverSource);
     final runtime = ChatRuntime(
       store: store,
@@ -275,7 +293,7 @@ void main() {
     final sourceDirectory = bindingDirectory(root, handoverSource);
     final targetDirectory = bindingDirectory(root, handoverTarget);
     final receipt = File(
-      ChatRuntime.debugFileHandoverReceiptPathForTest(
+      ChatRuntimeCore.debugFileHandoverReceiptPathForTest(
         bindingDirectory: sourceDirectory,
         target: handoverTarget,
       ),
@@ -291,29 +309,32 @@ void main() {
     );
   }
 
-  ChatEnvelope envelopeOf({
-    required String envelopeId,
+  EncryptedMessage messageOf({
+    required String messageId,
     required String conversationId,
     int createdAtMillis = 1000,
   }) {
-    return ChatEnvelope()
-      ..envelopeId = envelopeId
+    return EncryptedMessage()
+      ..messageId = messageId
       ..conversationId = conversationId
-      ..senderCidNumber = peerCidNumber
-      ..recipientCidNumber = ownerCidNumber
+      ..senderUserId = peerUserId
+      ..recipientCidNumber = ownerUserId
       ..senderDeviceId = 'dev-1'
-      ..mlsMessageKind = MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION
       ..createdAtMillis = Int64(createdAtMillis);
   }
 
-  Future<void> saveText(ChatStore store, String envelopeId, String text,
-      {String conversationId = 'conv-1',
-      int at = 1000,
-      String currentAccountId = accountId}) async {
-    final binding = AccountDataBinding(
+  Future<void> saveText(
+    ChatStore store,
+    String messageId,
+    String text, {
+    String conversationId = 'conv-1',
+    int at = 1000,
+    String currentAccountId = accountId,
+  }) async {
+    final binding = _TestBinding(
       genesisHash:
           '0x1111111111111111111111111111111111111111111111111111111111111111',
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: currentAccountId == accountId ? 1 : 2,
       accountId: currentAccountId,
     );
@@ -323,16 +344,16 @@ void main() {
     } on StateError {
       bindingToken = await store.activateBindingFence(binding);
     }
-    return store.saveIncomingEnvelope(
+    return store.saveIncomingMessage(
       bindingToken: bindingToken,
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: currentAccountId,
-      envelope: envelopeOf(
-        envelopeId: envelopeId,
+      message: messageOf(
+        messageId: messageId,
         conversationId: conversationId,
         createdAtMillis: at,
       ),
-      envelopeBytes: const <int>[1, 2, 3],
+      messageBytes: const <int>[1, 2, 3],
       messageKind: ChatMessageKind.text,
       plaintext: ChatPayloadCodec.encode(ChatContent.text(text)),
     );
@@ -369,7 +390,7 @@ void main() {
     expect(conversations.single.lastMessageCipher, isNot(contains(secret)));
   });
 
-  test('待发送消息先以本机密文进入会话，再与正式 Envelope 原子替换', () async {
+  test('待发送消息先以本机密文进入会话，再与正式 Message 原子替换', () async {
     final store = ChatStore();
     final token = await store.activateBindingFence(handoverSource);
     const localMessageId = 'pending:conv-pending:1000:nonce';
@@ -377,59 +398,56 @@ void main() {
 
     await store.savePendingOutgoingMessage(
       bindingToken: token,
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       localMessageId: localMessageId,
       conversationId: 'conv-pending',
-      recipientCidNumber: peerCidNumber,
+      recipientUserId: peerUserId,
       messageKind: ChatMessageKind.text,
       payload: payload,
       createdAtMillis: 1000,
     );
 
     final rawPending = await ChatIsar.instance.read(
-      (isar) => isar.chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, localMessageId),
+      (isar) => isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+        ownerUserId,
+        localMessageId,
+      ),
     );
     expect(rawPending, isNotNull);
-    expect(rawPending!.envelopeBytesHex, isEmpty);
+    expect(rawPending!.messageBytesHex, isEmpty);
     expect(rawPending.plaintextCipher, isNot(contains('离线先保存')));
     expect(
       (await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         conversationId: 'conv-pending',
-      ))
-          .single
-          .plaintext,
+      )).single.plaintext,
       payload,
     );
     expect(
       (await store.readPendingOutgoingMessages(
         bindingToken: token,
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
-      ))
-          .single
-          .localMessageId,
+      )).single.localMessageId,
       localMessageId,
     );
 
-    final envelope = ChatEnvelope()
-      ..envelopeId = 'env-pending-formal'
+    final message = EncryptedMessage()
+      ..messageId = 'env-pending-formal'
       ..conversationId = 'conv-pending'
-      ..senderCidNumber = ownerCidNumber
-      ..recipientCidNumber = peerCidNumber
+      ..senderUserId = ownerUserId
+      ..recipientCidNumber = peerUserId
       ..senderDeviceId = 'alice-phone'
-      ..mlsMessageKind = MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION
       ..createdAtMillis = Int64(1001);
-    await store.saveOutgoingEnvelope(
+    await store.saveOutgoingMessage(
       bindingToken: token,
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
-      envelope: envelope,
-      envelopeBytes: envelope.writeToBuffer(),
-      recipientCidNumber: peerCidNumber,
+      message: message,
+      messageBytes: message.writeToBuffer(),
+      recipientUserId: peerUserId,
       messageKind: ChatMessageKind.text,
       deliveryState: ChatMessageDeliveryState.queued,
       plaintext: payload,
@@ -439,23 +457,23 @@ void main() {
     final rows = await ChatIsar.instance.read(
       (isar) => isar.chatMessageEntitys
           .filter()
-          .ownerCidNumberEqualTo(ownerCidNumber)
+          .ownerUserIdEqualTo(ownerUserId)
           .conversationIdEqualTo('conv-pending')
           .findAll(),
     );
-    expect(rows.map((row) => row.envelopeId), ['env-pending-formal']);
+    expect(rows.map((row) => row.messageId), ['env-pending-formal']);
     expect(
       await store.readPendingOutgoingMessages(
         bindingToken: token,
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
       ),
       isEmpty,
     );
-    expect(await store.outboundQueueCount(ownerCidNumber), 1);
+    expect(await store.outboundQueueCount(ownerUserId), 1);
   });
 
-  test('较早待发送消息转正式 Envelope 时不回退较新的会话摘要', () async {
+  test('较早待发送消息转正式 Message 时不回退较新的会话摘要', () async {
     final store = ChatStore();
     final token = await store.activateBindingFence(handoverSource);
     const conversationId = 'conv-pending-order';
@@ -470,32 +488,31 @@ void main() {
     ]) {
       await store.savePendingOutgoingMessage(
         bindingToken: token,
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         localMessageId: pending.$1,
         conversationId: conversationId,
-        recipientCidNumber: peerCidNumber,
+        recipientUserId: peerUserId,
         messageKind: ChatMessageKind.text,
         payload: pending.$2,
         createdAtMillis: pending.$3,
       );
     }
 
-    final firstEnvelope = ChatEnvelope()
-      ..envelopeId = 'env-pending-order-first'
+    final firstMessage = EncryptedMessage()
+      ..messageId = 'env-pending-order-first'
       ..conversationId = conversationId
-      ..senderCidNumber = ownerCidNumber
-      ..recipientCidNumber = peerCidNumber
+      ..senderUserId = ownerUserId
+      ..recipientCidNumber = peerUserId
       ..senderDeviceId = 'alice-phone'
-      ..mlsMessageKind = MlsWireMessageKind.MLS_WIRE_MESSAGE_KIND_APPLICATION
       ..createdAtMillis = Int64(1000);
-    await store.saveOutgoingEnvelope(
+    await store.saveOutgoingMessage(
       bindingToken: token,
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
-      envelope: firstEnvelope,
-      envelopeBytes: firstEnvelope.writeToBuffer(),
-      recipientCidNumber: peerCidNumber,
+      message: firstMessage,
+      messageBytes: firstMessage.writeToBuffer(),
+      recipientUserId: peerUserId,
       messageKind: ChatMessageKind.text,
       deliveryState: ChatMessageDeliveryState.queued,
       plaintext: firstPayload,
@@ -503,21 +520,18 @@ void main() {
     );
 
     final preview = (await store.readConversationPreviews(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
-    ))
-        .single;
+    )).single;
     expect(preview.lastMessage, '第二条');
     expect(preview.lastUpdatedAt.millisecondsSinceEpoch, 2000);
     expect(
       (await store.readPendingOutgoingMessages(
         bindingToken: token,
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         conversationId: conversationId,
-      ))
-          .single
-          .localMessageId,
+      )).single.localMessageId,
       latestLocalId,
     );
   });
@@ -528,23 +542,20 @@ void main() {
     await saveText(store, 'env-1', secret);
 
     final messages = await store.readMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       conversationId: 'conv-1',
     );
-    expect(
-      ChatPayloadCodec.decode(messages.single.plaintext!).text,
-      secret,
-    );
+    expect(ChatPayloadCodec.decode(messages.single.plaintext!).text, secret);
 
     final previews = await store.readConversationPreviews(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
     );
     expect(previews.single.lastMessage, secret);
     expect(
       await store.readMessages(
-        ownerCidNumber: 'CN220-CTZN2-999999999-2026',
+        ownerUserId: 'CN220-CTZN2-999999999-2026',
         currentAccountId: accountId,
         conversationId: 'conv-1',
       ),
@@ -557,7 +568,7 @@ void main() {
     final store = ChatStore(crypto: crypto);
 
     final previews = await store.readConversationPreviews(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
     );
 
@@ -571,7 +582,7 @@ void main() {
     final store = ChatStore(crypto: crypto);
 
     final messages = await store.readMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       conversationId: 'conv-empty-window',
     );
@@ -589,11 +600,11 @@ void main() {
 
     Future<List<String>> hit(String q) async {
       final rows = await store.searchMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         keyword: q,
       );
-      return rows.map((r) => r.envelopeId).toList()..sort();
+      return rows.map((r) => r.messageId).toList()..sort();
     }
 
     expect(await hit('天气'), <String>['env-1']);
@@ -605,7 +616,7 @@ void main() {
     final store = ChatStore();
     await saveText(store, 'env-1', 'Hello World');
     final rows = await store.searchMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       keyword: 'HELLO',
     );
@@ -620,19 +631,20 @@ void main() {
     await saveText(store, 'env-2', 'xabcx', at: 2000);
 
     final rows = await store.searchMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       keyword: 'abc',
     );
-    expect(rows.map((r) => r.envelopeId), <String>['env-2'],
-        reason: '假阳性 bcab 必须被滤掉，只留真正包含 abc 的记录');
+    expect(rows.map((r) => r.messageId), <String>[
+      'env-2',
+    ], reason: '假阳性 bcab 必须被滤掉，只留真正包含 abc 的记录');
   });
 
   test('搜索：单字符查询无 bigram，仍能通过回落扫描命中', () async {
     final store = ChatStore();
     await saveText(store, 'env-1', '公民钱包');
     final rows = await store.searchMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       keyword: '钱',
     );
@@ -643,7 +655,7 @@ void main() {
     final store = ChatStore();
     await saveText(store, 'env-1', '今天天气很好');
     final rows = await store.searchMessages(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       keyword: '完全不相干的词',
     );
@@ -657,28 +669,30 @@ void main() {
 
     // 直接篡改密文，模拟密钥不匹配/密文损坏
     await ChatIsar.instance.writeTxn((isar) async {
-      final row = await isar.chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-1');
+      final row = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+        ownerUserId,
+        'env-1',
+      );
       row!.plaintextCipher = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-      await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(row);
+      await isar.chatMessageEntitys.putByOwnerUserIdMessageId(row);
     });
 
     await expectLater(
       store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         conversationId: 'conv-1',
       ),
-      throwsA(isA<LocalCipherException>()),
+      throwsA(isA<ChatLocalCipherException>()),
     );
 
     final display = await store.readMessagesForDisplay(
-      ownerCidNumber: ownerCidNumber,
+      ownerUserId: ownerUserId,
       currentAccountId: accountId,
       conversationId: 'conv-1',
     );
     expect(display.integrityFailureCount, 1);
-    expect(display.messages.map((message) => message.envelopeId), ['env-2']);
+    expect(display.messages.map((message) => message.messageId), ['env-2']);
     expect(
       ChatPayloadCodec.decode(display.messages.single.plaintext!).text,
       '仍可验证的内容',
@@ -691,15 +705,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -708,33 +722,36 @@ void main() {
     ChatCrypto.debugFixedKeys = null;
     try {
       final store = ChatStore(
-        crypto: ChatCrypto(walletManager: manager),
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
       );
       await saveText(store, 'env-handover', '只有内存中出现的交接明文');
-      final before = await ChatIsar.instance.read((isar) async => (await isar
-              .chatMessageEntitys
-              .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-handover'))!
-          .plaintextCipher!);
+      final before = await ChatIsar.instance.read(
+        (isar) async =>
+            (await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+              ownerUserId,
+              'env-handover',
+            ))!.plaintextCipher!,
+      );
 
       await store.stageAccountHandover(source: source, target: target);
       final stagedRows = await ChatIsar.instance.read(
         (isar) async => isar.chatAccountHandoverEntitys.where().findAll(),
       );
       expect(stagedRows, hasLength(1));
-      expect(
-        stagedRows.single.manifestJson,
-        isNot(contains('只有内存中出现的交接明文')),
-      );
+      expect(stagedRows.single.manifestJson, isNot(contains('只有内存中出现的交接明文')));
       final stagedManifest =
           jsonDecode(stagedRows.single.manifestJson) as Map<String, dynamic>;
       final stagedPayload = stagedManifest['payload_json'] as String;
       expect(stagedManifest.keys.toSet(), <String>{'payload_json', 'mac'});
       expect(stagedPayload, isNot(contains('"cipher"')));
       expect(stagedPayload, isNot(contains('"tokens"')));
-      final stillSource = await ChatIsar.instance.read((isar) async =>
-          (await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-                  ownerCidNumber, 'env-handover'))!
-              .plaintextCipher!);
+      final stillSource = await ChatIsar.instance.read(
+        (isar) async =>
+            (await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+              ownerUserId,
+              'env-handover',
+            ))!.plaintextCipher!,
+      );
       expect(stillSource, before, reason: 'finalized 前正式消息行不得切换');
 
       await expectLater(
@@ -758,15 +775,16 @@ void main() {
         throwsA(isA<StateError>()),
       );
       await store.commitAccountHandover(source: source, target: target);
-      final committed = await ChatIsar.instance.read((isar) async => (await isar
-          .chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-handover'))!);
+      final committed = await ChatIsar.instance.read(
+        (isar) async => (await isar.chatMessageEntitys
+            .getByOwnerUserIdMessageId(ownerUserId, 'env-handover'))!,
+      );
       final after = committed.plaintextCipher!;
       expect(after, isNot(before));
       expect(committed.bindingRevision, target.bindingRevision);
       expect(committed.accountId, target.accountId);
       final messages = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-1',
       );
@@ -777,7 +795,7 @@ void main() {
         <String>['只有内存中出现的交接明文'],
       );
       final previews = await store.readConversationPreviews(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
       );
       expect(previews.single.lastMessage, '只有内存中出现的交接明文');
@@ -797,15 +815,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -813,19 +831,19 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-missing-marker', '清单不能静默消失');
       await store.stageAccountHandover(source: source, target: target);
       final before = await ChatIsar.instance.read(
-        (isar) async =>
-            (await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-          ownerCidNumber,
-          'env-missing-marker',
-        ))!,
+        (isar) async => (await isar.chatMessageEntitys
+            .getByOwnerUserIdMessageId(ownerUserId, 'env-missing-marker'))!,
       );
       await ChatIsar.instance.writeTxn((isar) async {
-        final marker =
-            await isar.chatAccountHandoverEntitys.where().findFirst();
+        final marker = await isar.chatAccountHandoverEntitys
+            .where()
+            .findFirst();
         await isar.chatAccountHandoverEntitys.delete(marker!.id);
       });
 
@@ -849,15 +867,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -865,7 +883,9 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-idempotent', '重复提交仍须验真');
       await store.stageAccountHandover(source: source, target: target);
       manager.activeBinding = target;
@@ -873,7 +893,7 @@ void main() {
       await store.commitAccountHandover(source: source, target: target);
 
       final messages = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-1',
       );
@@ -888,14 +908,16 @@ void main() {
         0,
       );
       await ChatIsar.instance.writeTxn((isar) async {
-        final row = await isar.chatMessageEntitys
-            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-idempotent');
+        final row = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          ownerUserId,
+          'env-idempotent',
+        );
         row!.plaintextCipher = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
         await isar.chatMessageEntitys.put(row);
       });
       await expectLater(
         store.commitAccountHandover(source: source, target: target),
-        throwsA(isA<LocalCipherException>()),
+        throwsA(isA<ChatLocalCipherException>()),
       );
     } finally {
       ChatCrypto.debugFixedKeys = previousFixedKeys;
@@ -909,15 +931,15 @@ void main() {
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
     const thirdAccountId =
         '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -925,16 +947,17 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-third-binding', '不能从过滤快照里消失');
       await store.stageAccountHandover(source: source, target: target);
       final rowId = await ChatIsar.instance.read(
         (isar) async =>
-            (await isar.chatMessageEntitys.getByOwnerCidNumberEnvelopeId(
-          ownerCidNumber,
-          'env-third-binding',
-        ))!
-                .id,
+            (await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+              ownerUserId,
+              'env-third-binding',
+            ))!.id,
       );
 
       Future<void> expectTamperRejected(
@@ -943,7 +966,7 @@ void main() {
         await ChatIsar.instance.writeTxn((isar) async {
           final row = await isar.chatMessageEntitys.get(rowId);
           row!
-            ..ownerCidNumber = source.cidNumber
+            ..ownerUserId = source.cidNumber
             ..bindingRevision = source.bindingRevision
             ..accountId = source.accountId;
           corrupt(row);
@@ -955,9 +978,7 @@ void main() {
         );
       }
 
-      await expectTamperRejected(
-        (row) => row.ownerCidNumber = peerCidNumber,
-      );
+      await expectTamperRejected((row) => row.ownerUserId = peerUserId);
       await expectTamperRejected(
         (row) => row
           ..bindingRevision = 77
@@ -979,15 +1000,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -995,12 +1016,14 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-clear-summary', '会话摘要不可降级为空');
       await store.stageAccountHandover(source: source, target: target);
       await ChatIsar.instance.writeTxn((isar) async {
         final row = await isar.chatConversationEntitys
-            .getByOwnerCidNumberConversationId(ownerCidNumber, 'conv-1');
+            .getByOwnerUserIdConversationId(ownerUserId, 'conv-1');
         row!.lastMessageCipher = '';
         await isar.chatConversationEntitys.put(row);
       });
@@ -1025,15 +1048,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1041,12 +1064,16 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-clear-message', '消息正文不可降级为空');
       await store.stageAccountHandover(source: source, target: target);
       await ChatIsar.instance.writeTxn((isar) async {
-        final row = await isar.chatMessageEntitys
-            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-clear-message');
+        final row = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          ownerUserId,
+          'env-clear-message',
+        );
         row!
           ..plaintextCipher = null
           ..searchTokens = const <String>[];
@@ -1073,15 +1100,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1089,7 +1116,9 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(
         store,
         'env-delete-during-handover',
@@ -1105,7 +1134,7 @@ void main() {
       );
       final sourceToken = await store.captureBindingFenceToken(source);
       await store.deleteConversation(
-        ownerCidNumber,
+        ownerUserId,
         'conv-delete-during-handover',
         bindingToken: sourceToken,
       );
@@ -1115,21 +1144,18 @@ void main() {
 
       expect(
         await store.readMessages(
-          ownerCidNumber: ownerCidNumber,
+          ownerUserId: ownerUserId,
           currentAccountId: newAccountId,
           conversationId: 'conv-delete-during-handover',
         ),
         isEmpty,
       );
       final kept = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-keep-during-handover',
       );
-      expect(
-        ChatPayloadCodec.decode(kept.single.plaintext!).text,
-        '交接窗口应保留',
-      );
+      expect(ChatPayloadCodec.decode(kept.single.plaintext!).text, '交接窗口应保留');
       expect(
         await ChatIsar.instance.read(
           (isar) async => isar.chatAccountHandoverEntitys.where().count(),
@@ -1146,29 +1172,29 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
     final manager = _HandoverWalletManager(source);
-    final chatCrypto = ChatCrypto(walletManager: manager);
+    final chatCrypto = ChatCrypto(CitizenChatStorageKeyProvider(manager));
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
       final store = ChatStore(crypto: chatCrypto);
 
-      Future<void> saveEmpty(String envelopeId, String conversationId) {
+      Future<void> saveEmpty(String messageId, String conversationId) {
         return saveText(
           store,
-          envelopeId,
+          messageId,
           '建立记录后立即清空',
           conversationId: conversationId,
         );
@@ -1182,19 +1208,18 @@ void main() {
           'conv-empty-late',
         ]) {
           final row = await isar.chatConversationEntitys
-              .getByOwnerCidNumberConversationId(
-            ownerCidNumber,
-            conversationId,
-          );
+              .getByOwnerUserIdConversationId(ownerUserId, conversationId);
           row!.lastMessageCipher = '';
           await isar.chatConversationEntitys.put(row);
         }
-        for (final envelopeId in const <String>[
+        for (final messageId in const <String>[
           'env-empty-stays',
           'env-empty-late',
         ]) {
-          final row = await isar.chatMessageEntitys
-              .getByOwnerCidNumberEnvelopeId(ownerCidNumber, envelopeId);
+          final row = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+            ownerUserId,
+            messageId,
+          );
           row!
             ..plaintextCipher = null
             ..searchTokens = const <String>[];
@@ -1204,37 +1229,37 @@ void main() {
       await store.stageAccountHandover(source: source, target: target);
 
       const latePlaintext = '空记录窗口内合法更新';
-      final latePayload =
-          ChatPayloadCodec.encode(ChatContent.text(latePlaintext));
+      final latePayload = ChatPayloadCodec.encode(
+        ChatContent.text(latePlaintext),
+      );
       final lateMessageCipher = await chatCrypto.encryptText(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         recordId: 'env-empty-late',
         plaintext: latePayload,
       );
       final lateTokens = await chatCrypto.buildSearchTokens(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         text: latePlaintext,
       );
       final lateSummaryCipher = await chatCrypto.encryptText(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: accountId,
         recordId: 'conv-empty-late',
         plaintext: latePlaintext,
       );
       await ChatIsar.instance.writeTxn((isar) async {
-        final message = await isar.chatMessageEntitys
-            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-empty-late');
+        final message = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          ownerUserId,
+          'env-empty-late',
+        );
         message!
           ..plaintextCipher = lateMessageCipher
           ..searchTokens = const <String>['0000000000000000'];
         await isar.chatMessageEntitys.put(message);
         final conversation = await isar.chatConversationEntitys
-            .getByOwnerCidNumberConversationId(
-          ownerCidNumber,
-          'conv-empty-late',
-        );
+            .getByOwnerUserIdConversationId(ownerUserId, 'conv-empty-late');
         conversation!.lastMessageCipher = lateSummaryCipher;
         await isar.chatConversationEntitys.put(conversation);
       });
@@ -1251,8 +1276,10 @@ void main() {
         reason: 'late nonempty 正文的来源 token 未通过来源索引钥认证时必须保留清单',
       );
       await ChatIsar.instance.writeTxn((isar) async {
-        final message = await isar.chatMessageEntitys
-            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-empty-late');
+        final message = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          ownerUserId,
+          'env-empty-late',
+        );
         message!.searchTokens = lateTokens;
         await isar.chatMessageEntitys.put(message);
       });
@@ -1260,13 +1287,13 @@ void main() {
       manager.activeBinding = target;
       await store.commitAccountHandover(source: source, target: target);
       final emptyMessages = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-empty-stays',
       );
       expect(emptyMessages.single.plaintext, isNull);
       final lateMessages = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-empty-late',
       );
@@ -1275,7 +1302,7 @@ void main() {
         latePlaintext,
       );
       final previews = await store.readConversationPreviews(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
       );
       expect(
@@ -1304,15 +1331,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1349,7 +1376,7 @@ void main() {
       );
       await commit;
       final messages = await store.readMessages(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
         conversationId: 'conv-1',
       );
@@ -1360,7 +1387,7 @@ void main() {
         <String>['交接前消息', '加密已开始的窗口消息'],
       );
       final previews = await store.readConversationPreviews(
-        ownerCidNumber: ownerCidNumber,
+        ownerUserId: ownerUserId,
         currentAccountId: newAccountId,
       );
       expect(previews.single.lastMessage, '加密已开始的窗口消息');
@@ -1375,15 +1402,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1391,7 +1418,9 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-manifest-1', '严格清单消息一');
       await saveText(store, 'env-manifest-2', '严格清单消息二', at: 2000);
       await store.stageAccountHandover(source: source, target: target);
@@ -1428,15 +1457,12 @@ void main() {
           jsonDecode(value['payload_json'] as String) as Map<String, dynamic>;
 
       String manifestMac(String payloadJson) {
-        final key = manager._key(
-          target.accountId,
-          LocalKeyPurpose.chatIndex,
-        );
+        final key = manager._key(target.accountId, LocalKeyPurpose.chatIndex);
         try {
           return crypto.Hmac(crypto.sha256, key)
               .convert(
                 utf8.encode(
-                  'citizenapp.local/chat-handover-manifest|$payloadJson',
+                  'chat_sdk.local/chat-handover-manifest|$payloadJson',
                 ),
               )
               .toString();
@@ -1479,7 +1505,7 @@ void main() {
       await expectRejected((value) {
         final payload = payloadOf(value);
         final messages = payload['messages'] as List<dynamic>;
-        (messages[0] as Map<String, dynamic>).remove('envelope_id');
+        (messages[0] as Map<String, dynamic>).remove('message_id');
         replacePayload(value, payload);
       });
       await expectRejected((value) {
@@ -1533,15 +1559,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1552,14 +1578,12 @@ void main() {
         source,
         target.accountId,
       );
-      final failingStageStore =
-          ChatStore(crypto: ChatCrypto(walletManager: failingStageManager));
+      final failingStageStore = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(failingStageManager)),
+      );
       await failingStageStore.activateBindingFence(source);
       await expectLater(
-        failingStageStore.stageAccountHandover(
-          source: source,
-          target: target,
-        ),
+        failingStageStore.stageAccountHandover(source: source, target: target),
         throwsA(isA<StateError>()),
       );
       expect(failingStageManager.sourceKeysDisposed, isTrue);
@@ -1572,7 +1596,7 @@ void main() {
 
       final normalManager = _HandoverWalletManager(source);
       final normalStore = ChatStore(
-        crypto: ChatCrypto(walletManager: normalManager),
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(normalManager)),
       );
       await saveText(normalStore, 'env-key-dispose', '子钥失败清零');
       await normalStore.stageAccountHandover(source: source, target: target);
@@ -1582,8 +1606,11 @@ void main() {
         target.accountId,
       );
       await expectLater(
-        ChatStore(crypto: ChatCrypto(walletManager: failingCommitManager))
-            .commitAccountHandover(source: source, target: target),
+        ChatStore(
+          crypto: ChatCrypto(
+            CitizenChatStorageKeyProvider(failingCommitManager),
+          ),
+        ).commitAccountHandover(source: source, target: target),
         throwsA(isA<StateError>()),
       );
       expect(failingCommitManager.sourceKeysDisposed, isTrue);
@@ -1604,15 +1631,15 @@ void main() {
         '0x1111111111111111111111111111111111111111111111111111111111111111';
     const newAccountId =
         '0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
-    const source = AccountDataBinding(
+    const source = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 1,
       accountId: accountId,
     );
-    const target = AccountDataBinding(
+    const target = _TestBinding(
       genesisHash: genesisHash,
-      cidNumber: ownerCidNumber,
+      cidNumber: ownerUserId,
       bindingRevision: 2,
       accountId: newAccountId,
     );
@@ -1620,32 +1647,33 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(walletManager: manager));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       await saveText(store, 'env-inaccessible', '没有交接签名的历史内容');
-      final before = await ChatIsar.instance.read((isar) async => (await isar
-          .chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-inaccessible'))!);
+      final before = await ChatIsar.instance.read(
+        (isar) async => (await isar.chatMessageEntitys
+            .getByOwnerUserIdMessageId(ownerUserId, 'env-inaccessible'))!,
+      );
 
       manager.activeBinding = target;
       expect(
         await store.readMessages(
-          ownerCidNumber: ownerCidNumber,
+          ownerUserId: ownerUserId,
           currentAccountId: newAccountId,
           conversationId: 'conv-1',
         ),
         isEmpty,
       );
-      final preserved = await ChatIsar.instance.read((isar) async => (await isar
-          .chatMessageEntitys
-          .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-inaccessible'))!);
+      final preserved = await ChatIsar.instance.read(
+        (isar) async => (await isar.chatMessageEntitys
+            .getByOwnerUserIdMessageId(ownerUserId, 'env-inaccessible'))!,
+      );
       expect(preserved.plaintextCipher, before.plaintextCipher);
       expect(preserved.bindingRevision, source.bindingRevision);
       expect(preserved.accountId, source.accountId);
 
-      await store.isolateInaccessibleBinding(
-        previous: source,
-        current: target,
-      );
+      await store.isolateInaccessibleBinding(previous: source, current: target);
       await saveText(
         store,
         'env-current',
@@ -1653,18 +1681,20 @@ void main() {
         currentAccountId: newAccountId,
       );
       await ChatIsar.instance.writeTxn((isar) async {
-        final current = await isar.chatMessageEntitys
-            .getByOwnerCidNumberEnvelopeId(ownerCidNumber, 'env-current');
+        final current = await isar.chatMessageEntitys.getByOwnerUserIdMessageId(
+          ownerUserId,
+          'env-current',
+        );
         current!.plaintextCipher = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
-        await isar.chatMessageEntitys.putByOwnerCidNumberEnvelopeId(current);
+        await isar.chatMessageEntitys.putByOwnerUserIdMessageId(current);
       });
       await expectLater(
         store.readMessages(
-          ownerCidNumber: ownerCidNumber,
+          ownerUserId: ownerUserId,
           currentAccountId: newAccountId,
           conversationId: 'conv-1',
         ),
-        throwsA(isA<LocalCipherException>()),
+        throwsA(isA<ChatLocalCipherException>()),
       );
     } finally {
       ChatCrypto.debugFixedKeys = previousFixedKeys;
@@ -1711,7 +1741,7 @@ void main() {
     expect(fixture.targetDirectory.existsSync(), isTrue);
     expect(
       File(
-        ChatRuntime.debugFileHandoverReceiptPathForTest(
+        ChatRuntimeCore.debugFileHandoverReceiptPathForTest(
           bindingDirectory: fixture.targetDirectory,
           target: handoverTarget,
         ),
@@ -1786,9 +1816,9 @@ void main() {
       source: handoverSource,
       target: handoverTarget,
     );
-    final envelope = receiptEnvelope(fixture.receipt);
-    envelope['mac'] = List<String>.filled(64, '0').join();
-    await fixture.receipt.writeAsString(jsonEncode(envelope), flush: true);
+    final message = receiptMessage(fixture.receipt);
+    message['mac'] = List<String>.filled(64, '0').join();
+    await fixture.receipt.writeAsString(jsonEncode(message), flush: true);
     fixture.manager.activeBinding = handoverTarget;
 
     await expectLater(
@@ -1827,10 +1857,9 @@ void main() {
     expect(partial.existsSync(), isFalse);
     final files = (receiptPayload(fixture.receipt)['files'] as List<dynamic>)
         .cast<Map<String, dynamic>>();
-    expect(
-      files.map((item) => item['relative_path']),
-      <String>['cipher-marker.bin'],
-    );
+    expect(files.map((item) => item['relative_path']), <String>[
+      'cipher-marker.bin',
+    ]);
 
     fixture.manager.activeBinding = handoverTarget;
     await fixture.runtime.commitAccountHandover(
@@ -1842,13 +1871,15 @@ void main() {
       isTrue,
     );
     expect(
-      Directory('${fixture.targetDirectory.path}/attachments/.plain')
-          .existsSync(),
+      Directory(
+        '${fixture.targetDirectory.path}/attachments/.plain',
+      ).existsSync(),
       isFalse,
     );
     expect(
-      Directory('${fixture.targetDirectory.path}/attachments/.tmp')
-          .existsSync(),
+      Directory(
+        '${fixture.targetDirectory.path}/attachments/.tmp',
+      ).existsSync(),
       isFalse,
     );
   });
@@ -1882,64 +1913,67 @@ void main() {
     expect(fixture.targetDirectory.existsSync(), isTrue);
   });
 
-  test('文件已切到 target 但 Store commit 首败时保留 committing receipt，stage 拒绝降级并可重试',
-      () async {
-    late _FailOnceCommitChatStore failingStore;
-    final fixture = await createRuntimeHandoverFixture(
-      createStore: (manager) {
-        failingStore = _FailOnceCommitChatStore(
-          crypto: ChatCrypto(walletManager: manager),
-        );
-        return failingStore;
-      },
-    );
-    await File('${fixture.sourceDirectory.path}/cipher-marker.bin')
-        .create(recursive: true);
-    await fixture.runtime.stageAccountHandover(
-      source: handoverSource,
-      target: handoverTarget,
-    );
-    fixture.manager.activeBinding = handoverTarget;
-
-    await expectLater(
-      fixture.runtime.commitAccountHandover(
+  test(
+    '文件已切到 target 但 Store commit 首败时保留 committing receipt，stage 拒绝降级并可重试',
+    () async {
+      late _FailOnceCommitChatStore failingStore;
+      final fixture = await createRuntimeHandoverFixture(
+        createStore: (manager) {
+          failingStore = _FailOnceCommitChatStore(
+            crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+          );
+          return failingStore;
+        },
+      );
+      await File(
+        '${fixture.sourceDirectory.path}/cipher-marker.bin',
+      ).create(recursive: true);
+      await fixture.runtime.stageAccountHandover(
         source: handoverSource,
         target: handoverTarget,
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect(failingStore.commitCalls, 1);
-    expect(fixture.sourceDirectory.existsSync(), isFalse);
-    expect(fixture.targetDirectory.existsSync(), isTrue);
-    final targetReceipt = File(
-      ChatRuntime.debugFileHandoverReceiptPathForTest(
-        bindingDirectory: fixture.targetDirectory,
-        target: handoverTarget,
-      ),
-    );
-    expect(receiptPayload(targetReceipt)['state'], 'committing');
-    final committingBytes = await targetReceipt.readAsBytes();
+      );
+      fixture.manager.activeBinding = handoverTarget;
 
-    await expectLater(
-      fixture.runtime.stageAccountHandover(
+      await expectLater(
+        fixture.runtime.commitAccountHandover(
+          source: handoverSource,
+          target: handoverTarget,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(failingStore.commitCalls, 1);
+      expect(fixture.sourceDirectory.existsSync(), isFalse);
+      expect(fixture.targetDirectory.existsSync(), isTrue);
+      final targetReceipt = File(
+        ChatRuntimeCore.debugFileHandoverReceiptPathForTest(
+          bindingDirectory: fixture.targetDirectory,
+          target: handoverTarget,
+        ),
+      );
+      expect(receiptPayload(targetReceipt)['state'], 'committing');
+      final committingBytes = await targetReceipt.readAsBytes();
+
+      await expectLater(
+        fixture.runtime.stageAccountHandover(
+          source: handoverSource,
+          target: handoverTarget,
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(await targetReceipt.readAsBytes(), committingBytes);
+      expect(receiptPayload(targetReceipt)['state'], 'committing');
+
+      await fixture.runtime.commitAccountHandover(
         source: handoverSource,
         target: handoverTarget,
-      ),
-      throwsA(isA<StateError>()),
-    );
-    expect(await targetReceipt.readAsBytes(), committingBytes);
-    expect(receiptPayload(targetReceipt)['state'], 'committing');
-
-    await fixture.runtime.commitAccountHandover(
-      source: handoverSource,
-      target: handoverTarget,
-    );
-    expect(failingStore.commitCalls, 2);
-    expect(targetReceipt.existsSync(), isFalse);
-    await fixture.runtime.commitAccountHandover(
-      source: handoverSource,
-      target: handoverTarget,
-    );
-    expect(failingStore.commitCalls, 3);
-  });
+      );
+      expect(failingStore.commitCalls, 2);
+      expect(targetReceipt.existsSync(), isFalse);
+      await fixture.runtime.commitAccountHandover(
+        source: handoverSource,
+        target: handoverTarget,
+      );
+      expect(failingStore.commitCalls, 3);
+    },
+  );
 }

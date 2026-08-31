@@ -217,6 +217,7 @@ function envelopeRequest(extra: Record<string, unknown> = {}): Request {
     body: JSON.stringify({
       envelope_id: "envelope-12345678",
       recipient_cid_number: RECIPIENT_CID,
+      recipient_device_id: "recipient-phone",
       conversation_id: `dm:${SENDER_CID}:${RECIPIENT_CID}`,
       envelope: "AQID",
       created_at_millis: Date.now(),
@@ -409,7 +410,10 @@ describe("device-only Chat control plane", () => {
   it("fetches and acknowledges encrypted envelopes in bounded batches", async () => {
     const fetched = await fetchChatEnvelopes(
       new Request("https://worker.test/chat/messages", {
-        headers: { authorization: "Bearer test-session" },
+        headers: {
+          authorization: "Bearer test-session",
+          "x-chat-device": "recipient-phone",
+        },
       }),
       fakeEnv(),
     );
@@ -420,6 +424,7 @@ describe("device-only Chat control plane", () => {
         headers: {
           authorization: "Bearer test-session",
           "content-type": "application/json",
+          "x-chat-device": "recipient-phone",
         },
         body: JSON.stringify(["envelope-12345678", "envelope-12345678"]),
       }),
@@ -471,6 +476,7 @@ describe("device-only Chat control plane", () => {
     expect(await sendChatAlert(
       env,
       RECIPIENT_CID,
+      "recipient-phone",
       SENDER_CID,
       `dm:${SENDER_CID}:${RECIPIENT_CID}`,
       "envelope-12345678",

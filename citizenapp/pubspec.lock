@@ -201,7 +201,7 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
-  chat_sdk:
+  gmb_chat_sdk:
     dependency: "direct main"
     description:
       path: "../chatsdk"
@@ -385,7 +385,7 @@ packages:
     source: hosted
     version: "1.0.5"
   emoji_picker_flutter:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: emoji_picker_flutter
       sha256: "984d3e9b9cf3175df9a868ce4a2d9611491e80e5d3b8e2b1e8991a4998972885"
@@ -542,7 +542,7 @@ packages:
     source: sdk
     version: "0.0.0"
   flutter_blurhash:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: flutter_blurhash
       sha256: e97b9aff13b9930bbaa74d0d899fec76e3f320aba3190322dcc5d32104e3d25d
@@ -773,7 +773,7 @@ packages:
     source: sdk
     version: "0.0.0"
   flutter_webrtc:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: flutter_webrtc
       sha256: "0f89dee7f4c35dab5611f351c3897a3bfe9f7057720cc7da209b52455af4316e"

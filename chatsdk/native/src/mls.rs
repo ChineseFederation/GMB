@@ -6,18 +6,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use hpke_rs::{
-    hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm},
-    Hpke, HpkeKeyPair, HpkePublicKey, Mode,
-};
-use hpke_rs_rust_crypto::HpkeRustCrypto;
 use openmls::{
     prelude::{
         tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize},
-        BasicCredential, Ciphersuite, Credential, CredentialWithKey, Extensions, GroupId,
-        KeyPackage, KeyPackageBundle, KeyPackageIn, Lifetime, MlsGroup, MlsGroupCreateConfig,
-        MlsMessageBodyIn, MlsMessageIn, ProcessedMessageContent, ProtocolMessage, ProtocolVersion,
-        RatchetTreeIn, StagedWelcome,
+        BasicCredential, Capabilities, Ciphersuite, Credential, CredentialWithKey, ExtensionType,
+        Extensions, GroupId, KeyPackage, KeyPackageBundle, KeyPackageIn, Lifetime, MlsGroup,
+        MlsGroupCreateConfig, MlsMessageBodyIn, MlsMessageIn, ProcessedMessageContent,
+        ProtocolMessage, ProtocolVersion, StagedWelcome,
     },
     storage::OpenMlsProvider as OpenMlsStorageProvider,
 };
@@ -42,8 +37,6 @@ const ERROR_STATE_INVALID: &str = "CHAT_MLS_STATE_INVALID";
 const ERROR_SIGNER_MISSING: &str = "CHAT_MLS_SIGNER_MISSING";
 /// GCM nonce 固定 12 字节;密文布局 = nonce || ciphertext || tag(16)。
 const STATE_NONCE_LEN: usize = 12;
-const DIRECT_WIRE_VERSION: u8 = 1;
-const DIRECT_ENCAPSULATED_KEY_LEN: usize = 32;
 
 /// FFI 只依赖稳定阶段码分类，本地路径和底层错误只保留在技术信息中。
 fn state_error(code: &str, message: impl std::fmt::Display) -> String {
@@ -117,9 +110,6 @@ struct CreateKeyPackageRequest {
     state_store_dir: Option<String>,
     /// MLS 本地状态信封密钥(32 字节 hex)。无 state_store_dir 时可省。
     state_key_hex: Option<String>,
-    /// 只读取或首次创建当前 用户身份/设备签名者，不生成 KeyPackage。
-    #[serde(default)]
-    identity_only: bool,
     /// 生成 RFC 9420 last-resort KeyPackage；服务端只保留每个 用户身份/设备一枚。
     #[serde(default)]
     last_resort: bool,
@@ -128,30 +118,6 @@ struct CreateKeyPackageRequest {
 #[derive(Deserialize)]
 struct TwoPartySmokeRequest {
     plaintext: String,
-}
-
-#[derive(Deserialize)]
-struct EncryptRequest {
-    state_store_dir: String,
-    /// MLS 本地状态信封密钥(32 字节 hex),由 Dart 侧 LocalKeyPurpose.mls 子钥下传。
-    state_key_hex: String,
-    user_id: String,
-    device_id: String,
-    conversation_id: String,
-    recipient_user_id: String,
-    plaintext_hex: String,
-    recipient_device_public_key_hex: String,
-}
-
-#[derive(Deserialize)]
-struct DecryptRequest {
-    state_store_dir: String,
-    /// MLS 本地状态信封密钥(32 字节 hex),由 Dart 侧 LocalKeyPurpose.mls 子钥下传。
-    state_key_hex: String,
-    user_id: String,
-    device_id: String,
-    conversation_id: String,
-    wire_message_hex: String,
 }
 
 #[derive(Deserialize)]
@@ -168,14 +134,6 @@ struct DeviceRecord {
     device_id: String,
     signature_public_key_hex: String,
     signature_scheme: String,
-}
-
-#[derive(Deserialize)]
-struct DeviceIdentityRequest {
-    user_id: String,
-    device_id: String,
-    state_store_dir: String,
-    state_key_hex: String,
 }
 
 struct MlsProvider {
@@ -220,45 +178,6 @@ pub unsafe extern "C" fn chat_sdk_mls_create_key_package_json(
     }
 }
 
-/// 读取或首次创建当前 用户身份/设备的 RFC 9180 HPKE 身份。
-#[no_mangle]
-pub unsafe extern "C" fn chat_sdk_device_identity_json(
-    request_json: *const c_char,
-    error_out: *mut *mut c_char,
-) -> *mut c_char {
-    match device_identity_json(request_json) {
-        Ok(value) => crate::string_into_raw(value, error_out),
-        Err(message) => {
-            crate::set_error(error_out, &message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-fn device_identity_json(request_json: *const c_char) -> Result<String, String> {
-    let request: DeviceIdentityRequest = parse_request(request_json)?;
-    require_non_empty("user_id", &request.user_id)?;
-    require_non_empty("device_id", &request.device_id)?;
-    let state_dir = Path::new(&request.state_store_dir);
-    let state_key = parse_state_key(&request.state_key_hex)?;
-    let provider = load_provider(state_dir, &state_key)?;
-    let _ = ensure_device_signer(
-        &provider,
-        state_dir,
-        &request.user_id,
-        &request.device_id,
-        &state_key,
-    )?;
-    save_provider(state_dir, &provider, &state_key)?;
-    let key_pair = device_hpke_key_pair(&state_key, &request.user_id, &request.device_id)?;
-    serde_json::to_string(&json!({
-        "user_id": request.user_id,
-        "device_id": request.device_id,
-        "device_public_key_hex": hex::encode(key_pair.public_key().as_slice()),
-    }))
-    .map_err(|error| error.to_string())
-}
-
 /// 执行真实 OpenMLS 双人组 round-trip smoke。
 ///
 /// # Safety
@@ -270,44 +189,6 @@ pub unsafe extern "C" fn chat_sdk_mls_two_party_smoke_json(
     error_out: *mut *mut c_char,
 ) -> *mut c_char {
     match two_party_smoke_json(request_json) {
-        Ok(value) => crate::string_into_raw(value, error_out),
-        Err(message) => {
-            crate::set_error(error_out, &message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// 使用持久化 MLS 会话加密 application message。
-///
-/// # Safety
-/// - `request_json` 必须是合法 UTF-8 C 字符串。
-/// - 返回字符串必须由 `chat_sdk_free_string` 释放。
-#[no_mangle]
-pub unsafe extern "C" fn chat_sdk_mls_encrypt_json(
-    request_json: *const c_char,
-    error_out: *mut *mut c_char,
-) -> *mut c_char {
-    match encrypt_json(request_json) {
-        Ok(value) => crate::string_into_raw(value, error_out),
-        Err(message) => {
-            crate::set_error(error_out, &message);
-            std::ptr::null_mut()
-        }
-    }
-}
-
-/// 处理 Welcome 或解密 application message。
-///
-/// # Safety
-/// - `request_json` 必须是合法 UTF-8 C 字符串。
-/// - 返回字符串必须由 `chat_sdk_free_string` 释放。
-#[no_mangle]
-pub unsafe extern "C" fn chat_sdk_mls_decrypt_json(
-    request_json: *const c_char,
-    error_out: *mut *mut c_char,
-) -> *mut c_char {
-    match decrypt_json(request_json) {
         Ok(value) => crate::string_into_raw(value, error_out),
         Err(message) => {
             crate::set_error(error_out, &message);
@@ -387,18 +268,10 @@ fn create_key_package_json(request_json: *const c_char) -> Result<String, String
     require_non_empty("user_id", &request.user_id)?;
     require_non_empty("device_id", &request.device_id)?;
 
-    if request.identity_only && request.state_store_dir.is_none() {
-        return Err("identity_only 必须提供 state_store_dir".to_string());
-    }
-
-    if request.identity_only && request.last_resort {
-        return Err("identity_only 不允许请求 last-resort KeyPackage".to_string());
-    }
-
     let (
+        key_package_ref,
         key_package_hex,
         cipher_suite,
-        device_public_key_hex,
         not_before_millis,
         not_after_millis,
         last_resort,
@@ -417,31 +290,17 @@ fn create_key_package_json(request_json: *const c_char) -> Result<String, String
             &request.device_id,
             &state_key,
         )?;
-        let device_public_key_hex = hex::encode(
-            device_hpke_key_pair(&state_key, &request.user_id, &request.device_id)?
-                .public_key()
-                .as_slice(),
-        );
-        let (key_package_hex, not_before_millis, not_after_millis, last_resort) =
-            if request.identity_only {
-                (String::new(), 0, 0, false)
-            } else {
-                let bundle = generate_published_key_package(
-                    &provider,
-                    &signer,
-                    credential,
-                    request.last_resort,
-                )?;
-                key_package_publication_fields(&bundle)?
-            };
+        let bundle =
+            generate_published_key_package(&provider, &signer, credential, request.last_resort)?;
+        let publication = key_package_publication_fields(&provider, &bundle)?;
         save_provider(state_dir, &provider, &state_key)?;
         (
-            key_package_hex,
+            publication.0,
+            publication.1,
             format!("{:?}", GMB_MLS_CIPHERSUITE),
-            device_public_key_hex,
-            not_before_millis,
-            not_after_millis,
-            last_resort,
+            publication.2,
+            publication.3,
+            publication.4,
         )
     } else {
         let provider = OpenMlsRustCrypto::default();
@@ -452,22 +311,21 @@ fn create_key_package_json(request_json: *const c_char) -> Result<String, String
         )?;
         let bundle =
             generate_published_key_package(&provider, &signer, credential, request.last_resort)?;
-        let (key_package_hex, not_before_millis, not_after_millis, last_resort) =
-            key_package_publication_fields(&bundle)?;
+        let publication = key_package_publication_fields(&provider, &bundle)?;
         (
-            key_package_hex,
+            publication.0,
+            publication.1,
             format!("{:?}", GMB_MLS_CIPHERSUITE),
-            hex::encode(signer.to_public_vec()),
-            not_before_millis,
-            not_after_millis,
-            last_resort,
+            publication.2,
+            publication.3,
+            publication.4,
         )
     };
     let response = json!({
         "user_id": request.user_id,
         "device_id": request.device_id,
-        "device_public_key_hex": device_public_key_hex,
-        "key_package_id": format!("kp-{}", key_package_hex.chars().take(24).collect::<String>()),
+        // RFC 9420 KeyPackageRef 是目录去重与 Welcome 引用的唯一标识，不再生成应用编号。
+        "key_package_ref": key_package_ref,
         "key_package_hex": key_package_hex,
         "cipher_suite": cipher_suite,
         // 生命周期只读取刚生成的 OpenMLS KeyPackage，不再维护第二套自定义 TTL。
@@ -533,15 +391,11 @@ fn two_party_smoke_json(request_json: *const c_char) -> Result<String, String> {
         MlsMessageBodyIn::Welcome(welcome) => welcome,
         _ => return Err("OpenMLS Welcome 类型错误".to_string()),
     };
-    let mut bob_group = StagedWelcome::new_from_welcome(
-        &bob_provider,
-        group_config.join_config(),
-        welcome,
-        Some(alice_group.export_ratchet_tree().into()),
-    )
-    .map_err(|error| format!("Bob 处理 Welcome 失败: {error:?}"))?
-    .into_group(&bob_provider)
-    .map_err(|error| format!("Bob 创建 group 失败: {error:?}"))?;
+    let mut bob_group =
+        StagedWelcome::new_from_welcome(&bob_provider, group_config.join_config(), welcome, None)
+            .map_err(|error| format!("Bob 处理 Welcome 失败: {error:?}"))?
+            .into_group(&bob_provider)
+            .map_err(|error| format!("Bob 创建 group 失败: {error:?}"))?;
 
     let message = alice_group
         .create_message(&alice_provider, &alice_signer, request.plaintext.as_bytes())
@@ -579,141 +433,6 @@ fn two_party_smoke_json(request_json: *const c_char) -> Result<String, String> {
         "alice_wire_message_hex": hex::encode(message_bytes),
     });
     serde_json::to_string(&response).map_err(|error| error.to_string())
-}
-
-fn encrypt_json(request_json: *const c_char) -> Result<String, String> {
-    let request: EncryptRequest = parse_request(request_json)?;
-    require_non_empty("state_store_dir", &request.state_store_dir)?;
-    require_non_empty("user_id", &request.user_id)?;
-    require_non_empty("device_id", &request.device_id)?;
-    require_non_empty("conversation_id", &request.conversation_id)?;
-    require_non_empty("recipient_user_id", &request.recipient_user_id)?;
-    require_non_empty("plaintext_hex", &request.plaintext_hex)?;
-
-    let state_dir = Path::new(&request.state_store_dir);
-    let state_key = parse_state_key(&request.state_key_hex)?;
-    let provider = load_provider(state_dir, &state_key)?;
-    let _ = ensure_device_signer(
-        &provider,
-        state_dir,
-        &request.user_id,
-        &request.device_id,
-        &state_key,
-    )?;
-    let plaintext = decode_hex_field("plaintext_hex", &request.plaintext_hex)?;
-    save_provider(state_dir, &provider, &state_key)?;
-    let recipient_key = decode_hex_field(
-        "recipient_device_public_key_hex",
-        &request.recipient_device_public_key_hex,
-    )?;
-    if recipient_key.len() != 32 {
-        return Err("接收设备 HPKE 公钥必须为 32 字节".to_string());
-    }
-    let mut hpke = direct_hpke();
-    let info = direct_info(&request.conversation_id, &request.recipient_user_id);
-    let (encapsulated, ciphertext) = hpke
-        .seal(
-            &HpkePublicKey::new(recipient_key),
-            &info,
-            &info,
-            &plaintext,
-            None,
-            None,
-            None,
-        )
-        .map_err(|error| format!("RFC 9180 HPKE 加密失败: {error:?}"))?;
-    if encapsulated.len() != DIRECT_ENCAPSULATED_KEY_LEN {
-        return Err("RFC 9180 HPKE 封装钥长度异常".to_string());
-    }
-    let mut wire = Vec::with_capacity(1 + encapsulated.len() + ciphertext.len());
-    wire.push(DIRECT_WIRE_VERSION);
-    wire.extend_from_slice(&encapsulated);
-    wire.extend_from_slice(&ciphertext);
-
-    let response = json!({
-        "conversation_id": request.conversation_id,
-        "recipient_user_id": request.recipient_user_id,
-        "cipher_suite": "HPKE_BASE_X25519_HKDF_SHA256_AES128GCM",
-        "created_new_session": false,
-        "welcome_wire_message_hex": serde_json::Value::Null,
-        "application_wire_message_hex": hex::encode(wire),
-        "ratchet_tree_hex": serde_json::Value::Null,
-    });
-    serde_json::to_string(&response).map_err(|error| error.to_string())
-}
-
-fn decrypt_json(request_json: *const c_char) -> Result<String, String> {
-    let request: DecryptRequest = parse_request(request_json)?;
-    require_non_empty("state_store_dir", &request.state_store_dir)?;
-    require_non_empty("user_id", &request.user_id)?;
-    require_non_empty("device_id", &request.device_id)?;
-    require_non_empty("conversation_id", &request.conversation_id)?;
-    require_non_empty("wire_message_hex", &request.wire_message_hex)?;
-
-    let state_dir = Path::new(&request.state_store_dir);
-    let state_key = parse_state_key(&request.state_key_hex)?;
-    let provider = load_provider(state_dir, &state_key)?;
-    let _ = ensure_device_signer(
-        &provider,
-        state_dir,
-        &request.user_id,
-        &request.device_id,
-        &state_key,
-    )?;
-    let wire_bytes = decode_hex_field("wire_message_hex", &request.wire_message_hex)?;
-    if wire_bytes.len() <= 1 + DIRECT_ENCAPSULATED_KEY_LEN || wire_bytes[0] != DIRECT_WIRE_VERSION {
-        return Err("Chat HPKE 密文格式或版本不合法".to_string());
-    }
-    let key_pair = device_hpke_key_pair(&state_key, &request.user_id, &request.device_id)?;
-    let info = direct_info(&request.conversation_id, &request.user_id);
-    let plaintext = direct_hpke()
-        .open(
-            &wire_bytes[1..1 + DIRECT_ENCAPSULATED_KEY_LEN],
-            key_pair.private_key(),
-            &info,
-            &info,
-            &wire_bytes[1 + DIRECT_ENCAPSULATED_KEY_LEN..],
-            None,
-            None,
-            None,
-        )
-        .map_err(|error| format!("RFC 9180 HPKE 解密失败: {error:?}"))?;
-    let response = json!({
-        "conversation_id": request.conversation_id,
-        "message_kind": "application",
-        "cipher_suite": "HPKE_BASE_X25519_HKDF_SHA256_AES128GCM",
-        "plaintext_hex": hex::encode(plaintext),
-    });
-    serde_json::to_string(&response).map_err(|error| error.to_string())
-}
-
-fn direct_hpke() -> Hpke<HpkeRustCrypto> {
-    Hpke::new(
-        Mode::Base,
-        KemAlgorithm::DhKem25519,
-        KdfAlgorithm::HkdfSha256,
-        AeadAlgorithm::Aes128Gcm,
-    )
-}
-
-fn direct_info(conversation_id: &str, recipient_user_id: &str) -> Vec<u8> {
-    format!("chatsdk/direct/v1|{conversation_id}|{recipient_user_id}").into_bytes()
-}
-
-fn device_hpke_key_pair(
-    state_key: &[u8; 32],
-    user_id: &str,
-    device_id: &str,
-) -> Result<HpkeKeyPair, String> {
-    let mut input = Vec::with_capacity(32 + user_id.len() + device_id.len() + 32);
-    input.extend_from_slice(b"chatsdk/device-hpke/v1|");
-    input.extend_from_slice(state_key);
-    input.extend_from_slice(user_id.as_bytes());
-    input.push(0);
-    input.extend_from_slice(device_id.as_bytes());
-    direct_hpke()
-        .derive_key_pair(&input)
-        .map_err(|error| format!("派生 RFC 9180 HPKE 设备密钥失败: {error:?}"))
 }
 
 fn parse_request<T>(request_json: *const c_char) -> Result<T, String>
@@ -769,7 +488,13 @@ fn generate_published_key_package(
         .key_package_lifetime(Lifetime::default())
         .key_package_extensions(Extensions::empty());
     if last_resort {
-        builder = builder.mark_as_last_resort();
+        // 中文注释：遵循 OpenMLS 官方 Last Resort 用法，扩展与 LeafNode 能力必须同时声明；
+        // 否则接收方会按 RFC 9420 能力校验拒绝该 KeyPackage。
+        let capabilities =
+            Capabilities::new(None, None, Some(&[ExtensionType::LastResort]), None, None);
+        builder = builder
+            .leaf_node_capabilities(capabilities)
+            .mark_as_last_resort();
     }
     builder
         .build(GMB_MLS_CIPHERSUITE, provider, signer, credential_with_key)
@@ -778,8 +503,9 @@ fn generate_published_key_package(
 
 /// 从 KeyPackage 内嵌的标准 Lifetime 与 LastResort 扩展导出发布元数据。
 fn key_package_publication_fields(
+    provider: &impl OpenMlsStorageProvider,
     bundle: &KeyPackageBundle,
-) -> Result<(String, u64, u64, bool), String> {
+) -> Result<(String, String, u64, u64, bool), String> {
     let key_package = bundle.key_package();
     let lifetime = key_package.life_time();
     let key_package_hex = hex::encode(
@@ -788,6 +514,12 @@ fn key_package_publication_fields(
             .map_err(|error| format!("序列化 OpenMLS KeyPackage 失败: {error}"))?,
     );
     Ok((
+        hex::encode(
+            key_package
+                .hash_ref(provider.crypto())
+                .map_err(|error| format!("计算 RFC 9420 KeyPackageRef 失败: {error:?}"))?
+                .as_slice(),
+        ),
         key_package_hex,
         lifetime.not_before().saturating_mul(1000),
         lifetime.not_after().saturating_mul(1000),
@@ -1119,7 +851,6 @@ struct GroupProcessRequest {
     device_id: String,
     group_id: String,
     wire_message_hex: String,
-    ratchet_tree_hex: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1247,7 +978,7 @@ fn identity_of(credential: &Credential) -> String {
 }
 
 /// 从成员标识取 用户身份 段（"user_id:device_id" → "user_id"）。
-fn cid_of(credential: &Credential) -> String {
+fn user_id_of(credential: &Credential) -> String {
     let identity = identity_of(credential);
     match identity.split_once(':') {
         Some((user_id, _)) => user_id.to_string(),
@@ -1360,12 +1091,6 @@ fn group_add_members_json(request_json: *const c_char) -> Result<String, String>
             .tls_serialize_detached()
             .map_err(|error| format!("序列化 Welcome 失败: {error}"))?,
     );
-    let ratchet_tree_hex = hex::encode(
-        group
-            .export_ratchet_tree()
-            .tls_serialize_detached()
-            .map_err(|error| format!("序列化 ratchet tree 失败: {error}"))?,
-    );
     let epoch = group.epoch().as_u64();
     save_provider(state_dir, &provider, &state_key)?;
 
@@ -1374,7 +1099,6 @@ fn group_add_members_json(request_json: *const c_char) -> Result<String, String>
         "epoch": epoch,
         "commit_wire_hex": commit_wire_hex,
         "welcome_wire_hex": welcome_wire_hex,
-        "ratchet_tree_hex": ratchet_tree_hex,
     });
     serde_json::to_string(&response).map_err(|error| error.to_string())
 }
@@ -1413,7 +1137,7 @@ fn group_remove_members_json(request_json: *const c_char) -> Result<String, Stri
     let mut indices = Vec::new();
     let mut removed_user_ids = HashSet::new();
     for member in group.members() {
-        let user_id = cid_of(&member.credential);
+        let user_id = user_id_of(&member.credential);
         if targets.contains(user_id.as_str()) {
             indices.push(member.index);
             removed_user_ids.insert(user_id);
@@ -1516,21 +1240,11 @@ fn group_process_json(request_json: *const c_char) -> Result<String, String> {
 
     let response = match message_in.extract() {
         MlsMessageBodyIn::Welcome(welcome) => {
-            let ratchet_tree = match request.ratchet_tree_hex.as_deref() {
-                Some(value) if !value.trim().is_empty() => {
-                    let tree_bytes = decode_hex_field("ratchet_tree_hex", value)?;
-                    Some(
-                        RatchetTreeIn::tls_deserialize_exact(tree_bytes)
-                            .map_err(|error| format!("反序列化 ratchet tree 失败: {error}"))?,
-                    )
-                }
-                _ => None,
-            };
             let group = StagedWelcome::new_from_welcome(
                 &provider,
                 mls_group_config().join_config(),
                 welcome,
-                ratchet_tree,
+                None,
             )
             .map_err(|error| format!("处理群 Welcome 失败: {error:?}"))?
             .into_group(&provider)
@@ -1707,11 +1421,10 @@ fn group_state_json(request_json: *const c_char) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        atomic_write, create_key_package_json, device_hpke_key_pair, direct_hpke, direct_info,
-        group_add_members_json, group_create_json, group_create_message_json, group_process_json,
-        group_remove_members_json, group_state_json, open_state, parse_state_key, seal_state,
-        two_party_smoke_json, ERROR_DEVICE_AUTH, ERROR_STATE_INVALID, ERROR_STORAGE_AUTH,
-        STATE_AAD_DEVICE, STATE_AAD_STORAGE,
+        atomic_write, create_key_package_json, group_add_members_json, group_create_json,
+        group_create_message_json, group_process_json, group_remove_members_json, group_state_json,
+        open_state, parse_state_key, seal_state, two_party_smoke_json, ERROR_DEVICE_AUTH,
+        ERROR_STATE_INVALID, ERROR_STORAGE_AUTH, STATE_AAD_DEVICE, STATE_AAD_STORAGE,
     };
     use std::ffi::CString;
     use std::fs;
@@ -1735,13 +1448,11 @@ mod tests {
         // OpenMLS 0.8.1 默认 84 天，并额外向过去留 1 小时时钟偏差窗口。
         assert_eq!(not_after - not_before, (84 * 24 + 1) * 60 * 60 * 1000);
         assert_eq!(json["last_resort"], false);
-        // 键名即跨语言契约:Dart 侧 `mls_native.dart` 按这些名字读,漏 `_hex`
-        // 后缀会让设备公钥恒空并卡死 Chat 首启(2026-08-04)。改名必须两侧同改。
-        let device_public_key_hex = json["device_public_key_hex"]
+        let key_package_ref = json["key_package_ref"]
             .as_str()
-            .expect("响应必须含 device_public_key_hex");
-        assert!(!device_public_key_hex.is_empty());
-        assert!(device_public_key_hex
+            .expect("响应必须含 RFC 9420 KeyPackageRef");
+        assert!(!key_package_ref.is_empty());
+        assert!(key_package_ref
             .chars()
             .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
     }
@@ -1764,46 +1475,6 @@ mod tests {
     }
 
     #[test]
-    fn identity_only_reuses_native_owner_and_rejects_other_cid() {
-        let state_dir =
-            std::env::temp_dir().join(format!("citizen_identity_only_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&state_dir);
-        fs::create_dir_all(&state_dir).expect("临时目录应可创建");
-        let state_store_dir = state_dir.to_str().expect("路径必须是 UTF-8");
-        let invoke = |user_id: &str, device_id: &str| {
-            let request = CString::new(
-                serde_json::json!({
-                    "user_id": user_id,
-                    "device_id": device_id,
-                    "state_store_dir": state_store_dir,
-                    "state_key_hex": TEST_STATE_KEY_HEX,
-                    "identity_only": true,
-                })
-                .to_string(),
-            )
-            .expect("request should be valid");
-            create_key_package_json(request.as_ptr())
-        };
-
-        let first = invoke("用户身份-ALICE", "alice-phone").expect("首次身份读取应成功");
-        let first_json: serde_json::Value = serde_json::from_str(&first).expect("响应应为 JSON");
-        let public_key = first_json["device_public_key_hex"]
-            .as_str()
-            .expect("必须返回设备公钥")
-            .to_string();
-        assert!(!public_key.is_empty());
-        assert_eq!(first_json["key_package_hex"], "");
-
-        let second = invoke("用户身份-ALICE", "alice-phone").expect("同一身份读取应成功");
-        let second_json: serde_json::Value = serde_json::from_str(&second).expect("响应应为 JSON");
-        assert_eq!(second_json["device_public_key_hex"], public_key);
-
-        let error = invoke("用户身份-BOB", "bob-phone").expect_err("其他 用户身份 必须拒绝");
-        assert!(error.contains("CHAT_MLS_STATE_OWNER_MISMATCH"));
-        fs::remove_dir_all(&state_dir).expect("临时目录应清理");
-    }
-
-    #[test]
     fn openmls_two_party_smoke_round_trips_plaintext() {
         let request =
             CString::new(r#"{"plaintext":"hello openmls"}"#).expect("request should be valid");
@@ -1816,45 +1487,13 @@ mod tests {
     }
 
     #[test]
-    fn hpke_device_key_is_stable_and_direct_message_round_trips() {
-        let state_key = [9u8; 32];
-        let alice = device_hpke_key_pair(&state_key, "用户身份-ALICE", "alice-phone")
-            .expect("Alice HPKE key should derive");
-        let alice_again = device_hpke_key_pair(&state_key, "用户身份-ALICE", "alice-phone")
-            .expect("Alice HPKE key should remain stable");
-        assert_eq!(alice.public_key(), alice_again.public_key());
-
-        let bob = device_hpke_key_pair(&state_key, "用户身份-BOB", "bob-phone")
-            .expect("Bob HPKE key should derive");
-        assert_ne!(alice.public_key(), bob.public_key());
-        let info = direct_info("dm:alice:bob", "用户身份-BOB");
-        let plaintext = "第一条离线消息".as_bytes();
-        let (encapsulated, ciphertext) = direct_hpke()
-            .seal(bob.public_key(), &info, &info, plaintext, None, None, None)
-            .expect("HPKE seal should succeed");
-        let opened = direct_hpke()
-            .open(
-                &encapsulated,
-                bob.private_key(),
-                &info,
-                &info,
-                &ciphertext,
-                None,
-                None,
-                None,
-            )
-            .expect("HPKE open should succeed");
-        assert_eq!(opened, plaintext);
-    }
-
-    #[test]
     fn group_three_party_round_trip() {
         use serde_json::json;
         use std::fs;
         use std::os::raw::c_char;
         use std::path::Path;
 
-        let base = std::env::temp_dir().join(format!("citizen_group_rt_{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("chat_group_rt_{}", std::process::id()));
         let _ = fs::remove_dir_all(&base);
         let dir_a = base.join("a");
         let dir_b = base.join("b");
@@ -1900,7 +1539,6 @@ mod tests {
             json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(&dir_a), "user_id": "用户身份-A", "device_id": "devA", "group_id": group_id, "key_packages_hex": [b_kp, c_kp]}),
         );
         let welcome_hex = added["welcome_wire_hex"].as_str().unwrap().to_string();
-        let tree_hex = added["ratchet_tree_hex"].as_str().unwrap().to_string();
         assert_eq!(added["epoch"].as_u64(), Some(1));
 
         // B / C 处理 Welcome 入群,名册应为 3 人。
@@ -1910,7 +1548,7 @@ mod tests {
         ] {
             let joined = invoke(
                 group_process_json,
-                json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(dir.as_path()), "user_id": owner, "device_id": dev, "group_id": group_id, "wire_message_hex": welcome_hex, "ratchet_tree_hex": tree_hex}),
+                json!({"state_key_hex": TEST_STATE_KEY_HEX, "state_store_dir": path(dir.as_path()), "user_id": owner, "device_id": dev, "group_id": group_id, "wire_message_hex": welcome_hex}),
             );
             assert_eq!(joined["message_kind"].as_str(), Some("welcome"));
             assert_eq!(joined["member_identities"].as_array().unwrap().len(), 3);

@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 const PRODUCT_ID = 'citizensdk';
 const PACKAGE_NAME = 'citizen_sdk';
-const PROGRAM_CONSOLE_TARGET_ROOT = '/Users/rhett/Only/ProgramConsole/target/citizensdk';
+const PROGRAM_CONSOLE_TARGET_ROOT = '/Users/rhett/Only/programconsole/target/citizensdk';
 const ROOT_FILES = [
   '.gitignore',
   '.pubignore',

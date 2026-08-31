@@ -3,12 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:citizenapp/chat/chat_models.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
-import 'package:citizenapp/chat/chat_page.dart';
-import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/compose/sticker_panel.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:citizenapp/chat/chat_product_policy.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 
 /// 只喂固定消息列表的假 store(ChatPage 打开时只读 readMessages),不起 Isar。
 class _StubStore extends ChatStore {
@@ -18,68 +15,64 @@ class _StubStore extends ChatStore {
 
   @override
   Future<List<ChatStoredMessage>> readMessages({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String conversationId,
-  }) async =>
-      _messages
-          .where((message) => message.conversationId == conversationId)
-          .toList(growable: false);
+  }) async => _messages
+      .where((message) => message.conversationId == conversationId)
+      .toList(growable: false);
 
   @override
   Future<ChatMessageDisplayBatch> readMessagesForDisplay({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String conversationId,
-  }) async =>
-      ChatMessageDisplayBatch(
-        messages: await readMessages(
-          ownerCidNumber: ownerCidNumber,
-          currentAccountId: currentAccountId,
-          conversationId: conversationId,
-        ),
-        integrityFailureCount: 0,
-      );
+  }) async => ChatMessageDisplayBatch(
+    messages: await readMessages(
+      ownerUserId: ownerUserId,
+      currentAccountId: currentAccountId,
+      conversationId: conversationId,
+    ),
+    integrityFailureCount: 0,
+  );
 }
 
 ChatStoredMessage _stickerStored(
   String stickerId, {
   String pack = 'fluent3d',
-}) =>
-    ChatStoredMessage(
-      envelopeId: 'env-$stickerId',
-      conversationId: 'conv-st',
-      direction: 'incoming',
-      senderCidNumber:
-          '0x2222222222222222222222222222222222222222222222222222222222222222',
-      recipientCidNumber:
-          '0x1111111111111111111111111111111111111111111111111111111111111111',
-      messageKind: ChatMessageKind.sticker,
-      deliveryState: ChatMessageDeliveryState.receivedByDevice,
-      createdAtMillis: 1000,
-      plaintext: ChatPayloadCodec.encode(
-        ChatContent.sticker(packId: pack, stickerId: stickerId),
-      ),
-    );
+}) => ChatStoredMessage(
+  messageId: 'env-$stickerId',
+  conversationId: 'conv-st',
+  direction: 'incoming',
+  senderUserId:
+      '0x2222222222222222222222222222222222222222222222222222222222222222',
+  recipientUserId:
+      '0x1111111111111111111111111111111111111111111111111111111111111111',
+  messageKind: ChatMessageKind.sticker,
+  deliveryState: ChatMessageDeliveryState.receivedByDevice,
+  createdAtMillis: 1000,
+  plaintext: ChatPayloadCodec.encode(
+    ChatContent.sticker(packId: pack, stickerId: stickerId),
+  ),
+);
 
 Widget _host({
   required ChatStore store,
   ChatSendStickerCallback? onSendSticker,
-}) =>
-    MaterialApp(
-      home: ChatPage(
-        conversationId: 'conv-st',
-        ownerCidNumber: 'CN220-CTZN2-100000001-2026',
-        accountId:
-            '0x1111111111111111111111111111111111111111111111111111111111111111',
-        peerCidNumber:
-            '0x2222222222222222222222222222222222222222222222222222222222222222',
-        title: 'Bob',
-        store: store,
-        onSync: () async => 0,
-        onSendSticker: onSendSticker,
-      ),
-    );
+}) => MaterialApp(
+  home: ChatPage(
+    conversationId: 'conv-st',
+    ownerUserId: 'CN220-CTZN2-100000001-2026',
+    accountId:
+        '0x1111111111111111111111111111111111111111111111111111111111111111',
+    peerUserId:
+        '0x2222222222222222222222222222222222222222222222222222222222222222',
+    title: 'Bob',
+    store: store,
+    onSync: () async => 0,
+    onSendSticker: onSendSticker,
+  ),
+);
 
 Future<void> _settleOpen(WidgetTester tester) async {
   // Chat 第一帧入树后，flutter_chat_ui 会安排 250ms 初始滚动；推进到该
@@ -183,9 +176,9 @@ void main() {
       find.byWidgetPredicate(
         (widget) =>
             widget.key is ValueKey<String> &&
-            (widget.key! as ValueKey<String>)
-                .value
-                .startsWith('chat-sticker-message-local:'),
+            (widget.key! as ValueKey<String>).value.startsWith(
+              'chat-sticker-message-local:',
+            ),
       ),
       findsOneWidget,
     );

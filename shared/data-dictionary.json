@@ -157,7 +157,7 @@
     },
     {
       "domain": "citizenapp",
-      "concept_id": "chat_envelope",
+      "concept_id": "chat_message",
       "field_name": "envelope",
       "field_name_zh": "端到端加密聊天信封",
       "authority": "gmb",
@@ -171,21 +171,19 @@
       ]
     },
     {
-      "domain": "citizenapp",
-      "concept_id": "chat_envelope_id",
-      "field_name": "envelope_id",
-      "field_name_zh": "聊天信封唯一标识",
+      "domain": "chat",
+      "concept_id": "chat_message_id",
+      "field_name": "message_id",
+      "field_name_zh": "聊天消息唯一标识",
       "authority": "gmb",
       "data_type": "string",
       "forbidden_names": [
-        "message_id",
+        "envelope_id",
         "operation_id"
       ],
       "paths": [
-        "citizenapp/lib/chat/**",
-        "citizenapp/test/chat/**",
-        "citizenserve/src/chat/**",
-        "citizenserve/test/chat.test.ts"
+        "chatsdk/**",
+        "chatserver/**"
       ]
     },
     {
@@ -989,6 +987,195 @@
       "data_type": "enum",
       "value_set_id": "workspace_section",
       "forbidden_names": []
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_device_id",
+      "field_name": "device_id",
+      "field_name_zh": "聊天设备标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_server_url",
+      "field_name": "chat_server_url",
+      "field_name_zh": "聊天服务地址",
+      "authority": "gmb",
+      "data_type": "url",
+      "forbidden_names": [
+        "service_base_url"
+      ],
+      "paths": [
+        "chatsdk/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_server_token",
+      "field_name": "chat_server_token",
+      "field_name_zh": "聊天服务短期令牌",
+      "authority": "gmb",
+      "data_type": "secret_string",
+      "forbidden_names": [
+        "access_token"
+      ],
+      "paths": [
+        "chatsdk/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_access_expires_at_millis",
+      "field_name": "expires_at_millis",
+      "field_name_zh": "聊天服务授权过期毫秒时间",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_enabled",
+      "field_name": "chat_enabled",
+      "field_name_zh": "聊天能力授权",
+      "authority": "gmb",
+      "data_type": "boolean",
+      "forbidden_names": [],
+      "paths": [
+        "chatserver/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_max_attachment_bytes",
+      "field_name": "max_attachment_bytes",
+      "field_name_zh": "聊天附件授权字节上限",
+      "authority": "gmb",
+      "data_type": "integer",
+      "forbidden_names": [],
+      "paths": [
+        "chatserver/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "user_id",
+      "field_name": "user_id",
+      "field_name_zh": "聊天用户标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "recipient_user_id",
+      "field_name": "recipient_user_id",
+      "field_name_zh": "聊天接收用户标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "sender_user_id",
+      "field_name": "sender_user_id",
+      "field_name_zh": "聊天发送用户标识",
+      "authority": "gmb",
+      "data_type": "string",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "key_package_ref",
+      "field_name": "key_package_ref",
+      "field_name_zh": "MLS密钥包引用",
+      "authority": "openmls",
+      "data_type": "hex",
+      "forbidden_names": [
+        "key_package_id"
+      ],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/chat/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "key_package",
+      "field_name": "key_package",
+      "field_name_zh": "MLS密钥包",
+      "authority": "openmls",
+      "data_type": "base64url",
+      "forbidden_names": [
+        "device_public_key_hex"
+      ],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/chat/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "openmls_ciphertext",
+      "field_name": "openmls_ciphertext",
+      "field_name_zh": "OpenMLS端到端密文",
+      "authority": "openmls",
+      "data_type": "bytes",
+      "forbidden_names": [
+        "encrypted_metadata",
+        "ratchet_tree"
+      ],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**"
+      ]
+    },
+    {
+      "domain": "chat",
+      "concept_id": "chat_attachment_chunk_index",
+      "field_name": "chunk_index",
+      "field_name_zh": "聊天附件密文分块序号",
+      "authority": "gmb",
+      "data_type": "uint32",
+      "forbidden_names": [],
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**"
+      ]
     }
   ],
   "value_sets": [
@@ -1662,6 +1849,35 @@
       "value_sets": []
     },
     {
+      "domain": "chat",
+      "contract_id": "chat_service",
+      "contract_name_zh": "通用端到端加密聊天服务",
+      "authority": "gmb",
+      "paths": [
+        "chatsdk/**",
+        "chatserver/**",
+        "citizenapp/lib/chat/**",
+        "citizenserve/src/auth/chatserver_access.ts"
+      ],
+      "fields": [
+        "chat_access_expires_at_millis",
+        "chat_attachment_chunk_index",
+        "chat_device_id",
+        "chat_enabled",
+        "chat_max_attachment_bytes",
+        "chat_message_id",
+        "chat_server_token",
+        "chat_server_url",
+        "key_package",
+        "key_package_ref",
+        "openmls_ciphertext",
+        "recipient_user_id",
+        "sender_user_id",
+        "user_id"
+      ],
+      "value_sets": []
+    },
+    {
       "domain": "citizenapp",
       "contract_id": "citizenapp_chat",
       "contract_name_zh": "公民聊天",
@@ -1676,8 +1892,8 @@
         "chat_candidate",
         "chat_connection_id",
         "chat_created_at_millis",
-        "chat_envelope",
-        "chat_envelope_id",
+        "chat_message",
+        "chat_message_id",
         "chat_recipient_cid_number",
         "chat_recipient_device_id",
         "chat_sdp",

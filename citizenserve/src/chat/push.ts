@@ -89,6 +89,7 @@ export async function sendChatWake(
 export async function sendChatAlert(
   env: Env,
   recipientCidNumber: string,
+  recipientDeviceId: string,
   senderCidNumber: string,
   conversationId: string,
   envelopeId: string,
@@ -101,11 +102,13 @@ export async function sendChatAlert(
     `SELECT push_provider, push_token, apns_environment
        FROM chat_push_endpoints
       WHERE cid_number = ?
+        AND device_id = ?
         AND binding_revision = ?
         AND account_id = ?
         AND expires_at > ?`,
   ).bind(
     recipientCidNumber,
+    recipientDeviceId,
     recipientIdentity.binding_revision,
     recipientIdentity.account_id,
     nowMs(),

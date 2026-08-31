@@ -6,12 +6,36 @@
 
 import 'mls_boundary.dart';
 
+/// MLS BasicCredential 中的标准 ChatSDK 设备身份。
+class MlsMemberIdentity {
+  const MlsMemberIdentity({required this.userId, required this.deviceId});
+
+  final String userId;
+  final String deviceId;
+
+  String get wireValue => '$userId:$deviceId';
+
+  static MlsMemberIdentity parse(String identity) {
+    final index = identity.indexOf(':');
+    if (index <= 0 || index == identity.length - 1) {
+      throw const FormatException('MLS 成员身份格式不合法');
+    }
+    return MlsMemberIdentity(
+      userId: identity.substring(0, index),
+      deviceId: identity.substring(index + 1),
+    );
+  }
+}
+
 /// 群成员标识 = "user_id:device_id"（MLS BasicCredential 内容）。
 /// 扇出/名册以 用户身份 为单位，故从标识取 用户身份 段。
 String userIdFromMemberIdentity(String identity) {
-  final index = identity.indexOf(':');
-  return index < 0 ? identity : identity.substring(0, index);
+  return MlsMemberIdentity.parse(identity).userId;
 }
+
+List<MlsMemberIdentity> membersFromMemberIdentities(
+  Iterable<String> identities,
+) => identities.map(MlsMemberIdentity.parse).toList(growable: false);
 
 /// 一批成员标识 → 去重 用户身份 集合（可选排除自己）。
 List<String> userIdsFromMemberIdentities(
@@ -154,6 +178,12 @@ class GroupState {
 ///
 /// 实现必须调用成熟 OpenMLS native,不允许在 Dart 中自研群密码学。
 abstract class MlsGroupCrypto {
+  /// 为当前设备生成一枚由 OpenMLS 保存私有材料的 Last Resort KeyPackage。
+  Future<MlsKeyPackage> createKeyPackage(
+    ChatDevice identity, {
+    bool lastResort = true,
+  });
+
   /// 建群,创建者为唯一成员。
   Future<GroupCreated> createGroup(String groupId);
 

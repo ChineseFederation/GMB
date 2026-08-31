@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package gmb.chat;
+package chat.protocol;
 
 // 第一类聊天内容的唯一 wire 真源。协议依靠 protobuf 字段号演进，不增加
 // 自定义版本字段；未知字段和未知内容类型由 ChatSDK 失败关闭。

@@ -44,7 +44,7 @@ class MlsNativeSmokeResult {
 /// 通过现有 native 库调用 Rust OpenMLS。
 ///
 /// 该类只负责跨 FFI 边界，密码学实现全部在 Rust OpenMLS 中完成。
-class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
+class NativeMlsCrypto implements MlsGroupCrypto {
   NativeMlsCrypto({
     MlsNativeBindings? bindings,
     ChatDevice? identity,
@@ -57,30 +57,9 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
   final ChatDevice? _identity;
   final MlsStateStore? _stateStore;
 
-  /// 当前账户运行上下文退出后立即清零 Dart 侧 MLS 状态信封钥。
+  /// 当前账户运行上下文退出后立即清零 Dart 侧 MLS 状态消息钥。
   void dispose() {
     _stateStore?.dispose();
-  }
-
-  @override
-  Future<String> readDevicePublicKey(ChatDevice identity) async {
-    final error = identity.validate();
-    if (error != null) {
-      throw ArgumentError(error);
-    }
-    if (_stateStore == null) {
-      throw const MlsNativeException(
-        MlsNativeErrorCode.invalidRequest,
-        '读取 Chat 设备公钥必须提供 MLS stateStore',
-      );
-    }
-    final response = _bindings.callJson(_bindings.deviceIdentity, {
-      'user_id': identity.userId,
-      'device_id': identity.deviceId,
-      'state_store_dir': _stateStore.path,
-      'state_key_hex': _stateStore.stateKeyHex,
-    });
-    return _requireField(response, 'device_public_key_hex');
   }
 
   @override
@@ -103,8 +82,7 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
     return MlsKeyPackage(
       userId: identity.userId,
       deviceId: identity.deviceId,
-      devicePublicKey: _requireField(response, 'device_public_key_hex'),
-      keyPackageId: (response['key_package_id'] ?? '').toString(),
+      keyPackageRef: _requireField(response, 'key_package_ref'),
       keyPackageBytes: _hexToBytes(_requireField(response, 'key_package_hex')),
       cipherSuite: (response['cipher_suite'] ?? '').toString(),
       notBeforeMillis: (response['not_before_millis'] as num?)?.toInt() ?? 0,
@@ -123,88 +101,7 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
     return MlsNativeSmokeResult.fromJson(response);
   }
 
-  @override
-  Future<MlsOutboundMessage> encrypt({
-    required String conversationId,
-    required String recipientUserId,
-    required String recipientDevicePublicKey,
-    required List<int> plaintext,
-  }) async {
-    final identity = _requireIdentity();
-    final stateStore = _requireStateStore();
-    await stateStore.ensureReady();
-    final response = _bindings.callJson(_bindings.encrypt, {
-      'state_store_dir': stateStore.path,
-      'state_key_hex': stateStore.stateKeyHex,
-      'user_id': identity.userId,
-      'device_id': identity.deviceId,
-      'conversation_id': conversationId,
-      'recipient_user_id': recipientUserId,
-      'plaintext_hex': _bytesToHex(plaintext),
-      'recipient_device_public_key_hex': recipientDevicePublicKey,
-    });
-    final cipherSuite = (response['cipher_suite'] ?? '').toString();
-    final welcomeHex = response['welcome_wire_message_hex']?.toString();
-    final ratchetTreeHex = response['ratchet_tree_hex']?.toString();
-    final welcomeMessage = welcomeHex == null || welcomeHex.isEmpty
-        ? null
-        : MlsWireMessage(
-            wireBytes: _hexToBytes(welcomeHex),
-            cipherSuite: cipherSuite,
-            conversationId: conversationId,
-            messageKind: MlsMessageKind.welcome,
-            ratchetTreeBytes: ratchetTreeHex == null || ratchetTreeHex.isEmpty
-                ? null
-                : _hexToBytes(ratchetTreeHex),
-          );
-    return MlsOutboundMessage(
-      conversationId: conversationId,
-      welcomeMessage: welcomeMessage,
-      applicationMessage: MlsWireMessage(
-        wireBytes: _hexToBytes(
-          (response['application_wire_message_hex'] ?? '').toString(),
-        ),
-        cipherSuite: cipherSuite,
-        conversationId: conversationId,
-        messageKind: MlsMessageKind.application,
-      ),
-    );
-  }
-
-  @override
-  Future<List<int>> decrypt(MlsWireMessage message) async {
-    final inbound = await processIncoming(message);
-    return inbound.plaintext ?? const [];
-  }
-
-  /// 处理 Welcome 或 application wire message。
-  @override
-  Future<MlsInboundMessage> processIncoming(MlsWireMessage message) async {
-    final identity = _requireIdentity();
-    final stateStore = _requireStateStore();
-    await stateStore.ensureReady();
-    final response = _bindings.callJson(_bindings.decrypt, {
-      'state_store_dir': stateStore.path,
-      'state_key_hex': stateStore.stateKeyHex,
-      'user_id': identity.userId,
-      'device_id': identity.deviceId,
-      'conversation_id': message.conversationId,
-      'wire_message_hex': message.wireHex,
-    });
-    final plaintextHex = response['plaintext_hex']?.toString();
-    return MlsInboundMessage(
-      conversationId: (response['conversation_id'] ?? message.conversationId)
-          .toString(),
-      messageKind: MlsMessageKind.fromWireName(
-        (response['message_kind'] ?? '').toString(),
-      ),
-      plaintext: plaintextHex == null || plaintextHex.isEmpty
-          ? null
-          : _hexToBytes(plaintextHex),
-    );
-  }
-
-  // ==== 私密小群(MlsGroupCrypto)==== 单次加密 + Dart 扇出,密码学全在 Rust。
+  // 私聊和群聊统一调用同一套 OpenMLS 群接口。
 
   @override
   Future<GroupCreated> createGroup(String groupId) async {
@@ -242,7 +139,6 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
           .map((keyPackage) => keyPackage.keyPackageHex)
           .toList(),
     });
-    final treeHex = (response['ratchet_tree_hex'] ?? '').toString();
     final welcomeHex = (response['welcome_wire_hex'] ?? '').toString();
     return GroupCommitBundle(
       groupId: (response['group_id'] ?? groupId).toString(),
@@ -250,16 +146,11 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
       commit: _groupWire(
         groupId,
         (response['commit_wire_hex'] ?? '').toString(),
-        MlsMessageKind.application,
+        MlsMessageKind.commit,
       ),
       welcome: welcomeHex.isEmpty
           ? null
-          : _groupWire(
-              groupId,
-              welcomeHex,
-              MlsMessageKind.welcome,
-              ratchetTreeHex: treeHex.isEmpty ? null : treeHex,
-            ),
+          : _groupWire(groupId, welcomeHex, MlsMessageKind.welcome),
     );
   }
 
@@ -290,7 +181,7 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
       commit: _groupWire(
         groupId,
         (response['commit_wire_hex'] ?? '').toString(),
-        MlsMessageKind.application,
+        MlsMessageKind.commit,
       ),
       removedUserIds: removed,
     );
@@ -331,7 +222,6 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
       'device_id': identity.deviceId,
       'group_id': wire.conversationId,
       'wire_message_hex': wire.wireHex,
-      if (wire.ratchetTreeHex != null) 'ratchet_tree_hex': wire.ratchetTreeHex,
     });
     final plaintextHex = response['plaintext_hex']?.toString();
     final members = (response['member_identities'] as List?)
@@ -382,17 +272,12 @@ class NativeMlsCrypto implements MlsCrypto, MlsGroupCrypto {
   MlsWireMessage _groupWire(
     String groupId,
     String wireHex,
-    MlsMessageKind kind, {
-    String? ratchetTreeHex,
-  }) {
+    MlsMessageKind kind,
+  ) {
     return MlsWireMessage(
       wireBytes: _hexToBytes(wireHex),
-      cipherSuite: '',
       conversationId: groupId,
       messageKind: kind,
-      ratchetTreeBytes: ratchetTreeHex == null || ratchetTreeHex.isEmpty
-          ? null
-          : _hexToBytes(ratchetTreeHex),
     );
   }
 
@@ -433,11 +318,8 @@ typedef MlsFreeStringDart = void Function(Pointer<Utf8> ptr);
 /// Chat MLS native bindings。
 class MlsNativeBindings {
   MlsNativeBindings._({
-    required this.deviceIdentity,
     required this.createKeyPackage,
     required this.twoPartySmoke,
-    required this.encrypt,
-    required this.decrypt,
     required this.rekeyState,
     required this.groupCreate,
     required this.groupAddMembers,
@@ -448,11 +330,8 @@ class MlsNativeBindings {
     required MlsFreeStringDart freeString,
   }) : _freeString = freeString;
 
-  final MlsJsonDart deviceIdentity;
   final MlsJsonDart createKeyPackage;
   final MlsJsonDart twoPartySmoke;
-  final MlsJsonDart encrypt;
-  final MlsJsonDart decrypt;
   final MlsJsonDart rekeyState;
   final MlsJsonDart groupCreate;
   final MlsJsonDart groupAddMembers;
@@ -465,20 +344,11 @@ class MlsNativeBindings {
   static MlsNativeBindings load() {
     final library = _loadChatSdkLibrary();
     return MlsNativeBindings._(
-      deviceIdentity: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
-        'chat_sdk_device_identity_json',
-      ),
       createKeyPackage: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
         'chat_sdk_mls_create_key_package_json',
       ),
       twoPartySmoke: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
         'chat_sdk_mls_two_party_smoke_json',
-      ),
-      encrypt: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
-        'chat_sdk_mls_encrypt_json',
-      ),
-      decrypt: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
-        'chat_sdk_mls_decrypt_json',
       ),
       rekeyState: library.lookupFunction<MlsJsonNative, MlsJsonDart>(
         'chat_sdk_mls_rekey_state_json',
@@ -556,8 +426,9 @@ class MlsNativeBindings {
 }
 
 DynamicLibrary _loadChatSdkLibrary() {
-  // iOS 把 libchat_sdk.a 静态链接进 Runner 主二进制；不存在可 dlopen 的 dylib。
-  // 必须直接查当前进程符号，和 smoldot/dart 包的平台加载真源保持一致。
+  // iOS 由 ChatSDK 自己的 CocoaPods 目标链接、嵌入并签名动态 XCFramework；dyld
+  // 在 Dart 启动前已经装载该 Framework，因此从当前进程解析其唯一 C FFI 符号。
+  // Smoldot 不再参与 ChatSDK 的编译、链接、导出或加载。
   if (Platform.isIOS) {
     return DynamicLibrary.process();
   }
@@ -736,7 +607,7 @@ class MlsNativeException implements Exception {
     MlsNativeErrorCode.deviceReadFailed ||
     MlsNativeErrorCode.deviceAuthFailed ||
     MlsNativeErrorCode.stateInvalid ||
-    MlsNativeErrorCode.signerMissing => '当前用户身份的聊天加密状态无法恢复，请重新进入公民',
+    MlsNativeErrorCode.signerMissing => '当前用户身份的聊天加密状态无法恢复，请重新进入宿主',
     MlsNativeErrorCode.libraryUnavailable => '聊天安全组件加载失败，请重新安装当前版本',
     MlsNativeErrorCode.invalidRequest ||
     MlsNativeErrorCode.invalidResponse ||
@@ -798,10 +669,8 @@ String chatSdkUserErrorMessage(
 
 /// 读 Rust 侧**必填**响应字段;缺字段或空值一律抛错,绝不静默退化成空串。
 ///
-/// FFI 两侧字段名靠人工对齐,没有编译期约束:漏 `_hex` 后缀这类拼写漂移会让
-/// `?? ''` 一路把空串传到业务层,故障点离根因隔好几层(2026-08-04 的
-/// `device_public_key_hex` 断链即如此——设备公钥恒空,Chat 首启抛「请先重编
-/// native 库」,把 Dart 读错键名误导成 native 库过期)。在边界即炸。
+/// FFI 两侧字段名没有编译期约束，任何拼写漂移都会让错误远离根因；因此必须在
+/// OpenMLS 边界立即失败，禁止把空串继续传入群状态或 KeyPackage 流程。
 ///
 /// 只用于**恒非空**的字段;可为空的响应字段(如无新会话时的
 /// `welcome_wire_message_hex`、Welcome 消息的 `plaintext_hex`)照旧走 `?? ''`。

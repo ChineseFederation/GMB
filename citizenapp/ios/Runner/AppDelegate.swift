@@ -43,7 +43,7 @@ import UserNotifications
 
   /// 把 Chat 文件域和独立 Isar 文件排除出 iCloud Backup。
   ///
-  /// 只匹配固定 `Documents/chat` 与 `citizenapp_chat*`，不接受 Flutter 传入路径，
+  /// 只匹配固定 `Documents/chat` 与 `chat_sdk_chat*`，不接受 Flutter 传入路径，
   /// 避免业务层借该通道改变其它目录的备份属性。
   private func excludeChatDataFromBackup() throws {
     guard let documents = FileManager.default.urls(
@@ -71,7 +71,7 @@ import UserNotifications
       at: applicationSupport,
       includingPropertiesForKeys: nil
     )
-    for file in files where file.lastPathComponent.hasPrefix("citizenapp_chat") {
+    for file in files where file.lastPathComponent.hasPrefix("chat_sdk_chat") {
       var fileValues = URLResourceValues()
       fileValues.isExcludedFromBackup = true
       var mutableFile = file

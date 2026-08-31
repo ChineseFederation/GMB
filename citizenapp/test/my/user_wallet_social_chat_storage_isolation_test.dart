@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:isar_community/isar.dart';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:citizenapp/isar/chat_isar.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 import 'package:citizenapp/isar/user_isar.dart';
 
@@ -47,11 +47,10 @@ void main() {
       await ChatIsar.instance.writeTxn<void>((isar) async {
         await isar.chatRouteCacheEntitys.put(
           ChatRouteCacheEntity()
-            ..ownerCidNumber = 'R5-K3P1C1-N9-D4'
-            ..peerCidNumber = 'R5-K3P1C1-N8-D5'
+            ..ownerUserId = 'R5-K3P1C1-N9-D4'
+            ..peerUserId = 'R5-K3P1C1-N8-D5'
             ..routeDisplayName = 'chat'
             ..deviceId = 'device-user-isolation'
-            ..devicePublicKey = 'public-key-user-isolation'
             ..safetyNumber = '1234'
             ..createdAtMillis = 1
             ..updatedAtMillis = 1,
@@ -185,11 +184,10 @@ void main() {
     await ChatIsar.instance.writeTxn<void>((isar) async {
       await isar.chatRouteCacheEntitys.put(
         ChatRouteCacheEntity()
-          ..ownerCidNumber = 'R5-K3P1C1-N9-D4'
-          ..peerCidNumber = 'R5-K3P1C1-N8-D5'
+          ..ownerUserId = 'R5-K3P1C1-N9-D4'
+          ..peerUserId = 'R5-K3P1C1-N8-D5'
           ..routeDisplayName = 'chat'
           ..deviceId = 'device-user-close'
-          ..devicePublicKey = 'public-key-user-close'
           ..safetyNumber = '5678'
           ..createdAtMillis = 1
           ..updatedAtMillis = 1,
@@ -213,7 +211,7 @@ void main() {
     );
     expect(
       await ChatIsar.instance.read((isar) async =>
-          (await isar.chatRouteCacheEntitys.getByOwnerCidNumberPeerCidNumber(
+          (await isar.chatRouteCacheEntitys.getByOwnerUserIdPeerUserId(
             'R5-K3P1C1-N9-D4',
             'R5-K3P1C1-N8-D5',
           ))

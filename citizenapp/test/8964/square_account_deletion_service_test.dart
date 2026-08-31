@@ -6,7 +6,7 @@ import 'package:citizenapp/8964/profile/services/citizen_profile_cache.dart';
 import 'package:citizenapp/8964/services/square_account_deletion_service.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/8964/services/square_post_store.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:citizenapp/wallet/core/device_subkey.dart';
 
 const _owner =

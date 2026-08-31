@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# 清理目标平台缓存、编译本机优化安装包并覆盖安装到设备。
-# iOS 由系统开发设备签名后原位安装；Android 只在此生成无私钥候选，随后由
-# ProgramConsole 原生安全进程使用固定本机开发签名并安装。
+# 清理目标平台缓存并生成本机优化安装包；本脚本不启动、不安装产品。
 #
 # 用法：citizenapp-run.sh <ios|android>
 # 只读包检查：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
@@ -10,11 +8,11 @@
 # 而回落的那一端会被当成用户想编的那一端——「以为编了 iOS、实际编的 Android」
 # 就是这么来的。编程控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
 #
-# 本机中间文件只允许进入 ProgramConsole 中央 `.work`，最终成功包直接覆盖产品目录中的固定文件。
+# 本机中间文件只允许进入ProgramConsole中央`.work`，最终成功包覆盖中央产品产物目录中的固定文件。
 # 固定使用 smoldot 轻节点连接区块链（无需 RPC 服务器）。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# 中央快照门禁比较的是唯一真实路径；先消解 scripts/..，避免同一路径因文本形态不同被误拒绝。
+# 消解 scripts/..，确保直接产品源码身份使用唯一真实路径。
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
@@ -29,37 +27,62 @@ if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
   case "$PROGRAM_CONSOLE_WORK_DIR" in "$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
     echo "公民中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2; exit 1 ;;
   esac
-  # Flutter会把.dart_tool、Pods、Gradle和Xcode状态写到当前工程。编译脚本只接受
-  # ProgramConsole建立的一次性源码快照，直接从GMB主检出运行必须在任何Flutter命令前失败。
-  [[ "$APP_ROOT" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] || {
-    echo "公民本机编译只能在ProgramConsole中央源码快照中运行：$APP_ROOT" >&2
+  # Flutter会把依赖状态写到当前工程；Build直接读取产品源码，并在退出时清除临时状态。
+  [[ "$APP_ROOT" == "$REPO_ROOT/citizenapp" ]] || {
+  echo "citizenapp本机Build源码身份无效：$APP_ROOT" >&2
+  exit 1
+
+}
+
+CHATSDK_OVERRIDE_PATH="$APP_ROOT/pubspec_overrides.yaml"
+PUBSPEC_LOCK_BACKUP="$PROGRAM_CONSOLE_WORK_DIR/citizenapp.pubspec.lock"
+
+prepare_local_chat_sdk_dependency() {
+  [[ ! -e "$CHATSDK_OVERRIDE_PATH" ]] || {
+    echo "CitizenApp 本机依赖覆盖文件已存在：$CHATSDK_OVERRIDE_PATH" >&2
     exit 1
   }
-  INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少ProgramConsole本机增量缓存目录}"
-  [[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
-    echo "CitizenApp本机增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
-    exit 1
-  }
-  BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
-  ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenapp"
-  export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
-  export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
-  export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
-  export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
-  export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
-  mkdir -p "$XDG_CONFIG_HOME"
-  build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
-  flutter config --build-dir="$build_dir_relative" >/dev/null
+  cp -p "$APP_ROOT/pubspec.lock" "$PUBSPEC_LOCK_BACKUP"
+  # 本机开发只直连当前仓库 ChatSDK；正式源码依赖仍由准确 Git Release Tag 管理。
+  cat > "$CHATSDK_OVERRIDE_PATH" <<'YAML'
+dependency_overrides:
+  gmb_chat_sdk:
+    path: ../chatsdk
+YAML
+}
+
+cleanup_direct_source_state() {
+  rm -rf "$APP_ROOT/.dart_tool" "$APP_ROOT/.flutter-plugins" \
+    "$APP_ROOT/.flutter-plugins-dependencies" "$APP_ROOT/ios/Pods" \
+    "$APP_ROOT/ios/.symlinks" "$APP_ROOT/android/.gradle"
+  rm -f "$CHATSDK_OVERRIDE_PATH"
+  if [[ -f "$PUBSPEC_LOCK_BACKUP" ]]; then
+    cp -p "$PUBSPEC_LOCK_BACKUP" "$APP_ROOT/pubspec.lock"
+    rm -f "$PUBSPEC_LOCK_BACKUP"
+  fi
+  if [[ "$PLATFORM" == ios ]]; then
+    rm -f "$REPO_ROOT/chatsdk/ios/ChatSDK.xcframework"
+  fi
+}
+trap 'status=$?; cleanup_direct_source_state; exit "$status"' EXIT
+prepare_local_chat_sdk_dependency
 fi
 
-# 本机编译只读取仓库统一的 Flutter 依赖真源。禁止直接接受 PATH 中任意
-# Flutter；否则同一 iOS 工程会在旧 CocoaPods 与新 SPM 生成状态之间来回切换。
-EXPECTED_FLUTTER_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["toolchains"]["flutter"])' "$REPO_ROOT/.github/dependencies.json")"
-ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["frameworkVersion"])' 2>/dev/null || true)"
-[[ "$ACTUAL_FLUTTER_VERSION" == "$EXPECTED_FLUTTER_VERSION" ]] || {
-  echo "Flutter 版本不一致：要求 ${EXPECTED_FLUTTER_VERSION}，实际 ${ACTUAL_FLUTTER_VERSION:-未安装}" >&2
+INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少ProgramConsole本机增量缓存目录}"
+[[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
+  echo "CitizenApp本机增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
   exit 1
 }
+BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
+ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenapp"
+export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
+export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
+export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
+export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
+export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
+mkdir -p "$XDG_CONFIG_HOME"
+build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
+flutter config --build-dir="$build_dir_relative" >/dev/null
 
 # iOS 与 Android 使用独立中央缓存。中间产物保留，最终候选包每轮必须重新生成。
 clean_platform_build_outputs() {
@@ -70,7 +93,7 @@ clean_platform_build_outputs() {
   mkdir -p "$BUILD_DIR"
 }
 
-# iOS 的 Runner.app 已由系统签名并经设备安装回读验证；成功后只覆盖固定 `ios.app.zip`。
+# iOS Runner.app完成签名后只覆盖固定 `ios.app.zip`。
 retain_ios_local_artifact() {
   local app_bundle="$1" staging="$PROGRAM_CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
   rm -f "$staging"
@@ -80,136 +103,8 @@ retain_ios_local_artifact() {
   mv -f "$staging" "$destination"
 }
 
-# iOS 必须走 CoreDevice 的原位安装，禁止 `flutter install`：该命令的卸载式安装
-# install 命令默认先卸载旧 App，会连带删除 Application Support 中的钱包 Isar 数据库。
-# `devicectl` 直接接受 Flutter 返回的硬件 UDID。iOS 更新时允许迁移数据容器并改变
-# 绝对路径，因此不能比较 UUID；改为在覆盖前后复读钱包 Isar 文件并核对大小。
-install_ios_update() {
-  local device_id="$1" expected_bundle_id="$2" app_bundle="$3" wallet_database="$4" expected_bundle_version
-  expected_bundle_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app_bundle/Info.plist")"
-  local actual_bundle_id team_id before_data_container after_data_container
-  local before_database_size after_database_size
-  local signed_apns_environment profile_apns_environment profile_path
-
-  [[ -d "$app_bundle" ]] || { echo "iOS App 产物不存在：$app_bundle" >&2; return 1; }
-  actual_bundle_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app_bundle/Info.plist" 2>/dev/null || true)"
-  [[ "$actual_bundle_id" == "$expected_bundle_id" ]] || {
-    echo "iOS Bundle ID 不匹配：期望 ${expected_bundle_id}，实际 ${actual_bundle_id:-空}" >&2
-    return 1
-  }
-  team_id="$(codesign -d --verbose=4 "$app_bundle" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -n 1)"
-  [[ -n "$team_id" && "$team_id" != Not\ Set ]] || {
-    echo "iOS App 缺少有效签名团队，拒绝覆盖设备中的正式数据" >&2
-    return 1
-  }
-  if ! signed_apns_environment="$(
-    codesign -d --entitlements :- "$app_bundle" 2>/dev/null |
-      plutil -extract aps-environment raw -o - -
-  )"; then
-    echo "iOS App 最终签名缺少有效 aps-environment，拒绝安装" >&2
-    return 1
-  fi
-  [[ "$signed_apns_environment" == development || "$signed_apns_environment" == production ]] || {
-    echo "iOS App 最终签名包含未知 aps-environment：$signed_apns_environment" >&2
-    return 1
-  }
-  profile_path="$app_bundle/embedded.mobileprovision"
-  if [[ -f "$profile_path" ]]; then
-    if ! profile_apns_environment="$(
-      security cms -D -i "$profile_path" 2>/dev/null |
-        plutil -extract Entitlements.aps-environment raw -o - -
-    )"; then
-      echo "iOS provisioning profile 缺少有效 aps-environment，拒绝安装" >&2
-      return 1
-    fi
-    [[ "$profile_apns_environment" == development || "$profile_apns_environment" == production ]] || {
-      echo "iOS provisioning profile 包含未知 aps-environment：$profile_apns_environment" >&2
-      return 1
-    }
-    [[ "$profile_apns_environment" == "$signed_apns_environment" ]] || {
-      echo "iOS provisioning profile 与最终签名的 APNs 环境不一致，拒绝安装" >&2
-      return 1
-    }
-  elif [[ "$signed_apns_environment" != production ]]; then
-    echo "无 provisioning profile 的 iOS App 只能使用 production APNs 环境" >&2
-    return 1
-  fi
-
-  ios_data_container() {
-    xcrun devicectl device info apps --quiet \
-      --device "$device_id" \
-      --bundle-id "$expected_bundle_id" \
-      --include-container-paths \
-      --json-output - |
-      python3 -c '
-import json, sys
-apps = json.load(sys.stdin).get("result", {}).get("apps", [])
-if len(apps) > 1:
-    raise SystemExit("同一 Bundle ID 返回多个 App，拒绝继续")
-if apps:
-    path = apps[0].get("dataContainerPath", "")
-    if not path:
-        raise SystemExit("无法读取已安装 App 的数据容器，拒绝覆盖")
-    print(path)
-'
-  }
-
-  ios_wallet_database_size() {
-    xcrun devicectl device info files --quiet \
-      --device "$device_id" \
-      --domain-type appDataContainer \
-      --domain-identifier "$expected_bundle_id" \
-      --subdirectory 'Library/Application Support' \
-      --recurse \
-      --json-output - |
-      python3 -c '
-import json, sys
-database = sys.argv[1]
-files = json.load(sys.stdin).get("result", {}).get("files", [])
-matches = [item for item in files if item.get("name") == database]
-if len(matches) > 1:
-    raise SystemExit("钱包数据库返回多个同名文件，拒绝继续")
-if matches:
-    size = matches[0].get("metadata", {}).get("size", 0)
-    if not isinstance(size, int) or size <= 0:
-        raise SystemExit("钱包数据库大小无效，拒绝继续")
-    print(size)
-' "$wallet_database"
-  }
-
-  before_data_container="$(ios_data_container)"
-  if [[ -n "$before_data_container" ]]; then
-    before_database_size="$(ios_wallet_database_size)"
-  else
-    before_database_size=""
-  fi
-  xcrun devicectl device install app --quiet --timeout 180 \
-    --device "$device_id" "$app_bundle"
-  after_data_container="$(ios_data_container)"
-  [[ -n "$after_data_container" ]] || {
-    echo "iOS 覆盖安装后未找到 $expected_bundle_id" >&2
-    return 1
-  }
-  xcrun devicectl device info apps --quiet --device "$device_id" \
-    --bundle-id "$expected_bundle_id" --json-output - | python3 -c '
-import json, sys
-expected = sys.argv[1]
-apps = json.load(sys.stdin).get("result", {}).get("apps", [])
-if len(apps) != 1 or str(apps[0].get("bundleVersion", "")) != expected:
-    raise SystemExit("iOS 设备安装后的包版本标识不一致")
-' "$expected_bundle_version"
-  if [[ -n "$before_database_size" ]]; then
-    after_database_size="$(ios_wallet_database_size)"
-    [[ "$after_database_size" == "$before_database_size" ]] || {
-      echo "iOS 覆盖安装后钱包数据库不存在或大小改变，拒绝把本次安装判为成功" >&2
-      return 1
-    }
-  fi
-  echo "    iOS 原位覆盖完成：Bundle ID=${expected_bundle_id}，Team ID=${team_id}，APNs=${signed_apns_environment}，钱包数据库已保留"
-}
-
 # 系统权限弹窗由操作系统渲染；App 唯一能提供的是最终包内的受支持语言和本地化产品名。
-# 只检查源码会漏掉 Xcode variant group 未入 Resources 等问题，本机安装必须回读最终包。
+# 只检查源码会漏掉 Xcode variant group 未入 Resources 等问题，Build必须回读最终包。
 verify_ios_release_localization() {
   local app_bundle="$1" info="$1/Info.plist"
   local zh_strings="$1/zh-Hans.lproj/InfoPlist.strings"
@@ -278,7 +173,7 @@ fi
 
 # 构造 dart-define 参数
 DART_DEFINES=()
-echo "[启动模式] smoldot 轻节点 · 目标平台 $PLATFORM"
+echo "[Build模式] smoldot轻节点 · 目标平台 $PLATFORM"
 
 # ── chainspec.json 是从链端 plain SSOT + 创世状态包派生的轻节点创世 ──
 # 节点 SSOT = citizenchain/node/chainspecs/citizenchain.plain.json;App 资产只保留
@@ -298,10 +193,13 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
 echo "==> 编译 Rust 原生库（${PLATFORM}）..."
 "$SCRIPT_DIR/build-smoldot-native.sh" "$PLATFORM"
-# iOS 的 ChatSDK 已由 libsmoldot.a 在 Rust 层统一承载，避免同一 Runner 链接两套
-# Rust runtime；Android 的两个 .so 拥有独立链接空间，继续分别构建和装载。
-if [[ "$PLATFORM" == android ]]; then
-  "$SCRIPT_DIR/../../chatsdk/scripts/build-native.sh" android
+# Smoldot 和 ChatSDK 分别生成自己的原生产物；iOS 由静态 Smoldot Framework 与
+# 动态 ChatSDK XCFramework 隔离 Rust runtime，Android 继续使用两个独立 .so。
+if [[ "$PLATFORM" == ios ]]; then
+  CHATSDK_PACKAGE_IOS_DIR="$REPO_ROOT/chatsdk/ios" \
+    "$REPO_ROOT/chatsdk/scripts/build-native.sh" "$PLATFORM"
+else
+  "$REPO_ROOT/chatsdk/scripts/build-native.sh" "$PLATFORM"
 fi
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
@@ -309,53 +207,18 @@ clean_platform_build_outputs
 echo "==> 获取依赖..."
 flutter pub get
 
-# iOS 在脚本内挑选设备并把 id 显式传给系统安装命令；Android 的设备选择、签名证书
-# 比对与覆盖安装全部归原生安全进程，脚本不得取得 APP_KEY 或自行调用 adb 安装。
-# 不传设备 id 时 flutter 自己挑：同时连着安卓机和 iPhone 就无从决定，而编程控制台日志面板
-# 没有输入框，它的选择提示在那里根本回答不了。挑不到就报错退出，绝不改编另一端。
-# `flutter devices --machine` 内部会调 `adb devices`，万一 adb 异常会永久阻塞，
-# 故用 perl alarm 包 60s 超时（macOS 自带 perl，无 GNU `timeout`）。
-DEVICE_ID=""
-if [[ "$PLATFORM" == ios ]]; then
-  echo "==> 选择 iOS 设备..."
-  DEVICE_ID="$(perl -e 'alarm 60; exec @ARGV' flutter devices --machine 2>/dev/null | python3 -c "
-import sys, json
-want = sys.argv[1]
-try:
-    for device in json.load(sys.stdin):
-        if want in device.get('targetPlatform', ''):
-            print(device['id']); break
-except Exception:
-    pass
-" "$PLATFORM" || true)"
-  [[ -n "$DEVICE_ID" ]] || {
-    echo "未检测到 iOS 设备：请连接设备后重试。" >&2
-    exit 1
-  }
-  echo "    设备: $DEVICE_ID"
-fi
-
-# 本机「编译」只处理当前工作区源码并覆盖安装到设备，不读取或触发任何远端流程。
-# 一律 build + install，不用 `flutter run`（它只把 App 挂在调试器上跑）：
-#
-# - `--release` 只是 Flutter 的本机优化配置，不表示或触发项目的 Release 流程。
-# - iOS 必须使用该优化配置。iOS 14+ 禁止 Flutter debug 版脱离 flutter tooling / Xcode 启动;
-#   debug 版装进手机后从桌面点图标必然起不来(系统提示 "Cannot create a FlutterEngine
-#   instance in debug mode",随后 signal 11)——表现就是"一点就闪退"。
-#   iOS 安装直接走 `devicectl device install app`:它接受 flutter 返回的硬件 UDID，
-#   且不会先卸载旧 App；`flutter install` 默认先卸载，会删除钱包数据，永久禁用。
-# - Android 同样构建本机优化包。Gradle 输出无私钥候选；脚本退出后由原生安全进程使用
-#   Data Protection Keychain 内的固定本机开发证书签名，证书一致才保留数据覆盖安装。
+# Build不选择、不安装、不启动设备，只读取当前产品源码并生成中央产物。
+# `--release`只是本机优化配置，不表示或触发正式Release流程。
 echo "==> 编译本机优化安装包..."
 if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
   IOS_APP="$BUILD_DIR/ios/iphoneos/Runner.app"
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package "$IOS_APP"
+  "$REPO_ROOT/chatsdk/scripts/build-native.sh" verify-ios-package "$IOS_APP"
   verify_ios_release_localization "$IOS_APP"
-  install_ios_update "$DEVICE_ID" ios.citizenapp "$IOS_APP" citizenapp.isar
   retain_ios_local_artifact "$IOS_APP"
   echo ""
-  echo "==> 安装完成:请在设备桌面点开「公民」。"
+  echo "==> Build完成：iOS产物已写入ProgramConsole中央目录。"
 elif [[ "$PLATFORM" == android ]]; then
   ANDROID_APK="$BUILD_DIR/app/outputs/flutter-apk/app-release.apk"
   # Flutter 27 的 Android 包定位器仍可能只检查产品默认 build/，即使 Gradle 已按
@@ -374,6 +237,7 @@ elif [[ "$PLATFORM" == android ]]; then
     exit 1
   }
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package "$ANDROID_APK"
+  "$REPO_ROOT/chatsdk/scripts/build-native.sh" verify-android-package "$ANDROID_APK"
   verify_android_release_localization "$ANDROID_APK"
-  echo "==> Android 本机候选完成，正在交给原生安全进程做本机开发签名并安装。"
+  echo "==> Android无私钥候选完成，正在交给原生安全进程完成Build签名。"
 fi

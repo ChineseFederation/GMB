@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
-import 'package:citizenapp/chat/chat_models.dart';
+import 'package:citizenapp/chat/chat_product_policy.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 void main() {
   const mib = 1024 * 1024;
@@ -110,10 +110,7 @@ void main() {
 
   test('exceedsForKind:精确边界(按当前档)', () {
     ChatMediaLimits.applyMembershipLevel(null);
-    expect(
-      ChatMediaLimits.exceedsForKind(ChatMessageKind.image, 1),
-      isTrue,
-    );
+    expect(ChatMediaLimits.exceedsForKind(ChatMessageKind.image, 1), isTrue);
     ChatMediaLimits.applyMembershipLevel('freedom');
     expect(
       ChatMediaLimits.exceedsForKind(ChatMessageKind.image, 10 * mib),
@@ -134,7 +131,9 @@ void main() {
     );
     // text/sticker 无字节,任何大小都视为不超限(它们不携带媒体字节)。
     expect(
-        ChatMediaLimits.exceedsForKind(ChatMessageKind.text, 1 << 40), isFalse);
+      ChatMediaLimits.exceedsForKind(ChatMessageKind.text, 1 << 40),
+      isFalse,
+    );
     expect(
       ChatMediaLimits.exceedsForKind(ChatMessageKind.sticker, 1 << 40),
       isFalse,

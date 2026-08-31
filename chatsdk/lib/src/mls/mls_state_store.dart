@@ -9,10 +9,10 @@ import 'mls_session.dart';
 /// ChatSDK 的 MLS 本地状态目录。
 ///
 /// OpenMLS provider storage 由 Rust native 写入该目录；Dart 只管理目录位置、
-/// 下传状态信封密钥，以及 application 早于 Welcome 到达时的 pending 队列。
+/// 下传状态消息密钥，以及 application 早于 Welcome 到达时的 pending 队列。
 ///
 /// 该目录下**一律不得出现明文**：`openmls_storage.bin` / `device.bin` 由 Rust
-/// 用 [stateKey] 做 AES-256-GCM 信封；`pending_inbound.bin` 由本类同钥加密。
+/// 用 [stateKey] 做 AES-256-GCM 消息；`pending_inbound.bin` 由本类同钥加密。
 class MlsStateStore {
   const MlsStateStore(
     this.directory, {
@@ -32,7 +32,7 @@ class MlsStateStore {
   String get stateKeyHex =>
       stateKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
-  /// 运行上下文失效时立即清零 MLS 状态信封钥，不等待垃圾回收。
+  /// 运行上下文失效时立即清零 MLS 状态消息钥，不等待垃圾回收。
   void dispose() {
     stateKey.fillRange(0, stateKey.length, 0);
   }
@@ -47,8 +47,8 @@ class MlsStateStore {
 
   /// 删除当前设备的全部 ChatSDK 密码状态并立即建立空目录。
   ///
-  /// 调用方仍持有同一 [stateKey]，因此同一 `user_id + device_id` 会重新得到同一
-  /// HPKE 公开钥；OpenMLS 签名者、群状态和 pending 队列则从唯一空状态重建。
+  /// 调用方仍持有同一 [stateKey]，但 OpenMLS 签名者、KeyPackage、群状态和
+  /// pending 队列都会从唯一空状态重新建立，禁止保留第二套设备公开钥状态。
   Future<void> reset() async {
     final target = directory.absolute;
     if (target.path == target.parent.path) {
@@ -203,26 +203,14 @@ Future<String> _decryptStateString({
 Map<String, Object?> _wireMessageToJson(MlsWireMessage message) {
   return {
     'conversation_id': message.conversationId,
-    'message_kind': message.messageKind.wireName,
-    'cipher_suite': message.cipherSuite,
     'wire_hex': _bytesToHex(message.wireBytes),
-    'ratchet_tree_hex': message.ratchetTreeBytes == null
-        ? null
-        : _bytesToHex(message.ratchetTreeBytes!),
   };
 }
 
 MlsWireMessage _wireMessageFromJson(Map<String, dynamic> json) {
   return MlsWireMessage(
     conversationId: (json['conversation_id'] ?? '').toString(),
-    messageKind: MlsMessageKind.fromWireName(
-      (json['message_kind'] ?? '').toString(),
-    ),
-    cipherSuite: (json['cipher_suite'] ?? '').toString(),
     wireBytes: _hexToBytes((json['wire_hex'] ?? '').toString()),
-    ratchetTreeBytes: json['ratchet_tree_hex'] == null
-        ? null
-        : _hexToBytes(json['ratchet_tree_hex'].toString()),
   );
 }
 

@@ -1,7 +1,7 @@
 import 'package:citizenapp/8964/profile/services/citizen_profile_cache.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/8964/services/square_post_store.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:citizenapp/wallet/core/device_subkey.dart';
 
 /// 注销用户编排：签名验删服务端全部数据 → 尽最大努力清理全部本地残留。

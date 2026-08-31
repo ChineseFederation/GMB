@@ -133,7 +133,7 @@ GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 # 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
 source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 
-# 本机启动脚本只使用当前工作区源码构建 runtime WASM，禁止接受外部 WASM 覆盖。
+# 本机Build脚本只使用当前工作区源码构建 runtime WASM，禁止接受外部 WASM 覆盖。
 unset WASM_FILE
 # Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
 # 本任务不迁移、不删除正式 gmb 数据，也不让编程控制台启动的软件争用正式安装版 RocksDB。
@@ -174,7 +174,7 @@ export ONCHINA_TLS_DIR="$HOME/Library/Application Support/gmb.dev/onchina-tls"
 # 原平台签名钥与注销凭证签发配置已随注销凭证链路整体删除。
 
 echo "==> 使用当前工作区源码构建本机 runtime WASM..."
-echo "    节点启动产物目录: $TARGET_DIR"
+echo "    节点Build产物目录: $TARGET_DIR"
 echo "    本机运行数据目录: $HOME/Library/Application Support/gmb.dev"
 echo "==> 链上中国平台:节点设置页点击「启动」后访问 https://onchina.local:8964"
 
@@ -286,50 +286,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     app_bundle="$ARTIFACT_DIR/CitizenChain.app"
     app_executable="$app_bundle/Contents/MacOS/citizenchain"
     export ONCHINA_FRONTEND_DIST="$app_bundle/Contents/Resources/onchina-frontend/dist"
-    # 编译不因旧版本正在运行而跳过；只有新产物完整验真后才结束旧实例并启动新实例。
-    pkill -TERM -f "$app_executable" 2>/dev/null || true
-    for _ in {1..30}; do
-        pgrep -f "$app_executable" >/dev/null 2>&1 || break
-        sleep 0.2
-    done
-    pgrep -f "$app_executable" >/dev/null 2>&1 && {
-        echo '    [error] 旧公民链实例未能正常退出' >&2
-        exit 1
-    }
-    # 不重定向 LaunchServices 的标准流：桌面会话下把 /dev/stdout、/dev/stderr 作为目标路径
-    # 会触发 LS -10810，导致已正确签名的 App 根本无法启动。
-    open_args=(-n)
-    for name in \
-        CITIZENCHAIN_DATA_PROFILE \
-        ONCHINA_EMBEDDED_PG ONCHINA_PG_BIN_DIR ONCHINA_PG_PORT ONCHINA_PG_DATA_DIR \
-        ONCHINA_CHINA_DB ONCHINA_FRONTEND_DIST ONCHINA_ENABLE_TLS ONCHINA_TLS_DIR; do
-        [[ -z "${!name:-}" ]] || open_args+=(--env "$name=${!name}")
-    done
-    # LaunchServices 让 TCC 以 macOS.citizenappchain 识别请求方；编译任务只负责确认
-    # App进程和RPC已就绪，不继续占用ProgramConsole标签跟踪节点生命周期。
-    open "${open_args[@]}" "$app_bundle"
-    node_health=''
-    node_ready=0
-    for _ in {1..60}; do
-        if pgrep -f "$app_executable" >/dev/null 2>&1; then
-            node_health="$(curl --silent --max-time 2 \
-                -H 'content-type: application/json' \
-                --data '{"id":1,"jsonrpc":"2.0","method":"system_health","params":[]}' \
-                http://127.0.0.1:9944 2>/dev/null || true)"
-            if grep -Eq '"result"[[:space:]]*:[[:space:]]*\{' <<<"$node_health"; then
-                node_ready=1
-                break
-            fi
-        fi
-        sleep 1
-    done
-    [[ "$node_ready" == 1 ]] || {
-        echo "    [error] CitizenChain App 已打开，但进程或 RPC 未在 60 秒内就绪" >&2
-        exit 1
-    }
-    # 节点已由 LaunchServices 独立托管；此后脚本正常退出不得触发失败路径的进程清理。
+    # Build只生成并验真中央产物，不终止旧实例，也不启动新实例。
     trap - EXIT INT TERM HUP
-    echo "    节点启动验证通过，ProgramConsole 编译任务结束"
+    echo "    CitizenChain Node macOS中央产物构建完成；Build不会启动节点"
 else
     echo "    [error] ProgramConsole 本机产品启动入口只支持 macOS；其它平台请使用正式安装包" >&2
     exit 1

@@ -6,7 +6,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 sdk_dir="$(dirname "$script_dir")"
 ffi_manifest="$sdk_dir/native/smoldot/ffi/Cargo.toml"
 target_name="${1:-all}"
-program_console_target_root="/Users/rhett/Only/ProgramConsole/target/citizensdk"
+program_console_target_root="/Users/rhett/Only/programconsole/target/citizensdk"
 ios_deployment_target=16.0
 android_ndk_version=28.2.13676358
 
@@ -58,7 +58,7 @@ work_dir="$(canonical_directory "${CITIZENSDK_WORK_DIR:-}" CITIZENSDK_WORK_DIR)"
 output_dir="$(canonical_directory "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" CITIZENSDK_NATIVE_OUTPUT_DIR)"
 
 # 中文注释：无论本机、ProgramConsole 还是 GitHub runner，都禁止把 Cargo、二进制或符号清单
-# 回写到 SDK 源码树；ProgramConsole 本机调用时两个目录必须位于 ProgramConsole/target/citizensdk。
+# 回写到 SDK 源码树；ProgramConsole 本机调用时两个目录必须位于 programconsole/target/citizensdk。
 for directory in "$work_dir" "$output_dir"; do
   case "$directory/" in
     "$sdk_dir/"*) fail "工作目录或产物目录位于 CitizenSDK 源码树：$directory" ;;

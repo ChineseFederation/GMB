@@ -20,12 +20,14 @@ import { basename, dirname, join, posix, relative, resolve, sep } from 'node:pat
 import { pathToFileURL } from 'node:url';
 
 const PRODUCT_ID = 'chatsdk';
-const PACKAGE_NAME = 'chat_sdk';
+const PACKAGE_NAME = 'gmb_chat_sdk';
 const ARCHIVE_NAME = 'chatsdk.tgz';
 const MANIFEST_NAME = 'chatsdk-release.json';
 const CHECKSUMS_NAME = 'SHA256SUMS';
 const RELEASE_ASSETS = [ARCHIVE_NAME, MANIFEST_NAME, CHECKSUMS_NAME];
 const SOURCE_ENTRIES = [
+  'CHANGELOG.md',
+  'LICENSE',
   'README.md',
   'analysis_options.yaml',
   'pubspec.yaml',
@@ -34,6 +36,7 @@ const SOURCE_ENTRIES = [
   'ios',
   'lib',
   'native',
+  'stickers',
 ];
 const GENERATED_COMPONENTS = new Set([
   '.dart_tool',
@@ -53,8 +56,13 @@ const PLATFORM_ARTIFACTS = [
   {
     platform: 'ios',
     architecture: 'arm64',
-    source: 'ios/libchat_sdk.a',
-    path: 'prebuilt/ios-arm64/libchat_sdk.a',
+    source: 'ios/ChatSDK.xcframework',
+    path: 'prebuilt/ios-arm64/ChatSDK.xcframework',
+    requiredFiles: [
+      'Info.plist',
+      'ios-arm64/ChatSDK.framework/ChatSDK',
+      'ios-arm64/ChatSDK.framework/Info.plist',
+    ],
   },
   {
     platform: 'macos',
@@ -96,14 +104,6 @@ function normalizeRelativePath(value) {
   return normalized;
 }
 
-async function assertRegularFile(path, label) {
-  const stat = await lstat(path).catch(() => null);
-  if (!stat?.isFile() || stat.isSymbolicLink()) {
-    fail(`${label} 缺失或不是普通文件：${path}`);
-  }
-  return stat;
-}
-
 async function copySourceTree(source, destination, relativePath) {
   const sourcePath = join(source, relativePath);
   const stat = await lstat(sourcePath).catch(() => null);
@@ -126,6 +126,33 @@ async function copySourceTree(source, destination, relativePath) {
   await mkdir(dirname(target), { recursive: true });
   await copyFile(sourcePath, target);
   await chmod(target, stat.mode & 0o111 ? 0o755 : 0o644);
+}
+
+async function copyNativeArtifact(source, destination, label) {
+  const stat = await lstat(source).catch(() => null);
+  if (!stat || stat.isSymbolicLink()) fail(`${label} 缺失或是符号链接：${source}`);
+  if (stat.isFile()) {
+    if (stat.size === 0) fail(`${label} 为空：${source}`);
+    await mkdir(dirname(destination), { recursive: true });
+    await copyFile(source, destination);
+    await chmod(destination, stat.mode & 0o111 ? 0o755 : 0o644);
+    return 1;
+  }
+  if (!stat.isDirectory()) fail(`${label} 只允许普通文件或目录：${source}`);
+
+  await mkdir(destination, { recursive: true });
+  const entries = (await readdir(source, { withFileTypes: true }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  let files = 0;
+  for (const entry of entries) {
+    files += await copyNativeArtifact(
+      join(source, entry.name),
+      join(destination, entry.name),
+      label,
+    );
+  }
+  if (files === 0) fail(`${label} 目录为空：${source}`);
+  return files;
 }
 
 async function listTree(root, current = '') {
@@ -275,6 +302,21 @@ function expectedPlatforms() {
   }));
 }
 
+function validatePlatformArtifacts(archiveEntries) {
+  for (const artifact of PLATFORM_ARTIFACTS) {
+    const root = `chatsdk/${artifact.path}`;
+    if (artifact.requiredFiles) {
+      for (const relativePath of artifact.requiredFiles) {
+        const entry = archiveEntries.get(`${root}/${relativePath}`);
+        if (!entry || entry.directory) fail(`ChatSDK ${artifact.platform} 原生资产结构不完整`);
+      }
+    } else {
+      const entry = archiveEntries.get(root);
+      if (!entry || entry.directory) fail(`ChatSDK ${artifact.platform} 原生资产缺失`);
+    }
+  }
+}
+
 function validateManifest(manifest, expectedGitSha, expectedSoftwareVersion, archiveEntries) {
   assertExactKeys(
     manifest,
@@ -294,6 +336,7 @@ function validateManifest(manifest, expectedGitSha, expectedSoftwareVersion, arc
   if (JSON.stringify(manifest.platforms) !== JSON.stringify(expectedPlatforms())) {
     fail('ChatSDK Release 平台闭包错误');
   }
+  validatePlatformArtifacts(archiveEntries);
   if (!Array.isArray(manifest.files)) fail('ChatSDK Release files 必须是数组');
 
   const archiveFiles = [...archiveEntries.entries()]
@@ -359,12 +402,8 @@ export async function buildRelease({ source, native, output, archive, gitSha, so
     for (const entry of SOURCE_ENTRIES) await copySourceTree(source, packageRoot, entry);
     for (const artifact of PLATFORM_ARTIFACTS) {
       const input = join(native, artifact.source);
-      const stat = await assertRegularFile(input, `ChatSDK ${artifact.platform} 原生资产`);
-      if (stat.size === 0) fail(`ChatSDK ${artifact.platform} 原生资产为空`);
       const destination = join(packageRoot, artifact.path);
-      await mkdir(dirname(destination), { recursive: true });
-      await copyFile(input, destination);
-      await chmod(destination, 0o644);
+      await copyNativeArtifact(input, destination, `ChatSDK ${artifact.platform} 原生资产`);
     }
 
     const files = (await listTree(packageRoot))

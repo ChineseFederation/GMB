@@ -23,7 +23,9 @@ const supportSource = readFileSync(join(projectPath, 'src', 'pages', 'Support.ts
 const termsSource = readFileSync(join(projectPath, 'src', 'pages', 'Terms.tsx'), 'utf8');
 const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots = [];
-const releaseAction = resolve(import.meta.dirname, '../../.github/scripts/citizenweb/ci-web.mjs');
+const flowRoot = process.env.PROGRAM_CONSOLE_FLOW_ROOT;
+if (!flowRoot) throw new Error('缺少 PROGRAM_CONSOLE_FLOW_ROOT');
+const releaseAction = resolve(flowRoot, 'gmb/scripts/citizenweb-ci-web.mjs');
 
 function runRelease(argumentsList) {
   const result = spawnSync(process.execPath, [releaseAction, 'citizenweb-release', ...argumentsList], {

@@ -3,12 +3,11 @@ import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
 
-import 'package:citizenapp/chat/chat_page.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
-import 'package:citizenapp/chat/compose/composer_bar.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
+import 'package:citizenapp/chat/chat_product_policy.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 import 'package:citizenapp/ui/app_theme.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 const _iphone16ProLogicalSize = Size(402, 874);
 
@@ -18,7 +17,7 @@ Widget _productionThemeBuilder(BuildContext context, Widget? child) =>
 class _EmptyStore extends ChatStore {
   @override
   Future<List<ChatStoredMessage>> readMessages({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String conversationId,
   }) async =>
@@ -28,22 +27,20 @@ class _EmptyStore extends ChatStore {
 Widget _host({
   bool isGroup = false,
   ChatResolvePeerAddressCallback? resolvePeerAddress,
-  ChatStartCallCallback? onStartCall,
 }) =>
     MaterialApp(
       theme: AppTheme.lightTheme,
       builder: _productionThemeBuilder,
       home: ChatPage(
         conversationId: isGroup ? 'group:test' : 'dm:me:peer',
-        ownerCidNumber: 'CN220-CTZN2-100000001-2026',
+        ownerUserId: 'CN220-CTZN2-100000001-2026',
         accountId:
             '0x1111111111111111111111111111111111111111111111111111111111111111',
-        peerCidNumber: isGroup ? 'group:test' : 'CN220-CTZN2-100000002-2026',
+        peerUserId: isGroup ? 'group:test' : 'CN220-CTZN2-100000002-2026',
         title: isGroup ? '测试群' : '对方',
         isGroup: isGroup,
         store: _EmptyStore(),
         onSync: () async => 0,
-        onStartCall: onStartCall,
         resolvePeerAddress: resolvePeerAddress,
       ),
     );
@@ -52,17 +49,17 @@ Future<void> _open(
   WidgetTester tester, {
   bool isGroup = false,
   ChatResolvePeerAddressCallback? resolvePeerAddress,
-  ChatStartCallCallback? onStartCall,
 }) async {
   tester.view.physicalSize = _iphone16ProLogicalSize;
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
-  await tester.pumpWidget(_host(
-    isGroup: isGroup,
-    resolvePeerAddress: resolvePeerAddress,
-    onStartCall: onStartCall,
-  ));
+  await tester.pumpWidget(
+    _host(
+      isGroup: isGroup,
+      resolvePeerAddress: resolvePeerAddress,
+    ),
+  );
   await tester.pump(const Duration(milliseconds: 200));
 }
 
@@ -144,10 +141,7 @@ void main() {
         vertical: 10 * visualScale,
       ),
     );
-    expect(
-      tester.getSize(inputSurface).height,
-      closeTo(42 * visualScale, 0.5),
-    );
+    expect(tester.getSize(inputSurface).height, closeTo(42 * visualScale, 0.5));
     final inputDecoration =
         tester.widget<DecoratedBox>(inputSurface).decoration as BoxDecoration;
     final inputRadius = inputDecoration.borderRadius! as BorderRadius;
@@ -162,9 +156,13 @@ void main() {
 
     expect(tester.getCenter(voice).dx, lessThan(tester.getCenter(input).dx));
     expect(
-        tester.getCenter(input).dx, lessThan(tester.getCenter(expression).dx));
-    expect(tester.getCenter(expression).dx,
-        lessThan(tester.getCenter(actions).dx));
+      tester.getCenter(input).dx,
+      lessThan(tester.getCenter(expression).dx),
+    );
+    expect(
+      tester.getCenter(expression).dx,
+      lessThan(tester.getCenter(actions).dx),
+    );
     final inputCenterY = tester.getCenter(input).dy;
     expect(tester.getCenter(voice).dy, closeTo(inputCenterY, 0.01));
     expect(tester.getCenter(expression).dy, closeTo(inputCenterY, 0.01));
@@ -185,18 +183,14 @@ void main() {
     expect(holdToTalk, findsOneWidget);
     expect(find.text('按住 说话'), findsOneWidget);
     final voiceSurface = tester.widget<AnimatedContainer>(
-      find.descendant(
-        of: holdToTalk,
-        matching: find.byType(AnimatedContainer),
-      ),
+      find.descendant(of: holdToTalk, matching: find.byType(AnimatedContainer)),
     );
     expect(
-        (voiceSurface.decoration as BoxDecoration).color, Colors.transparent);
+      (voiceSurface.decoration as BoxDecoration).color,
+      Colors.transparent,
+    );
     final voiceCenterY = tester.getCenter(holdToTalk).dy;
-    expect(
-      tester.getSize(holdToTalk).height,
-      closeTo(42 * visualScale, 0.5),
-    );
+    expect(tester.getSize(holdToTalk).height, closeTo(42 * visualScale, 0.5));
     expect(tester.getCenter(voice).dy, closeTo(voiceCenterY, 0.01));
     expect(tester.getCenter(expression).dy, closeTo(voiceCenterY, 0.01));
     expect(tester.getCenter(actions).dy, closeTo(voiceCenterY, 0.01));
@@ -221,17 +215,19 @@ void main() {
     addTearDown(focusNode.dispose);
     final outcomes = <bool>[];
 
-    await tester.pumpWidget(_voiceComposerHost(
-      recording: recording,
-      controller: controller,
-      focusNode: focusNode,
-      onStart: () => recording.value = true,
-      recordingDuration: const Duration(minutes: 2, seconds: 59),
-      onEnd: (cancel) {
-        outcomes.add(cancel);
-        recording.value = false;
-      },
-    ));
+    await tester.pumpWidget(
+      _voiceComposerHost(
+        recording: recording,
+        controller: controller,
+        focusNode: focusNode,
+        onStart: () => recording.value = true,
+        recordingDuration: const Duration(minutes: 2, seconds: 59),
+        onEnd: (cancel) {
+          outcomes.add(cancel);
+          recording.value = false;
+        },
+      ),
+    );
     await tester.pump();
 
     final hold = find.byKey(const ValueKey('chat-hold-to-talk'));
@@ -239,9 +235,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    final overlay = find.byKey(
-      const ValueKey('chat-voice-recording-overlay'),
-    );
+    final overlay = find.byKey(const ValueKey('chat-voice-recording-overlay'));
     final mic = find.byKey(const ValueKey('chat-voice-recording-mic'));
     final timer = find.byKey(const ValueKey('chat-voice-recording-timer'));
     final cancel = find.byKey(const ValueKey('chat-voice-cancel-target'));
@@ -279,12 +273,8 @@ void main() {
     expect(overlay, findsNothing);
   });
 
-  testWidgets('一对一加号面板为七项且语音视频通话进入真实回调', (tester) async {
-    final calls = <bool>[];
-    await _open(
-      tester,
-      onStartCall: ({required bool video}) async => calls.add(video),
-    );
+  testWidgets('一对一加号面板为七项且本阶段禁用语音视频通话', (tester) async {
+    await _open(tester);
     await tester.tap(find.byKey(const ValueKey('chat-actions-toggle')));
     await tester.pump();
 
@@ -313,10 +303,10 @@ void main() {
       greaterThanOrEqualTo(tester.getBottomRight(input).dy),
     );
 
-    await tester.tap(find.byKey(const ValueKey('chat-action-videoCall')));
-    await tester.pump();
-    expect(calls, [true]);
-    expect(find.text('功能完善中，敬请期待'), findsNothing);
+    final videoCall = find.byKey(const ValueKey('chat-action-videoCall'));
+    final voiceCall = find.byKey(const ValueKey('chat-action-voiceCall'));
+    expect(tester.widget<InkWell>(videoCall).onTap, isNull);
+    expect(tester.widget<InkWell>(voiceCall).onTap, isNull);
   });
 
   testWidgets('群聊移除转账并禁用语音视频通话', (tester) async {
@@ -345,7 +335,9 @@ void main() {
     await _open(tester);
 
     expect(
-        find.byKey(const ValueKey('chat-membership-required')), findsOneWidget);
+      find.byKey(const ValueKey('chat-membership-required')),
+      findsOneWidget,
+    );
     expect(find.text('尚未开通会员，订阅任一会员后即可使用聊天'), findsOneWidget);
     expect(find.byKey(const ValueKey('chat-text-input')), findsNothing);
     expect(find.byKey(const ValueKey('chat-actions-toggle')), findsNothing);

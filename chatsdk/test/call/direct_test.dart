@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:chat_sdk/call.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gmb_chat_sdk/call.dart';
 
 void main() {
   test('私聊通话按 offer answer ICE 和 hangup 收口', () async {

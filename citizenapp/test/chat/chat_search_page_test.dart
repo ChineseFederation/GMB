@@ -3,11 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:citizenapp/chat/chat_models.dart';
-import 'package:citizenapp/chat/chat_payload.dart';
-import 'package:citizenapp/chat/chat_search_page.dart';
-import 'package:citizenapp/chat/open_direct_chat.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/my/user/contact_service.dart';
 
 /// 聊天搜索页验证：一个输入框、三段结果（会话 / 联系人 / 聊天记录）。
@@ -18,14 +15,14 @@ const _accountId =
     '0x1111111111111111111111111111111111111111111111111111111111111111';
 const _peerAccountId =
     '0x2222222222222222222222222222222222222222222222222222222222222222';
-const _ownerCidNumber = 'CN220-CTZN2-100000001-2026';
-const _peerCidNumber = 'CN220-CTZN2-100000002-2026';
+const _ownerUserId = 'CN220-CTZN2-100000001-2026';
+const _peerUserId = 'CN220-CTZN2-100000002-2026';
 const _contactAddress = 'w5Bc7ma8qUcECfQDJmRyQM2wGmga5XSYtz7DvEengQ86xBWrT';
 
 final _dmPreview = ChatConversationPreview(
   conversationId: 'dm:me:peer',
   title: '张三',
-  peerCidNumber: _peerCidNumber,
+  peerUserId: _peerUserId,
   lastMessage: '明天见',
   lastUpdatedAt: DateTime.fromMillisecondsSinceEpoch(20),
   unreadCount: 0,
@@ -35,7 +32,7 @@ final _dmPreview = ChatConversationPreview(
 final _groupPreview = ChatConversationPreview(
   conversationId: 'grp:me:1',
   title: '张家村议事群',
-  peerCidNumber: '',
+  peerUserId: '',
   lastMessage: '资料已上传',
   lastUpdatedAt: DateTime.fromMillisecondsSinceEpoch(10),
   unreadCount: 0,
@@ -44,7 +41,7 @@ final _groupPreview = ChatConversationPreview(
 );
 
 const _contact = UserContact(
-  cidNumber: _peerCidNumber,
+  cidNumber: _peerUserId,
   accountId: _peerAccountId,
   ss58Address: _contactAddress,
   contactRemark: '张三',
@@ -53,11 +50,11 @@ const _contact = UserContact(
 );
 
 final _message = ChatStoredMessage(
-  envelopeId: 'env-1',
+  messageId: 'env-1',
   conversationId: 'dm:me:peer',
   direction: 'incoming',
-  senderCidNumber: _peerCidNumber,
-  recipientCidNumber: _ownerCidNumber,
+  senderUserId: _peerUserId,
+  recipientUserId: _ownerUserId,
   messageKind: ChatMessageKind.text,
   deliveryState: ChatMessageDeliveryState.sent,
   createdAtMillis: 30,
@@ -78,30 +75,30 @@ class _FakeChatStore extends ChatStore {
 
   @override
   Future<List<ChatConversationPreview>> readConversationPreviews({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
-  }) async =>
-      conversations;
+  }) async => conversations;
 
   @override
   Future<List<ChatStoredMessage>> searchMessages({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String keyword,
     int limit = 50,
   }) async {
     searchedKeywords.add(keyword);
     final needle = keyword.toLowerCase();
-    return messages.where((item) {
-      try {
-        return ChatPayloadCodec.decode(item.plaintext ?? '')
-            .summary
-            .toLowerCase()
-            .contains(needle);
-      } on FormatException {
-        return false;
-      }
-    }).toList(growable: false);
+    return messages
+        .where((item) {
+          try {
+            return ChatPayloadCodec.decode(
+              item.plaintext ?? '',
+            ).summary.toLowerCase().contains(needle);
+          } on FormatException {
+            return false;
+          }
+        })
+        .toList(growable: false);
   }
 }
 
@@ -111,10 +108,9 @@ class _PendingSearchStore extends _FakeChatStore {
 
   @override
   Future<List<ChatConversationPreview>> readConversationPreviews({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
-  }) =>
-      completer.future;
+  }) => completer.future;
 }
 
 class _FakeContacts extends UserContactService {
@@ -145,7 +141,7 @@ void main() {
         home: ChatSearchPage(
           store: store,
           contactService: _FakeContacts(contacts),
-          cidNumber: _ownerCidNumber,
+          cidNumber: _ownerUserId,
           accountId: _accountId,
           directChatOpener: directChatOpener,
           groupChatOpener: groupChatOpener,
@@ -173,7 +169,7 @@ void main() {
         home: ChatSearchPage(
           store: store,
           contactService: _FakeContacts(const <UserContact>[]),
-          cidNumber: _ownerCidNumber,
+          cidNumber: _ownerUserId,
           accountId: _accountId,
         ),
       ),
@@ -218,12 +214,18 @@ void main() {
     expect(find.text('会话'), findsOneWidget);
     expect(find.text('联系人'), findsOneWidget);
     expect(find.text('聊天记录'), findsOneWidget);
-    expect(find.byKey(const ValueKey('search-conversation-dm:me:peer')),
-        findsOneWidget);
-    expect(find.byKey(const ValueKey('search-conversation-grp:me:1')),
-        findsOneWidget);
-    expect(find.byKey(const ValueKey('search-contact-$_peerCidNumber')),
-        findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-conversation-dm:me:peer')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('search-conversation-grp:me:1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('search-contact-$_peerUserId')),
+      findsOneWidget,
+    );
     expect(find.byKey(const ValueKey('search-message-env-1')), findsOneWidget);
     expect(find.text('张三说的那份材料'), findsOneWidget);
   });
@@ -236,7 +238,7 @@ void main() {
         ChatConversationPreview(
           conversationId: 'dm:me:bob',
           title: 'Bob',
-          peerCidNumber: _peerCidNumber,
+          peerUserId: _peerUserId,
           lastMessage: 'hello',
           lastUpdatedAt: DateTime.fromMillisecondsSinceEpoch(5),
           unreadCount: 0,
@@ -247,8 +249,10 @@ void main() {
 
     await search(tester, 'bob');
 
-    expect(find.byKey(const ValueKey('search-conversation-dm:me:bob')),
-        findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('search-conversation-dm:me:bob')),
+      findsOneWidget,
+    );
   });
 
   testWidgets('点单聊会话走统一私聊收口，点群聊会话走群聊收口', (tester) async {
@@ -257,10 +261,10 @@ void main() {
     await pumpPage(
       tester,
       conversations: [_dmPreview, _groupPreview],
-      directChatOpener: (context,
-          {required peerCidNumber, required title}) async {
-        openedPeer = peerCidNumber;
-      },
+      directChatOpener:
+          (context, {required peerUserId, required title}) async {
+            openedPeer = peerUserId;
+          },
       groupChatOpener: (context, {required groupId, required title}) async {
         openedGroupId = groupId;
       },
@@ -268,13 +272,15 @@ void main() {
 
     await search(tester, '张');
 
-    await tester
-        .tap(find.byKey(const ValueKey('search-conversation-dm:me:peer')));
+    await tester.tap(
+      find.byKey(const ValueKey('search-conversation-dm:me:peer')),
+    );
     await tester.pump();
-    expect(openedPeer, _peerCidNumber);
+    expect(openedPeer, _peerUserId);
 
-    await tester
-        .tap(find.byKey(const ValueKey('search-conversation-grp:me:1')));
+    await tester.tap(
+      find.byKey(const ValueKey('search-conversation-grp:me:1')),
+    );
     await tester.pump();
     expect(openedGroupId, 'grp:me:1');
   });
@@ -285,19 +291,20 @@ void main() {
     await pumpPage(
       tester,
       contacts: const [_contact],
-      directChatOpener: (context,
-          {required peerCidNumber, required title}) async {
-        openedPeer = peerCidNumber;
-        openedTitle = title;
-      },
+      directChatOpener:
+          (context, {required peerUserId, required title}) async {
+            openedPeer = peerUserId;
+            openedTitle = title;
+          },
     );
 
     await search(tester, '张');
-    await tester
-        .tap(find.byKey(const ValueKey('search-contact-$_peerCidNumber')));
+    await tester.tap(
+      find.byKey(const ValueKey('search-contact-$_peerUserId')),
+    );
     await tester.pump();
 
-    expect(openedPeer, _peerCidNumber);
+    expect(openedPeer, _peerUserId);
     expect(openedTitle, '张三');
   });
 
@@ -307,17 +314,17 @@ void main() {
       tester,
       conversations: [_dmPreview],
       messages: [_message],
-      directChatOpener: (context,
-          {required peerCidNumber, required title}) async {
-        openedPeer = peerCidNumber;
-      },
+      directChatOpener:
+          (context, {required peerUserId, required title}) async {
+            openedPeer = peerUserId;
+          },
     );
 
     await search(tester, '材料');
     await tester.tap(find.byKey(const ValueKey('search-message-env-1')));
     await tester.pump();
 
-    expect(openedPeer, _peerCidNumber);
+    expect(openedPeer, _peerUserId);
   });
 
   testWidgets('三段都没命中时显示空态', (tester) async {

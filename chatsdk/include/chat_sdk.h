@@ -13,13 +13,7 @@ void chat_sdk_free_string(char *value);
 
 char *chat_sdk_mls_create_key_package_json(const char *request_json, char **error_out);
 
-char *chat_sdk_device_identity_json(const char *request_json, char **error_out);
-
 char *chat_sdk_mls_two_party_smoke_json(const char *request_json, char **error_out);
-
-char *chat_sdk_mls_encrypt_json(const char *request_json, char **error_out);
-
-char *chat_sdk_mls_decrypt_json(const char *request_json, char **error_out);
 
 char *chat_sdk_mls_rekey_state_json(const char *request_json,
                                         char **error_out);

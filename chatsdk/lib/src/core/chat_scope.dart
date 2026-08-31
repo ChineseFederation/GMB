@@ -2,4 +2,4 @@
 enum ChatScope { direct, group }
 
 /// 密文邮箱的统一最长保留时间，重试不得刷新该期限。
-const Duration chatSdkMailboxRetention = Duration(days: 7);
+const Duration chatSdkMessageRetention = Duration(days: 7);

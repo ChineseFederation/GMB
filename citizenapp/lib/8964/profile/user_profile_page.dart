@@ -23,7 +23,7 @@ import 'package:citizenapp/8964/profile/widgets/profile_kebab_menu.dart';
 import 'package:citizenapp/8964/profile/widgets/profile_posts_list.dart';
 import 'package:citizenapp/8964/services/square_account_deletion_service.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/open_direct_chat.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/my/membership/membership_revision.dart';
 import 'package:citizenapp/my/membership/subscription_service.dart';
@@ -498,7 +498,7 @@ class _UserProfilePageState extends State<UserProfilePage> {
       _snack('资料尚未加载，请稍后再试');
       return;
     }
-    _directChat(context, peerCidNumber: peerCidNumber, title: _displayName);
+    _directChat(context, peerUserId: peerCidNumber, title: _displayName);
   }
 
   void _openFollows(FollowsType type) {

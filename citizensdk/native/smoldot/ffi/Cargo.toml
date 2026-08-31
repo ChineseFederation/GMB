@@ -39,7 +39,7 @@ lto = true             # Link-time optimization
 codegen-units = 1      # Better optimization
 # 磁盘产物始终保留符号+行号,原生崩溃栈才能反解到 Rust 源码行(留档即符号服务器)。
 # 最终宿主 APK 由宿主 AGP 配置分档处理:debug 包保留、release 包打包时剥离；
-# CitizenSDK 正式临时宿主的约束见 GMB 仓库根目录 .github/workflows/citizensdk/{ci,release}-sdk.yml。
+# CitizenSDK 正式临时宿主的约束见中央流程 gmb.citizensdk.sdk.{ci,release}。
 strip = false
 debug = 1
 # 必须 unwind:citizen-signer 的 4 个 FFI 入口靠 `catch_unwind` 把内部 panic 兜成

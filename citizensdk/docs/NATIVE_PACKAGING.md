@@ -56,7 +56,7 @@ podspec 用 `-force_load` 链入静态库，并根据真实产物的 `exported_s
 
 ## 本机 ProgramConsole
 
-所有本机生成状态只允许位于 `/Users/rhett/Only/ProgramConsole/target/citizensdk`。本机构建先读取
+所有本机生成状态只允许位于 `/Users/rhett/Only/programconsole/target/citizensdk`。本机构建先读取
 GMB 当前提交 SHA，再通过 `git archive <sha> citizensdk` 建立无生成状态的打包快照；构建
 快照从该提交快照派生。这样工作区未提交修改不会被错误标注为已提交 HEAD。
 

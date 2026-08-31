@@ -674,8 +674,8 @@ void main() {
           cache: FakeProfileCache(),
           sessionProvider: FakeSessionProvider(fakeSession()),
           onOpenDirectChat: (context,
-              {required peerCidNumber, required title}) {
-            peer = peerCidNumber;
+              {required peerUserId, required title}) {
+            peer = peerUserId;
             chatTitle = title;
             return Future<void>.value();
           },
@@ -704,8 +704,8 @@ void main() {
           // 浏览者账户 == 主页账户 = 他人视角看自己 → 按钮应置灰。
           viewerAccountLoader: () async => kOwner,
           onOpenDirectChat: (context,
-              {required peerCidNumber, required title}) {
-            peer = peerCidNumber;
+              {required peerUserId, required title}) {
+            peer = peerUserId;
             return Future<void>.value();
           },
         ),

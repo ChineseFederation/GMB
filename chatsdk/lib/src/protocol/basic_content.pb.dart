@@ -51,7 +51,7 @@ class BasicPayload extends $pb.GeneratedMessage {
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'BasicPayload',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..oo(0, [1, 2, 3])
     ..aOM<TextContent>(1, _omitFieldNames ? '' : 'text',
@@ -145,7 +145,7 @@ class TextContent extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'TextContent',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'value')
     ..hasRequiredFields = false;
@@ -199,7 +199,7 @@ class EmojiContent extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'EmojiContent',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'value')
     ..hasRequiredFields = false;
@@ -255,7 +255,7 @@ class StickerContent extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'StickerContent',
-      package: const $pb.PackageName(_omitMessageNames ? '' : 'gmb.chat'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'packId')
     ..aOS(2, _omitFieldNames ? '' : 'stickerId')

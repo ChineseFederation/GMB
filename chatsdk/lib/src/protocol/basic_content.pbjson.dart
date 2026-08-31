@@ -24,7 +24,7 @@ const BasicPayload$json = {
       '3': 1,
       '4': 1,
       '5': 11,
-      '6': '.gmb.chat.TextContent',
+      '6': '.chat.protocol.TextContent',
       '9': 0,
       '10': 'text'
     },
@@ -33,7 +33,7 @@ const BasicPayload$json = {
       '3': 2,
       '4': 1,
       '5': 11,
-      '6': '.gmb.chat.EmojiContent',
+      '6': '.chat.protocol.EmojiContent',
       '9': 0,
       '10': 'emoji'
     },
@@ -42,7 +42,7 @@ const BasicPayload$json = {
       '3': 3,
       '4': 1,
       '5': 11,
-      '6': '.gmb.chat.StickerContent',
+      '6': '.chat.protocol.StickerContent',
       '9': 0,
       '10': 'sticker'
     },
@@ -54,10 +54,10 @@ const BasicPayload$json = {
 
 /// Descriptor for `BasicPayload`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List basicPayloadDescriptor = $convert.base64Decode(
-    'CgxCYXNpY1BheWxvYWQSKwoEdGV4dBgBIAEoCzIVLmdtYi5jaGF0LlRleHRDb250ZW50SABSBH'
-    'RleHQSLgoFZW1vamkYAiABKAsyFi5nbWIuY2hhdC5FbW9qaUNvbnRlbnRIAFIFZW1vamkSNAoH'
-    'c3RpY2tlchgDIAEoCzIYLmdtYi5jaGF0LlN0aWNrZXJDb250ZW50SABSB3N0aWNrZXJCCQoHY2'
-    '9udGVudA==');
+    'CgxCYXNpY1BheWxvYWQSMAoEdGV4dBgBIAEoCzIaLmNoYXQucHJvdG9jb2wuVGV4dENvbnRlbn'
+    'RIAFIEdGV4dBIzCgVlbW9qaRgCIAEoCzIbLmNoYXQucHJvdG9jb2wuRW1vamlDb250ZW50SABS'
+    'BWVtb2ppEjkKB3N0aWNrZXIYAyABKAsyHS5jaGF0LnByb3RvY29sLlN0aWNrZXJDb250ZW50SA'
+    'BSB3N0aWNrZXJCCQoHY29udGVudA==');
 
 @$core.Deprecated('Use textContentDescriptor instead')
 const TextContent$json = {

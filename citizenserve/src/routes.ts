@@ -4,6 +4,7 @@ import {
   inspectCachedUserProjectionHealth,
 } from "./account/user_projection";
 import { createLoginChallenge, createSession, registerDeviceSubkey } from "./auth/service";
+import { issueChatServerAccess } from "./auth/chatserver_access";
 import { chainBootstrapRoute, citizenSdkBootstrapRoute } from "./chain/bootstrap";
 import { constitutionRoute } from "./chain/constitution";
 import { relaySignedExtrinsicRoute } from "./chain/extrinsic_relay";
@@ -13,11 +14,9 @@ import {
   fetchChatEnvelopes,
   issueChatIce,
   openChatSignal,
-  publishChatDeviceKey,
-  publishChatGroupKeyPackage,
+  publishChatKeyPackage,
   registerChatPushEndpoint,
-  resolveChatDeviceKey,
-  resolveChatGroupKeyPackage,
+  resolveChatKeyPackages,
   submitChatEnvelope,
 } from "./chat/service";
 import {
@@ -135,6 +134,9 @@ export async function routeRequest(
   if (request.method === "POST" && path === "/square/auth/device/register") {
     return registerDeviceSubkey(request, env);
   }
+  if (request.method === "POST" && path === "/auth/chatserver/access") {
+    return issueChatServerAccess(request, env);
+  }
   if (request.method === "GET" && path === "/square/membership") {
     return membershipRoute(request, env);
   }
@@ -240,18 +242,12 @@ export async function routeRequest(
   if (request.method === "GET" && path === "/chat/signals") {
     return openChatSignal(request, env);
   }
-  // 中文注释：私信设备公钥与群聊 last-resort 包使用独立 HTTPS 路由，禁止恢复旧 KeyPackage 池。
-  if (request.method === "PUT" && path === "/chat/device-key") {
-    return publishChatDeviceKey(request, env);
+  // 私聊与群聊只使用同一套 RFC 9420 Last Resort KeyPackage 目录。
+  if (request.method === "PUT" && path === "/chat/key-package") {
+    return publishChatKeyPackage(request, env);
   }
-  if (request.method === "POST" && path === "/chat/device-key/resolve") {
-    return resolveChatDeviceKey(request, env);
-  }
-  if (request.method === "PUT" && path === "/chat/groups/key-package") {
-    return publishChatGroupKeyPackage(request, env);
-  }
-  if (request.method === "POST" && path === "/chat/groups/key-package/resolve") {
-    return resolveChatGroupKeyPackage(request, env);
+  if (request.method === "POST" && path === "/chat/key-package/resolve") {
+    return resolveChatKeyPackages(request, env);
   }
   // WebRTC 只读取固定公开 STUN 地址；没有中继密钥、短期凭证或流量回退。
   if (request.method === "POST" && path === "/chat/ice") {

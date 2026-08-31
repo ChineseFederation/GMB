@@ -1,0 +1,33 @@
+[package]
+name = "chatserver-linux-arm64"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "chatserver_linux"
+path = "src/lib.rs"
+
+[[bin]]
+name = "chatserver"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "=0.8.9", features = ["ws"] }
+axum-server = { version = "=0.8.0", features = ["tls-rustls"] }
+chatserver-core = { path = "../core" }
+futures-util = "=0.3.34"
+jsonwebtoken = { version = "=10.4.0", default-features = false, features = ["rust_crypto", "use_pem"] }
+reqwest = { version = "=0.13.4", default-features = false, features = ["form", "http2", "json", "rustls"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+sha2 = "=0.10.9"
+sqlx = { version = "=0.9.0", default-features = false, features = ["json", "postgres", "runtime-tokio", "tls-rustls-ring-webpki"] }
+thiserror = "=2.0.20"
+tokio = { version = "=1.53.1", features = ["full"] }
+tokio-util = { version = "=0.7.19", features = ["io"] }
+toml = "=1.1.4"
+
+[dev-dependencies]
+tempfile = "=3.27.0"

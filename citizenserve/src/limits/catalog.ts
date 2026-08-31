@@ -13,6 +13,7 @@ export type ResourceKey =
   | 'square_video_democracy'
   | 'square_video_spark'
   | 'chat_push_endpoint'
+  | 'chat_server_access'
   | 'chat_ice'
   | 'chat_signal'
   | 'chat_envelope'
@@ -126,6 +127,7 @@ export const resourceLimits: Readonly<Record<ResourceKey, ResourceLimit>> = {
     max_count: 1,
   },
   chat_push_endpoint: { max_bytes: 16 * kib, max_count: 8, ttl_seconds: 90 * 24 * 60 * 60 },
+  chat_server_access: { max_bytes: 4 * kib },
   chat_ice: { max_bytes: 1 * kib },
   chat_signal: { max_bytes: 64 * kib },
   // 文本、表情、贴纸和 MLS 控制信封只进单 CID 临时密文邮箱；媒体字节不得进入此入口。
@@ -219,6 +221,7 @@ const routeLimits: readonly RouteLimit[] = [
   route('POST', /^\/chain\/extrinsics\/relay$/, 'chain_extrinsic_json'),
   route('POST', /^\/square\/auth\/(challenge|session)$/),
   route('POST', /^\/square\/auth\/device\/register$/),
+  route('POST', /^\/auth\/chatserver\/access$/, 'chat_server_access'),
   route('GET', /^\/square\/membership$/),
   route('POST', /^\/square\/membership\/confirm$/),
   route('POST', /^\/square\/users\/confirm$/),
@@ -257,10 +260,8 @@ const routeLimits: readonly RouteLimit[] = [
   route('POST', /^\/square\/notify\/read$/),
   route('PUT', /^\/chat\/push-endpoint$/, 'chat_push_endpoint'),
   route('GET', /^\/chat\/signals$/),
-  route('PUT', /^\/chat\/device-key$/, 'chat_signal'),
-  route('POST', /^\/chat\/device-key\/resolve$/, 'chat_signal'),
-  route('PUT', /^\/chat\/groups\/key-package$/, 'chat_signal'),
-  route('POST', /^\/chat\/groups\/key-package\/resolve$/, 'chat_signal'),
+  route('PUT', /^\/chat\/key-package$/, 'chat_signal'),
+  route('POST', /^\/chat\/key-package\/resolve$/, 'chat_signal'),
   route('POST', /^\/chat\/ice$/, 'chat_ice'),
   route('POST', /^\/chat\/messages$/, 'chat_envelope'),
   route('GET', /^\/chat\/messages$/),

@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 import 'package:citizenapp/main.dart';
 import 'package:citizenapp/isar/user_isar.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import 'package:citizenapp/security/app_permission_gate.dart';
 import 'package:citizenapp/wallet/core/sign_mode.dart';
 
@@ -43,49 +43,19 @@ Future<void> pumpUntilFound(
   int maxRounds = 80,
 }) async {
   for (var i = 0; i < maxRounds && !tester.any(finder); i++) {
-    await tester
-        .runAsync(() => Future<void>.delayed(const Duration(milliseconds: 25)));
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 25)),
+    );
     await tester.pump();
   }
 }
 
 class _ForegroundWakeChatRuntime extends ChatRuntime {
-  int startCount = 0;
-  int stopCount = 0;
   int wakeCount = 0;
 
   @override
-  Future<Future<void> Function()?> startRealtimeSync({
-    required Future<void> Function() onNotice,
-    Future<void> Function()? onDisconnected,
-    Future<void> Function(Map<String, dynamic> signal)? onSignal,
-    bool retryOutgoingOnConnect = true,
-  }) async {
-    startCount += 1;
-    return () async {
-      stopCount += 1;
-    };
-  }
-
-  @override
-  Future<void> handleWakeSender(String senderCidNumber) async {
+  Future<void> handleWake() async {
     wakeCount += 1;
-  }
-}
-
-class _InitiallyFailingChatRuntime extends _ForegroundWakeChatRuntime {
-  @override
-  Future<Future<void> Function()?> startRealtimeSync({
-    required Future<void> Function() onNotice,
-    Future<void> Function()? onDisconnected,
-    Future<void> Function(Map<String, dynamic> signal)? onSignal,
-    bool retryOutgoingOnConnect = true,
-  }) async {
-    startCount += 1;
-    if (startCount == 1) throw StateError('transient-connect-failure');
-    return () async {
-      stopCount += 1;
-    };
   }
 }
 
@@ -107,7 +77,7 @@ void main() {
     expect(myStyle.systemNavigationBarIconBrightness, Brightness.dark);
   });
 
-  testWidgets('AppShell启动轻量信令且切换页面复用同一ChatRuntime', (tester) async {
+  testWidgets('AppShell按需创建并复用同一ChatRuntime', (tester) async {
     final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
     addTearDown(openedPushes.close);
     final runtime = _ForegroundWakeChatRuntime();
@@ -132,18 +102,17 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('test-tab-0-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 1);
-    expect(runtime.startCount, 1);
+    expect(chatRuntimeCreations, 0);
 
     await tester.tap(find.text('公民'));
     await tester.pump();
     expect(find.text('test-tab-1-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 1);
+    expect(chatRuntimeCreations, 0);
 
     openedPushes.add(const <String, dynamic>{'kind': 'square_post'});
     await tester.pump();
     expect(find.text('test-tab-0-plain'), findsOneWidget);
-    expect(chatRuntimeCreations, 1);
+    expect(chatRuntimeCreations, 0);
 
     await tester.tap(find.text('聊天'));
     await tester.pump();
@@ -188,13 +157,6 @@ void main() {
     expect(chatRuntimeCreations, 1);
 
     await tester.pumpWidget(const SizedBox.shrink());
-    await tester.runAsync(() async {
-      for (var i = 0; i < 20 && runtime.stopCount == 0; i++) {
-        await Future<void>.delayed(const Duration(milliseconds: 10));
-      }
-    });
-    expect(runtime.startCount, 1);
-    expect(runtime.stopCount, 1);
   });
 
   testWidgets('HomeTabGate 缺省映射广场、打开映射聊天且读取失败可重试', (tester) async {
@@ -261,73 +223,7 @@ void main() {
     expect(find.text('permission-child'), findsOneWidget);
   });
 
-  testWidgets('App前台生命周期只保留一条轻量信令连接', (
-    tester,
-  ) async {
-    SharedPreferences.setMockInitialValues({});
-    final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
-    addTearDown(openedPushes.close);
-    final runtime = _ForegroundWakeChatRuntime();
-    var runtimeCreations = 0;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: AppShell(
-          openedPushData: openedPushes.stream,
-          initialPushDataLoader: () async => null,
-          chatRuntimeFactory: () {
-            runtimeCreations += 1;
-            return runtime;
-          },
-          tabBuilder: (index, chatRuntime) => Text('test-tab-$index'),
-        ),
-      ),
-    );
-    await tester.pump();
-
-    await tester.pump();
-    expect(runtimeCreations, 1);
-    expect(runtime.startCount, 1);
-
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
-    await tester.pump();
-    expect(runtime.stopCount, 1);
-
-    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
-    await tester.pump();
-    expect(runtime.startCount, 2);
-    await tester.pumpWidget(const SizedBox.shrink());
-  });
-
-  testWidgets('App前台首次信令初始化失败后自动恢复且仍只保留一条连接', (tester) async {
-    final runtime = _InitiallyFailingChatRuntime();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: AppShell(
-          openedPushData: const Stream<Map<String, dynamic>>.empty(),
-          initialPushDataLoader: () async => null,
-          chatRuntimeFactory: () => runtime,
-          tabBuilder: (index, chatRuntime) => Text('retry-tab-$index'),
-        ),
-      ),
-    );
-    await tester.pump();
-    expect(runtime.startCount, 1);
-
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pump();
-    expect(runtime.startCount, 2);
-
-    await tester.pumpWidget(const SizedBox.shrink());
-    await tester.pump();
-    expect(runtime.stopCount, 1);
-
-    final source = File('lib/main.dart').readAsStringSync();
-    expect(source, contains('chat_signal_lifecycle_failed'));
-    expect(source, isNot(contains(r'生命周期同步失败: $error')));
-  });
-
-  testWidgets('App级聊天打开推送由同一运行态直接收敛发送方', (tester) async {
+  testWidgets('App级聊天打开推送由同一运行态补拉密文邮箱', (tester) async {
     SharedPreferences.setMockInitialValues({});
     final openedPushes = StreamController<Map<String, dynamic>>.broadcast();
     addTearDown(openedPushes.close);
@@ -348,11 +244,7 @@ void main() {
     );
     await tester.pump();
 
-    const sender = '00000000-0000-4000-8000-000000000099';
-    openedPushes.add(const <String, dynamic>{
-      'kind': 'chat_wake',
-      'sender_cid_number': sender,
-    });
+    openedPushes.add(const <String, dynamic>{'event': 'chat_wake'});
     await tester.pump();
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 10)),
@@ -362,8 +254,9 @@ void main() {
     expect(runtime.wakeCount, 1);
   });
 
-  const secureStorageChannel =
-      MethodChannel('plugins.it_nomads.com/flutter_secure_storage');
+  const secureStorageChannel = MethodChannel(
+    'plugins.it_nomads.com/flutter_secure_storage',
+  );
   const localAuthChannel = MethodChannel('plugins.flutter.io/local_auth');
 
   setUp(() async {
@@ -439,38 +332,46 @@ void main() {
     expect(find.text('权限设置'), findsOneWidget);
     expect(find.text('开启通知并继续'), findsOneWidget);
     expect(find.text('稍后再说'), findsOneWidget);
+
+    // 启动维护最多按 1 秒间隔重试两次；完整启动测试必须推进这些
+    // 已知窗口，不能在根组件销毁时遗留假时钟定时器。
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      await tester.pump(const Duration(seconds: 1));
+    }
   });
 
-  testWidgets('app bootstraps', (tester) async {
-    // 账户门禁要求至少 1 个热钱包才放行主界面。
-    await tester.runAsync(() async {
-      await WalletIsar.instance.resetForTest();
-      await seedHotWallet();
-    });
+  testWidgets(
+    'app bootstraps',
+    (tester) async {
+      // 账户门禁要求至少 1 个热钱包才放行主界面。
+      await tester.runAsync(() async {
+        await WalletIsar.instance.resetForTest();
+        await seedHotWallet();
+      });
 
-    await tester.pumpWidget(
-      const CitizenApp(key: ValueKey('app-bootstrap')),
-    );
-    // 等待异步锁检查 + 账户门禁的 Isar 查询完成并渲染主界面。
-    await pumpUntilFound(tester, find.text('广场'));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(const CitizenApp(key: ValueKey('app-bootstrap')));
+      // 等待异步锁检查 + 账户门禁的 Isar 查询完成并渲染主界面。
+      await pumpUntilFound(tester, find.text('广场'));
+      await tester.pumpAndSettle();
 
-    // 底部导航最左侧为广场，公民 tab 右移；个人多签入口迁到交易页。
-    expect(find.text('广场'), findsWidgets);
-    expect(find.text('暂无推荐动态'), findsOneWidget);
-    expect(find.text('交易'), findsWidgets);
-    expect(find.text('多签'), findsNothing);
-    expect(find.text('消息'), findsNothing);
-    // app 启动会初始化链 RPC（smoldot）；官方 CI 先构建宿主库。开发者在无库环境
-    // 直跑时跳过此全量启动冒烟（首启权限引导用例不依赖 native，仍跑）。
-    // testWidgets 的 skip 仅接受 bool。连活链的全量启动冒烟默认跳过(离线会 hang 到超时);
-    // 本地设 RUN_BOOTSTRAP_CHAIN_SMOKE=1 且 libsmoldot native 可用时才跑,由集成 / APK 测试覆盖。
-  },
-      skip: Platform.environment['RUN_BOOTSTRAP_CHAIN_SMOKE'] == null ||
-          smoldotNativeSkipReason() != null);
+      // 底部导航最左侧为广场，公民 tab 右移；个人多签入口迁到交易页。
+      expect(find.text('广场'), findsWidgets);
+      expect(find.text('暂无推荐动态'), findsOneWidget);
+      expect(find.text('交易'), findsWidgets);
+      expect(find.text('多签'), findsNothing);
+      expect(find.text('消息'), findsNothing);
+      // app 启动会初始化链 RPC（smoldot）；官方 CI 先构建宿主库。开发者在无库环境
+      // 直跑时跳过此全量启动冒烟（首启权限引导用例不依赖 native，仍跑）。
+      // testWidgets 的 skip 仅接受 bool。连活链的全量启动冒烟默认跳过(离线会 hang 到超时);
+      // 本地设 RUN_BOOTSTRAP_CHAIN_SMOKE=1 且 libsmoldot native 可用时才跑,由集成 / APK 测试覆盖。
+    },
+    skip: Platform.environment['RUN_BOOTSTRAP_CHAIN_SMOKE'] == null ||
+        smoldotNativeSkipReason() != null,
+  );
 
-  testWidgets('no wallet: bootstraps into forced create-wallet page',
-      (tester) async {
+  testWidgets('no wallet: bootstraps into forced create-wallet page', (
+    tester,
+  ) async {
     addTearDown(() async {
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump();
@@ -500,5 +401,10 @@ void main() {
     }
     expect(find.text('创建钱包'), findsWidgets);
     expect(find.text('广场'), findsNothing);
+
+    // 与真实启动生命周期一致，等待短命 Chat 文件维护结束后再销毁根组件。
+    for (var attempt = 0; attempt < 2; attempt += 1) {
+      await tester.pump(const Duration(seconds: 1));
+    }
   });
 }

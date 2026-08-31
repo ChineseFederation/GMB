@@ -3,6 +3,8 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, test } from 'vitest';
 const projectPath = resolve(import.meta.dirname, '..');
+const flowRoot = process.env.PROGRAM_CONSOLE_FLOW_ROOT;
+if (!flowRoot) throw new Error('缺少 PROGRAM_CONSOLE_FLOW_ROOT');
 const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots: string[] = [];
 
@@ -24,13 +26,13 @@ function unpackActionImplementation(wrapperPath: string): string {
 }
 
 const ciModule = await import(unpackActionImplementation(resolve(
-  import.meta.dirname,
-  '../../.github/scripts/citizenserve/ci-cloudflare.mjs',
+  flowRoot,
+  'gmb/scripts/citizenserve-ci-global.mjs',
 )));
 const { buildCitizenServeCloudflareRelease: buildCitizenServeCloudflareCI } = ciModule;
 const releaseModule = await import(unpackActionImplementation(resolve(
-  import.meta.dirname,
-  '../../.github/scripts/citizenserve/release-cloudflare.mjs',
+  flowRoot,
+  'gmb/scripts/citizenserve-release-global.mjs',
 )));
 const {
   buildCitizenServeCloudflareRelease,

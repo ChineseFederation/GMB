@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -16,22 +16,40 @@ async function fixture() {
   const native = join(root, 'native');
   const output = join(root, 'output');
   await mkdir(source, { recursive: true });
-  for (const file of ['README.md', 'analysis_options.yaml', 'pubspec.yaml', 'pubspec.lock']) {
+  for (const file of [
+    'CHANGELOG.md',
+    'LICENSE',
+    'README.md',
+    'analysis_options.yaml',
+    'pubspec.yaml',
+    'pubspec.lock',
+  ]) {
     await writeFile(join(source, file), `${file}\n`);
   }
-  for (const directory of ['include', 'ios', 'lib', 'native']) {
+  for (const directory of ['include', 'ios', 'lib', 'native', 'stickers']) {
     await mkdir(join(source, directory), { recursive: true });
     await writeFile(join(source, directory, `${directory}.txt`), `${directory}\n`);
   }
   const artifacts = [
     ['android', 'libchat_sdk.so'],
-    ['ios', 'libchat_sdk.a'],
     ['macos', 'libchat_sdk.dylib'],
   ];
   for (const [directory, name] of artifacts) {
     await mkdir(join(native, directory), { recursive: true });
     await writeFile(join(native, directory, name), `${directory}-binary`);
   }
+  const iosFramework = join(
+    native,
+    'ios',
+    'ChatSDK.xcframework',
+    'ios-arm64',
+    'ChatSDK.framework',
+  );
+  await mkdir(iosFramework, { recursive: true });
+  await writeFile(join(native, 'ios', 'ChatSDK.xcframework', 'Info.plist'), 'xcframework\n');
+  await writeFile(join(iosFramework, 'Info.plist'), 'framework\n');
+  await writeFile(join(iosFramework, 'ChatSDK'), 'ios-dynamic-binary');
+  await chmod(join(iosFramework, 'ChatSDK'), 0o755);
   const build = () => buildRelease({
     source,
     native,
@@ -52,8 +70,13 @@ test('builds a deterministic three-asset ChatSDK release and verifies it', async
     const second = await readFile(join(item.output, 'chatsdk.tgz'));
     assert.deepEqual(first, second);
     const manifest = await verifyReleaseAssets(item.output, { expectedGitSha: SHA, softwareVersion: '1.0.0' });
+    assert.equal(manifest.package_name, 'gmb_chat_sdk');
     assert.equal(manifest.product_id, 'chatsdk');
     assert.equal(manifest.platforms.length, 3);
+    assert.equal(
+      manifest.platforms.find(({ platform }) => platform === 'ios').artifact,
+      'prebuilt/ios-arm64/ChatSDK.xcframework',
+    );
   } finally {
     await rm(item.root, { recursive: true, force: true });
   }
@@ -75,7 +98,7 @@ test('rejects the wrong source SHA', async () => {
 test('rejects a missing native artifact', async () => {
   const item = await fixture();
   try {
-    await rm(join(item.native, 'ios', 'libchat_sdk.a'));
+    await rm(join(item.native, 'ios', 'ChatSDK.xcframework'), { recursive: true });
     await assert.rejects(item.build(), /原生资产/);
   } finally {
     await rm(item.root, { recursive: true, force: true });
@@ -87,6 +110,25 @@ test('rejects source symlinks', async () => {
   try {
     await symlink(join(item.source, 'README.md'), join(item.source, 'lib', 'linked.md'));
     await assert.rejects(item.build(), /禁止符号链接/);
+  } finally {
+    await rm(item.root, { recursive: true, force: true });
+  }
+});
+
+test('rejects symlinks inside the iOS XCFramework', async () => {
+  const item = await fixture();
+  try {
+    const binary = join(
+      item.native,
+      'ios',
+      'ChatSDK.xcframework',
+      'ios-arm64',
+      'ChatSDK.framework',
+      'ChatSDK',
+    );
+    await rm(binary);
+    await symlink('/tmp/forbidden-chat-sdk', binary);
+    await assert.rejects(item.build(), /符号链接/);
   } finally {
     await rm(item.root, { recursive: true, force: true });
   }

@@ -58,8 +58,7 @@ class MediaDescriptor extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MediaDescriptor',
-      package:
-          const $pb.PackageName(_omitMessageNames ? '' : 'chatsdk.protocol'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..aOS(1, _omitFieldNames ? '' : 'attachmentId')
     ..aOS(2, _omitFieldNames ? '' : 'fileName')
@@ -237,8 +236,7 @@ class MediaPayload extends $pb.GeneratedMessage {
   };
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(
       _omitMessageNames ? '' : 'MediaPayload',
-      package:
-          const $pb.PackageName(_omitMessageNames ? '' : 'chatsdk.protocol'),
+      package: const $pb.PackageName(_omitMessageNames ? '' : 'chat.protocol'),
       createEmptyInstance: create)
     ..oo(0, [16, 17, 18, 19])
     ..aOM<MediaDescriptor>(16, _omitFieldNames ? '' : 'image',

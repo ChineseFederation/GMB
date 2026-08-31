@@ -1,17 +1,14 @@
 import 'dart:io';
 
-import 'package:citizenapp/chat/chat_push_service.dart';
+import 'package:citizenapp/chat/chat_product_configuration.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// 唤醒载荷按发件人身份主键 CID 号标识（Worker R5 口径）；下游邮箱补拉与补发
-/// 一律按 CID 寻址，钱包账户 account_id 不进推送。
-const _senderCidNumber = 'CN220-CTZN2-100000001-2026';
-const _otherCidNumber = 'CN220-CTZN2-100000002-2026';
-
 void main() {
   test('新应用标识使用各自登记的唯一 Firebase App ID', () {
-    final source = File('lib/chat/chat_push_service.dart').readAsStringSync();
+    final source = File(
+      'lib/chat/chat_product_configuration.dart',
+    ).readAsStringSync();
     final appIds = RegExp(
       r"'(1:124593150477:(?:android|ios):[0-9a-f]+)'",
     ).allMatches(source).map((match) => match.group(1)!).toSet();
@@ -28,7 +25,9 @@ void main() {
   });
 
   test('Firebase 客户端 Key 按平台隔离且禁止共享回退', () {
-    final source = File('lib/chat/chat_push_service.dart').readAsStringSync();
+    final source = File(
+      'lib/chat/chat_product_configuration.dart',
+    ).readAsStringSync();
     final keys = RegExp(
       r"const _firebase(?:Android|Ios)ApiKey = '(AIza[^']+)'",
     ).allMatches(source).map((match) => match.group(1)!).toList();
@@ -49,68 +48,45 @@ void main() {
   });
 
   test('只接受无内容聊天唤醒载荷', () {
+    expect(ChatPushService.isWakeData(const {'event': 'chat_wake'}), isTrue);
     expect(
-      ChatPushService.wakeSenderFromData(const {
-        'kind': 'chat_wake',
-        'sender_cid_number': _senderCidNumber,
+      ChatPushService.isWakeData(const {
+        'event': 'chat_wake',
+        'sender_cid_number': 'forbidden',
       }),
-      _senderCidNumber,
-    );
-    const conversationId =
-        'dm:CN220-CTZN2-100000001-2026:CN220-CTZN2-100000002-2026';
-    expect(
-      ChatPushService.wakeSenderFromData(const {
-        'kind': 'chat_wake',
-        'sender_cid_number': _senderCidNumber,
-        'conversation_id': conversationId,
-      }),
-      _senderCidNumber,
+      isFalse,
     );
     expect(
-      ChatPushService.notificationConversationFromData(const {
-        'kind': 'chat_wake',
-        'sender_cid_number': _senderCidNumber,
-        'conversation_id': conversationId,
+      ChatPushService.isWakeData(const {
+        'event': 'chat_wake',
+        'conversation_id': 'forbidden',
       }),
-      conversationId,
+      isFalse,
     );
     expect(
-      ChatPushService.wakeSenderFromData(const {
-        'kind': 'chat_wake',
-        'sender_cid_number': _senderCidNumber,
+      ChatPushService.isWakeData(const {
+        'event': 'chat_wake',
         'message': '不得进入推送',
       }),
-      isNull,
+      isFalse,
     );
     expect(
-      ChatPushService.wakeSenderFromData(const {
-        'kind': 'chat_message',
-        'sender_cid_number': _senderCidNumber,
-      }),
-      isNull,
+      ChatPushService.isWakeData(const {'event': 'chat_message'}),
+      isFalse,
     );
   });
 
-  test('双端可见聊天通知只展示固定无正文文案', () {
-    // 系统通知只能提示存在新消息，禁止把端到端加密正文写入 APNs、FCM 或系统通知栏。
-    final push = File('../citizenserve/src/chat/push.ts').readAsStringSync();
+  test('CitizenApp 双端只展示并清理固定聊天通知', () {
     final android = File(
       'android/app/src/main/kotlin/com/crcfrcn/citizenapp/MainActivity.kt',
     ).readAsStringSync();
-    final client = File('lib/chat/chat_push_service.dart').readAsStringSync();
+    final client = File(
+      'lib/chat/chat_product_configuration.dart',
+    ).readAsStringSync();
 
-    expect(push, contains("'apns-push-type': 'alert'"));
-    expect(push, contains("notification: { title: '公民', body: '你有一条新消息' }"));
-    expect(push, contains("channel_id: 'chat_messages'"));
     expect(android, contains('CHAT_NOTIFICATION_CHANNEL_ID = "chat_messages"'));
     expect(android, contains('.setContentText("你有一条新消息")'));
     expect(client, contains('setForegroundNotificationPresentationOptions'));
-    expect(client, contains('message.notification != null'));
-    expect(push, contains("'thread-id': payload.conversation_id"));
-    expect(
-      push,
-      contains("['Unregistered', 'BadDeviceToken'].includes(reason ?? '')"),
-    );
     expect(android, contains('clearChatNotifications(conversationId)'));
     expect(
       File('ios/Runner/AppDelegate.swift').readAsStringSync(),
@@ -158,17 +134,11 @@ void main() {
       'android/app/src/main/AndroidManifest.xml',
     ).readAsStringSync();
     final iosDelegate = File('ios/Runner/AppDelegate.swift').readAsStringSync();
-    final chatIsar = File('lib/isar/chat_isar.dart').readAsStringSync();
-
     expect(androidManifest, contains('android:allowBackup="false"'));
     expect(iosDelegate, contains('isExcludedFromBackup = true'));
     expect(iosDelegate, contains('appendingPathComponent("chat"'));
-    expect(iosDelegate, contains('hasPrefix("citizenapp_chat")'));
+    expect(iosDelegate, contains('hasPrefix("chat_sdk_chat")'));
     expect(iosDelegate, contains('case "excludeChatDataFromBackup"'));
-    expect(
-      chatIsar,
-      contains("invokeMethod<void>('excludeChatDataFromBackup')"),
-    );
   });
 
   test('推送端点缓存同时绑定服务类型、APNs 环境和 Token', () {
@@ -194,39 +164,14 @@ void main() {
     expect(fcm.registrationCacheValue, isNot(sandbox.registrationCacheValue));
   });
 
-  test('启动恢复先建立WSS再补拉邮箱且Token更新保持统一有界重试', () {
-    final runtime = File('lib/chat/chat_runtime.dart').readAsStringSync();
-    final socketConnect = runtime.indexOf('connectRealtime(');
-    final tokenListener = runtime.indexOf('session.attachTokenSubscription');
-    final mailboxFetch = runtime.indexOf(
-      'await signalContext.transport.fetchMailbox()',
-    );
-
-    expect(runtime, contains('_ensurePushEndpointWithRetry'));
-    expect(
-      runtime,
-      contains('for (var attempt = 0; attempt < 3; attempt += 1)'),
-    );
-    expect(mailboxFetch, greaterThanOrEqualTo(0));
-    // 先建立 WSS 再补拉邮箱，禁止留下“补拉结束、实时连接尚未建立”的消息丢失窗口。
-    expect(socketConnect, greaterThanOrEqualTo(0));
-    expect(mailboxFetch, greaterThan(socketConnect));
-    expect(tokenListener, greaterThanOrEqualTo(0));
-    expect(runtime, isNot(contains("'peer_ready'")));
-  });
-
-  test('后台连续唤醒会去重保存全部发送方', () async {
+  test('后台连续唤醒只持久化一个待补拉标志', () async {
     SharedPreferences.setMockInitialValues({});
-    await ChatPushService.storeWakeSender(_senderCidNumber);
-    await ChatPushService.storeWakeSender(_otherCidNumber);
-    await ChatPushService.storeWakeSender(_senderCidNumber);
+    await ChatPushService.storeWake();
+    await ChatPushService.storeWake();
 
     final service = ChatPushService();
-    expect(await service.takePendingWakeSenders(), [
-      _senderCidNumber,
-      _otherCidNumber,
-    ]);
-    expect(await service.takePendingWakeSenders(), isEmpty);
+    expect(await service.takePendingWake(), isTrue);
+    expect(await service.takePendingWake(), isFalse);
     await service.dispose();
   });
 }

@@ -16,14 +16,11 @@ import {
 import {
   acknowledgeChatEnvelopes,
   readChatMailbox,
-  readStoredChatGroupKeyPackage,
-  readStoredChatDeviceKey,
+  readStoredChatKeyPackages,
   requireChatRealtimeNamespace,
-  storeChatDeviceKey,
-  storeChatGroupKeyPackage,
+  storeChatKeyPackage,
   storeChatEnvelope,
-  type ChatGroupKeyPackage,
-  type ChatPublishedDeviceKey,
+  type ChatKeyPackage,
 } from "./realtime";
 import { sendChatAlert } from "./push";
 import { resourceLimit } from "../limits/catalog";
@@ -42,55 +39,42 @@ interface RegisterPushEndpointRequest {
   expires_at?: unknown;
 }
 
-interface PublishChatDeviceKeyRequest {
-  device_id?: unknown;
-  device_public_key_hex?: unknown;
-}
-
-interface ResolveChatDeviceKeyRequest {
-  recipient_cid_number?: unknown;
-}
-
-interface PublishChatGroupKeyPackageRequest {
+interface PublishChatKeyPackageRequest {
   key_package?: unknown;
 }
 
-interface ResolveChatGroupKeyPackageRequest {
+interface ResolveChatKeyPackageRequest {
   recipient_cid_number?: unknown;
 }
 
-/** 幂等登记当前认证设备唯一的 RFC 9180 HPKE 公开加密钥。 */
-export async function publishChatDeviceKey(
+/** 幂等登记当前认证设备唯一的 RFC 9420 Last Resort KeyPackage。 */
+export async function publishChatKeyPackage(
   request: Request,
   env: Env,
 ): Promise<Response> {
   const session = await requireSession(request, env);
   await requireActiveMembership(env, session.cid_number, session.account_id);
-  const body = await readJson<PublishChatDeviceKeyRequest>(request);
+  const body = await readJson<PublishChatKeyPackageRequest>(request);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_device_key_fields", "Chat 设备公开加密钥字段不合法");
+    throw new HttpError(400, "invalid_chat_key_package_fields", "Chat KeyPackage 字段不合法");
   }
-  assertExactFields(body, ["device_id", "device_public_key_hex"], "invalid_chat_device_key_fields");
-  const deviceKey: ChatPublishedDeviceKey = {
-    cid_number: session.cid_number,
-    device_id: assertDeviceId(body.device_id),
-    device_public_key_hex: assertDevicePublicKey(body.device_public_key_hex),
-  };
-  await storeChatDeviceKey(env, session.cid_number, deviceKey);
+  assertExactFields(body, ["key_package"], "invalid_chat_key_package_fields");
+  const keyPackage = assertKeyPackage(body.key_package, session.cid_number);
+  await storeChatKeyPackage(env, session.cid_number, keyPackage);
   return jsonResponse({ ok: true });
 }
 
-/** 读取接收 CID 当前认证设备公开加密钥；读取不消费、不旋转任何状态。 */
-export async function resolveChatDeviceKey(
+/** 读取接收 CID 全部活跃设备的 Last Resort KeyPackage。 */
+export async function resolveChatKeyPackages(
   request: Request,
   env: Env,
 ): Promise<Response> {
   const session = await requireSession(request, env);
-  const body = await readJson<ResolveChatDeviceKeyRequest>(request);
+  const body = await readJson<ResolveChatKeyPackageRequest>(request);
   if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_device_key_resolve", "Chat 设备公开加密钥查询字段不合法");
+    throw new HttpError(400, "invalid_chat_key_package_resolve", "Chat KeyPackage 查询字段不合法");
   }
-  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_device_key_resolve");
+  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_key_package_resolve");
   const recipientCidNumber = assertChatCidNumber(
     body.recipient_cid_number,
     "invalid_recipient_cid_number",
@@ -107,55 +91,7 @@ export async function resolveChatDeviceKey(
   }
   return jsonResponse({
     ok: true,
-    ...(await readStoredChatDeviceKey(env, recipientCidNumber)),
-  });
-}
-
-/** 发布一枚仅供 OpenMLS 群成员加入的 last-resort 公开包。 */
-export async function publishChatGroupKeyPackage(
-  request: Request,
-  env: Env,
-): Promise<Response> {
-  const session = await requireSession(request, env);
-  await requireActiveMembership(env, session.cid_number, session.account_id);
-  const body = await readJson<PublishChatGroupKeyPackageRequest>(request);
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_group_key_package_fields", "群聊公开包字段不合法");
-  }
-  assertExactFields(body, ["key_package"], "invalid_chat_group_key_package_fields");
-  const keyPackage = assertGroupKeyPackage(body.key_package, session.cid_number);
-  await storeChatGroupKeyPackage(env, session.cid_number, keyPackage);
-  return jsonResponse({ ok: true });
-}
-
-/** 读取接收 CID 的群聊公开包；私聊链路不调用本接口。 */
-export async function resolveChatGroupKeyPackage(
-  request: Request,
-  env: Env,
-): Promise<Response> {
-  const session = await requireSession(request, env);
-  const body = await readJson<ResolveChatGroupKeyPackageRequest>(request);
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    throw new HttpError(400, "invalid_chat_group_key_package_resolve", "群聊公开包查询字段不合法");
-  }
-  assertExactFields(body, ["recipient_cid_number"], "invalid_chat_group_key_package_resolve");
-  const recipientCidNumber = assertChatCidNumber(
-    body.recipient_cid_number,
-    "invalid_recipient_cid_number",
-  );
-  await requireActiveMembership(env, session.cid_number, session.account_id);
-  const recipient = await readUserByCidNumber(env, recipientCidNumber);
-  if (!recipient) {
-    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法加入群聊");
-  }
-  try {
-    await requireActiveMembership(env, recipient.cid_number, recipient.account_id);
-  } catch {
-    throw new HttpError(403, "chat_recipient_membership_required", "对方尚未开通会员，无法加入群聊");
-  }
-  return jsonResponse({
-    ok: true,
-    key_package: await readStoredChatGroupKeyPackage(env, recipientCidNumber),
+    key_packages: await readStoredChatKeyPackages(env, recipientCidNumber),
   });
 }
 
@@ -356,6 +292,7 @@ export async function submitChatEnvelope(
     body.recipient_cid_number,
     "invalid_recipient_cid_number",
   );
+  const recipientDeviceId = assertDeviceId(body.recipient_device_id);
   await requireActiveMembership(env, session.cid_number, session.account_id);
   const recipient = await readUserByCidNumber(env, recipientCidNumber);
   if (!recipient) {
@@ -399,6 +336,7 @@ export async function submitChatEnvelope(
     envelope_id: envelopeId,
     sender_cid_number: session.cid_number,
     recipient_cid_number: recipientCidNumber,
+    recipient_device_id: recipientDeviceId,
     conversation_id: conversationId,
     envelope,
     created_at_millis: createdAtMillis,
@@ -411,6 +349,7 @@ export async function submitChatEnvelope(
     const alertTask = sendChatAlert(
       env,
       recipientCidNumber,
+      recipientDeviceId,
       session.cid_number,
       conversationId,
       envelopeId,
@@ -431,13 +370,15 @@ export async function submitChatEnvelope(
 /** 前台连接或系统唤醒后批量读取当前 CID 的未确认密文；返回值不包含任何明文。 */
 export async function fetchChatEnvelopes(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
+  const deviceId = assertDeviceId(request.headers.get("x-chat-device"));
   await enforceEdgeRate(env, "RATE_READ", `cid_number:${session.cid_number}:chat_mailbox_read`);
-  return jsonResponse(await readChatMailbox(env, session.cid_number));
+  return jsonResponse(await readChatMailbox(env, session.cid_number, deviceId));
 }
 
 /** 接收端必须先完成解密和本机持久化，再批量确认既有 envelope_id；确认后云端立即删除。 */
 export async function acknowledgeChatMailbox(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
+  const deviceId = assertDeviceId(request.headers.get("x-chat-device"));
   const raw = await readJson<unknown>(request);
   const maxItems = resourceLimit("chat_ack").max_items ?? 100;
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > maxItems) {
@@ -445,7 +386,7 @@ export async function acknowledgeChatMailbox(request: Request, env: Env): Promis
   }
   const envelopeIds = [...new Set(raw.map(assertChatEnvelopeId))];
   await enforceEdgeRate(env, "RATE_WRITE", `cid_number:${session.cid_number}:chat_mailbox_ack`);
-  await acknowledgeChatEnvelopes(env, session.cid_number, envelopeIds);
+  await acknowledgeChatEnvelopes(env, session.cid_number, deviceId, envelopeIds);
   return jsonResponse({ ok: true });
 }
 
@@ -459,6 +400,7 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
     "envelope",
     "envelope_id",
     "recipient_cid_number",
+    "recipient_device_id",
     "ttl_millis",
   ];
   const actual = Object.keys(value).sort();
@@ -467,32 +409,31 @@ function assertExactChatEnvelopeFields(value: ChatEnvelopePayload): void {
   }
 }
 
-function assertGroupKeyPackage(
+function assertKeyPackage(
   value: unknown,
   expectedCidNumber: string,
-): ChatGroupKeyPackage {
+): ChatKeyPackage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包不合法");
+    throw new HttpError(400, "invalid_chat_key_package", "Chat KeyPackage 不合法");
   }
   const raw = value as Record<string, unknown>;
   assertExactFields(raw, [
     "cid_number",
     "device_id",
-    "device_public_key_hex",
-    "key_package_id",
+    "key_package_ref",
     "key_package",
     "cipher_suite",
     "not_before",
     "not_after",
     "last_resort",
-  ], "invalid_chat_group_key_package");
-  const cidNumber = assertChatCidNumber(raw.cid_number, "invalid_chat_group_key_package");
+  ], "invalid_chat_key_package");
+  const cidNumber = assertChatCidNumber(raw.cid_number, "invalid_chat_key_package");
   if (cidNumber !== expectedCidNumber) {
-    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包 CID 与当前会话不一致");
+    throw new HttpError(400, "invalid_chat_key_package", "Chat KeyPackage CID 与当前会话不一致");
   }
   if (
-    typeof raw.key_package_id !== "string"
-    || !/^kp-[0-9a-f]{24}$/.test(raw.key_package_id)
+    typeof raw.key_package_ref !== "string"
+    || !/^[0-9a-f]{32,128}$/.test(raw.key_package_ref)
     || typeof raw.key_package !== "string"
     || raw.key_package.length === 0
     || raw.key_package.length > 131_072
@@ -506,26 +447,18 @@ function assertGroupKeyPackage(
     || (raw.not_after as number) <= nowMs()
     || raw.last_resort !== true
   ) {
-    throw new HttpError(400, "invalid_chat_group_key_package", "群聊公开包不合法");
+    throw new HttpError(400, "invalid_chat_key_package", "Chat KeyPackage 不合法");
   }
   return {
     cid_number: cidNumber,
     device_id: assertDeviceId(raw.device_id),
-    device_public_key_hex: assertDevicePublicKey(raw.device_public_key_hex),
-    key_package_id: raw.key_package_id,
+    key_package_ref: raw.key_package_ref,
     key_package: raw.key_package,
     cipher_suite: raw.cipher_suite,
     not_before: raw.not_before as number,
     not_after: raw.not_after as number,
     last_resort: true,
   };
-}
-
-function assertDevicePublicKey(value: unknown): string {
-  if (typeof value !== "string" || !/^[0-9a-f]{64}$/.test(value)) {
-    throw new HttpError(400, "invalid_chat_device_key", "Chat 设备公开加密钥不合法");
-  }
-  return value;
 }
 
 function assertExactFields(

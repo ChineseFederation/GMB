@@ -15,12 +15,12 @@ void main() {
       final blob = await LocalCipher.encryptString(
         key: key,
         plaintext: clear,
-        aad: 'citizenapp.local/chat|msg-1',
+        aad: 'citizenapp.local/test-cipher|msg-1',
       );
       final back = await LocalCipher.decryptString(
         key: key,
         blob: blob,
-        aad: 'citizenapp.local/chat|msg-1',
+        aad: 'citizenapp.local/test-cipher|msg-1',
       );
       expect(back, clear);
     });
@@ -29,12 +29,12 @@ void main() {
       final blob = await LocalCipher.encryptBytes(
         key: key,
         plaintext: const <int>[],
-        aad: 'citizenapp.local/chat|empty',
+        aad: 'citizenapp.local/test-cipher|empty',
       );
       final back = await LocalCipher.decryptBytes(
         key: key,
         blob: blob,
-        aad: 'citizenapp.local/chat|empty',
+        aad: 'citizenapp.local/test-cipher|empty',
       );
       expect(back, isEmpty);
     });
@@ -44,11 +44,13 @@ void main() {
       final blob = await LocalCipher.encryptString(
         key: key,
         plaintext: clear,
-        aad: 'citizenapp.local/chat|m',
+        aad: 'citizenapp.local/test-cipher|m',
       );
       expect(blob.contains(clear), isFalse);
-      expect(utf8.decode(base64Decode(blob), allowMalformed: true),
-          isNot(contains(clear)));
+      expect(
+        utf8.decode(base64Decode(blob), allowMalformed: true),
+        isNot(contains(clear)),
+      );
     });
   });
 
@@ -59,7 +61,7 @@ void main() {
       blob = await LocalCipher.encryptString(
         key: key,
         plaintext: '正文',
-        aad: 'citizenapp.local/chat|msg-1',
+        aad: 'citizenapp.local/test-cipher|msg-1',
       );
     });
 
@@ -68,7 +70,7 @@ void main() {
         LocalCipher.decryptBytes(
           key: otherKey,
           blob: blob,
-          aad: 'citizenapp.local/chat|msg-1',
+          aad: 'citizenapp.local/test-cipher|msg-1',
         ),
         throwsA(isA<LocalCipherException>()),
       );
@@ -79,7 +81,7 @@ void main() {
         LocalCipher.decryptBytes(
           key: key,
           blob: blob,
-          aad: 'citizenapp.local/chat|msg-2',
+          aad: 'citizenapp.local/test-cipher|msg-2',
         ),
         throwsA(isA<LocalCipherException>()),
       );
@@ -92,7 +94,7 @@ void main() {
         LocalCipher.decryptBytes(
           key: key,
           blob: base64Encode(raw),
-          aad: 'citizenapp.local/chat|msg-1',
+          aad: 'citizenapp.local/test-cipher|msg-1',
         ),
         throwsA(isA<LocalCipherException>()),
       );
@@ -103,7 +105,7 @@ void main() {
         LocalCipher.decryptBytes(
           key: key,
           blob: '不是base64!!!',
-          aad: 'citizenapp.local/chat|msg-1',
+          aad: 'citizenapp.local/test-cipher|msg-1',
         ),
         throwsA(isA<LocalCipherException>()),
       );
@@ -114,7 +116,7 @@ void main() {
         LocalCipher.decryptBytes(
           key: key,
           blob: base64Encode(List<int>.filled(10, 0)),
-          aad: 'citizenapp.local/chat|msg-1',
+          aad: 'citizenapp.local/test-cipher|msg-1',
         ),
         throwsA(isA<LocalCipherException>()),
       );
@@ -122,11 +124,7 @@ void main() {
 
     test('密钥长度非 32 字节被拒', () async {
       await expectLater(
-        LocalCipher.encryptString(
-          key: Uint8List(16),
-          plaintext: 'x',
-          aad: 'a',
-        ),
+        LocalCipher.encryptString(key: Uint8List(16), plaintext: 'x', aad: 'a'),
         throwsA(isA<LocalCipherException>()),
       );
     });
@@ -136,19 +134,25 @@ void main() {
     final a = await LocalCipher.encryptString(
       key: key,
       plaintext: '同样的话',
-      aad: 'citizenapp.local/chat|same',
+      aad: 'citizenapp.local/test-cipher|same',
     );
     final b = await LocalCipher.encryptString(
       key: key,
       plaintext: '同样的话',
-      aad: 'citizenapp.local/chat|same',
+      aad: 'citizenapp.local/test-cipher|same',
     );
     expect(a, isNot(b));
     expect(
       await LocalCipher.decryptString(
-          key: key, blob: a, aad: 'citizenapp.local/chat|same'),
+        key: key,
+        blob: a,
+        aad: 'citizenapp.local/test-cipher|same',
+      ),
       await LocalCipher.decryptString(
-          key: key, blob: b, aad: 'citizenapp.local/chat|same'),
+        key: key,
+        blob: b,
+        aad: 'citizenapp.local/test-cipher|same',
+      ),
     );
   });
 

@@ -42,27 +42,15 @@ interface RoutedChatMailboxItem extends ChatMailboxItem {
 
 type ChatMailboxSqlRow = ChatMailboxItem & Record<string, SqlStorageValue>;
 
-export interface ChatPublishedDeviceKey {
+export interface ChatKeyPackage {
   cid_number: string;
   device_id: string;
-  device_public_key_hex: string;
-}
-
-export interface ChatGroupKeyPackage {
-  cid_number: string;
-  device_id: string;
-  device_public_key_hex: string;
-  key_package_id: string;
+  key_package_ref: string;
   key_package: string;
   cipher_suite: string;
   not_before: number;
   not_after: number;
   last_resort: true;
-}
-
-interface ChatDeviceKeySqlRow extends Record<string, SqlStorageValue> {
-  device_id: string;
-  device_public_key_hex: string;
 }
 
 interface ChatMailboxUsage extends Record<string, SqlStorageValue> {
@@ -110,17 +98,13 @@ export class Chat implements DurableObject {
       envelope_id TEXT PRIMARY KEY,
       sender_cid_number TEXT NOT NULL,
       recipient_cid_number TEXT NOT NULL,
+      recipient_device_id TEXT NOT NULL,
       envelope TEXT NOT NULL,
       created_at_millis INTEGER NOT NULL,
       ttl_millis INTEGER NOT NULL
     )`);
-    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_device_key (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-      device_id TEXT NOT NULL,
-      device_public_key_hex TEXT NOT NULL
-    )`);
-    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_group_key_package (
-      singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    this.state.storage.sql.exec(`CREATE TABLE IF NOT EXISTS chat_key_packages (
+      device_id TEXT PRIMARY KEY,
       payload TEXT NOT NULL
     )`);
   }
@@ -131,69 +115,47 @@ export class Chat implements DurableObject {
       const payload = (await request.json()) as ChatSignalPayload;
       return jsonResponse({ ok: true, sent: this.deliver(payload) });
     }
-    if (request.method === 'PUT' && path === '/__device_key') {
-      const payload = (await request.json()) as ChatPublishedDeviceKey;
-      const stored = this.state.storage.sql.exec<ChatDeviceKeySqlRow>(
-        'SELECT device_id, device_public_key_hex FROM chat_device_key WHERE singleton = 1',
-      ).toArray()[0];
-      if (stored?.device_id !== payload.device_id
-          || stored?.device_public_key_hex !== payload.device_public_key_hex) {
-        this.state.storage.sql.exec(
-          `INSERT OR REPLACE INTO chat_device_key
-             (singleton, device_id, device_public_key_hex) VALUES (1, ?, ?)`,
-          payload.device_id,
-          payload.device_public_key_hex,
-        );
-      }
-      return jsonResponse({ ok: true });
-    }
-    if (request.method === 'GET' && path === '/__device_key') {
-      const row = this.state.storage.sql.exec<ChatDeviceKeySqlRow>(
-        'SELECT device_id, device_public_key_hex FROM chat_device_key WHERE singleton = 1',
-      ).toArray()[0];
-      if (!row) {
-        return jsonResponse(
-          { ok: false, error_code: 'chat_device_key_unavailable', message: '接收设备尚未登记聊天加密钥' },
-          { status: 404 },
-        );
-      }
-      return jsonResponse({ ok: true, device_key: row });
-    }
-    if (request.method === 'PUT' && path === '/__group_key_package') {
-      const payload = (await request.json()) as { key_package: ChatGroupKeyPackage };
+    if (request.method === 'PUT' && path === '/__key_package') {
+      const payload = (await request.json()) as { key_package: ChatKeyPackage };
       const encoded = JSON.stringify(payload.key_package);
       const stored = this.state.storage.sql.exec<{ payload: string }>(
-        'SELECT payload FROM chat_group_key_package WHERE singleton = 1',
+        'SELECT payload FROM chat_key_packages WHERE device_id = ?',
+        payload.key_package.device_id,
       ).toArray()[0];
       if (stored?.payload !== encoded) {
         this.state.storage.sql.exec(
-          'INSERT OR REPLACE INTO chat_group_key_package (singleton, payload) VALUES (1, ?)',
+          'INSERT OR REPLACE INTO chat_key_packages (device_id, payload) VALUES (?, ?)',
+          payload.key_package.device_id,
           encoded,
         );
       }
       return jsonResponse({ ok: true });
     }
-    if (request.method === 'GET' && path === '/__group_key_package') {
-      const row = this.state.storage.sql.exec<{ payload: string }>(
-        'SELECT payload FROM chat_group_key_package WHERE singleton = 1',
-      ).toArray()[0];
-      if (!row) {
+    if (request.method === 'GET' && path === '/__key_packages') {
+      const rows = this.state.storage.sql.exec<{ payload: string }>(
+        'SELECT payload FROM chat_key_packages ORDER BY device_id',
+      ).toArray();
+      if (rows.length === 0) {
         return jsonResponse(
           {
             ok: false,
-            error_code: 'chat_group_key_package_unavailable',
-            message: '接收设备尚未登记群聊公开包',
+            error_code: 'chat_key_package_unavailable',
+            message: '接收设备尚未登记 Chat KeyPackage',
           },
           { status: 404 },
         );
       }
-      return jsonResponse({ ok: true, key_package: JSON.parse(row.payload) });
+      return jsonResponse({
+        ok: true,
+        key_packages: rows.map((row) => JSON.parse(row.payload)),
+      });
     }
     if (request.method === 'POST' && path === '/__message') {
       const payload = (await request.json()) as RoutedChatMailboxItem;
       this.deleteExpiredEnvelopes();
       const existing = this.state.storage.sql.exec<ChatMailboxSqlRow>(
-        `SELECT envelope_id, sender_cid_number, recipient_cid_number, envelope,
+        `SELECT envelope_id, sender_cid_number, recipient_cid_number,
+                recipient_device_id, envelope,
                 created_at_millis, ttl_millis
            FROM chat_envelopes WHERE envelope_id = ?`,
         payload.envelope_id,
@@ -221,12 +183,14 @@ export class Chat implements DurableObject {
         }
         this.state.storage.sql.exec(
           `INSERT INTO chat_envelopes (
-             envelope_id, sender_cid_number, recipient_cid_number, envelope,
+             envelope_id, sender_cid_number, recipient_cid_number,
+             recipient_device_id, envelope,
              created_at_millis, ttl_millis
-           ) VALUES (?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           payload.envelope_id,
           payload.sender_cid_number,
           payload.recipient_cid_number,
+          payload.recipient_device_id,
           payload.envelope,
           payload.created_at_millis,
           payload.ttl_millis,
@@ -241,22 +205,40 @@ export class Chat implements DurableObject {
     }
     if (request.method === 'GET' && path === '/__messages') {
       this.deleteExpiredEnvelopes();
+      const deviceId = request.headers.get('x-chat-device');
+      if (!deviceId) {
+        return jsonResponse(
+          { ok: false, error_code: 'chat_device_required', message: '缺少 Chat 设备路由' },
+          { status: 400 },
+        );
+      }
       const rows = this.state.storage.sql.exec<ChatMailboxSqlRow>(
-        `SELECT envelope_id, sender_cid_number, recipient_cid_number, envelope,
+        `SELECT envelope_id, sender_cid_number, recipient_cid_number,
+                recipient_device_id, envelope,
                 created_at_millis, ttl_millis
-           FROM chat_envelopes
+           FROM chat_envelopes WHERE recipient_device_id = ?
           ORDER BY rowid
           LIMIT ?`,
+        deviceId,
         CHAT_MAILBOX_FETCH_BATCH,
       ).toArray();
       return jsonResponse(rows);
     }
     if (request.method === 'POST' && path === '/__ack') {
       const envelopeIds = (await request.json()) as string[];
+      const deviceId = request.headers.get('x-chat-device');
+      if (!deviceId) {
+        return jsonResponse(
+          { ok: false, error_code: 'chat_device_required', message: '缺少 Chat 设备路由' },
+          { status: 400 },
+        );
+      }
       if (envelopeIds.length > 0) {
         const placeholders = envelopeIds.map(() => '?').join(', ');
         this.state.storage.sql.exec(
-          `DELETE FROM chat_envelopes WHERE envelope_id IN (${placeholders})`,
+          `DELETE FROM chat_envelopes
+            WHERE recipient_device_id = ? AND envelope_id IN (${placeholders})`,
+          deviceId,
           ...envelopeIds,
         );
       }
@@ -269,8 +251,7 @@ export class Chat implements DurableObject {
         closed += 1;
       }
       this.state.storage.sql.exec('DELETE FROM chat_envelopes');
-      this.state.storage.sql.exec('DELETE FROM chat_device_key');
-      this.state.storage.sql.exec('DELETE FROM chat_group_key_package');
+      this.state.storage.sql.exec('DELETE FROM chat_key_packages');
       return jsonResponse({ ok: true, closed });
     }
     if (request.method === 'POST' && path === '/__close_stale') {
@@ -378,6 +359,8 @@ export class Chat implements DurableObject {
       const attachment = readAttachment(socket);
       if (
         attachment?.cid_number !== payload.recipient_cid_number
+        || (payload.recipient_device_id !== null
+          && attachment.device_id !== payload.recipient_device_id)
         || attachment.binding_revision !== payload.recipient_binding_revision
         || attachment.account_id !== payload.recipient_binding_account_id
       ) {
@@ -401,15 +384,17 @@ export class Chat implements DurableObject {
       type: CHAT_WS_ENVELOPE_TYPE,
       envelope_id: payload.envelope_id,
       sender_cid_number: payload.sender_cid_number,
+      recipient_device_id: payload.recipient_device_id,
       envelope: payload.envelope,
       created_at_millis: payload.created_at_millis,
       ttl_millis: payload.ttl_millis,
     });
     let sent = 0;
-    for (const socket of this.state.getWebSockets()) {
+    for (const socket of this.state.getWebSockets(deviceTag(payload.recipient_device_id))) {
       const attachment = readAttachment(socket);
       if (
         attachment?.cid_number !== payload.recipient_cid_number
+        || attachment.device_id !== payload.recipient_device_id
         || attachment.binding_revision !== payload.recipient_binding_revision
         || attachment.account_id !== payload.recipient_binding_account_id
       ) {
@@ -535,88 +520,47 @@ export async function relayChatSignal(env: Env, payload: ChatSignalPayload): Pro
   return ((await response.json()) as { sent?: number }).sent ?? 0;
 }
 
-/** 幂等保存当前 CID 认证设备的 HPKE 公开加密钥；私钥始终只存在于手机。 */
-export async function storeChatDeviceKey(
+/** 幂等保存当前认证设备唯一的 RFC 9420 Last Resort KeyPackage。 */
+export async function storeChatKeyPackage(
   env: Env,
   cidNumber: string,
-  deviceKey: ChatPublishedDeviceKey,
+  keyPackage: ChatKeyPackage,
 ): Promise<void> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__device_key', {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(deviceKey),
-    }));
-  if (!response.ok) {
-    throw new HttpError(503, 'chat_device_key_write_failed', 'Chat 设备公开加密钥写入失败');
-  }
-}
-
-/** 读取当前 CID 认证设备的 HPKE 公开加密钥；读取不会消费或改写状态。 */
-export async function readStoredChatDeviceKey(
-  env: Env,
-  cidNumber: string,
-): Promise<ChatPublishedDeviceKey> {
-  const response = await requireChatRealtimeNamespace(env)
-    .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__device_key', {
-      method: 'GET',
-    }));
-  const body = await response.json() as {
-    device_key?: Omit<ChatPublishedDeviceKey, 'cid_number'>;
-    error_code?: string;
-    message?: string;
-  };
-  if (!response.ok || !body.device_key) {
-    throw new HttpError(
-      response.status,
-      body.error_code ?? 'chat_device_key_unavailable',
-      body.message ?? '接收设备尚未登记聊天加密钥',
-    );
-  }
-  return { cid_number: cidNumber, ...body.device_key };
-}
-
-/** 幂等保存一枚仅供 OpenMLS 群成员加入的 last-resort 公开包。 */
-export async function storeChatGroupKeyPackage(
-  env: Env,
-  cidNumber: string,
-  keyPackage: ChatGroupKeyPackage,
-): Promise<void> {
-  const response = await requireChatRealtimeNamespace(env)
-    .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__group_key_package', {
+    .fetch(new Request('https://chat.internal/__key_package', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ key_package: keyPackage }),
     }));
   if (!response.ok) {
-    throw new HttpError(503, 'chat_group_key_package_write_failed', '群聊公开包写入失败');
+    throw new HttpError(503, 'chat_key_package_write_failed', 'Chat KeyPackage 写入失败');
   }
 }
 
-/** 读取群聊 last-resort 公开包；读取不消费、不旋转。 */
-export async function readStoredChatGroupKeyPackage(
+/** 读取当前用户全部活跃设备的 Last Resort KeyPackage。 */
+export async function readStoredChatKeyPackages(
   env: Env,
   cidNumber: string,
-): Promise<ChatGroupKeyPackage> {
+): Promise<ChatKeyPackage[]> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__group_key_package', { method: 'GET' }));
+    .fetch(new Request('https://chat.internal/__key_packages', {
+      method: 'GET',
+    }));
   const body = await response.json() as {
-    key_package?: ChatGroupKeyPackage;
+    key_packages?: ChatKeyPackage[];
     error_code?: string;
     message?: string;
   };
-  if (!response.ok || !body.key_package) {
+  if (!response.ok || !body.key_packages || body.key_packages.length === 0) {
     throw new HttpError(
       response.status,
-      body.error_code ?? 'chat_group_key_package_unavailable',
-      body.message ?? '接收设备尚未登记群聊公开包',
+      body.error_code ?? 'chat_key_package_unavailable',
+      body.message ?? '接收设备尚未登记 Chat KeyPackage',
     );
   }
-  return body.key_package;
+  return body.key_packages;
 }
 
 /** 使用已认证 socket 身份发送瞬时信令；离线只触发无内容唤醒，不保存 SDP 或 ICE。 */
@@ -681,10 +625,16 @@ export async function storeChatEnvelope(
   };
 }
 
-export async function readChatMailbox(env: Env, cidNumber: string): Promise<ChatMailboxItem[]> {
+export async function readChatMailbox(
+  env: Env,
+  cidNumber: string,
+  deviceId: string,
+): Promise<ChatMailboxItem[]> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
-    .fetch(new Request('https://chat.internal/__messages'));
+    .fetch(new Request('https://chat.internal/__messages', {
+      headers: { 'x-chat-device': deviceId },
+    }));
   if (!response.ok) {
     throw new HttpError(response.status, 'chat_mailbox_read_failed', 'Chat 临时密文读取失败');
   }
@@ -698,13 +648,17 @@ export async function readChatMailbox(env: Env, cidNumber: string): Promise<Chat
 export async function acknowledgeChatEnvelopes(
   env: Env,
   cidNumber: string,
+  deviceId: string,
   envelopeIds: string[],
 ): Promise<void> {
   const response = await requireChatRealtimeNamespace(env)
     .getByName(cidNumber)
     .fetch(new Request('https://chat.internal/__ack', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'x-chat-device': deviceId,
+      },
       body: JSON.stringify(envelopeIds),
     }));
   if (!response.ok) {
@@ -769,6 +723,7 @@ function sameStoredEnvelope(left: ChatMailboxItem, right: ChatMailboxItem): bool
   return left.envelope_id === right.envelope_id
     && left.sender_cid_number === right.sender_cid_number
     && left.recipient_cid_number === right.recipient_cid_number
+    && left.recipient_device_id === right.recipient_device_id
     && left.envelope === right.envelope
     && left.created_at_millis === right.created_at_millis
     && left.ttl_millis === right.ttl_millis;

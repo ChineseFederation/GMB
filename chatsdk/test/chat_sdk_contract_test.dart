@@ -1,5 +1,5 @@
-import 'package:chat_sdk/chat_sdk.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 void main() {
   test('公开配置保留准确的 HTTPS 与 WSS 入口', () {

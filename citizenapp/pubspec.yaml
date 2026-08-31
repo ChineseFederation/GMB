@@ -73,7 +73,6 @@ dependencies:
   url_launcher: ^6.3.1
   firebase_core: ^4.11.0
   firebase_messaging: ^16.4.1
-  flutter_webrtc: ^1.5.2
   webview_flutter: ^4.13.0
   video_player: ^2.10.1
   image_size_getter: ^2.4.1
@@ -81,11 +80,11 @@ dependencies:
   video_compress: ^3.1.4
   blurhash_dart: ^1.2.1
   image: ^4.9.1
-  flutter_blurhash: ^0.9.1
-  emoji_picker_flutter: ^4.4.0
   # 文章正文富文本编辑器；11.5.1 实现 Flutter 3.44 新增的 TextInputClient.onFocusReceived。
   flutter_quill: 11.5.1
-  chat_sdk:
+  # 本机脚本使用临时 pubspec_overrides.yaml 直连同仓 ChatSDK；该文件退出即删。
+  # ChatSDK 首次正式 Release 后，本依赖再固定到准确 chatsdk-sdk-v* Git Tag。
+  gmb_chat_sdk:
     path: ../chatsdk
 dev_dependencies:
   flutter_test:
@@ -107,7 +106,6 @@ flutter:
     - assets/badges/
     - assets/topup/walletconnect.html
     - assets/topup/walletconnect.bundle.js
-    - assets/stickers/fluent3d/
     - assets/chainspec.json
     - assets/light_sync_state.json
     - assets/public_institutions/

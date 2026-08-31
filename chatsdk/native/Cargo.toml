@@ -7,7 +7,7 @@ description = "ChatSDK OpenMLS native engine"
 
 [lib]
 name = "chat_sdk"
-crate-type = ["cdylib", "staticlib", "rlib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -19,8 +19,6 @@ openmls_basic_credential = "0.5.0"
 openmls_traits = "0.5.0"
 openmls_memory_storage = { version = "0.5.0", features = ["persistence"] }
 aes-gcm = "0.10"
-hpke-rs = { version = "0.6.1", features = ["rustcrypto", "std"] }
-hpke-rs-rust-crypto = { version = "0.6.1", features = ["std"] }
 base64 = "0.22"
 
 [workspace]

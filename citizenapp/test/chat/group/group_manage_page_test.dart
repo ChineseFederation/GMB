@@ -1,10 +1,9 @@
 import 'dart:async';
 
-import 'package:citizenapp/chat/group/group_model.dart';
-import 'package:citizenapp/chat/group/ui/group_manage_page.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 /// 只覆写渲染所需的 readGroup(避免 Isar 真异步在 widget 测 fake-async 下不 settle)。
 class _FakeStore extends ChatStore {
@@ -13,10 +12,7 @@ class _FakeStore extends ChatStore {
   final ChatGroup _group;
 
   @override
-  Future<ChatGroup?> readGroup(
-    String ownerCidNumber,
-    String groupId,
-  ) async =>
+  Future<ChatGroup?> readGroup(String ownerUserId, String groupId) async =>
       _group;
 }
 
@@ -24,31 +20,34 @@ class _PendingStore extends ChatStore {
   final Completer<ChatGroup?> completer = Completer<ChatGroup?>();
 
   @override
-  Future<ChatGroup?> readGroup(String ownerCidNumber, String groupId) =>
+  Future<ChatGroup?> readGroup(String ownerUserId, String groupId) =>
       completer.future;
 }
 
 ChatGroup _group() => const ChatGroup(
-      groupId: 'grp:CN220-CTZN2-100000003-2026:n',
-      name: '测试群',
-      creatorCidNumber: 'CN220-CTZN2-100000003-2026',
-      epoch: 1,
-      roster: [
-        GroupMember(
-            cidNumber: 'CN220-CTZN2-100000003-2026',
-            role: GroupMemberRole.admin),
-        GroupMember(cidNumber: 'CN220-CTZN2-100000004-2026'),
-      ],
-    );
+  groupId: 'grp:CN220-CTZN2-100000003-2026:n',
+  name: '测试群',
+  creatorUserId: 'CN220-CTZN2-100000003-2026',
+  epoch: 1,
+  roster: [
+    GroupMember(
+      userId: 'CN220-CTZN2-100000003-2026',
+      role: GroupMemberRole.admin,
+    ),
+    GroupMember(userId: 'CN220-CTZN2-100000004-2026'),
+  ],
+);
 
 Future<void> _pump(WidgetTester tester, String cidNumber) async {
-  await tester.pumpWidget(MaterialApp(
-    home: GroupManagePage(
-      groupId: 'grp:CN220-CTZN2-100000003-2026:n',
-      store: _FakeStore(_group()),
-      cidNumber: cidNumber,
+  await tester.pumpWidget(
+    MaterialApp(
+      home: GroupManagePage(
+        groupId: 'grp:CN220-CTZN2-100000003-2026:n',
+        store: _FakeStore(_group()),
+        cidNumber: cidNumber,
+      ),
     ),
-  ));
+  );
   await tester.pumpAndSettle();
 }
 

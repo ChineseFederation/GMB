@@ -11,7 +11,7 @@ import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/profile/user_profile_page.dart';
 import 'package:citizenapp/8964/profile/widgets/profile_avatar.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/open_direct_chat.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/my/myid/register_identity_flow.dart';
 import 'package:citizenapp/my/membership/membership_revision.dart';
@@ -65,7 +65,8 @@ class ContactBookPage extends StatefulWidget {
   final Future<void> Function(
     BuildContext context, {
     required String toSs58Address,
-  })? transferOpener;
+  })?
+  transferOpener;
 
   @override
   State<ContactBookPage> createState() => _ContactBookPageState();
@@ -399,7 +400,7 @@ class _ContactBookPageState extends State<ContactBookPage> {
       contact.cidNumber,
     ).resolveDisplayName(publicName: profile?.displayName);
     final opener = widget.directChatOpener ?? openDirectChat;
-    await opener(context, peerCidNumber: contact.cidNumber, title: title);
+    await opener(context, peerUserId: contact.cidNumber, title: title);
   }
 
   Future<void> _delete(UserContact contact) async {
@@ -457,19 +458,23 @@ class _ContactBookPageState extends State<ContactBookPage> {
 
   List<UserContact> get _visibleContacts {
     final query = _query.trim().toLowerCase();
-    final visible = _contacts.where((contact) {
-      if (query.isEmpty) return true;
-      final profile = _profileOf(contact);
-      final publicName = ProfilePresentation.forIdentityKey(contact.cidNumber)
-          .resolveDisplayName(publicName: profile?.displayName)
-          .toLowerCase();
-      return contact.contactRemark.toLowerCase().contains(query) ||
-          contact.cidNumber.toLowerCase().contains(query) ||
-          publicName.contains(query);
-    }).toList(growable: false)
-      ..sort(
-        (a, b) => _contactDisplayName(a).compareTo(_contactDisplayName(b)),
-      );
+    final visible =
+        _contacts
+            .where((contact) {
+              if (query.isEmpty) return true;
+              final profile = _profileOf(contact);
+              final publicName =
+                  ProfilePresentation.forIdentityKey(contact.cidNumber)
+                      .resolveDisplayName(publicName: profile?.displayName)
+                      .toLowerCase();
+              return contact.contactRemark.toLowerCase().contains(query) ||
+                  contact.cidNumber.toLowerCase().contains(query) ||
+                  publicName.contains(query);
+            })
+            .toList(growable: false)
+          ..sort(
+            (a, b) => _contactDisplayName(a).compareTo(_contactDisplayName(b)),
+          );
     return visible;
   }
 
@@ -565,8 +570,9 @@ class _ContactBookPageState extends State<ContactBookPage> {
               _ContactCard(
                 contact: contact,
                 profile: _profileOf(contact),
-                profileResolved:
-                    _resolvedProfileCidNumbers.contains(contact.cidNumber),
+                profileResolved: _resolvedProfileCidNumbers.contains(
+                  contact.cidNumber,
+                ),
                 avatarPath: _profileMedia[contact.cidNumber]?.avatarPath,
                 avatarUrl: _avatarUrl(_profileOf(contact)),
                 avatarHeaders: _session == null
@@ -768,7 +774,8 @@ class _SyncBanner extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final retryable = state.phase == ContactSyncPhase.failed ||
+    final retryable =
+        state.phase == ContactSyncPhase.failed ||
         state.phase == ContactSyncPhase.offline;
     return InkWell(
       onTap: retryable ? () => unawaited(onRetry()) : null,
@@ -784,8 +791,8 @@ class _SyncBanner extends StatelessWidget {
               state.phase == ContactSyncPhase.synced
                   ? Icons.cloud_done_outlined
                   : state.phase == ContactSyncPhase.syncing
-                      ? Icons.sync_rounded
-                      : Icons.cloud_outlined,
+                  ? Icons.sync_rounded
+                  : Icons.cloud_outlined,
               size: AppLayout.scaled(context, 16),
               color: retryable ? AppTheme.warning : AppTheme.textTertiary,
             ),

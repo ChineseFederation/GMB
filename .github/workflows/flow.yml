@@ -1,0 +1,416 @@
+# GitHub要求的仓库固定入口；全部产品流程由 programconsole/flows 直接实现。
+name: GMB · Flow
+
+on:
+  workflow_call:
+    inputs:
+      pipeline:
+        description: 分组流水线文件路径
+        required: true
+        type: string
+      run_title:
+        description: 编程控制台展示标题
+        required: true
+        type: string
+      source_sha:
+        description: 成功 CI 准确提交（仅 Release）
+        required: false
+        type: string
+      ci_run_id:
+        description: 对应成功 CI run id（仅 Release）
+        required: false
+        type: string
+      version_tag:
+        description: 正式版本 Tag（仅 Release）
+        required: false
+        type: string
+      software_version:
+        description: 候选软件版本
+        required: false
+        type: string
+      spec_version:
+        description: Runtime spec_version
+        required: false
+        type: string
+      chain_spec_version:
+        description: 当前链上 spec_version
+        required: false
+        type: string
+      genesis_hash:
+        description: 当前链 genesis hash
+        required: false
+        type: string
+      finalized_head:
+        description: 当前链 finalized head
+        required: false
+        type: string
+
+
+permissions:
+  contents: read
+
+concurrency:
+  # 中文注释：每条逻辑流水线独立串行；仓库门禁仍可取消自己的旧运行，不互相取消产品。
+  group: ${{ github.event_name == 'push' && 'gmb-flow' || inputs.pipeline }}
+  cancel-in-progress: ${{ github.event_name == 'push' || inputs.pipeline == 'repository' }}
+
+env:
+  CI: true
+  WRANGLER_SEND_METRICS: false
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
+  # CI 始终使用 workflow_dispatch 创建时由 GitHub 锁定的 main 提交；只有 Release
+  # 使用对应成功 CI 的 source_sha。禁止编程控制台给 CI 注入预读或历史提交。
+  GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && endsWith(inputs.pipeline, '.release') && inputs.source_sha || github.sha }}
+  GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
+  GMB_VERSION_TAG: ${{ inputs.version_tag }}
+  GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
+  GMB_SPEC_VERSION: ${{ inputs.spec_version }}
+  GMB_CHAIN_SPEC_VERSION: ${{ inputs.chain_spec_version }}
+  GMB_CHAIN_GENESIS_HASH: ${{ inputs.genesis_hash }}
+  GMB_CHAIN_FINALIZED_HEAD: ${{ inputs.finalized_head }}
+
+jobs:
+  validate_dispatch:
+    name: 校验统一流程并生成产品作业矩阵
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      has_ci_phase_0: ${{ steps.central_job.outputs.has_ci_phase_0 }}
+      ci_phase_0_matrix: ${{ steps.central_job.outputs.ci_phase_0_matrix }}
+      has_ci_phase_1: ${{ steps.central_job.outputs.has_ci_phase_1 }}
+      ci_phase_1_matrix: ${{ steps.central_job.outputs.ci_phase_1_matrix }}
+      has_ci_phase_2: ${{ steps.central_job.outputs.has_ci_phase_2 }}
+      ci_phase_2_matrix: ${{ steps.central_job.outputs.ci_phase_2_matrix }}
+      has_release_standard: ${{ steps.central_job.outputs.has_release_standard }}
+      release_standard_matrix: ${{ steps.central_job.outputs.release_standard_matrix }}
+      has_release_attested: ${{ steps.central_job.outputs.has_release_attested }}
+      release_attested_matrix: ${{ steps.central_job.outputs.release_attested_matrix }}
+      has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
+      repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
+    steps:
+      - name: 执行中央共享校验
+        id: central_job
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: validate_dispatch
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  retain-current-run:
+    permissions:
+      actions: write
+      contents: read
+    if: ${{ github.event_name == 'push' || inputs.pipeline == 'repository' }}
+    name: 预收口门禁历史
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: 执行 shared 中央产品作业
+        id: central_job
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: retain-current-run
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  repository-contracts:
+    if: inputs.pipeline == 'repository' && needs.validate_dispatch.outputs.has_repository_contracts == 'true'
+    needs: [validate_dispatch, retain-current-run]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.repository_contracts_matrix) }}
+    steps:
+      - name: 执行统一仓库门禁
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: ${{ matrix.contract }}
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+  ci_phase_0:
+    if: ${{ needs.validate_dispatch.outputs.has_ci_phase_0 == 'true' }}
+    needs: validate_dispatch
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_0_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    steps:
+      - name: 执行中央产品调度
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: dispatch-product
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          route_product: ${{ matrix.product }}
+          route_job: ${{ matrix.route_job }}
+          route_prepare_job: ${{ matrix.route_prepare_job }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  ci_phase_1:
+    if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_1 == 'true' && (needs.ci_phase_0.result == 'success' || needs.ci_phase_0.result == 'skipped') }}
+    needs: [validate_dispatch, ci_phase_0]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_1_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    steps:
+      - name: 执行中央产品调度
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: dispatch-product
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          route_product: ${{ matrix.product }}
+          route_job: ${{ matrix.route_job }}
+          route_prepare_job: ${{ matrix.route_prepare_job }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  ci_phase_2:
+    if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_2 == 'true' && (needs.ci_phase_1.result == 'success' || needs.ci_phase_1.result == 'skipped') }}
+    needs: [validate_dispatch, ci_phase_1]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: write
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_2_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    steps:
+      - name: 执行中央产品调度
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: dispatch-product
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          route_product: ${{ matrix.product }}
+          route_job: ${{ matrix.route_job }}
+          route_prepare_job: ${{ matrix.route_prepare_job }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  release_standard:
+    if: ${{ needs.validate_dispatch.outputs.has_release_standard == 'true' }}
+    needs: validate_dispatch
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.release_standard_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARGO_INCREMENTAL: "0"
+      CI: "true"
+      WRANGLER_SEND_METRICS: "false"
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      CI_RUN_ID: ${{ inputs.ci_run_id }}
+      TOOL_SHA: ${{ github.sha }}
+      RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
+      CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
+      ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    steps:
+      - name: 执行中央产品调度
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: dispatch-product
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          route_product: ${{ matrix.product }}
+          route_job: ${{ matrix.route_job }}
+          route_prepare_job: ${{ matrix.route_prepare_job }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  release_attested:
+    if: ${{ needs.validate_dispatch.outputs.has_release_attested == 'true' }}
+    needs: validate_dispatch
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.release_attested_matrix) }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CARGO_INCREMENTAL: "0"
+      CI: "true"
+      WRANGLER_SEND_METRICS: "false"
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      CI_RUN_ID: ${{ inputs.ci_run_id }}
+      TOOL_SHA: ${{ github.sha }}
+      RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
+      CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
+      ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    steps:
+      - name: 执行中央产品调度
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        with:
+          job: dispatch-product
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}
+          route_product: ${{ matrix.product }}
+          route_job: ${{ matrix.route_job }}
+          route_prepare_job: ${{ matrix.route_prepare_job }}
+          version_tag: ${{ inputs.version_tag }}
+          software_version: ${{ inputs.software_version }}
+          spec_version: ${{ inputs.spec_version }}
+          chain_spec_version: ${{ inputs.chain_spec_version }}
+          genesis_hash: ${{ inputs.genesis_hash }}
+          finalized_head: ${{ inputs.finalized_head }}
+  retain-terminal-run:
+    if: always() && inputs.pipeline == 'repository'
+    needs: [retain-current-run, repository-contracts]
+    name: 清理仓库门禁历史终态
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: 成功和失败各保留最近一条
+        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        env:
+          PROGRAM_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: ${{ needs.repository-contracts.result }}
+        with:
+          job: retain-terminal-run
+          pipeline: ${{ inputs.pipeline }}
+          run_title: ${{ inputs.run_title }}
+          source_sha: ${{ inputs.source_sha }}
+          ci_run_id: ${{ inputs.ci_run_id }}

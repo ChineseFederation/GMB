@@ -112,9 +112,8 @@ build_ios() {
   cd "$RUST_DIR"
   cargo build --release --target aarch64-apple-ios
 
-  # iOS 走静态库直接链进 Runner 主二进制(本地 pod,见 ios/smoldot/smoldot_ffi.podspec):
-  # 裸 .dylib 需要嵌入 App 并单独代码签名,App Store 还要求动态库必须包成 .framework;
-  # 静态库没有这些坑。Dart 侧经 DynamicLibrary.process() 取符号,与冷端同一套做法。
+  # Smoldot 继续作为独立静态库进入 Runner；ChatSDK 由自己的动态 XCFramework
+  # 承载，禁止再把聊天 Rust crate 合并到本归档。
   local dest="${PROGRAM_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
   mkdir -p "$dest"
   cp "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libsmoldot.a" "$dest/"
@@ -130,21 +129,24 @@ build_ios() {
   # `-u` 只能保留公开 C FFI。若把 Rust 内部 T 符号也写入清单，Runner 会把
   # compiler_builtins 的 private external 主动变成外部必需符号并在最终链接失败。
   ("$nm" -g --defined-only "$dest/libsmoldot.a" 2>/dev/null || true) \
-    | awk '$2 == "T" && $3 ~ /^_(smoldot_|citizen_sr25519_|account_crypto_|chat_sdk_)/ { print $3 }' \
+    | awk '$2 == "T" && $3 ~ /^_(smoldot_|citizen_sr25519_|account_crypto_)/ { print $3 }' \
     | sort -u > "$dest/exported_symbols.txt"
 
   local n_smoldot n_signer n_account_crypto n_chat_sdk
   n_smoldot=$(grep -c '^_smoldot_' "$dest/exported_symbols.txt" || true)
   n_signer=$(grep -c '^_citizen_sr25519_' "$dest/exported_symbols.txt" || true)
   n_account_crypto=$(grep -c '^_account_crypto_' "$dest/exported_symbols.txt" || true)
-  n_chat_sdk=$(grep -c '^_chat_sdk_' "$dest/exported_symbols.txt" || true)
+  n_chat_sdk=$(
+    ("$nm" -g --defined-only "$dest/libsmoldot.a" 2>/dev/null || true) \
+      | awk '$2 == "T" && $3 ~ /^_chat_sdk_/ { count += 1 } END { print count + 0 }'
+  )
   local n_total
   n_total=$(wc -l < "$dest/exported_symbols.txt" | tr -d ' ')
   echo "iOS arm64: $dest/libsmoldot.a ($(wc -c < "$dest/libsmoldot.a" | tr -d ' ') bytes)"
   if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_account_crypto" -ne 4 ] \
-    || [ "$n_chat_sdk" -eq 0 ] \
-    || [ "$n_total" -ne "$((n_smoldot + n_signer + n_account_crypto + n_chat_sdk))" ]; then
-    echo "错误: iOS统一原生库符号清单不完整（account_crypto_* 必须精确，其余族必须非空）。"
+    || [ "$n_chat_sdk" -ne 0 ] \
+    || [ "$n_total" -ne "$((n_smoldot + n_signer + n_account_crypto))" ]; then
+    echo "错误: iOS Smoldot 符号边界不完整或混入 ChatSDK。"
     return 1
   fi
 }
@@ -164,7 +166,10 @@ build_host() {
     Linux) host_extension=so ;;
     *) echo "错误: 不支持的 flutter test 宿主平台：$(uname -s)"; return 1 ;;
   esac
-  local host_library="$RUST_DIR/target/release/libsmoldot.$host_extension"
+  # Respect the caller-owned Cargo target directory so ProgramConsole can keep
+  # every native build artifact inside its central work tree.
+  local host_target_dir="${CARGO_TARGET_DIR:-$RUST_DIR/target}"
+  local host_library="$host_target_dir/release/libsmoldot.$host_extension"
   echo "宿主库: $host_library ($(wc -c < "$host_library" | tr -d ' ') bytes)"
 
   # flutter_tester 不会链接 iOS 的 CocoaPods 静态库；宿主测试必须 dlopen 这份
@@ -212,7 +217,10 @@ build_host() {
   n_smoldot="$(grep -c '^smoldot_' <<<"$host_symbols" || true)"
   n_signer="$(grep -c '^citizen_sr25519_' <<<"$host_symbols" || true)"
   n_account_crypto="$(grep -c '^account_crypto_' <<<"$host_symbols" || true)"
-  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_account_crypto" -ne 4 ]; then
+  local n_chat_sdk
+  n_chat_sdk="$(grep -c '^chat_sdk_' <<<"$host_symbols" || true)"
+  if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_account_crypto" -ne 4 ] \
+    || [ "$n_chat_sdk" -ne 0 ]; then
     echo "错误: 宿主符号清单不完整（account_crypto_* 必须精确，其余族必须非空）。" >&2
     return 1
   fi
@@ -269,7 +277,7 @@ verify_ios_package() {
   nm_bin="$(xcrun --find llvm-nm)"
   symbols="$("$nm_bin" -gU "$executable" 2>/dev/null | awk '{print $NF}' | sed 's/^_//' || true)"
   local family
-  for family in smoldot_ citizen_sr25519_ chat_sdk_; do
+  for family in smoldot_ citizen_sr25519_; do
     [[ "$(printf '%s\n' "$symbols" | grep -c "^$family" || true)" -gt 0 ]] || {
       echo "错误: iOS Runner 缺少 $family 导出符号。"; return 1;
     }
@@ -277,7 +285,10 @@ verify_ios_package() {
   [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
     echo "错误: iOS Runner 的 account_crypto_* 符号必须正好 4 个。"; return 1;
   }
-  echo "iOS 包原生库门禁通过：arm64 与全部 FFI 符号族完整"
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^chat_sdk_' || true)" = "0" ]] || {
+    echo "错误: iOS Runner 静态符号中混入 ChatSDK。"; return 1;
+  }
+  echo "iOS Smoldot 包门禁通过：arm64 与独立 FFI 符号边界完整"
 }
 
 case "$TARGET" in

@@ -4,14 +4,29 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:chat_sdk/chat_sdk.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/storage/chat_crypto.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
 
 import '../support/isar_test_env.dart';
+
+class _TestBinding extends AccountDataBinding implements ChatDataBinding {
+  const _TestBinding({
+    required super.genesisHash,
+    required super.cidNumber,
+    required super.bindingRevision,
+    required super.accountId,
+  });
+
+  @override
+  String get keyDomain => genesisHash;
+
+  @override
+  String get userId => cidNumber;
+
+  @override
+  String get id => '$keyDomain|$userId|$bindingRevision|$accountId';
+}
 
 class _TargetHandoverKeyFailureWalletManager extends WalletManager {
   final List<Uint8List> sourceKeys = <Uint8List>[
@@ -37,7 +52,6 @@ void main() {
       const identity = ChatDevice(
         userId: 'CN220-CTZN2-100000001-2026',
         deviceId: 'alice-phone',
-        devicePublicKey: '0xaabbcc',
       );
 
       expect(identity.validate(), isNull);
@@ -45,27 +59,22 @@ void main() {
       expect(identity.deviceId, 'alice-phone');
     });
 
-    test('rejects invalid device public key hex', () {
+    test('rejects an ambiguous device identity', () {
       const identity = ChatDevice(
         userId: 'CN220-CTZN2-100000001-2026',
-        deviceId: 'alice-phone',
-        devicePublicKey: 'xyz',
+        deviceId: 'alice:phone',
       );
 
-      expect(identity.validate(), contains('hex'));
+      expect(identity.validate(), contains('冒号'));
     });
   });
 
   group('Chat 设备身份 CID 隔离', () {
-    test('不同 CID 使用不同 device_id 和派生公钥缓存键', () {
-      final aId = ChatRuntime.deviceIdPreferenceKey('CID-A');
-      final bId = ChatRuntime.deviceIdPreferenceKey('CID-B');
-      final aKey = ChatRuntime.devicePublicKeyCachePreferenceKey('CID-A');
-      final bKey = ChatRuntime.devicePublicKeyCachePreferenceKey('CID-B');
+    test('不同 CID 使用不同 device_id 缓存键', () {
+      final aId = ChatRuntimeCore.deviceIdPreferenceKey('CID-A');
+      final bId = ChatRuntimeCore.deviceIdPreferenceKey('CID-B');
       expect(aId, isNot(bId));
-      expect(aKey, isNot(bKey));
-      expect(aId, contains('chat.by_cid.CID-A'));
-      expect(aKey, contains('device.public_key_cache_hex'));
+      expect(aId, contains('chat.by_user.CID-A'));
     });
   });
 
@@ -92,9 +101,9 @@ void main() {
       late Uint8List storeSourceCopy;
       late Uint8List pendingTargetCopy;
 
-      await ChatRuntime.debugStageMlsDeviceHandoverForTest(
+      await ChatRuntimeCore.debugStageMlsDeviceHandoverForTest(
         deviceDirectory: deviceDirectory,
-        ownerCidNumber: 'CN220-CTZN2-100000001-2026',
+        ownerUserId: 'CN220-CTZN2-100000001-2026',
         sourceStateKey: source,
         targetStateKey: target,
         runNativeRekey: (sourceCopy, targetCopy) {
@@ -127,9 +136,9 @@ void main() {
       var pendingCalled = false;
 
       await expectLater(
-        ChatRuntime.debugStageMlsDeviceHandoverForTest(
+        ChatRuntimeCore.debugStageMlsDeviceHandoverForTest(
           deviceDirectory: deviceDirectory,
-          ownerCidNumber: 'CN220-CTZN2-100000001-2026',
+          ownerUserId: 'CN220-CTZN2-100000001-2026',
           sourceStateKey: source,
           targetStateKey: target,
           runNativeRekey: (sourceCopy, targetCopy) {
@@ -157,9 +166,9 @@ void main() {
       late Uint8List storeSourceCopy;
 
       await expectLater(
-        ChatRuntime.debugStageMlsDeviceHandoverForTest(
+        ChatRuntimeCore.debugStageMlsDeviceHandoverForTest(
           deviceDirectory: deviceDirectory,
-          ownerCidNumber: 'CN220-CTZN2-100000001-2026',
+          ownerUserId: 'CN220-CTZN2-100000001-2026',
           sourceStateKey: source,
           targetStateKey: target,
           runNativeRekey: (sourceCopy, targetCopy) {
@@ -181,7 +190,7 @@ void main() {
     });
 
     test('目标用途钥取得失败时立即清零已经取得的来源用途钥', () async {
-      const source = AccountDataBinding(
+      const source = _TestBinding(
         genesisHash:
             '0x1111111111111111111111111111111111111111111111111111111111111111',
         cidNumber: 'CN220-CTZN2-100000001-2026',
@@ -189,7 +198,7 @@ void main() {
         accountId:
             '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
       );
-      const target = AccountDataBinding(
+      const target = _TestBinding(
         genesisHash:
             '0x1111111111111111111111111111111111111111111111111111111111111111',
         cidNumber: 'CN220-CTZN2-100000001-2026',
@@ -199,7 +208,7 @@ void main() {
       );
       final walletManager = _TargetHandoverKeyFailureWalletManager();
       final store = ChatStore(
-        crypto: ChatCrypto(walletManager: walletManager),
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(walletManager)),
       );
       await store.activateBindingFence(source);
       final runtime = ChatRuntime(
@@ -273,6 +282,16 @@ void main() {
       expect(message, '聊天服务暂时无法连接，请稍后重试');
       expect(message, isNot(contains('OpenMLS')));
       expect(message, isNot(contains('安全组件')));
+    });
+
+    test('ChatServer 会员拒绝使用统一错误码并映射为权益提示', () {
+      const error = SquareApiException(
+        'chat membership required',
+        statusCode: 403,
+        errorCode: 'chat_membership_required',
+      );
+
+      expect(chatUserErrorMessage(error), '当前账户尚未开通聊天会员权益');
     });
   });
 }

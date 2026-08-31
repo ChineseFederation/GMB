@@ -13,8 +13,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../8964/compose/drafts/compose_draft_media.dart';
 import '../8964/profile/services/citizen_profile_cache.dart';
 import '../isar/social_isar.dart';
-import '../chat/chat_runtime.dart';
-import '../isar/chat_isar.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
 import '../isar/app_isar.dart';
 import '../isar/user_isar.dart';
 import '../isar/wallet_isar.dart';
@@ -26,7 +26,7 @@ import 'secure_storage.dart';
 /// [failures] 会保留每个失败数据域，调用方不得把部分擦除当成成功退出。
 class AppDataWipeException implements Exception {
   AppDataWipeException(List<String> failures)
-      : failures = List<String>.unmodifiable(failures);
+    : failures = List<String>.unmodifiable(failures);
 
   final List<String> failures;
 
@@ -76,7 +76,7 @@ class AppLockService {
   static const Duration lockDuration = Duration(hours: 24);
   static const Duration _wipeStepTimeout = Duration(seconds: 6);
   static Future<AppPinVerificationResult> Function(String)?
-      _debugVerifyPinForTest;
+  _debugVerifyPinForTest;
   static Future<bool> Function()? _debugIsLockedForTest;
   static Future<void> Function()? _debugRemovePinForTest;
   static Future<void> Function()? _debugWipeAllDataForTest;
@@ -116,11 +116,7 @@ class AppLockService {
   static Future<void> setPin(String pin) async {
     _requireSixDigitPin(pin);
     final salt = _generateSalt();
-    final hash = await _hash(
-      pin,
-      salt,
-      iterations: appLockPinHashIterations,
-    );
+    final hash = await _hash(pin, salt, iterations: appLockPinHashIterations);
     await appSecureStorage.write(key: _keyPinSalt, value: salt);
     await appSecureStorage.write(key: _keyPinHash, value: hash);
     // 重置错误计数
@@ -253,27 +249,16 @@ class AppLockService {
     final normalHash = await appSecureStorage.read(key: _keyPinHash);
     final normalSalt = await appSecureStorage.read(key: _keyPinSalt);
     if (normalHash == null || normalSalt == null) return false;
-    if (await _hash(
-          pin,
-          normalSalt,
-          iterations: appLockPinHashIterations,
-        ) ==
+    if (await _hash(pin, normalSalt, iterations: appLockPinHashIterations) ==
         normalHash) {
       return false;
     }
 
     final salt = _generateSalt();
-    await appSecureStorage.write(
-      key: _keyDuressModePinSalt,
-      value: salt,
-    );
+    await appSecureStorage.write(key: _keyDuressModePinSalt, value: salt);
     await appSecureStorage.write(
       key: _keyDuressModePinHash,
-      value: await _hash(
-        pin,
-        salt,
-        iterations: duressModePinHashIterations,
-      ),
+      value: await _hash(pin, salt, iterations: duressModePinHashIterations),
     );
     await appSecureStorage.write(key: _keyDuressModeEnabled, value: 'true');
     return isDuressModeEnabled();
@@ -305,12 +290,7 @@ class AppLockService {
     final salt = await appSecureStorage.read(key: _keyDuressModePinSalt);
     return hash != null &&
         salt != null &&
-        await _hash(
-              pin,
-              salt,
-              iterations: duressModePinHashIterations,
-            ) ==
-            hash;
+        await _hash(pin, salt, iterations: duressModePinHashIterations) == hash;
   }
 
   /// 是否已设置 PIN。
@@ -571,11 +551,7 @@ class AppLockService {
     );
 
     if (persistentGateReady && walletSecretsDeleted) {
-      await _attemptWipe(
-        'SharedPreferences',
-        clearSharedPreferences,
-        failures,
-      );
+      await _attemptWipe('SharedPreferences', clearSharedPreferences, failures);
     } else {
       failures.add('SharedPreferences：关键擦除前置条件未完成，已安全跳过');
     }

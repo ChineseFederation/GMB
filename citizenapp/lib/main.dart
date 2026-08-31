@@ -8,13 +8,9 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:citizenapp/8964/square_tab_page.dart';
 import 'package:citizenapp/citizen/citizen_tab_page.dart';
-import 'package:citizenapp/chat/chat_push_service.dart';
-import 'package:citizenapp/chat/chat_runtime.dart';
-import 'package:citizenapp/chat/chat_tab.dart';
-import 'package:citizenapp/chat/call/coordinator.dart';
-import 'package:citizenapp/chat/call/page.dart';
-import 'package:citizenapp/chat/call/scope.dart';
-import 'package:citizenapp/chat/call/transport.dart';
+import 'package:citizenapp/chat/chat_product_configuration.dart';
+import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/rpc/smoldot_client.dart';
 import 'package:citizenapp/security/app_lock_service.dart';
 import 'package:citizenapp/security/emergency_wipe_platform.dart';
@@ -231,10 +227,7 @@ class _DataWipeRecoveryPageState extends State<_DataWipeRecoveryPage> {
                 const SizedBox(height: 20),
                 const Text(
                   '安全状态无法确认',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
                 ),
                 const SizedBox(height: 12),
                 const Text(
@@ -563,9 +556,7 @@ class _AppLockGateState extends State<_AppLockGate>
 
     if (_authenticated) {
       // 账户门禁排在最后一环：无热钱包先进强制创建页，再放行主界面。
-      return const AppPermissionGate(
-        child: WalletGate(child: HomeTabGate()),
-      );
+      return const AppPermissionGate(child: WalletGate(child: HomeTabGate()));
     }
 
     if (_showDeviceLock) {
@@ -655,11 +646,7 @@ class _AppLockGateState extends State<_AppLockGate>
 
 /// AppShell 构造前读取用户首页偏好，避免先创建广场再异步跳到聊天。
 class HomeTabGate extends StatefulWidget {
-  const HomeTabGate({
-    super.key,
-    this.preferenceReader,
-    this.shellBuilder,
-  });
+  const HomeTabGate({super.key, this.preferenceReader, this.shellBuilder});
 
   /// 测试只替换 UserIsar 读取。
   @visibleForTesting
@@ -787,23 +774,15 @@ class AppShell extends StatefulWidget {
   State<AppShell> createState() => _AppShellState();
 }
 
-class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
+class _AppShellState extends State<AppShell> {
   final AppUpdateController _updateController = AppUpdateController.instance;
   late final ValueNotifier<int> _selectedTab;
   ChatRuntime? _chatRuntime;
-  late final CitizenCallCoordinator _callCoordinator;
-  StreamSubscription<CitizenCallHandle>? _incomingCallSubscription;
-  bool _openingIncomingCall = false;
   late int _currentIndex;
   int _pendingVoteCount = 0;
   int _squareNotifyCount = 0;
   bool _isRooted = false;
   StreamSubscription<Map<String, dynamic>>? _pushOpenSub;
-  Future<void> _foregroundSignalTail = Future<void>.value();
-  Future<void> Function()? _foregroundSignalStop;
-  Timer? _foregroundSignalRetry;
-  bool _foregroundSignalsEnabled = false;
-  bool _disposing = false;
 
   /// Chat 运行态只在用户首次打开聊天 Tab 时创建。广场、用户、钱包或公民页启动
   /// 不得因为构造 ChatRuntime 而进入 Chat 的文件、密钥或网络生命周期。
@@ -815,22 +794,13 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     super.initState();
     _currentIndex = widget.initialTabIndex;
     _selectedTab = ValueNotifier<int>(_currentIndex);
-    _callCoordinator = CitizenCallCoordinator(
-      transport: CitizenCallTransport.fromRuntime(_chatRuntimeForTab),
-      readLocalUserId: () async =>
-          await _chatRuntimeForTab.readCidNumber() ?? '',
-    );
-    _incomingCallSubscription =
-        _callCoordinator.incomingCalls.listen(_handleIncomingCall);
-    WidgetsBinding.instance.addObserver(this);
     _updateController.addListener(_handleUpdateStateChanged);
     _checkRootStatus();
     // 启动后异步检查 Release 更新，只更新设置页状态，不阻塞主界面进入。
     _updateController.check();
-    // 点击推送属于 App 导航，不得为此提前构造 ChatRuntime。聊天唤醒只保存无内容
-    // sender 提示，进入/恢复 Chat 时再由 Chat 域消费；广场推送直接切广场 Tab。
+    // 点击推送属于 App 导航，不得为此提前构造 ChatRuntime。聊天推送只表示邮箱变化；
+    // 广场推送仍直接切广场 Tab。
     unawaited(_startPushOpenRouting());
-    _queueForegroundSignals(true);
   }
 
   Future<void> _startPushOpenRouting() async {
@@ -857,88 +827,20 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     }
   }
 
-  /// App前台始终持有一条轻量WSS信令；生命周期动作串行，避免快速切换产生双连接。
-  void _queueForegroundSignals(bool enabled) {
-    _foregroundSignalsEnabled = enabled;
-    if (!enabled) {
-      _foregroundSignalRetry?.cancel();
-      _foregroundSignalRetry = null;
-    }
-    _foregroundSignalTail = _foregroundSignalTail.then<void>((_) async {
-      if (enabled) {
-        if (_disposing ||
-            !_foregroundSignalsEnabled ||
-            _foregroundSignalStop != null) {
-          return;
-        }
-        _foregroundSignalStop = await _chatRuntimeForTab.startRealtimeSync(
-          onNotice: () async {},
-          onSignal: _callCoordinator.handleFrame,
-          retryOutgoingOnConnect: false,
-        );
-        _foregroundSignalRetry?.cancel();
-        _foregroundSignalRetry = null;
-        return;
-      }
-      final stop = _foregroundSignalStop;
-      _foregroundSignalStop = null;
-      await stop?.call();
-    }).catchError((Object _, StackTrace __) {
-      // 生命周期故障只记录稳定阶段码，禁止把异常正文或调用栈写入运行日志。
-      AppLog.d('[ChatSignal] chat_signal_lifecycle_failed');
-      if (_foregroundSignalsEnabled && !_disposing) {
-        _foregroundSignalRetry ??= Timer(const Duration(seconds: 1), () {
-          _foregroundSignalRetry = null;
-          if (_foregroundSignalsEnabled && !_disposing) {
-            _queueForegroundSignals(true);
-          }
-        });
-      }
-    });
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _queueForegroundSignals(true);
-    } else if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused ||
-        state == AppLifecycleState.detached) {
-      _queueForegroundSignals(false);
-    }
-  }
-
   Future<void> _handleOpenedPushData(Map<String, dynamic> data) async {
     if (!mounted) return;
     if (data['kind'] == 'square_post') {
       _openSquareTab();
       return;
     }
-    final sender = ChatPushService.wakeSenderFromData(data);
-    if (sender != null) {
+    if (ChatPushService.isWakeData(data)) {
       try {
-        await _chatRuntimeForTab.handleWakeSender(sender);
+        await _chatRuntimeForTab.handleWake();
       } catch (_) {
-        // 点击通知时若会话或网络尚未恢复，持久保存发送方供下一次信令连接消费。
-        await ChatPushService.storeWakeSender(sender);
+        // 点击通知时若会话或网络尚未恢复，持久保存一次邮箱变化提示。
+        await ChatPushService.storeWake();
       }
     }
-  }
-
-  void _handleIncomingCall(CitizenCallHandle handle) {
-    if (!mounted || _openingIncomingCall || handle.session.state.isTerminal) {
-      return;
-    }
-    _openingIncomingCall = true;
-    scheduleMicrotask(() async {
-      try {
-        if (mounted && !handle.session.state.isTerminal) {
-          await openIncomingCallPage(context, handle);
-        }
-      } finally {
-        _openingIncomingCall = false;
-      }
-    });
   }
 
   void _openSquareTab() {
@@ -949,16 +851,8 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
 
   @override
   void dispose() {
-    _disposing = true;
-    _foregroundSignalsEnabled = false;
-    _foregroundSignalRetry?.cancel();
-    _foregroundSignalRetry = null;
-    WidgetsBinding.instance.removeObserver(this);
-    _queueForegroundSignals(false);
     _updateController.removeListener(_handleUpdateStateChanged);
     unawaited(_pushOpenSub?.cancel());
-    unawaited(_incomingCallSubscription?.cancel());
-    unawaited(_callCoordinator.dispose());
     _selectedTab.dispose();
     super.dispose();
   }
@@ -1203,10 +1097,7 @@ class _AppShellState extends State<AppShell> with WidgetsBindingObserver {
     return AnnotatedRegion<SystemUiOverlayStyle>(
       key: const ValueKey('app-shell-system-ui-style'),
       value: AppShell.systemUiOverlayStyleForTab(_currentIndex),
-      child: ChatCallScope(
-        coordinator: _callCoordinator,
-        child: scaffold,
-      ),
+      child: scaffold,
     );
   }
 }

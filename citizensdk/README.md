@@ -65,7 +65,7 @@ Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、移动�
 公民网下载。
 
 本机 ProgramConsole 只允许把 CitizenSDK 生成记录写入
-`/Users/rhett/Only/ProgramConsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
+`/Users/rhett/Only/programconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
 工作区中的未提交修改不会被冒充成该提交。中央目录现有三件套属于其生成时的历史提交，
 除非重新完成当前提交的统一构建与核验，否则不得称为当前源码候选。
 

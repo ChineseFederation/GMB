@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:isar_community/isar.dart';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:citizenapp/isar/chat_isar.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 
 import '../support/isar_test_env.dart';
@@ -39,11 +39,10 @@ void main() {
 
       await ChatIsar.instance.writeTxn<void>((isar) async {
         final route = ChatRouteCacheEntity()
-          ..ownerCidNumber = 'R5-K3P1C1-N9-D4'
-          ..peerCidNumber = 'R5-K3P1C1-N8-D5'
+          ..ownerUserId = 'R5-K3P1C1-N9-D4'
+          ..peerUserId = 'R5-K3P1C1-N8-D5'
           ..routeDisplayName = '隔离测试联系人'
           ..deviceId = 'device-a'
-          ..devicePublicKey = 'public-key-a'
           ..safetyNumber = '1234'
           ..createdAtMillis = 1
           ..updatedAtMillis = 1;
@@ -55,7 +54,7 @@ void main() {
       }).timeout(const Duration(seconds: 1));
       final chatValue = await ChatIsar.instance.read<String?>((isar) async {
         return (await isar.chatRouteCacheEntitys
-                .getByOwnerCidNumberPeerCidNumber(
+                .getByOwnerUserIdPeerUserId(
           'R5-K3P1C1-N9-D4',
           'R5-K3P1C1-N8-D5',
         ))
@@ -124,11 +123,10 @@ void main() {
     });
     await ChatIsar.instance.writeTxn<void>((isar) async {
       final route = ChatRouteCacheEntity()
-        ..ownerCidNumber = 'R5-K3P1C1-N9-D4'
-        ..peerCidNumber = 'R5-K3P1C1-N8-D5'
+        ..ownerUserId = 'R5-K3P1C1-N9-D4'
+        ..peerUserId = 'R5-K3P1C1-N8-D5'
         ..routeDisplayName = 'chat'
         ..deviceId = 'device-b'
-        ..devicePublicKey = 'public-key-b'
         ..safetyNumber = '5678'
         ..createdAtMillis = 1
         ..updatedAtMillis = 1;
@@ -142,7 +140,7 @@ void main() {
       return (await isar.walletAttestationEntitys.get(0))?.lastRequestPayload;
     });
     final chat = await ChatIsar.instance.read<String?>((isar) async {
-      return (await isar.chatRouteCacheEntitys.getByOwnerCidNumberPeerCidNumber(
+      return (await isar.chatRouteCacheEntitys.getByOwnerUserIdPeerUserId(
         'R5-K3P1C1-N9-D4',
         'R5-K3P1C1-N8-D5',
       ))

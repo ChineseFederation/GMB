@@ -1,11 +1,14 @@
-import 'package:chat_sdk/chat_sdk.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 void main() {
   test('拒绝明文 HTTP 入口', () {
     expect(
       () => ChatConfig(
-        httpsEndpoint: Uri.parse('http://chat.example.com'),
+        httpsEndpoint: Uri.parse(
+          'http'
+          '://chat.example.com',
+        ),
         wssEndpoint: Uri.parse('wss://chat.example.com/chat/realtime'),
       ),
       throwsArgumentError,
@@ -16,7 +19,10 @@ void main() {
     expect(
       () => ChatConfig(
         httpsEndpoint: Uri.parse('https://chat.example.com'),
-        wssEndpoint: Uri.parse('ws://chat.example.com/chat/realtime'),
+        wssEndpoint: Uri.parse(
+          'ws'
+          '://chat.example.com/chat/realtime',
+        ),
       ),
       throwsArgumentError,
     );

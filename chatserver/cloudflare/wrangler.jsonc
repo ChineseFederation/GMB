@@ -1,0 +1,48 @@
+{
+  "name": "chatserver-cloudflare",
+  "main": "build/worker/shim.mjs",
+  "compatibility_date": "2026-08-30",
+  "build": {
+    "command": "cargo install -q worker-build --version 0.8.5 --locked && worker-build --release"
+  },
+  "d1_databases": [
+    {
+      "binding": "CHAT_DB",
+      "database_name": "chatserver-db",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "CHAT_ATTACHMENTS",
+      "bucket_name": "chatserver-attachments"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "CHAT_REALTIME",
+        "class_name": "ChatRealtime"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["ChatRealtime"]
+    }
+  ],
+  "triggers": {
+    "crons": ["* * * * *"]
+  },
+  "vars": {
+    "CHAT_APP_ID": "replace.chat.app",
+    "CHAT_AUTH_ISSUER": "https://replace.example",
+    "CHAT_AUTH_AUDIENCE": "chatserver",
+    "CHAT_MAX_ATTACHMENT_BYTES": "104857600",
+    "CHAT_APNS_TEAM_ID": "",
+    "CHAT_APNS_KEY_ID": "",
+    "CHAT_APNS_ALLOWED_TOPICS": "",
+    "CHAT_APNS_SANDBOX": "false"
+  }
+}

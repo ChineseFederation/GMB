@@ -1,36 +1,32 @@
-import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
+import 'package:citizenapp/chat/chat_product_policy.dart';
+import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:citizenapp/chat/chat_page.dart';
-import 'package:citizenapp/chat/chat_media_limits.dart';
-import 'package:citizenapp/chat/compose/sticker_panel.dart';
-import 'package:citizenapp/chat/storage/chat_store.dart';
+import 'package:gmb_chat_sdk/chat_sdk.dart';
 
 class _EmptyStore extends ChatStore {
   @override
   Future<List<ChatStoredMessage>> readMessages({
-    required String ownerCidNumber,
+    required String ownerUserId,
     required String currentAccountId,
     required String conversationId,
-  }) async =>
-      const [];
+  }) async => const [];
 }
 
 Widget _host({ChatSendTextCallback? onSendText}) => MaterialApp(
-      home: ChatPage(
-        conversationId: 'conv-emoji',
-        ownerCidNumber: 'CN220-CTZN2-100000001-2026',
-        accountId:
-            '0x1111111111111111111111111111111111111111111111111111111111111111',
-        peerCidNumber:
-            '0x2222222222222222222222222222222222222222222222222222222222222222',
-        title: 'Bob',
-        store: _EmptyStore(),
-        onSync: () async => 0,
-        onSendText: onSendText,
-      ),
-    );
+  home: ChatPage(
+    conversationId: 'conv-emoji',
+    ownerUserId: 'CN220-CTZN2-100000001-2026',
+    accountId:
+        '0x1111111111111111111111111111111111111111111111111111111111111111',
+    peerUserId:
+        '0x2222222222222222222222222222222222222222222222222222222222222222',
+    title: 'Bob',
+    store: _EmptyStore(),
+    onSync: () async => 0,
+    onSendText: onSendText,
+  ),
+);
 
 Future<void> _settleOpen(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 100));
@@ -54,10 +50,10 @@ void main() {
     await tester.pumpWidget(_host());
     await _settleOpen(tester);
 
-    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsNothing);
     await tester.tap(find.byKey(const ValueKey('chat-expression-toggle')));
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsOneWidget);
     final input = find.byKey(const ValueKey('chat-text-input'));
     final panel = find.byKey(const ValueKey('chat-expression-panel'));
     expect(
@@ -66,7 +62,7 @@ void main() {
     );
     await tester.tap(find.byKey(const ValueKey('chat-expression-toggle')));
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsNothing);
     expect(
       tester
           .widget<TextField>(find.byKey(const ValueKey('chat-text-input')))
@@ -87,12 +83,12 @@ void main() {
     final input = find.byKey(const ValueKey('chat-text-input'));
     await tester.tap(toggle);
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsOneWidget);
     expect(tester.widget<TextField>(input).focusNode?.hasFocus, isFalse);
 
     await tester.tap(input);
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsNothing);
     expect(tester.widget<TextField>(input).focusNode?.hasFocus, isTrue);
 
     await tester.pumpWidget(const SizedBox.shrink());
@@ -130,15 +126,16 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
     expect(sent, <String>['你好🙂']);
     expect(controller.text, isEmpty);
-    expect(find.byType(EmojiPicker), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsOneWidget);
     expect(input.focusNode?.hasFocus, isFalse);
 
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump(const Duration(milliseconds: 300));
   });
 
-  testWidgets('EmojiPicker 与输入框共用同一 controller,文本经 onSendText 发出',
-      (tester) async {
+  testWidgets('EmojiPicker 与输入框共用同一 controller,文本经 onSendText 发出', (
+    tester,
+  ) async {
     final sent = <String>[];
     await tester.pumpWidget(_host(onSendText: (text) async => sent.add(text)));
     await _settleOpen(tester);
@@ -150,11 +147,10 @@ void main() {
     final input = tester.widget<TextField>(
       find.byKey(const ValueKey('chat-text-input')),
     );
-    final picker = tester.widget<EmojiPicker>(find.byType(EmojiPicker));
-    expect(
-      identical(input.controller, picker.textEditingController),
-      isTrue,
+    final panel = tester.widget<ChatExpressionPanel>(
+      find.byType(ChatExpressionPanel),
     );
+    expect(identical(input.controller, panel.controller), isTrue);
 
     // 直接向 composer 文本框输入(确定性替代点真 emoji 格:网格异步加载不可靠),
     // 走键盘 action 的共享文本发送链路。
@@ -180,13 +176,13 @@ void main() {
     // 开表情
     await tester.tap(find.byKey(const ValueKey('chat-expression-toggle')));
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsOneWidget);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsOneWidget);
     expect(find.byType(StickerPanel), findsNothing);
 
     // 切贴纸 → 表情自动关
     await tester.tap(find.byKey(const ValueKey('chat-expression-sticker')));
     await tester.pump();
-    expect(find.byType(EmojiPicker), findsNothing);
+    expect(find.byKey(const ValueKey('chat-emoji-picker')), findsNothing);
     expect(find.byType(StickerPanel), findsOneWidget);
     final input = find.byKey(const ValueKey('chat-text-input'));
     final panel = find.byKey(const ValueKey('chat-expression-panel'));

@@ -1,76 +1,98 @@
 # ChatSDK
 
-ChatSDK 是独立的端到端加密聊天 SDK，不依赖 CitizenSDK、CitizenApp 或 CitizenServe。
-应用可以连接 CitizenServe，也可以连接实现同一 ChatSDK 协议的自建服务器。
+ChatSDK 是独立、部署无关的端到端加密聊天客户端 SDK。宿主只注入用户身份、产品策略、平台能力和 ChatServer 传输实现；聊天运行编排、OpenMLS、消息模型、本机存储、可靠队列、附件处理与通用界面均由本包负责。
 
-## 初始化
+公开 Dart 包名固定为 `gmb_chat_sdk`，产品名仍为 ChatSDK。不得再发布或引用第二个 Dart 包身份；原生动态库和 C ABI 继续使用稳定的 `chat_sdk` / `chat_sdk_*` 名称。
 
-```dart
-final chat = ChatSdk(
-  config: ChatConfig(
-    httpsEndpoint: Uri.parse('https://chat.example.com'),
-    wssEndpoint: Uri.parse('wss://chat.example.com/chat/realtime'),
-  ),
-  identity: identity,
-  access: access,
-);
+## 依赖方式
 
-await chat.start();
+第三方应用只使用 pub.dev 的公开包：
+
+```yaml
+dependencies:
+  gmb_chat_sdk: ^1.0.0
 ```
 
-ChatSDK 只接受 HTTPS 与 WSS 地址，不提供明文连接或证书校验绕过选项。
+```dart
+import 'package:gmb_chat_sdk/chat_sdk.dart';
+```
 
-## OpenMLS ownership
+GMB 第一方正式产品固定依赖准确的 ChatSDK GitHub Release Tag，不跟随浮动分支：
 
-ChatSDK owns the OpenMLS protocol models, native engine, FFI symbols, and local
-MLS state namespace. Applications supply a deployment-neutral user identifier
-and server transport; product identifiers remain outside the SDK.
+```yaml
+dependencies:
+  gmb_chat_sdk:
+    git:
+      url: https://github.com/ChineseFederation/GMB.git
+      ref: chatsdk-sdk-v1.0.0
+      path: chatsdk
+```
 
-Native artifacts are named libchat_sdk and export only the
-chat_sdk_mls_ and chat_sdk_device_ symbol families.
+GMB 本机开发由产品脚本临时写入 `pubspec_overrides.yaml`，把同一依赖直接指向仓库内 `../chatsdk`；脚本退出必须删除覆盖文件并恢复产品锁文件。首次 ChatSDK Release Tag 尚未生成前，第一方宿主保持同仓路径锁定，禁止伪造不存在的 Git Tag 或提交哈希。
 
-## CitizenApp adapter boundary
+## 唯一边界
 
-CitizenApp maps its citizen number to ChatSDK user_id in one product adapter.
-CitizenServe-specific error codes and CID wording stay in that adapter. ChatSDK
-uses the chatsdk/direct/v1 and chatsdk/device-hpke/v1 cryptographic domains.
+- 唯一端到端加密协议：OpenMLS。
+- 唯一逻辑消息编号：message_id。
+- 每个接收设备持有独立的 OpenMLS 密文投递。
+- 控制与实时通道只允许 WSS。
+- 附件数据通道只允许 HTTPS。
+- 本机待发任务和服务端投递都不得超过七天。
+- 私聊与群聊共用同一套消息、存储和传输合同。
+- 群聊不提供语音或视频通话入口。
+- SDK 不包含任何宿主产品身份、会员、链、品牌或部署凭据。
 
-The native build uses the installed Rust targets and Android NDK directly. It
-does not require cargo-ndk. Host, Android arm64, and iOS arm64 artifacts are
-checked for OpenMLS, device identity, and string-release symbols.
+## 宿主必须注入
 
-## 第一类消息完整链路
+- ChatRuntimeHost：当前用户、ChatServer 会话、发送授权和账户失效处理。
+- ChatServiceTransport：WSS 控制面、邮箱、KeyPackage、推送、附件和通话信令边界。
+- ChatStorageKeyProvider：按用户绑定和用途返回本机存储钥。
+- ChatMediaLimitPolicy：宿主决定媒体类型和大小限制；SDK 只执行结果。
+- 平台回调：系统推送、文件选择、录音、相机和通话设备能力。
+- 产品 UI 配置：主题、文案覆盖和入口组合；默认通用 UI 仍由 SDK 提供。
 
-ChatSDK 现在统一拥有私聊与群聊的文字、emoji、贴纸协议。三种内容使用同一个 protobuf 真源，先严格校验再交给私聊 HPKE 或群聊 OpenMLS；CitizenApp 只映射 CID 与展示模型，不再保存 basic JSON 协议。
+## SDK 负责
 
-- 私聊入口：`lib/direct.dart`，同一会话的密码学操作串行。
-- 群聊入口：`lib/group.dart`，一份 OpenMLS 密文按收件人生成确定性信封。
-- 可靠性：发送前由宿主保存密文；同一密文重试复用同一 `envelope_id`；邮箱最长保留 7 天。
-- 传输：可靠消息使用 HTTPS 密文邮箱，WSS 只做实时通知，WebRTC 只属于语音/视频通话。
-- 服务端边界：实现 `MailboxTransport` 即可接入 CitizenServe 或任意自建服务，服务端不得解析端到端明文。
+- ChatRuntimeCore 的启动、恢复、实时同步、邮箱补拉和账户上下文生命周期。
+- OpenMLS 会话、Last Resort KeyPackage、设备投递和群组状态。
+- 文本、表情、贴纸、语音、照片、视频与文件消息。
+- 本机 Isar 数据库、静止态密文、搜索索引、未读数、交接和清理。
+- 待发队列、失败隔离、幂等确认、七天到期和附件异步上传。
+- 私聊、群聊、会话列表、消息列表、输入栏、媒体预览和通话通用 UI。
+- 原生 OpenMLS 库的独立构建、加载和符号合同。
 
-## 第二类媒体消息完整链路
+## 目录
 
-ChatSDK 统一拥有私聊与群聊的语音消息、照片、视频消息和文件协议。媒体描述使用 protobuf，内容密钥和 SHA-256 在端到端加密控制信封内传递；附件字节使用分块 AES-256-GCM 加密后经 HTTPS 对象存储传输，服务端只看到密文。
+- lib/chat_sdk.dart：公开入口。
+- lib/src/attachment：附件密文、分块和本机文件库。
+- lib/src/call：私聊通话状态和客户端边界。
+- lib/src/core：通用消息、内容、会话与范围模型。
+- lib/src/group：群聊模型与 OpenMLS 群流程。
+- lib/src/mls：OpenMLS 会话、状态库和原生边界。
+- lib/src/protocol：Protobuf 生成代码与严格编解码。
+- lib/src/runtime：唯一运行编排、队列、同步和账户生命周期。
+- lib/src/storage：唯一 Isar、静止态密文、索引和交接实现。
+- lib/src/ui：通用聊天界面。
+- native、include、proto、scripts、test：独立原生、协议、构建与测试。
 
-- 通用附件金库位于 lib/src/media，长期缓存只保存密文，预览明文只进入短命目录。
-- AttachmentStorage 是 CitizenServe、Cloudflare R2 与 Linux 自建服务共同实现的服务器中立合同。
-- 群聊只加密并上传一份附件密文，再将同一密文引用放入一份 OpenMLS 控制消息扇出。
-- 附件上传失败只失败该附件，不占用同会话串行密码学门闩，不阻塞后续文字、表情或贴纸。
-- 拍摄、相册、录音、压缩、会员限额和界面仍由宿主应用负责。
+宿主不得复制 runtime 和 storage 的实现。
 
-## 私聊语音和视频通话
+## 本机存储
 
-ChatSDK 通过 `call.dart` 提供部署无关的一对一通话状态机。部署端只实现 STUN 读取与加密 WSS 信令转发，音视频只经过 WebRTC `RTCPeerConnection`，禁止 TURN、DataChannel 媒体传输和服务端音视频中转。信令沿用既有 `connection_id`、Offer、Answer、ICE、Hangup、ICE Restart 与 Peer Ready，不创建第二套编号或协议版本。
+- 数据库实例名固定为 chat_sdk_chat。
+- 文件域固定为 chat/by_user/<user_id>/by_binding/<revision>/<account_id>。
+- 正文、摘要、搜索索引和 OpenMLS 状态均按用途钥隔离。
+- 交接清单使用严格字段、完整认证和失败关闭。
+- 系统备份必须排除聊天文件域及 chat_sdk_chat* 数据库文件。
 
-群聊当前只在产品界面显示禁用的语音、视频图标，不包含群通话实现。
+## 网络安全
 
-## ProgramConsole 与正式 Release
+任何首方运行路径出现明文 HTTP 或明文 WS 都是错误。ChatSDK 不提供明文回退、旧协议兼容、版本路径兼容或第二套传输实现。
 
-ChatSDK 在 ProgramConsole 的“编程控制台”流程页中作为独立产品显示，产品标识为 `chatsdk`，平台标识为 `sdk`。它只提供以下三个相互独立的动作：
+## 开发验证
 
-- `chatsdk-build-sdk`：在本机隔离快照中验证 Dart、Flutter 与 Rust，并生成三件套到 `/Users/rhett/Only/ProgramConsole/target/chatsdk`。
-- `chatsdk-ci-sdk`：使用任务创建时 GitHub 锁定的最新 `main` 提交完成检查和 Android、iOS、macOS ARM64 原生构建；CI 不读取、生成或持久化软件版本。
-- `chatsdk-release-sdk`：只消费准确成功 CI 的提交和原生候选，按 `chatsdk-v<software_version>` 固化正式 Release。
+所有 Flutter/Dart 构建与测试产物必须写入 ProgramConsole 的 target/.work 隔离工作区，不得在源码目录生成构建产物。
 
-正式 GitHub Release 必须且只能包含 `chatsdk.tgz`、`chatsdk-release.json`、`SHA256SUMS`。归档内外 manifest 必须逐字节一致，manifest 固定登记 Android ARM64、iOS ARM64 和 macOS ARM64 三个平台及全部文件摘要。ChatSDK 当前没有 LinuxARM 服务端安装包，也没有独立“发布”动作；正式 GitHub Release 是当前 SDK 分发终态。
+基础验证为 flutter analyze 和 flutter test。
+
+原生 OpenMLS 测试只有在独立 ChatSDK 原生库可用时执行；缺少宿主库的用例必须明确显示为跳过，不能冒充通过。

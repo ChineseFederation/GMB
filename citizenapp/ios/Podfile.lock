@@ -3,6 +3,7 @@ PODS:
     - Flutter
   - camera_avfoundation (0.0.1):
     - Flutter
+  - chat_sdk (1.0.0)
   - DKImagePickerController/Core (4.3.9):
     - DKImagePickerController/ImageDataManager
     - DKImagePickerController/Resource
@@ -185,6 +186,7 @@ PODS:
 DEPENDENCIES:
   - audio_session (from `.symlinks/plugins/audio_session/ios`)
   - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
+  - chat_sdk (from `.symlinks/plugins/chat_sdk/ios`)
   - emoji_picker_flutter (from `.symlinks/plugins/emoji_picker_flutter/ios`)
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
   - firebase_core (from `.symlinks/plugins/firebase_core/ios`)
@@ -237,6 +239,8 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/audio_session/ios"
   camera_avfoundation:
     :path: ".symlinks/plugins/camera_avfoundation/ios"
+  chat_sdk:
+    :path: ".symlinks/plugins/chat_sdk/ios"
   emoji_picker_flutter:
     :path: ".symlinks/plugins/emoji_picker_flutter/ios"
   file_picker:
@@ -293,6 +297,7 @@ EXTERNAL SOURCES:
 SPEC CHECKSUMS:
   audio_session: 9bb7f6c970f21241b19f5a3658097ae459681ba0
   camera_avfoundation: 968a9a5323c79a99c166ad9d7866bfd2047b5a9b
+  chat_sdk: 22416d2ab0a9520087e71aba829ad0c6c5a8e3af
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
   DKPhotoGallery: b3834fecb755ee09a593d7c9e389d8b5d6deed60
   emoji_picker_flutter: ece213fc274bdddefb77d502d33080dc54e616cc
@@ -329,7 +334,7 @@ SPEC CHECKSUMS:
   SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
   SDWebImageWebPCoder: 0e06e365080397465cc73a7a9b472d8a3bd0f377
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
-  smoldot_ffi: 9386cca9b4bedacddd144d7be3f5a28700bb9afc
+  smoldot_ffi: d5e44ba09e1c9e97cc6e0b19126f16c98295e161
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   video_compress: f2133a07762889d67f0711ac831faa26f956980e
@@ -337,6 +342,6 @@ SPEC CHECKSUMS:
   WebRTC-SDK: e6006119cd730d6315d875e4a421b6cc8bb88833
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 
-PODFILE CHECKSUM: 7978541a7f5406cb6c7f33046951729bb6efb9b1
+PODFILE CHECKSUM: 416f58a5d9ce68335abe18df6e3a6d76fee250cb
 
 COCOAPODS: 1.17.0

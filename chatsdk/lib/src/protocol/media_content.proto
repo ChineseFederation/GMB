@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package chatsdk.protocol;
+package chat.protocol;
 
 // Encrypted attachment metadata carried inside the MLS mailbox.
 message MediaDescriptor {

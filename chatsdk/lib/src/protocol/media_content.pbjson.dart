@@ -52,7 +52,7 @@ const MediaPayload$json = {
       '3': 16,
       '4': 1,
       '5': 11,
-      '6': '.chatsdk.protocol.MediaDescriptor',
+      '6': '.chat.protocol.MediaDescriptor',
       '9': 0,
       '10': 'image'
     },
@@ -61,7 +61,7 @@ const MediaPayload$json = {
       '3': 17,
       '4': 1,
       '5': 11,
-      '6': '.chatsdk.protocol.MediaDescriptor',
+      '6': '.chat.protocol.MediaDescriptor',
       '9': 0,
       '10': 'video'
     },
@@ -70,7 +70,7 @@ const MediaPayload$json = {
       '3': 18,
       '4': 1,
       '5': 11,
-      '6': '.chatsdk.protocol.MediaDescriptor',
+      '6': '.chat.protocol.MediaDescriptor',
       '9': 0,
       '10': 'file'
     },
@@ -79,7 +79,7 @@ const MediaPayload$json = {
       '3': 19,
       '4': 1,
       '5': 11,
-      '6': '.chatsdk.protocol.MediaDescriptor',
+      '6': '.chat.protocol.MediaDescriptor',
       '9': 0,
       '10': 'audio'
     },
@@ -91,8 +91,8 @@ const MediaPayload$json = {
 
 /// Descriptor for `MediaPayload`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List mediaPayloadDescriptor = $convert.base64Decode(
-    'CgxNZWRpYVBheWxvYWQSOQoFaW1hZ2UYECABKAsyIS5jaGF0c2RrLnByb3RvY29sLk1lZGlhRG'
-    'VzY3JpcHRvckgAUgVpbWFnZRI5CgV2aWRlbxgRIAEoCzIhLmNoYXRzZGsucHJvdG9jb2wuTWVk'
-    'aWFEZXNjcmlwdG9ySABSBXZpZGVvEjcKBGZpbGUYEiABKAsyIS5jaGF0c2RrLnByb3RvY29sLk'
-    '1lZGlhRGVzY3JpcHRvckgAUgRmaWxlEjkKBWF1ZGlvGBMgASgLMiEuY2hhdHNkay5wcm90b2Nv'
-    'bC5NZWRpYURlc2NyaXB0b3JIAFIFYXVkaW9CCQoHY29udGVudA==');
+    'CgxNZWRpYVBheWxvYWQSNgoFaW1hZ2UYECABKAsyHi5jaGF0LnByb3RvY29sLk1lZGlhRGVzY3'
+    'JpcHRvckgAUgVpbWFnZRI2CgV2aWRlbxgRIAEoCzIeLmNoYXQucHJvdG9jb2wuTWVkaWFEZXNj'
+    'cmlwdG9ySABSBXZpZGVvEjQKBGZpbGUYEiABKAsyHi5jaGF0LnByb3RvY29sLk1lZGlhRGVzY3'
+    'JpcHRvckgAUgRmaWxlEjYKBWF1ZGlvGBMgASgLMh4uY2hhdC5wcm90b2NvbC5NZWRpYURlc2Ny'
+    'aXB0b3JIAFIFYXVkaW9CCQoHY29udGVudA==');

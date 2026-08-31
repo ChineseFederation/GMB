@@ -1,5 +1,5 @@
 #
-# CitizenApp 热端原生静态库(smoldot 轻节点 + citizen-signer sr25519 签名 聊天)。
+# CitizenApp 热端原生静态库（smoldot 轻节点与账户签名/加密）。
 #
 # 由 scripts/build-smoldot-native.sh ios 交叉编译产出 libsmoldot.a,并从产物实抽
 # exported_symbols.txt;本 podspec 逐符号生成 -Wl,-u,<符号>,清单绝不手维护——
@@ -31,7 +31,7 @@ unless File.exist?(symbols_path)
 end
 ffi_symbols = File.readlines(symbols_path).map(&:strip).reject(&:empty?)
 raise "exported_symbols.txt 为空,静态库构建异常" if ffi_symbols.empty?
-ffi_symbol_pattern = /\A_(?:smoldot_|citizen_sr25519_|account_crypto_|chat_sdk_)[A-Za-z0-9_]*\z/
+ffi_symbol_pattern = /\A_(?:smoldot_|citizen_sr25519_|account_crypto_)[A-Za-z0-9_]*\z/
 invalid_symbols = ffi_symbols.reject { |symbol| ffi_symbol_pattern.match?(symbol) }
 unless invalid_symbols.empty?
   raise "exported_symbols.txt 含非公开 FFI 符号: #{invalid_symbols.first}"
@@ -44,8 +44,7 @@ Pod::Spec.new do |s|
   s.version          = '1.0.0'
   s.summary          = 'CitizenApp 热端原生静态库(smoldot + sr25519)'
   s.description      = <<-DESC
-CitizenApp 热端原生库:smoldot 轻节点、sr25519 原生签名(与 CitizenWallet 冷端
-共用 shared/citizen-signer 同一份源码)、OpenMLS 端到端加密聊天。
+CitizenApp 热端原生库:smoldot 轻节点、sr25519 原生签名与账户数据加密。
                        DESC
   s.homepage         = 'https://github.com/ChineseFederation/GMB'
   s.license          = { :type => 'Apache-2.0' }

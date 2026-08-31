@@ -73,6 +73,9 @@ export interface SquareNotifyJob {
 /// Wrangler 根据 wrangler.toml 生成固定变量与资源绑定；发布期变量和 Secret 只保留名称契约，
 /// 实际值由 ProgramConsole 分别通过 `--var` 与受保护 Secret FIFO 注入。
 interface WorkerSecretsAndOptionalVars {
+  // ChatServer 私钥只签发短期 EdDSA JWT；服务地址是公开 HTTPS 配置。
+  CHAT_AUTH_ED25519_PRIVATE_KEY?: string;
+  CHAT_SERVER_URL?: string;
   // 平台推送只发送无内容 Chat 唤醒；私钥只允许使用 Worker Secret 配置。
   APNS_KEY?: string;
   APNS_KID?: string;
@@ -147,6 +150,7 @@ export interface SessionState {
 export interface ChatEnvelopePayload {
   envelope_id: string;
   recipient_cid_number: string;
+  recipient_device_id: string;
   conversation_id: string;
   envelope: string;
   created_at_millis: number;

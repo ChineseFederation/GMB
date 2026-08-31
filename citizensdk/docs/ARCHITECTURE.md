@@ -101,8 +101,8 @@ SDK 暴露底层仓储接口供受控集成和测试注入，因此宿主进程�
 GMB 七个路由产品共有 24 条分组 CI/Release workflow，并由唯一顶层
 `.github/workflows/gmb-repository.yml` 注册。CitizenSDK 使用其中两条：
 
-- `.github/workflows/citizensdk/ci-sdk.yml`
-- `.github/workflows/citizensdk/release-sdk.yml`
+- `gmb.citizensdk.sdk.ci`
+- `gmb.citizensdk.sdk.release`
 
 CI 与 Release 都从干净源码建立隔离构建快照，执行唯一根包依赖锁检查、静态检查、Rust 与
 Dart/Flutter 测试、移动原生构建和候选验证。smoldot Dart 绑定和来源测试现与根 Flutter

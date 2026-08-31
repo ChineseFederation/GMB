@@ -35,7 +35,7 @@ enum CallSdpType {
 
 /// 部署无关的扁平 WebRTC 信令。
 ///
-/// 唯一关联键使用既有 connection_id，禁止再创建 call_id 或 operation_id。
+/// 唯一关联键使用既有 connection_id，禁止再创建其他重复编号。
 class CallSignal {
   const CallSignal._({
     required this.kind,

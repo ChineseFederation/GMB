@@ -1,0 +1,33 @@
+# ChatServer Linux ARM64 唯一运行配置。安装前必须替换域名和数据库密码。
+[server]
+bind = "[::]:8443"
+public_url = "https://chat.example.com"
+app_id = "replace.chat.app"
+tls_certificate = "/etc/chatserver/tls/server-cert.pem"
+tls_private_key = "/etc/chatserver/tls/server-key.pem"
+cleanup_interval_seconds = 300
+
+[database]
+url = "postgresql://chatserver:CHANGE_ME@localhost/chatserver?sslmode=require"
+max_connections = 16
+
+[storage]
+object_directory = "/var/lib/chatserver/objects"
+max_attachment_bytes = 5368709120
+
+[auth]
+issuer = "https://identity.example.com"
+audience = "chatserver"
+ed25519_public_key = "/etc/chatserver/auth/jwt-ed25519-public.pem"
+
+# 启用 iOS 系统通知时取消本节注释，并把私钥放到指定路径。
+# [push.apns]
+# team_id = "APPLE_TEAM_ID"
+# key_id = "APPLE_KEY_ID"
+# private_key = "/etc/chatserver/push/apns-auth-key.p8"
+# allowed_topics = ["com.example.app"]
+# sandbox = false
+
+# 启用 Android 系统通知时取消本节注释，并把服务账户放到指定路径。
+# [push.fcm]
+# service_account = "/etc/chatserver/push/fcm-service-account.json"

@@ -113,8 +113,6 @@ dependencies = [
  "aes-gcm",
  "base64",
  "hex",
- "hpke-rs",
- "hpke-rs-rust-crypto",
  "openmls",
  "openmls_basic_credential",
  "openmls_memory_storage",
