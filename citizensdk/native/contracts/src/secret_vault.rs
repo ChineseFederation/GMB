@@ -87,7 +87,7 @@ impl SecretRef {
     }
 }
 
-/// 秘密只在 Rust 的受控、可清零内存中存在。
+/// 本类型拥有的一份 Rust 缓冲区会在析构时清零；它不承诺锁页、进程硬隔离或清除受信任闭包另行产生的副本。
 ///
 /// ```compile_fail
 /// use citizen_sdk_contracts::SecretBuffer;

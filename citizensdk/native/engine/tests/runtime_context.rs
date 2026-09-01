@@ -74,6 +74,9 @@ fn same_hash_context_can_be_promoted_from_best_to_finalized() {
     let best = VerifiedBlockRef::best(hash, 31);
     let finalized = VerifiedBlockRef::finalized(hash, 31);
     let mut cache = RuntimeContextCache::new();
+
+    let best_request = cache.begin(best);
+    assert!(cache.complete(best_request, context(best, 5, 5)).is_ok());
     let request = cache.begin(finalized);
     let promoted = match cache.complete(request, context(best, 5, 5)) {
         Ok(context) => context,

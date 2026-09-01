@@ -1,7 +1,7 @@
 use citizen_sdk_contracts::{ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32};
 use citizen_sdk_engine::{
     validate_import_startup, validate_state_export, validate_state_import, EngineLifecycle,
-    StateImportPolicy, StateImportRejection, MAX_CHAIN_DATABASE_BYTES,
+    StateImportPolicy, StateImportRejection, CHAIN_STATE_FORMAT_VERSION, MAX_CHAIN_DATABASE_BYTES,
 };
 
 fn identity(genesis: u8) -> ChainIdentity {
@@ -29,11 +29,16 @@ fn state(
 
 #[test]
 fn import_accepts_exact_non_regressing_pre_start_state() {
-    let chain = identity(7);
+    let chain = ChainIdentity::citizenchain();
     let current = FinalizedBlockRef::from_parts(Hash32::from_bytes([8; 32]), 10);
     let imported = FinalizedBlockRef::from_parts(Hash32::from_bytes([9; 32]), 12);
-    let policy = StateImportPolicy::new(chain.clone(), 1, Some(current));
-    let candidate = state(chain, 1, imported, vec![1, 2, 3]);
+    let policy = StateImportPolicy::citizenchain(Some(current));
+    let candidate = state(
+        chain,
+        CHAIN_STATE_FORMAT_VERSION,
+        imported,
+        vec![1, 2, 3],
+    );
     assert_eq!(
         validate_state_import(&policy, EngineLifecycle::Created, &candidate),
         Ok(())
@@ -43,9 +48,9 @@ fn import_accepts_exact_non_regressing_pre_start_state() {
 
 #[test]
 fn import_rejects_lifecycle_identity_format_size_and_finality_drift() {
-    let chain = identity(7);
+    let chain = ChainIdentity::citizenchain();
     let current = FinalizedBlockRef::from_parts(Hash32::from_bytes([8; 32]), 10);
-    let policy = StateImportPolicy::new(chain.clone(), 1, Some(current));
+    let policy = StateImportPolicy::citizenchain(Some(current));
     let valid = state(
         chain.clone(),
         1,
@@ -60,6 +65,17 @@ fn import_rejects_lifecycle_identity_format_size_and_finality_drift() {
         validate_state_import(&policy, EngineLifecycle::Stopped, &valid),
         Err(StateImportRejection::ProviderAlreadyStarted)
     );
+    for lifecycle in [
+        EngineLifecycle::ImportingState,
+        EngineLifecycle::Starting,
+        EngineLifecycle::StartFailed,
+        EngineLifecycle::Disposed,
+    ] {
+        assert_eq!(
+            validate_state_import(&policy, lifecycle, &valid),
+            Err(StateImportRejection::ProviderAlreadyStarted)
+        );
+    }
 
     let wrong_identity = state(identity(6), 1, valid.finalized(), vec![1]);
     assert_eq!(
@@ -105,8 +121,8 @@ fn import_rejects_lifecycle_identity_format_size_and_finality_drift() {
 
 #[test]
 fn genesis_and_export_anchors_are_strict() {
-    let chain = identity(7);
-    let policy = StateImportPolicy::new(chain.clone(), 1, None);
+    let chain = ChainIdentity::citizenchain();
+    let policy = StateImportPolicy::citizenchain(None);
     let wrong_genesis = state(
         chain.clone(),
         1,

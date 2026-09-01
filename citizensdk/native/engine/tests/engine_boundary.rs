@@ -4,13 +4,14 @@ use std::sync::{
 };
 
 use citizen_sdk_contracts::{
-    ChainIdentity, ContractFuture, ContractStream, ExecutionConclusion, ExportedChainState,
-    ExtrinsicWatchEvent, FinalizedBlockRef, Hash32, RuntimeContext, RuntimeVersion,
-    SignedExtrinsic, StateImportReceipt, SubmittedExtrinsic, UnverifiedReason, VerifiedBlockRef,
-    VerifiedChainClient,
+    CapabilityName, CapabilityReason, ChainIdentity, ContractFuture, ContractStream,
+    ExecutionConclusion, ExportedChainState, ExtrinsicWatchEvent, FinalizedBlockRef, Hash32,
+    RuntimeContext, RuntimeVersion, SignedExtrinsic, StateImportReceipt, SubmittedExtrinsic,
+    UnverifiedReason, VerifiedBlockRef, VerifiedChainClient,
 };
 use citizen_sdk_engine::{
-    signed_extrinsic_hash, CitizenEngine, EngineComponents, EngineLifecycle, StateImportPolicy,
+    signed_extrinsic_hash, CapabilityProbe, CitizenEngine, EngineComponents, EngineLifecycle,
+    CHAIN_STATE_FORMAT_VERSION,
 };
 
 const METADATA_HEX: &str =
@@ -60,11 +61,13 @@ struct FakeClient {
     extrinsics: Vec<Vec<u8>>,
     events: Option<Vec<u8>>,
     imports: Arc<AtomicUsize>,
+    evidence_reads: Arc<AtomicUsize>,
+    exports: Arc<AtomicUsize>,
 }
 
 impl VerifiedChainClient for FakeClient {
     fn identity(&self) -> ContractFuture<'_, ChainIdentity> {
-        Box::pin(async { Ok(identity(7)) })
+        Box::pin(async { Ok(ChainIdentity::citizenchain()) })
     }
 
     fn get_best_head(&self) -> ContractFuture<'_, VerifiedBlockRef> {
@@ -80,6 +83,7 @@ impl VerifiedChainClient for FakeClient {
         _block: VerifiedBlockRef,
         key: Vec<u8>,
     ) -> ContractFuture<'_, Option<Vec<u8>>> {
+        self.evidence_reads.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
             Ok((key.as_slice() == SYSTEM_EVENTS_STORAGE_KEY)
                 .then(|| self.events.clone())
@@ -99,6 +103,7 @@ impl VerifiedChainClient for FakeClient {
         &self,
         _block: VerifiedBlockRef,
     ) -> ContractFuture<'_, RuntimeContext> {
+        self.evidence_reads.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(self.context.clone()) })
     }
 
@@ -106,6 +111,7 @@ impl VerifiedChainClient for FakeClient {
         &self,
         _block: VerifiedBlockRef,
     ) -> ContractFuture<'_, Vec<Vec<u8>>> {
+        self.evidence_reads.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(self.extrinsics.clone()) })
     }
 
@@ -124,8 +130,14 @@ impl VerifiedChainClient for FakeClient {
     }
 
     fn export_state(&self) -> ContractFuture<'_, ExportedChainState> {
+        self.exports.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move {
-            ExportedChainState::try_new(identity(7), 1, self.block.require_finalized()?, vec![1])
+            ExportedChainState::try_new(
+                ChainIdentity::citizenchain(),
+                CHAIN_STATE_FORMAT_VERSION,
+                self.block.require_finalized()?,
+                vec![1],
+            )
         })
     }
 
@@ -135,13 +147,27 @@ impl VerifiedChainClient for FakeClient {
     }
 }
 
+#[derive(Clone)]
+struct FakeCounters {
+    imports: Arc<AtomicUsize>,
+    evidence_reads: Arc<AtomicUsize>,
+    exports: Arc<AtomicUsize>,
+}
+
+fn all_ready() -> Vec<CapabilityProbe> {
+    CapabilityName::ALL
+        .into_iter()
+        .map(CapabilityProbe::ready)
+        .collect()
+}
+
 fn engine(
     events: Option<Vec<u8>>,
 ) -> (
     CitizenEngine,
     RuntimeContext,
     SignedExtrinsic,
-    Arc<AtomicUsize>,
+    FakeCounters,
 ) {
     let block = VerifiedBlockRef::finalized(Hash32::from_bytes([9; 32]), 100);
     let context =
@@ -155,22 +181,37 @@ fn engine(
         Err(error) => panic!("extrinsic fixture failed: {error}"),
     };
     let imports = Arc::new(AtomicUsize::new(0));
+    let evidence_reads = Arc::new(AtomicUsize::new(0));
+    let exports = Arc::new(AtomicUsize::new(0));
     let client = Arc::new(FakeClient {
         block,
         context: context.clone(),
         extrinsics: vec![signed.as_bytes().to_vec()],
         events,
         imports: Arc::clone(&imports),
+        evidence_reads: Arc::clone(&evidence_reads),
+        exports: Arc::clone(&exports),
     });
     let components = EngineComponents::new(client, None, None, None, None, None, None, None);
-    (CitizenEngine::new(components), context, signed, imports)
+    let engine = CitizenEngine::new(components);
+    if let Err(error) = engine.update_capabilities(all_ready()) {
+        panic!("capability initialization failed: {error}");
+    }
+    (
+        engine,
+        context,
+        signed,
+        FakeCounters {
+            imports,
+            evidence_reads,
+            exports,
+        },
+    )
 }
 
 #[test]
 fn engine_gathers_provider_evidence_without_arbitrary_rpc() {
     let (engine, context, signed, _) = engine(Some(hex_bytes(EVENTS_HEX)));
-    assert!(engine.components().signer().is_none());
-    assert!(engine.components().secret_vault().is_none());
     let hash = match signed_extrinsic_hash(&context, &signed) {
         Ok(hash) => hash,
         Err(error) => panic!("hash failed: {error}"),
@@ -184,6 +225,41 @@ fn engine_gathers_provider_evidence_without_arbitrary_rpc() {
         Err(error) => panic!("engine verification failed: {error}"),
     };
     assert!(matches!(outcome, ExecutionConclusion::Success { .. }));
+}
+
+#[test]
+fn capability_change_is_rechecked_before_provider_evidence() {
+    let (engine, context, signed, counters) = engine(Some(hex_bytes(EVENTS_HEX)));
+    let mut unavailable = all_ready();
+    let chain = unavailable
+        .iter_mut()
+        .find(|probe| probe.name == CapabilityName::ChainRead)
+        .unwrap_or_else(|| panic!("CHAIN_READ probe missing"));
+    chain.runtime_ready = false;
+    chain.not_ready_reason = Some(CapabilityReason::ChainUnsynced);
+    if let Err(error) = engine.update_capabilities(unavailable) {
+        panic!("capability update failed: {error}");
+    }
+    let hash = match signed_extrinsic_hash(&context, &signed) {
+        Ok(hash) => hash,
+        Err(error) => panic!("hash failed: {error}"),
+    };
+    let outcome = match futures::executor::block_on(engine.verify_transaction_at(
+        context.block(),
+        signed,
+        hash,
+    )) {
+        Ok(outcome) => outcome,
+        Err(error) => panic!("capability gate returned an unexpected error: {error}"),
+    };
+    assert!(matches!(
+        outcome,
+        ExecutionConclusion::Unverified {
+            reason: UnverifiedReason::ProviderFailure,
+            ..
+        }
+    ));
+    assert_eq!(counters.evidence_reads.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -212,11 +288,11 @@ fn missing_events_remain_unverified() {
 
 #[test]
 fn failed_import_preflight_never_reaches_provider() {
-    let (engine, context, _, imports) = engine(None);
+    let (engine, context, _, counters) = engine(None);
     let chain = identity(7);
     let state = match ExportedChainState::try_new(
         chain.clone(),
-        1,
+        CHAIN_STATE_FORMAT_VERSION,
         context
             .block()
             .require_finalized()
@@ -226,9 +302,49 @@ fn failed_import_preflight_never_reaches_provider() {
         Ok(state) => state,
         Err(error) => panic!("state fixture failed: {error}"),
     };
-    let policy = StateImportPolicy::new(chain, 1, None);
-    let result =
-        futures::executor::block_on(engine.import_state(&policy, EngineLifecycle::Running, state));
+    let result = futures::executor::block_on(engine.import_state(state));
     assert!(result.is_err());
-    assert_eq!(imports.load(Ordering::SeqCst), 0);
+    assert_eq!(counters.imports.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn engine_owns_import_startup_and_export_lifecycle() {
+    let (engine, context, _, counters) = engine(None);
+    let finalized = context
+        .block()
+        .require_finalized()
+        .unwrap_or_else(|error| panic!("finalized fixture failed: {error}"));
+    let imported = match ExportedChainState::try_new(
+        ChainIdentity::citizenchain(),
+        CHAIN_STATE_FORMAT_VERSION,
+        finalized,
+        vec![1],
+    ) {
+        Ok(state) => state,
+        Err(error) => panic!("state fixture failed: {error}"),
+    };
+    if let Err(error) = futures::executor::block_on(engine.import_state(imported.clone())) {
+        panic!("valid pre-start import failed: {error}");
+    }
+    assert_eq!(counters.imports.load(Ordering::SeqCst), 1);
+    assert_eq!(engine.lifecycle(), Ok(EngineLifecycle::Created));
+
+    if let Err(error) = engine.begin_provider_start() {
+        panic!("provider start reservation failed: {error}");
+    }
+    assert!(futures::executor::block_on(engine.import_state(imported)).is_err());
+    assert_eq!(counters.imports.load(Ordering::SeqCst), 1);
+    let started = match futures::executor::block_on(engine.complete_provider_start()) {
+        Ok(finalized) => finalized,
+        Err(error) => panic!("provider startup verification failed: {error}"),
+    };
+    assert_eq!(started, finalized);
+    assert_eq!(engine.lifecycle(), Ok(EngineLifecycle::Running));
+
+    let exported = match futures::executor::block_on(engine.export_state()) {
+        Ok(state) => state,
+        Err(error) => panic!("stable state export failed: {error}"),
+    };
+    assert_eq!(exported.finalized(), finalized);
+    assert_eq!(counters.exports.load(Ordering::SeqCst), 1);
 }

@@ -10,7 +10,8 @@ use citizen_sdk_contracts::{
     EncryptedSecretBlobSnapshot, EncryptedSecretBlobStore, FinalizedBlockRef,
     FinalizedTransferRecord, Hash32, RuntimeCacheStore, RuntimeContext, RuntimeVersion,
     SecretOwner, SecretRef, TransactionHistoryState, TransactionHistoryStore, VaultGeneration,
-    VerifiedBlockRef, WalletAccount, WalletOrigin, WalletProfile, WalletProfileStore, WalletState,
+    VerifiedBlockRef, WalletAccount, WalletCleanupPlan, WalletOrigin, WalletProfile,
+    WalletProfileStore, WalletProvisioningPlan, WalletState,
 };
 
 fn block_on<F: Future>(future: F) -> F::Output {
@@ -196,7 +197,32 @@ fn wallet_profile_rejects_duplicate_or_cross_generation_secret_refs() {
         WalletOrigin::Created,
         100,
         first_id,
-        vec![first, foreign],
+        vec![first.clone(), foreign],
+    )
+    .is_err());
+
+    let foreign_generation_ref = SecretRef::account_mini_secret(
+        7,
+        VaultGeneration::from_bytes([2; 16]),
+        SecretOwner::from_bytes([4; 16]),
+        AccountId32::from_bytes([7; 32]),
+    );
+    let foreign_generation = value_or_panic(WalletAccount::try_new(
+        1,
+        AccountId32::from_bytes([7; 32]),
+        foreign_generation_ref,
+        "5CitizenGeneration",
+        "generation",
+        103,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        first_id,
+        WalletOrigin::Created,
+        100,
+        first_id,
+        vec![first, foreign_generation],
     )
     .is_err());
 }
@@ -224,12 +250,60 @@ fn wallet_profile_requires_account_zero_master_and_bounded_indices() {
     )
     .is_err());
 
-    let too_high = value_or_panic(WalletAccount::try_new(
-        1990,
+    let wrong_zero_id = AccountId32::from_bytes([5; 32]);
+    let wrong_zero = value_or_panic(WalletAccount::try_new(
+        0,
+        wrong_zero_id,
+        secret_ref(2, 5),
+        "5CitizenWrongZero",
+        "wrong-zero",
+        100,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
         master,
-        secret_ref(2, 4),
+        WalletOrigin::Created,
+        100,
+        wrong_zero_id,
+        vec![wrong_zero],
+    )
+    .is_err());
+
+    let valid_zero = value_or_panic(WalletAccount::try_new(
+        0,
+        master,
+        secret_ref(3, 4),
         "5CitizenMaster",
         "master",
+        100,
+    ));
+    let maximum_id = AccountId32::from_bytes([6; 32]);
+    let maximum = value_or_panic(WalletAccount::try_new(
+        1989,
+        maximum_id,
+        secret_ref(4, 6),
+        "5CitizenMaximum",
+        "maximum",
+        101,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        master,
+        WalletOrigin::Created,
+        100,
+        maximum_id,
+        vec![valid_zero.clone(), maximum],
+    )
+    .is_ok());
+
+    let too_high = value_or_panic(WalletAccount::try_new(
+        1990,
+        maximum_id,
+        secret_ref(5, 6),
+        "5CitizenTooHigh",
+        "too-high",
         100,
     ));
     assert!(WalletProfile::try_new(
@@ -239,9 +313,120 @@ fn wallet_profile_requires_account_zero_master_and_bounded_indices() {
         WalletOrigin::Created,
         100,
         master,
-        vec![too_high],
+        vec![valid_zero, too_high],
     )
     .is_err());
+}
+
+#[test]
+fn wallet_state_rejects_conflicting_ownership_and_cross_wallet_cleanup() {
+    let generation = VaultGeneration::from_bytes([1; 16]);
+    let master = AccountId32::from_bytes([4; 32]);
+    let account = value_or_panic(WalletAccount::try_new(
+        0,
+        master,
+        secret_ref(1, 4),
+        "5CitizenMaster",
+        "master",
+        100,
+    ));
+    let profile = value_or_panic(WalletProfile::try_new(
+        7,
+        generation,
+        master,
+        WalletOrigin::Created,
+        100,
+        master,
+        vec![account],
+    ));
+    let next_generation = VaultGeneration::from_bytes([2; 16]);
+    let next_secret = SecretRef::account_mini_secret(
+        7,
+        next_generation,
+        SecretOwner::from_bytes([8; 16]),
+        AccountId32::from_bytes([8; 32]),
+    );
+    let provisioning = value_or_panic(WalletProvisioningPlan::try_new(
+        [1; 16],
+        7,
+        next_generation,
+        Some(profile.clone()),
+        vec![next_secret],
+        true,
+    ));
+    let cleanup = value_or_panic(WalletCleanupPlan::try_new(
+        [2; 16],
+        7,
+        generation,
+        vec![secret_ref(1, 4)],
+        true,
+    ));
+    assert!(WalletState::try_from_parts(
+        1,
+        Some(profile.clone()),
+        Some(provisioning.clone()),
+        Some(cleanup.clone()),
+        Vec::new(),
+    )
+    .is_err());
+
+    let wrong_previous = value_or_panic(WalletProvisioningPlan::try_new(
+        [3; 16],
+        7,
+        next_generation,
+        None,
+        vec![next_secret],
+        true,
+    ));
+    assert!(WalletState::try_from_parts(
+        1,
+        Some(profile.clone()),
+        Some(wrong_previous),
+        None,
+        Vec::new(),
+    )
+    .is_err());
+
+    let foreign_cleanup = value_or_panic(WalletCleanupPlan::try_new(
+        [4; 16],
+        8,
+        generation,
+        Vec::new(),
+        true,
+    ));
+    assert!(WalletState::try_from_parts(
+        1,
+        Some(profile.clone()),
+        None,
+        None,
+        vec![foreign_cleanup],
+    )
+    .is_err());
+
+    let duplicate_operation = value_or_panic(WalletCleanupPlan::try_new(
+        [2; 16],
+        7,
+        VaultGeneration::from_bytes([3; 16]),
+        Vec::new(),
+        true,
+    ));
+    assert!(WalletState::try_from_parts(
+        1,
+        Some(profile.clone()),
+        None,
+        Some(cleanup),
+        vec![duplicate_operation],
+    )
+    .is_err());
+
+    assert!(WalletState::try_from_parts(
+        1,
+        Some(profile),
+        Some(provisioning),
+        None,
+        Vec::new(),
+    )
+    .is_ok());
 }
 
 #[test]

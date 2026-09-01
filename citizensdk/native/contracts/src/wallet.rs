@@ -325,20 +325,78 @@ impl WalletState {
         }
     }
 
-    pub fn from_parts(
+    pub fn try_from_parts(
         revision: u64,
         profile: Option<WalletProfile>,
         provisioning: Option<WalletProvisioningPlan>,
         cleanup: Option<WalletCleanupPlan>,
         cleanup_queue: Vec<WalletCleanupPlan>,
-    ) -> Self {
-        Self {
+    ) -> ContractResult<Self> {
+        if provisioning.is_some() && cleanup.is_some() {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "provisioning 与 cleanup 不能同时取得钱包操作所有权",
+            ));
+        }
+
+        let mut wallet_indices = BTreeSet::new();
+        if let Some(profile) = profile.as_ref() {
+            wallet_indices.insert(profile.wallet_index());
+        }
+        if let Some(plan) = provisioning.as_ref() {
+            wallet_indices.insert(plan.wallet_index());
+            if plan.previous_profile() != profile.as_ref() {
+                return Err(ContractError::new(
+                    ContractErrorCode::InvalidArgument,
+                    "provisioning 的 previous profile 必须等于当前公开事实",
+                ));
+            }
+        }
+        if let Some(plan) = cleanup.as_ref() {
+            wallet_indices.insert(plan.wallet_index());
+            if profile.as_ref().is_some_and(|profile| {
+                profile.wallet_index() != plan.wallet_index()
+                    || profile.generation() != plan.generation()
+            }) {
+                return Err(ContractError::new(
+                    ContractErrorCode::InvalidArgument,
+                    "活动 cleanup 只能拥有当前钱包生命周期",
+                ));
+            }
+        }
+        for plan in &cleanup_queue {
+            wallet_indices.insert(plan.wallet_index());
+        }
+        if wallet_indices.len() > 1 {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "一个 WalletState 不得混合不同 wallet index",
+            ));
+        }
+
+        let mut operation_ids = HashSet::new();
+        if let Some(plan) = provisioning.as_ref() {
+            operation_ids.insert(*plan.operation_id());
+        }
+        if let Some(plan) = cleanup.as_ref() {
+            operation_ids.insert(*plan.operation_id());
+        }
+        for plan in &cleanup_queue {
+            if !operation_ids.insert(*plan.operation_id()) {
+                return Err(ContractError::new(
+                    ContractErrorCode::InvalidArgument,
+                    "钱包在途操作与补偿队列的 operation id 必须唯一",
+                ));
+            }
+        }
+
+        Ok(Self {
             revision,
             profile,
             provisioning,
             cleanup,
             cleanup_queue,
-        }
+        })
     }
 
     pub const fn revision(&self) -> u64 {
