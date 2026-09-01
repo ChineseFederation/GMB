@@ -15,14 +15,14 @@ allprojects {
     }
 }
 
-// 本机编译必须由ProgramConsole把Gradle输出导向中央工作目录；GitHub临时Runner仍使用其短命工作区。
-val programProgramConsoleBuildDir = System.getenv("PROGRAM_CONSOLE_BUILD_DIR")
+// 本机编译必须由TataConsole把Gradle输出导向中央工作目录；GitHub临时Runner仍使用其短命工作区。
+val programTataConsoleBuildDir = System.getenv("TATA_CONSOLE_BUILD_DIR")
 val newBuildDir: Directory =
-    if (!programProgramConsoleBuildDir.isNullOrBlank()) {
-        rootProject.layout.dir(rootProject.provider { rootProject.file(programProgramConsoleBuildDir) }).get()
+    if (!programTataConsoleBuildDir.isNullOrBlank()) {
+        rootProject.layout.dir(rootProject.provider { rootProject.file(programTataConsoleBuildDir) }).get()
     } else {
         if (System.getenv("CI") != "true") {
-            throw GradleException("本机Android编译必须由ProgramConsole提供PROGRAM_CONSOLE_BUILD_DIR")
+            throw GradleException("本机Android编译必须由TataConsole提供TATA_CONSOLE_BUILD_DIR")
         }
         rootProject.layout.buildDirectory.dir("../../build").get()
     }

@@ -13,7 +13,7 @@ Pod::Spec.new do |spec|
   spec.author = { 'GMB' => 'devnull@example.invalid' }
   spec.source = { :path => '.' }
   spec.platform = :ios, '16.0'
-  # ProgramConsole stages the central build into its disposable source snapshot.
+  # TataConsole stages the central build into its disposable source snapshot.
   # CocoaPods requires this path to stay inside the binary Pod root.
   spec.vendored_frameworks = 'ChatSDK.xcframework'
 end

@@ -56,7 +56,7 @@ build_host() {
 }
 
 build_android() {
-  : "${PROGRAM_CONSOLE_NATIVE_ANDROID_DIR:?PROGRAM_CONSOLE_NATIVE_ANDROID_DIR is required}"
+  : "${TATA_CONSOLE_NATIVE_ANDROID_DIR:?TATA_CONSOLE_NATIVE_ANDROID_DIR is required}"
   ensure_target aarch64-linux-android
 
   local ndk_home="${ANDROID_NDK_HOME:-}"
@@ -86,14 +86,14 @@ build_android() {
   export AR_aarch64_linux_android="$toolchain/bin/llvm-ar"
   cargo build --manifest-path "$MANIFEST" --release --target aarch64-linux-android
 
-  local destination="$PROGRAM_CONSOLE_NATIVE_ANDROID_DIR/arm64-v8a"
+  local destination="$TATA_CONSOLE_NATIVE_ANDROID_DIR/arm64-v8a"
   mkdir -p "$destination"
   cp "$TARGET_DIR/aarch64-linux-android/release/libchat_sdk.so" "$destination/"
   assert_symbols "$destination/libchat_sdk.so" "$toolchain/bin/llvm-nm"
 }
 
 build_ios() {
-  : "${PROGRAM_CONSOLE_NATIVE_IOS_DIR:?PROGRAM_CONSOLE_NATIVE_IOS_DIR is required}"
+  : "${TATA_CONSOLE_NATIVE_IOS_DIR:?TATA_CONSOLE_NATIVE_IOS_DIR is required}"
   ensure_target aarch64-apple-ios
   export IPHONEOS_DEPLOYMENT_TARGET=16.0
   # Write the final framework install name during the Rust link. Rust 1.97's
@@ -108,7 +108,7 @@ build_ios() {
   local library="$TARGET_DIR/aarch64-apple-ios/release/libchat_sdk.dylib"
   local framework_root="$TARGET_DIR/ios-framework"
   local framework="$framework_root/ChatSDK.framework"
-  local xcframework="$PROGRAM_CONSOLE_NATIVE_IOS_DIR/ChatSDK.xcframework"
+  local xcframework="$TATA_CONSOLE_NATIVE_IOS_DIR/ChatSDK.xcframework"
   local nm_bin
   nm_bin="$(xcrun --find llvm-nm)"
   assert_symbols "$library" "$nm_bin"
@@ -153,7 +153,7 @@ MODULEMAP
 PLIST
   assert_symbols "$framework/ChatSDK" "$nm_bin"
 
-  mkdir -p "$PROGRAM_CONSOLE_NATIVE_IOS_DIR"
+  mkdir -p "$TATA_CONSOLE_NATIVE_IOS_DIR"
   if [[ -e "$xcframework" ]]; then
     find "$xcframework" -depth -delete
   fi
@@ -161,7 +161,7 @@ PLIST
 
   # CocoaPods only accepts vendored frameworks inside the Pod root. A Flutter
   # host provides this optional package directory during its iOS build; stage only a
-  # temporary symlink, while the actual bytes remain in ProgramConsole storage.
+  # temporary symlink, while the actual bytes remain in TataConsole storage.
   if [[ -n "${CHATSDK_PACKAGE_IOS_DIR:-}" ]]; then
     local staged="$CHATSDK_PACKAGE_IOS_DIR/ChatSDK.xcframework"
     mkdir -p "$CHATSDK_PACKAGE_IOS_DIR"

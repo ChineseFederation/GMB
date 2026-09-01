@@ -1,5 +1,16 @@
 # CitizenSDK 安全模型
 
+## CitizenChain 随包信任资产
+
+`assets/README.md` 规定随包静态资产不得混入设备数据库、缓存或秘密；
+`assets/citizenchain` 是 SDK 唯一随包链信任目录。`manifest.json` 使用精确字段闭集固定
+`product_id = citizensdk`、`chain_id = citizenchain`、`protocol_id = citizenchain`、
+genesis hash 和两个资产 SHA-256。SDK 先验证摘要，再从 `#0` header 重算 genesis hash，
+并核对 chainspec state root；失败时不得创建或初始化 smoldot 原生客户端。
+
+远端 `/chain/citizensdk/bootstrap` 只提供经过边界校验的 bootnode 建议，不能下发 RPC、
+checkpoint、manifest 或链资产摘要覆盖。本版本没有在线链资产替换通道。
+
 ## sr25519 固定口径
 
 - 唯一实现是 `native/signer` 中的 `schnorrkel`，不增加纯 Dart 或自研实现。
@@ -12,7 +23,7 @@
 ## 设备机密与受信任宿主
 
 助记词、母种子、child mini-secret 和私钥不得上传到 TuyuServe、TuyuBooking、Cloudflare、
-GitHub、ProgramConsole 或任何远端服务。标准移动装配只在用户设备硬件金库保存 child 密文，并在
+GitHub、TataConsole 或任何远端服务。标准移动装配只在用户设备硬件金库保存 child 密文，并在
 本地认证、解密和签名。
 
 Android 使用硬件 RSA-OAEP KEK、AES-256-GCM 与逐次 `BIOMETRIC_STRONG`；iOS 使用 Secure

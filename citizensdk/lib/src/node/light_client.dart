@@ -337,7 +337,7 @@ final class CitizenLightClient {
 
   /// 初始化 smoldot 轻客户端并加入 citizenchain。
   ///
-  /// 从 assets/chainspec.json 加载链规格文件。
+  /// 从 assets/citizenchain 的已验证 manifest、chainspec 和同步状态加载链规格。
   /// 如果上次运行有缓存的同步数据库，会通过 `databaseContent` 恢复，
   /// 大幅缩短区块头同步时间。
   /// 如果已初始化或已有初始化正在执行，则复用同一个 Future。
@@ -394,16 +394,18 @@ final class CitizenLightClient {
       final bootstrap = await _fetchBootstrapManifest();
       _ensureLifecycleCurrent(generation);
 
-      // 1. 创建 smoldot 客户端
-      _client = SmoldotClient(config: SmoldotConfig(maxLogLevel: _maxLogLevel));
-      await _client!.initialize();
-      _ensureLifecycleCurrent(generation);
-
-      // 2. 通过 SDK 资产适配器加载 chainspec，并注入安装包固定的 #0 信任锚。
+      // 1. 先通过 SDK 资产适配器验证 manifest、chainspec 和安装包固定的
+      // #0 信任锚。任何损坏都必须在创建或初始化 smoldot 原生客户端前失败，
+      // 不能让未验证链内容进入原生边界。
       // 远端清单只可补充与本地链参数匹配的 bootnode，不能替代随包锚点。
       final bundle = await _assets.load(bootstrap: bootstrap);
       final chainSpec = bundle.chainSpec;
       _expectedGenesisHash = bundle.genesisHash;
+      _ensureLifecycleCurrent(generation);
+
+      // 2. 链资产全部通过后才创建并初始化 smoldot 原生客户端。
+      _client = SmoldotClient(config: SmoldotConfig(maxLogLevel: _maxLogLevel));
+      await _client!.initialize();
       _ensureLifecycleCurrent(generation);
 
       // 3. 优先恢复上次导出的 finalized database，避免每次冷启动都从零同步
@@ -498,6 +500,10 @@ final class CitizenLightClient {
 
   @visibleForTesting
   bool get initializedForTesting => _initialized;
+
+  /// 链资产启动顺序测试专用：在资产读取回调中观察原生客户端是否已创建。
+  @visibleForTesting
+  bool get nativeClientCreatedForTesting => _client != null;
 
   /// 只供生命周期合同测试驱动与生产读取相同的重试/健康状态机。
   @visibleForTesting

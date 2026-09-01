@@ -6,9 +6,9 @@
 #
 # 目标平台是必填参数，不做任何自动探测：探测总要在失败时选一个回落，
 # 而回落的那一端会被当成用户想编的那一端——「以为编了 iOS、实际编的 Android」
-# 就是这么来的。编程控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
+# 就是这么来的。塔塔控制台的「编译iOS端 / 编译Android端」两个按钮各自传死这个参数。
 #
-# 本机中间文件只允许进入ProgramConsole中央`.work`，最终成功包覆盖中央产品产物目录中的固定文件。
+# 本机中间文件只允许进入TataConsole中央`.work`，最终成功包覆盖中央产品产物目录中的固定文件。
 # 固定使用 smoldot 轻节点连接区块链（无需 RPC 服务器）。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -22,10 +22,10 @@ PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 cd "$APP_ROOT"
 
 if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
-  : "${PROGRAM_CONSOLE_TARGET_ROOT:?本机编译必须由 ProgramConsole 提供中央产物目录}"
-  : "${PROGRAM_CONSOLE_WORK_DIR:?本机编译必须由 ProgramConsole 提供中央工作目录}"
-  case "$PROGRAM_CONSOLE_WORK_DIR" in "$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
-    echo "公民中央工作目录不合法：$PROGRAM_CONSOLE_WORK_DIR" >&2; exit 1 ;;
+  : "${TATA_CONSOLE_TARGET_ROOT:?本机编译必须由 TataConsole 提供中央产物目录}"
+  : "${TATA_CONSOLE_WORK_DIR:?本机编译必须由 TataConsole 提供中央工作目录}"
+  case "$TATA_CONSOLE_WORK_DIR" in "$TATA_CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
+    echo "公民中央工作目录不合法：$TATA_CONSOLE_WORK_DIR" >&2; exit 1 ;;
   esac
   # Flutter会把依赖状态写到当前工程；Build直接读取产品源码，并在退出时清除临时状态。
   [[ "$APP_ROOT" == "$REPO_ROOT/citizenapp" ]] || {
@@ -35,7 +35,7 @@ if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
 }
 
 CHATSDK_OVERRIDE_PATH="$APP_ROOT/pubspec_overrides.yaml"
-PUBSPEC_LOCK_BACKUP="$PROGRAM_CONSOLE_WORK_DIR/citizenapp.pubspec.lock"
+PUBSPEC_LOCK_BACKUP="$TATA_CONSOLE_WORK_DIR/citizenapp.pubspec.lock"
 
 prepare_local_chat_sdk_dependency() {
   [[ ! -e "$CHATSDK_OVERRIDE_PATH" ]] || {
@@ -68,16 +68,16 @@ trap 'status=$?; cleanup_direct_source_state; exit "$status"' EXIT
 prepare_local_chat_sdk_dependency
 fi
 
-INCREMENTAL_CACHE_DIR="${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少ProgramConsole本机增量缓存目录}"
-[[ "$INCREMENTAL_CACHE_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/cache" ]] || {
-  echo "CitizenApp本机增量缓存必须位于$PROGRAM_CONSOLE_WORK_DIR/cache" >&2
+INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少TataConsole本机增量缓存目录}"
+[[ "$INCREMENTAL_CACHE_DIR" == "$TATA_CONSOLE_WORK_DIR/cache" ]] || {
+  echo "CitizenApp本机增量缓存必须位于$TATA_CONSOLE_WORK_DIR/cache" >&2
   exit 1
 }
 BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
-ARTIFACT_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT/citizenapp"
-export PROGRAM_CONSOLE_BUILD_DIR="$BUILD_DIR"
-export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
-export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
+ARTIFACT_ROOT="$TATA_CONSOLE_TARGET_ROOT/citizenapp"
+export TATA_CONSOLE_BUILD_DIR="$BUILD_DIR"
+export TATA_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
+export TATA_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
 export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
 export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
 mkdir -p "$XDG_CONFIG_HOME"
@@ -95,7 +95,7 @@ clean_platform_build_outputs() {
 
 # iOS Runner.app完成签名后只覆盖固定 `ios.app.zip`。
 retain_ios_local_artifact() {
-  local app_bundle="$1" staging="$PROGRAM_CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
+  local app_bundle="$1" staging="$TATA_CONSOLE_WORK_DIR/ios.app.zip" destination="$ARTIFACT_ROOT/ios.app.zip"
   rm -f "$staging"
   ditto -c -k --sequesterRsrc --keepParent "$app_bundle" "$staging"
   mkdir -p "$ARTIFACT_ROOT"
@@ -141,7 +141,7 @@ verify_android_release_localization() {
   [[ -f "$apk" ]] || { echo "Android Release APK 不存在：$apk" >&2; return 1; }
   aapt_bin="$(command -v aapt2 || true)"
   if [[ -z "$aapt_bin" ]]; then
-    # ProgramConsole 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
+    # TataConsole 只向子进程传公开工具链环境，不依赖启动它的桌面进程恰好继承
     # ANDROID_HOME。与原生库构建保持同一确定性规则：显式 SDK 优先，macOS 默认
     # SDK 目录兜底，再从已安装 build-tools 中选择最高版本，禁止硬编码具体版本。
     sdk_home="${ANDROID_HOME:-$HOME/Library/Android/sdk}"
@@ -186,8 +186,8 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # 已删除：`-f` 匹配全命令行，而 `flutter_tools.snapshot` 是每一个 flutter 命令的实际执行体，
 # 那一枪不区分产品、不区分平台、也不区分是不是本次运行的——公民钱包正在跑的编译、
 # 乃至你自己在终端里手敲的 flutter，都会一起被 SIGKILL（现象是 `Killed: 9`）。
-# 它要解决的残留问题已经由编程控制台承接：所有动作子进程都在独立进程组里启动，
-# 「停止」与编程控制台退出都按进程组终止整棵进程树，不会再留下脱缰的 flutter。
+# 它要解决的残留问题已经由塔塔控制台承接：所有动作子进程都在独立进程组里启动，
+# 「停止」与塔塔控制台退出都按进程组终止整棵进程树，不会再留下脱缰的 flutter。
 
 # Rust 的 iOS、Android 与宿主产物分别位于不同 target 子目录。禁止设备构建执行根级
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
@@ -218,11 +218,11 @@ if [[ "$PLATFORM" == ios ]]; then
   verify_ios_release_localization "$IOS_APP"
   retain_ios_local_artifact "$IOS_APP"
   echo ""
-  echo "==> Build完成：iOS产物已写入ProgramConsole中央目录。"
+  echo "==> Build完成：iOS产物已写入TataConsole中央目录。"
 elif [[ "$PLATFORM" == android ]]; then
   ANDROID_APK="$BUILD_DIR/app/outputs/flutter-apk/app-release.apk"
   # Flutter 27 的 Android 包定位器仍可能只检查产品默认 build/，即使 Gradle 已按
-  # PROGRAM_CONSOLE_BUILD_DIR 把唯一 Release APK 写入中央目录。只允许用这个准确中央产物
+  # TATA_CONSOLE_BUILD_DIR 把唯一 Release APK 写入中央目录。只允许用这个准确中央产物
   # 收口该工具误报；Gradle 未产出时保持失败，禁止搜索猜测或复制回源码目录。
   if ! flutter build apk --release --target-platform android-arm64 \
     ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}; then

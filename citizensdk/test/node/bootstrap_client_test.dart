@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:citizen_sdk/src/node/bootstrap_client.dart';
 import 'package:citizen_sdk/src/node/bootstrap_manifest.dart';
+import 'package:citizen_sdk/src/node/chain_asset_manifest.dart';
 import 'package:citizen_sdk/src/node/chain_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -116,11 +117,7 @@ void main() {
 
   test('推荐 bootnode 只在链参数与本地 chainspec 完全匹配时注入', () {
     final manifest = BootstrapManifest.fromJson(_manifest());
-    final injected = CitizenChainAssets.combine(
-      chainSpecJson: jsonEncode(_chainSpec()),
-      lightSyncStateJson: jsonEncode(_lightSyncState()),
-      bootstrap: manifest,
-    );
+    final injected = _combineWithBootstrap(manifest);
     final spec = jsonDecode(injected.chainSpec) as Map<String, dynamic>;
     expect(spec['bootNodes'], <String>[
       _bootnodeA,
@@ -131,10 +128,8 @@ void main() {
     final mismatch = _manifest();
     (mismatch['chain'] as Map<String, dynamic>)['state_root'] =
         '0x${'11' * 32}';
-    final unchanged = CitizenChainAssets.combine(
-      chainSpecJson: jsonEncode(_chainSpec()),
-      lightSyncStateJson: jsonEncode(_lightSyncState()),
-      bootstrap: BootstrapManifest.fromJson(mismatch),
+    final unchanged = _combineWithBootstrap(
+      BootstrapManifest.fromJson(mismatch),
     );
     expect(
       (jsonDecode(unchanged.chainSpec) as Map<String, dynamic>)['bootNodes'],
@@ -144,10 +139,8 @@ void main() {
     final wrongGenesis = _manifest();
     (wrongGenesis['chain'] as Map<String, dynamic>)['genesis_hash'] =
         '0x${'33' * 32}';
-    final genesisMismatch = CitizenChainAssets.combine(
-      chainSpecJson: jsonEncode(_chainSpec()),
-      lightSyncStateJson: jsonEncode(_lightSyncState()),
-      bootstrap: BootstrapManifest.fromJson(wrongGenesis),
+    final genesisMismatch = _combineWithBootstrap(
+      BootstrapManifest.fromJson(wrongGenesis),
     );
     expect(
       (jsonDecode(genesisMismatch.chainSpec)
@@ -204,6 +197,32 @@ Map<String, dynamic> _chainSpec() => <String, dynamic>{
 };
 
 Map<String, dynamic> _lightSyncState() => <String, dynamic>{
-  'finalizedBlockHeader': '0x${'00' * 32}00${'00' * 64}',
+  'finalizedBlockHeader': '0x${'00' * 32}00${'44' * 32}${'00' * 32}00',
   'grandpaAuthoritySet': '0x00',
 };
+
+CitizenChainBundle _combineWithBootstrap(BootstrapManifest bootstrap) {
+  final chainSpecJson = jsonEncode(_chainSpec());
+  final lightSyncStateJson = jsonEncode(_lightSyncState());
+  final genesisHash = CitizenChainAssets.genesisHashFromCheckpoint(
+    _lightSyncState()['finalizedBlockHeader']! as String,
+  );
+  final assetManifestJson = jsonEncode(<String, dynamic>{
+    'format_version': 1,
+    'product_id': 'citizensdk',
+    'chain_id': 'citizenchain',
+    'protocol_id': 'citizenchain',
+    'genesis_hash': genesisHash,
+    'chainspec_sha256': CitizenChainAssetManifest.sha256Utf8(chainSpecJson),
+    'light_sync_state_sha256': CitizenChainAssetManifest.sha256Utf8(
+      lightSyncStateJson,
+    ),
+    'sdk_min_version': '1.0.0',
+  });
+  return CitizenChainAssets.combine(
+    assetManifestJson: assetManifestJson,
+    chainSpecJson: chainSpecJson,
+    lightSyncStateJson: lightSyncStateJson,
+    bootstrap: bootstrap,
+  );
+}

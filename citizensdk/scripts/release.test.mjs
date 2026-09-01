@@ -31,9 +31,9 @@ import {
   verifyCitizenSdkRelease,
 } from './release.mjs';
 
-const workRoot = process.env.PROGRAM_CONSOLE_WORK_DIR;
+const workRoot = process.env.TATA_CONSOLE_WORK_DIR;
 if (!workRoot) {
-  throw new Error('CitizenSDK 发布测试缺少 ProgramConsole 中央工作目录');
+  throw new Error('CitizenSDK 发布测试缺少 TataConsole 中央工作目录');
 }
 mkdirSync(workRoot, { recursive: true });
 
@@ -163,7 +163,7 @@ test('smoldot Release 合同覆盖根支持文件并拒绝 223 文件闭集漂�
   }
 });
 
-test('链资产合同固定两个运行时信任锚的闭集与逐文件哈希', () => {
+test('链资产合同固定根边界说明、manifest、目录说明和两个运行时信任锚', () => {
   const root = mkdtempSync(join(workRoot, 'release-chain-assets-test-'));
   const source = join(citizenSdkRoot, 'assets');
   const copy = join(root, 'assets');
@@ -171,15 +171,32 @@ test('链资产合同固定两个运行时信任锚的闭集与逐文件哈希',
     cpSync(source, copy, { recursive: true });
     assert.doesNotThrow(() => assertChainAssets(root));
 
-    const chainSpec = join(copy, 'chainspec.json');
+    const chainSpec = join(copy, 'citizenchain', 'chainspec.json');
     writeFileSync(chainSpec, `${readFileSync(chainSpec, 'utf8')}\n`);
-    assert.throws(() => assertChainAssets(root), /链资产文件哈希漂移：assets\/chainspec\.json/);
-
-    copyFileSync(join(source, 'chainspec.json'), chainSpec);
-    writeFileSync(join(copy, 'unexpected.json'), '{}\n');
     assert.throws(
       () => assertChainAssets(root),
-      /链资产闭集漂移.*额外=assets\/unexpected\.json/,
+      /链资产文件哈希漂移：assets\/citizenchain\/chainspec\.json/,
+    );
+
+    copyFileSync(join(source, 'citizenchain', 'chainspec.json'), chainSpec);
+    const manifest = join(copy, 'citizenchain', 'manifest.json');
+    writeFileSync(
+      manifest,
+      readFileSync(manifest, 'utf8').replace(
+        '"chain_id": "citizenchain"',
+        '"chain_id": "citizenchain-mainnet"',
+      ),
+    );
+    assert.throws(
+      () => assertChainAssets(root),
+      /链资产文件哈希漂移：assets\/citizenchain\/manifest\.json/,
+    );
+
+    copyFileSync(join(source, 'citizenchain', 'manifest.json'), manifest);
+    writeFileSync(join(copy, 'citizenchain', 'unexpected.json'), '{}\n');
+    assert.throws(
+      () => assertChainAssets(root),
+      /链资产闭集漂移.*额外=assets\/citizenchain\/unexpected\.json/,
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -296,6 +313,12 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     assert.throws(
       () => assertHostedPackageSource(root),
       /Hosted Package 依赖约束漂移：bip39_mnemonic/,
+    );
+
+    writeFileSync(pubspecPath, pubspec.replace('crypto: ^3.0.7', 'crypto: ^3.0.6'));
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /Hosted Package 依赖约束漂移：crypto/,
     );
 
     writeFileSync(

@@ -28,7 +28,9 @@ citizensdk/
 │       └── pow/            PoW + GRANDPA 轻节点 Rust 快照
 ├── android/                Android 插件与硬件金库
 ├── ios/                    iOS 插件与硬件金库
-├── assets/                 chain spec 与 #0 light sync state
+├── assets/
+│   ├── README.md           随包静态资产与设备运行状态边界
+│   └── citizenchain/       manifest、chain spec 与 #0 light sync state
 ├── scripts/                外部原生构建与确定性候选工具
 ├── test/                   根包合同测试及迁入的 smoldot 测试
 └── docs/                   产品技术文档和 smoldot 来源记录
@@ -44,6 +46,8 @@ citizensdk/
 - `CitizenSdk`：组合 `chain`、`rpc`、`wallet`、`transfers`、finalized 流水与 `signer`。
 - `CitizenLightClient`：管理 smoldot 生命周期、随包创世锚、bootnode、同步健康、
   finalized database、JSON-RPC 与链头订阅。
+- `CitizenChainAssets`：在创建或初始化 smoldot 原生客户端前核对 manifest 精确字段闭集、正式
+  `citizenchain` 链/协议 ID、两个资产 SHA-256、genesis hash 与 checkpoint state root。
 - `WalletService`：管理一只无根热钱包、`//0..//1989` 多账户、创建/导入/追加/删除、完整
   可用性门禁、账户改名、本地任意载荷签名和用户主动的子账户私钥导出。
 - `ChainRpc`：只经本机轻节点读取 finalized 状态、提交 extrinsic、订阅状态并核对
@@ -126,10 +130,10 @@ CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然
 XCTest；编译成功不等于平台测试执行成功。这些是每个准确提交都要重新满足的测试合同，不是
 对尚未完成最终验收的日期性结论。
 
-2026-08-29 包边界重构前的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
+2026-08-29 包边界重构前的 TataConsole `.work` 隔离快照已实际通过根 Flutter
 230/230 和独立 smoldot Dart 51/51。signer Rust 6/6、FFI Rust 5/5、PoW Rust
 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、Android JUnit 3/3
-与 ProgramConsole 99/99 是同一次任务中的先前执行记录；这些历史结果不冒充包边界重构后的
+与 TataConsole 99/99 是同一次任务中的先前执行记录；这些历史结果不冒充包边界重构后的
 验证结论。iOS 的 2 项 XCTest
 已编译链接，但本机没有 Simulator runtime，未宣称本地执行成功；正式 workflow
 在 GitHub macOS Runner 上要求真实执行并失败关闭。

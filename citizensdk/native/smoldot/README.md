@@ -8,7 +8,7 @@
 - `include/`：公共 C 头文件。
 
 smoldot Dart FFI 绑定已经并入根 `citizen_sdk` 包的 `lib/src/smoldot`，不再形成独立
-`path` 依赖。动态库继续使用官方依赖名称 `smoldot`。Android/iOS 从 ProgramConsole 或
+`path` 依赖。动态库继续使用官方依赖名称 `smoldot`。Android/iOS 从 TataConsole 或
 Runner 的外部原生产物目录注入库，源码树不保存 `.so`、`.a` 或 Cargo target。
 
 原 smoldot Dart 包的历史说明、包清单和许可证保存在 `docs/smoldot-dart`；迁移后的生产

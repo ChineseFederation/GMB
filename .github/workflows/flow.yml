@@ -1,4 +1,4 @@
-# GitHub要求的仓库固定入口；全部产品流程由 programconsole/flows 直接实现。
+# GitHub要求的仓库固定入口；全部产品流程由 tataconsole/flows 直接实现。
 name: GMB · Flow
 
 on:
@@ -9,7 +9,7 @@ on:
         required: true
         type: string
       run_title:
-        description: 编程控制台展示标题
+        description: 塔塔控制台展示标题
         required: true
         type: string
       source_sha:
@@ -61,7 +61,7 @@ env:
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
   # CI 始终使用 workflow_dispatch 创建时由 GitHub 锁定的 main 提交；只有 Release
-  # 使用对应成功 CI 的 source_sha。禁止编程控制台给 CI 注入预读或历史提交。
+  # 使用对应成功 CI 的 source_sha。禁止塔塔控制台给 CI 注入预读或历史提交。
   GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && endsWith(inputs.pipeline, '.release') && inputs.source_sha || github.sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
@@ -93,7 +93,7 @@ jobs:
     steps:
       - name: 执行中央共享校验
         id: central_job
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: validate_dispatch
           pipeline: ${{ inputs.pipeline }}
@@ -117,7 +117,7 @@ jobs:
     steps:
       - name: 执行 shared 中央产品作业
         id: central_job
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: retain-current-run
           pipeline: ${{ inputs.pipeline }}
@@ -143,7 +143,7 @@ jobs:
       matrix: ${{ fromJSON(needs.validate_dispatch.outputs.repository_contracts_matrix) }}
     steps:
       - name: 执行统一仓库门禁
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: ${{ matrix.contract }}
           pipeline: ${{ inputs.pipeline }}
@@ -163,23 +163,23 @@ jobs:
       matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_0_matrix) }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
       - name: 执行中央产品调度
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -208,23 +208,23 @@ jobs:
       matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_1_matrix) }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
       - name: 执行中央产品调度
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -253,23 +253,23 @@ jobs:
       matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_2_matrix) }}
     env:
       GH_TOKEN: ${{ github.token }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
       - name: 执行中央产品调度
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -307,23 +307,23 @@ jobs:
       RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
       CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
       ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
       - name: 执行中央产品调度
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -363,23 +363,23 @@ jobs:
       RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
       CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
       ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      PROGRAM_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      PROGRAM_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
+      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
+      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
+      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
+      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
       - name: 执行中央产品调度
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -405,9 +405,9 @@ jobs:
       contents: read
     steps:
       - name: 成功和失败各保留最近一条
-        uses: ChineseFederation/Only/programconsole/flows/gmb/shared@main
+        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
         env:
-          PROGRAM_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: ${{ needs.repository-contracts.result }}
+          TATA_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: ${{ needs.repository-contracts.result }}
         with:
           job: retain-terminal-run
           pipeline: ${{ inputs.pipeline }}

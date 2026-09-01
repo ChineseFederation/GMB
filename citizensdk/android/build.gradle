@@ -27,7 +27,7 @@ android {
     namespace = 'org.citizen.sdk'
     compileSdk = 36
 
-    def consoleNativeAndroidDir = System.getenv('PROGRAM_CONSOLE_NATIVE_ANDROID_DIR')
+    def consoleNativeAndroidDir = System.getenv('TATA_CONSOLE_NATIVE_ANDROID_DIR')
     if (consoleNativeAndroidDir != null && !consoleNativeAndroidDir.trim().isEmpty()) {
         sourceSets {
             main {

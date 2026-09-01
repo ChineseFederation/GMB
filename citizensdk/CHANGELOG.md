@@ -9,6 +9,12 @@
 - Verified that the Hosted Package candidate is derived from the same audited
   GitHub Release candidate. Publication to a Hosted registry remains a
   separately authorized operation.
+- Bound the packaged CitizenChain chain spec and light sync state to an exact
+  `citizenchain` identity, genesis hash, and SHA-256 asset manifest.
+- Required the complete chain-asset contract to pass before the native
+  smoldot client is created or initialized.
+- Excluded generated build and tool state from the Hosted Package even when
+  validation runs in a previously exercised disposable copy.
 
 ## 0.1.0 - 2026-08-29
 

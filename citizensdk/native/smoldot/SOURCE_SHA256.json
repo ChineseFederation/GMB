@@ -26,7 +26,7 @@
         },
         {
           "path": "Cargo.toml",
-          "sha256": "6be5e8110da5ba70ec0bb1649065adc64b1a3b5fa7207baba46fcbdc51755a55"
+          "sha256": "f8d80e96a5f4fcc372d792a86af11cc52c458d39678ff2c3f9c3406f1b59e367"
         },
         {
           "path": "build.rs",

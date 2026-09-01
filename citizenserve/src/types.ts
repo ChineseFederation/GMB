@@ -71,7 +71,7 @@ export interface SquareNotifyJob {
 }
 
 /// Wrangler 根据 wrangler.toml 生成固定变量与资源绑定；发布期变量和 Secret 只保留名称契约，
-/// 实际值由 ProgramConsole 分别通过 `--var` 与受保护 Secret FIFO 注入。
+/// 实际值由 TataConsole 分别通过 `--var` 与受保护 Secret FIFO 注入。
 interface WorkerSecretsAndOptionalVars {
   // ChatServer 私钥只签发短期 EdDSA JWT；服务地址是公开 HTTPS 配置。
   CHAT_AUTH_ED25519_PRIVATE_KEY?: string;
@@ -101,15 +101,15 @@ interface WorkerSecretsAndOptionalVars {
   CONSTITUTION_TTL_SECONDS?: string;
   TURNSTILE_SECRET?: string;
   HASH_KEY?: string;
-  // 本地部署编程控制台↔Worker 结算接口鉴权令牌，只放 Worker Secret。
+  // 本地部署塔塔控制台↔Worker 结算接口鉴权令牌，只放 Worker Secret。
   SETTLE_TOKEN?: string;
   // 付款意图 HMAC 密钥，只放 Worker Secret；用于把登录账户、付款钱包和报价绑定为短期令牌。
   TOPUP_INTENT_SECRET?: string;
-  // 编程控制台更新公民链官网下载指针的独立 HMAC 密钥，不得与部署或结算凭据复用。
+  // 塔塔控制台更新公民链官网下载指针的独立 HMAC 密钥，不得与部署或结算凭据复用。
   CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET?: string;
 }
 
-/// Wrangler 会把配置值推导为字面量；Worker 运行期仍需接受测试覆盖值和编程控制台注入的字符串。
+/// Wrangler 会把配置值推导为字面量；Worker 运行期仍需接受测试覆盖值和塔塔控制台注入的字符串。
 type WidenWorkerVar<T> = T extends string ? string : T;
 type GeneratedBindings = {
   [K in keyof CloudflareBindings]: WidenWorkerVar<CloudflareBindings[K]>;

@@ -14,6 +14,11 @@ finalized 数据库、多账户热钱包、硬件金库、任意协议载荷签�
 CitizenApp 现有功能和
 依赖保持不变；只有在 SDK 稳定后，才会另行设计 CitizenApp 的切换步骤。
 
+`assets/README.md` 固定随包资产与设备运行状态的边界，正式链信任资产统一位于
+`assets/citizenchain`。SDK 在创建或初始化 smoldot 原生客户端前先验证固定 manifest、
+`chain_id = citizenchain`、`protocol_id = citizenchain`、genesis hash、chainspec 摘要和
+light sync state 摘要；任何不一致都失败关闭，远端启动清单只能建议 bootnode。
+
 ## 当前交付边界
 
 - 正式 CI/Release 候选只声明 Android `arm64-v8a` 与 iOS `arm64`。
@@ -64,8 +69,8 @@ Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、移动�
 两种分发读取同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
 公民网下载。
 
-本机 ProgramConsole 只允许把 CitizenSDK 生成记录写入
-`/Users/rhett/Only/programconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
+本机 TataConsole 只允许把 CitizenSDK 生成记录写入
+`/Users/rhett/Only/tataconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
 工作区中的未提交修改不会被冒充成该提交。中央目录现有三件套属于其生成时的历史提交，
 除非重新完成当前提交的统一构建与核验，否则不得称为当前源码候选。
 

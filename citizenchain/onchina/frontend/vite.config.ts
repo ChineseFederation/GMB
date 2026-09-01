@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig(({ command }) => {
   if (command === 'build' && !process.env.ONCHINA_FRONTEND_DIST && process.env.CI !== 'true') {
-    throw new Error('本机编译必须由ProgramConsole提供ONCHINA_FRONTEND_DIST，禁止恢复产品目录dist');
+    throw new Error('本机编译必须由TataConsole提供ONCHINA_FRONTEND_DIST，禁止恢复产品目录dist');
   }
   return {
   // OnChina 后端同源托管 dist,base 用相对路径以适配任意内网挂载路径。

@@ -20,11 +20,11 @@
 #
 require 'pathname'
 
-native_dir = ENV['PROGRAM_CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
+native_dir = ENV['TATA_CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
 library_path = File.expand_path('libsmoldot.a', native_dir)
 symbols_path = File.expand_path('exported_symbols.txt', native_dir)
 # CocoaPods 1.17 禁止 vendored_libraries 使用绝对文件模式。中央产物仍留在
-# ProgramConsole 工作目录，只在 podspec 解析时转换为相对本文件的路径，不复制回源码树。
+# TataConsole 工作目录，只在 podspec 解析时转换为相对本文件的路径，不复制回源码树。
 library_pattern = Pathname.new(library_path).relative_path_from(Pathname.new(__dir__)).to_s
 unless File.exist?(symbols_path)
   raise "缺少 #{symbols_path},先运行 scripts/build-smoldot-native.sh ios 生成静态库与符号清单"

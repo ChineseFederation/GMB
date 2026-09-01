@@ -4,7 +4,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 late _MemoryChainDatabaseStore _store;
 
@@ -13,6 +16,27 @@ void main() {
 
   setUp(() {
     _store = _MemoryChainDatabaseStore();
+  });
+
+  test('损坏链资产在创建或初始化原生 smoldot 客户端前失败', () async {
+    late CitizenLightClient manager;
+    final reads = <String>[];
+    final bundle = _FailingAssetBundle((key) {
+      reads.add(key);
+      expect(manager.nativeClientCreatedForTesting, isFalse);
+    });
+    manager = CitizenLightClient(
+      assets: CitizenChainAssets(bundle: bundle),
+      bootstrapClient: BootstrapClient(
+        httpClient: MockClient((_) async => http.Response('{}', 503)),
+      ),
+      databaseStore: _store,
+    );
+
+    await expectLater(manager.ensureStarted(), throwsFormatException);
+    expect(reads, <String>[CitizenChainAssets.manifestAsset]);
+    expect(manager.nativeClientCreatedForTesting, isFalse);
+    await manager.dispose();
   });
 
   test('并发启动复用同一个 Future 且只执行一次初始化', () async {
@@ -330,7 +354,7 @@ void main() {
 
     test('从内置 #0 checkpoint 推导合法 genesis hash', () async {
       final checkpointRaw = await File(
-        'assets/light_sync_state.json',
+        'assets/citizenchain/light_sync_state.json',
       ).readAsString();
       final checkpoint = jsonDecode(checkpointRaw) as Map<String, dynamic>;
 
@@ -808,5 +832,19 @@ final class _MemoryChainDatabaseStore implements ChainDatabaseStore {
   @override
   Future<void> delete() async {
     value = null;
+  }
+}
+
+/// 生产启动顺序回归夹具：读取第一项资产时检查原生客户端尚未创建，随后
+/// 以确定性格式错误终止，避免测试依赖本机动态库或网络。
+final class _FailingAssetBundle extends AssetBundle {
+  _FailingAssetBundle(this.onLoad);
+
+  final void Function(String key) onLoad;
+
+  @override
+  Future<ByteData> load(String key) async {
+    onLoad(key);
+    throw FormatException('测试链资产损坏：$key');
   }
 }

@@ -49,7 +49,7 @@ flutter test
 ```
 
 Android 共享硬件金库的原生单元测试只运行 Release 变体。真机构建、签名、
-安装与证书回读只能通过 ProgramConsole 正式入口执行，不得把未签名候选
+安装与证书回读只能通过 TataConsole 正式入口执行，不得把未签名候选
 当作交付结果。QR registry 与仓库守卫使用 Release profile 验证：
 
 ```bash

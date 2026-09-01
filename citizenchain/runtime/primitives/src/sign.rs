@@ -56,7 +56,7 @@ pub const fn qr_chain_action(pallet_index: u8, call_index: u8) -> u16 {
 //   指定用途钥加密交给一次性接收公钥；不提交链，也不改变 CID 绑定。
 // - 0x23:CitizenApp 钱包账户签名模式确认哈希域。只用于本机验证热钱包私钥确实
 //   控制目标 AccountId 后写入 Hot；不提交链、不修改账户控制权。
-// - 0x24:ProgramConsole 生产发布授权哈希域。冷钱包签署精确 Release、产物摘要、
+// - 0x24:TataConsole 生产发布授权哈希域。冷钱包签署精确 Release、产物摘要、
 //   回滚锚点和短时随机挑战；不提交链，也不向发布平台发送钱包信息。
 //   新增签名 op_tag 一律往上顺延,禁止回填 0x00-0x0F 或复用已删域的旧值。
 
@@ -118,7 +118,7 @@ pub const OP_SIGN_ACCOUNT_DATA_KEY_PROVISION: u8 = 0x22;
 /// CitizenApp 钱包账户签名模式确认：本机私钥签署创世哈希、目标 AccountId、
 /// `hot` 模式与一次性挑战。只用于本机重标验证，不提交链。
 pub const OP_SIGN_WALLET_MODE: u8 = 0x23;
-/// ProgramConsole 生产发布授权：只在本机校验，且必须与 Touch ID 同时通过。
+/// TataConsole 生产发布授权：只在本机校验，且必须与 Touch ID 同时通过。
 pub const OP_SIGN_PUBLISH: u8 = 0x24;
 
 /// 二进制前缀域(0x18/0x19)统一前缀长度:`GMB`(3B) + op_tag(1B) = 4 字节。

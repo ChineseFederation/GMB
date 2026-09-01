@@ -3,8 +3,8 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, test } from 'vitest';
 const projectPath = resolve(import.meta.dirname, '..');
-const flowRoot = process.env.PROGRAM_CONSOLE_FLOW_ROOT;
-if (!flowRoot) throw new Error('缺少 PROGRAM_CONSOLE_FLOW_ROOT');
+const flowRoot = process.env.TATA_CONSOLE_FLOW_ROOT;
+if (!flowRoot) throw new Error('缺少 TATA_CONSOLE_FLOW_ROOT');
 const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots: string[] = [];
 

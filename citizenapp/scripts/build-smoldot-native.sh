@@ -20,16 +20,16 @@ RUST_DIR="$CITIZENAPP_DIR/smoldot/ffi"
 TARGET="${1:-all}"
 
 if [[ "$TARGET" == ios || "$TARGET" == android ]]; then
-  if [[ -n "${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:-}" ]]; then
-    export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
-  elif [[ -n "${PROGRAM_CONSOLE_WORK_DIR:-}" ]]; then
-    export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/cargo"
+  if [[ -n "${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:-}" ]]; then
+    export CARGO_TARGET_DIR="$TATA_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
+  elif [[ -n "${TATA_CONSOLE_WORK_DIR:-}" ]]; then
+    export CARGO_TARGET_DIR="$TATA_CONSOLE_WORK_DIR/native/cargo"
   elif [[ "${CI:-}" == true ]]; then
     export CARGO_TARGET_DIR="$RUST_DIR/target"
-    export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$CITIZENAPP_DIR/android/app/src/main/jniLibs"
-    export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$CITIZENAPP_DIR/ios/smoldot"
+    export TATA_CONSOLE_NATIVE_ANDROID_DIR="$CITIZENAPP_DIR/android/app/src/main/jniLibs"
+    export TATA_CONSOLE_NATIVE_IOS_DIR="$CITIZENAPP_DIR/ios/smoldot"
   else
-    echo '本机原生库编译必须由ProgramConsole提供中央工作目录' >&2
+    echo '本机原生库编译必须由TataConsole提供中央工作目录' >&2
     exit 1
   fi
 fi
@@ -90,7 +90,7 @@ build_android() {
   cargo build --release --target aarch64-linux-android
 
   # CitizenApp Android 唯一支持 arm64-v8a；禁止重新生成任何 32 位或 x86 ABI。
-  local arm64_dest="${PROGRAM_CONSOLE_NATIVE_ANDROID_DIR:?缺少中央Android原生库目录}/arm64-v8a"
+  local arm64_dest="${TATA_CONSOLE_NATIVE_ANDROID_DIR:?缺少中央Android原生库目录}/arm64-v8a"
   mkdir -p "$arm64_dest"
   cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/libsmoldot.so" "$arm64_dest/"
   echo "Android arm64-v8a: $arm64_dest/libsmoldot.so ($(wc -c < "$arm64_dest/libsmoldot.so" | tr -d ' ') bytes)"
@@ -114,7 +114,7 @@ build_ios() {
 
   # Smoldot 继续作为独立静态库进入 Runner；ChatSDK 由自己的动态 XCFramework
   # 承载，禁止再把聊天 Rust crate 合并到本归档。
-  local dest="${PROGRAM_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
+  local dest="${TATA_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
   mkdir -p "$dest"
   cp "$CARGO_TARGET_DIR/aarch64-apple-ios/release/libsmoldot.a" "$dest/"
 
@@ -166,7 +166,7 @@ build_host() {
     Linux) host_extension=so ;;
     *) echo "错误: 不支持的 flutter test 宿主平台：$(uname -s)"; return 1 ;;
   esac
-  # Respect the caller-owned Cargo target directory so ProgramConsole can keep
+  # Respect the caller-owned Cargo target directory so TataConsole can keep
   # every native build artifact inside its central work tree.
   local host_target_dir="${CARGO_TARGET_DIR:-$RUST_DIR/target}"
   local host_library="$host_target_dir/release/libsmoldot.$host_extension"
@@ -227,7 +227,7 @@ build_host() {
 }
 
 verify_android_package() {
-  local package="$1" expected="${PROGRAM_CONSOLE_NATIVE_ANDROID_DIR:-$CITIZENAPP_DIR/android/app/src/main/jniLibs}/arm64-v8a/libsmoldot.so" entry temporary packaged nm_bin symbols
+  local package="$1" expected="${TATA_CONSOLE_NATIVE_ANDROID_DIR:-$CITIZENAPP_DIR/android/app/src/main/jniLibs}/arm64-v8a/libsmoldot.so" entry temporary packaged nm_bin symbols
   [[ -f "$package" ]] || { echo "错误: Android 包不存在：$package"; return 1; }
   [[ -f "$expected" ]] || { echo "错误: Android 原生库不存在：$expected"; return 1; }
   case "$package" in

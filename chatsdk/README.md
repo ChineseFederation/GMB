@@ -91,7 +91,7 @@ GMB 本机开发由产品脚本临时写入 `pubspec_overrides.yaml`，把同一
 
 ## 开发验证
 
-所有 Flutter/Dart 构建与测试产物必须写入 ProgramConsole 的 target/.work 隔离工作区，不得在源码目录生成构建产物。
+所有 Flutter/Dart 构建与测试产物必须写入 TataConsole 的 target/.work 隔离工作区，不得在源码目录生成构建产物。
 
 基础验证为 flutter analyze 和 flutter test。
 

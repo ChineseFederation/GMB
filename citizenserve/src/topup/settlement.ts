@@ -16,8 +16,8 @@ import type { TopupToken } from './config';
 import { findOrderById, statusLabel, type TopupOrderRow } from './orders';
 import { verifyErc20Payment } from './evm_verify';
 
-/// 本地部署编程控制台结算接口。稳定币事实由 EVM 复核，公民币事实由 finalized
-/// CitizenChain 区块复核；编程控制台声明本身不能把订单改成 paid。
+/// 本地部署塔塔控制台结算接口。稳定币事实由 EVM 复核，公民币事实由 finalized
+/// CitizenChain 区块复核；塔塔控制台声明本身不能把订单改成 paid。
 const PENDING_QUERY_LIMIT = 50;
 const HISTORY_QUERY_LIMIT = 100;
 const HISTORY_STATUSES = ['pending', 'paid', 'exception'] as const;
@@ -80,7 +80,7 @@ export async function topupPendingRoute(request: Request, env: Env): Promise<Res
   });
 }
 
-/// GET history 是 ProgramConsole 换机后重建嵌入式 SQLite 的唯一远程镜像源。
+/// GET history 是 TataConsole 换机后重建嵌入式 SQLite 的唯一远程镜像源。
 /// 结算令牌仍是唯一授权；按 `(confirmed_at, order_id)` 稳定分页，三种业务状态
 /// 分别走现有 `(status, confirmed_at)` 索引后合并，不为读镜像单独改生产 Schema。
 export async function topupHistoryRoute(request: Request, env: Env): Promise<Response> {
@@ -128,7 +128,7 @@ export async function topupHistoryRoute(request: Request, env: Env): Promise<Res
   });
 }
 
-/// POST claim — 发币前原子抢占订单。claim 不自动过期：编程控制台崩溃后必须核链并人工处置，
+/// POST claim — 发币前原子抢占订单。claim 不自动过期：塔塔控制台崩溃后必须核链并人工处置，
 /// 绝不能靠租约超时自动重发。
 export async function topupClaimRoute(request: Request, env: Env, orderId: string): Promise<Response> {
   requireSettleAuth(request, env);

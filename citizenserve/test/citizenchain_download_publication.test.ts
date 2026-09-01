@@ -124,13 +124,13 @@ describe('公民链官网显式发布指针', () => {
     )).rejects.toMatchObject({ code: 'publication_revision_conflict' });
   });
 
-  it('错误或过期的编程控制台签名在读取 D1 前拒绝', async () => {
+  it('错误或过期的塔塔控制台签名在读取 D1 前拒绝', async () => {
     const path = `${basePath}macos`;
     const invalid = new Request(`https://worker.test/api${path}`, {
       headers: {
-        'x-console-time': String(Date.now()),
-        'x-console-nonce': '11'.repeat(16),
-        'x-console-signature': '00'.repeat(32),
+        'x-tataconsole-time': String(Date.now()),
+        'x-tataconsole-nonce': '11'.repeat(16),
+        'x-tataconsole-signature': '00'.repeat(32),
       },
     });
     await expect(routeRequest(invalid, env)).rejects.toMatchObject({
@@ -190,9 +190,9 @@ async function signedRequest(
     'HMAC', key, new TextEncoder().encode(canonical),
   )));
   const headers: Record<string, string> = {
-    'x-console-time': String(timestamp),
-    'x-console-nonce': nonce,
-    'x-console-signature': signature,
+    'x-tataconsole-time': String(timestamp),
+    'x-tataconsole-nonce': nonce,
+    'x-tataconsole-signature': signature,
   };
   if (body) {
     headers['content-type'] = 'application/json';

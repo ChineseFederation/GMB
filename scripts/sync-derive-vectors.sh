@@ -18,15 +18,15 @@ set -euo pipefail
 # 仓库根(本脚本位于 <repo>/scripts/)。
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/programconsole/target}"
-SHARED_WORK_DIR="${PROGRAM_CONSOLE_WORK_DIR:-${PROGRAM_CONSOLE_TARGET_ROOT}/.work/shared-repository}"
-[[ "$SHARED_WORK_DIR" == "${PROGRAM_CONSOLE_TARGET_ROOT}/.work/shared-repository" ]] \
+TATA_CONSOLE_TARGET_ROOT="${TATA_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/tataconsole/target}"
+SHARED_WORK_DIR="${TATA_CONSOLE_WORK_DIR:-${TATA_CONSOLE_TARGET_ROOT}/.work/shared-repository}"
+[[ "$SHARED_WORK_DIR" == "${TATA_CONSOLE_TARGET_ROOT}/.work/shared-repository" ]] \
   || { echo "[sync] 共享仓库中央工作目录不合法：${SHARED_WORK_DIR}" >&2; exit 1; }
 mkdir -p "$SHARED_WORK_DIR/cargo"
 export CARGO_TARGET_DIR="$SHARED_WORK_DIR/cargo"
 cleanup_shared_work() {
   rm -rf "$SHARED_WORK_DIR"
-  rmdir "${PROGRAM_CONSOLE_TARGET_ROOT}/.work" 2>/dev/null || true
+  rmdir "${TATA_CONSOLE_TARGET_ROOT}/.work" 2>/dev/null || true
 }
 trap cleanup_shared_work EXIT INT TERM HUP
 

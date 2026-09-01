@@ -21,16 +21,16 @@ LIB_NAME="libcitizenwallet_signer"
 TARGET="${1:-all}"
 
 if [[ "$TARGET" == ios || "$TARGET" == android ]]; then
-  if [[ -n "${PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR:-}" ]]; then
-    export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
-  elif [[ -n "${PROGRAM_CONSOLE_WORK_DIR:-}" ]]; then
-    export CARGO_TARGET_DIR="$PROGRAM_CONSOLE_WORK_DIR/native/cargo"
+  if [[ -n "${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:-}" ]]; then
+    export CARGO_TARGET_DIR="$TATA_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
+  elif [[ -n "${TATA_CONSOLE_WORK_DIR:-}" ]]; then
+    export CARGO_TARGET_DIR="$TATA_CONSOLE_WORK_DIR/native/cargo"
   elif [[ "${CI:-}" == true ]]; then
     export CARGO_TARGET_DIR="$RUST_DIR/target"
-    export PROGRAM_CONSOLE_NATIVE_ANDROID_DIR="$WALLET_DIR/android/app/src/main/jniLibs"
-    export PROGRAM_CONSOLE_NATIVE_IOS_DIR="$WALLET_DIR/ios/signer"
+    export TATA_CONSOLE_NATIVE_ANDROID_DIR="$WALLET_DIR/android/app/src/main/jniLibs"
+    export TATA_CONSOLE_NATIVE_IOS_DIR="$WALLET_DIR/ios/signer"
   else
-    echo '本机原生库编译必须由ProgramConsole提供中央工作目录' >&2
+    echo '本机原生库编译必须由TataConsole提供中央工作目录' >&2
     exit 1
   fi
 fi
@@ -69,7 +69,7 @@ verify_symbols() {
 }
 
 verify_android_package() {
-  local package="$1" expected="${PROGRAM_CONSOLE_NATIVE_ANDROID_DIR:-$WALLET_DIR/android/app/src/main/jniLibs}/arm64-v8a/$LIB_NAME.so" entry temporary packaged
+  local package="$1" expected="${TATA_CONSOLE_NATIVE_ANDROID_DIR:-$WALLET_DIR/android/app/src/main/jniLibs}/arm64-v8a/$LIB_NAME.so" entry temporary packaged
   [[ -f "$package" ]] || { echo "错误: Android 包不存在：$package"; return 1; }
   [[ -f "$expected" ]] || { echo "错误: Android 原生库不存在：$expected"; return 1; }
   case "$package" in
@@ -157,7 +157,7 @@ build_android() {
   cargo build --release --target aarch64-linux-android
 
   # CitizenWallet Android 唯一支持 arm64-v8a；禁止重新生成任何 32 位或 x86 ABI。
-  local arm64_dest="${PROGRAM_CONSOLE_NATIVE_ANDROID_DIR:?缺少中央Android原生库目录}/arm64-v8a"
+  local arm64_dest="${TATA_CONSOLE_NATIVE_ANDROID_DIR:?缺少中央Android原生库目录}/arm64-v8a"
   mkdir -p "$arm64_dest"
   cp "$CARGO_TARGET_DIR/aarch64-linux-android/release/$LIB_NAME.so" "$arm64_dest/"
   echo "Android arm64-v8a: $arm64_dest/$LIB_NAME.so ($(wc -c < "$arm64_dest/$LIB_NAME.so" | tr -d ' ') bytes)"
@@ -175,7 +175,7 @@ build_ios() {
   # iOS 用**静态库**而非 dylib：裸 .dylib 需嵌入 + 单独签名，且 App Store 要求
   # 动态库必须包在 .framework 里；静态库直接链进 App 二进制，无这些坑。
   # 符号经 podspec 的 -force_load 保留，Dart 侧用 DynamicLibrary.process() 取。
-  local dest="${PROGRAM_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
+  local dest="${TATA_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
   mkdir -p "$dest"
   cp "$CARGO_TARGET_DIR/aarch64-apple-ios/release/$LIB_NAME.a" "$dest/"
   echo "iOS arm64: $dest/$LIB_NAME.a ($(wc -c < "$dest/$LIB_NAME.a" | tr -d ' ') bytes)"

@@ -73,7 +73,7 @@ formatter 归一外不改行为；
 历史 `README.md`、`BUILD.md`、`UPSTREAM.md` 中的桌面平台、CitizenApp 路径及源码树内
 `target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前只
 交付 Android ARM64 与 iOS ARM64；宿主测试库与全部生成记录只能写入 Runner 临时目录或
-ProgramConsole 中央目录。实际指引以本文件、根 README 和 `docs/NATIVE_PACKAGING.md` 为准。
+TataConsole 中央目录。实际指引以本文件、根 README 和 `docs/NATIVE_PACKAGING.md` 为准。
 
 ## smoldot FFI
 
@@ -138,7 +138,7 @@ Release 门禁把 `native/smoldot` 固定为 223 个普通文件的完整闭集�
 |---|---|---|
 | `LICENSE` | 与 `citizenapp/smoldot/pow/LICENSE` 逐字节一致 | `aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4` |
 | `LICENSE-APACHE-2.0` | 与 `citizenapp/smoldot/dart/LICENSE` 逐字节一致 | `4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78` |
-| `README.md` | CitizenSDK 边界说明 | `00edbd5b7559d061e43b3d6e1d64e3d760340c28799dccd880af20a32c8a6b52` |
+| `README.md` | CitizenSDK 边界说明 | `5eb02391d53347f28cad43229fde751c5f54bb905ba63a61318dbeb9211ed0e1` |
 | `UPSTREAM.md` | CitizenSDK 上游与本地改动说明 | `9826a09529ebf2eabb253d05bcccbf8b2107e9c39950ee0aa200b06b5e4feb94` |
 | `include/README.md` | CitizenSDK 公共 ABI 说明 | `2ae510563d3b87a852bc990d462ad940d92578b05fbe9809a9c82d63c16503bc` |
 | `include/citizensdk.h` | CitizenSDK 聚合公共 ABI | `18c476d67cd00822b1a14fe4317330d56195712a7f8e33f39a487d84ad1a0819` |
@@ -148,15 +148,23 @@ Release 门禁把 `native/smoldot` 固定为 223 个普通文件的完整闭集�
 
 ## 链资产、轻节点行为与交易
 
-以下固定链资产逐字节来自 CitizenApp：
+以下两个固定链资产逐字节来自 CitizenApp，并收敛在 CitizenSDK 独立产品目录：
 
-- `assets/chainspec.json`，SHA-256
+- `assets/citizenchain/chainspec.json`，SHA-256
   `6ae934933682a8ffca78663dd4391a730b6ae219bd12abfb5d96b4d8154fc2e0`；
-- `assets/light_sync_state.json`，SHA-256
+- `assets/citizenchain/light_sync_state.json`，SHA-256
   `014802836a0f6e01a9f1bf7173b8e04c9df8fc3f057565f855abdccdc7361ab6`。
 
-Release 门禁反向枚举 `assets`，只允许上述两个普通文件，并逐文件固定哈希。仅验证 JSON 可解析、
-bootnode 数量、区块高度或哈希字段形状不能替代这项逐字节信任锚检查。
+CitizenSDK 自有 `assets/README.md` 固定随包静态资产与设备运行状态的边界，SHA-256 为
+`647c1d957cb16ae179813ef2d54867459286d024a857f8eb72bcd791d59eb5dd`。
+`assets/citizenchain/manifest.json` 固定产品、正式 `citizenchain` 链/协议 ID、
+genesis hash 和上述两个摘要，SHA-256 为
+`73983825dbefac4a74102c80db9913f0ea27ca952eaa110d276ad1c8854835d8`；相邻 README 记录资产
+来源与更新门禁，SHA-256 为
+`78f2582c48562bb3b65a224362e285121d58e69353677ae72ba5d69235f5871b`。Release 门禁反向枚举
+`assets`，只允许根边界说明与 `citizenchain` 四项文件共五个普通文件，并逐文件固定哈希。
+运行时会在创建或初始化 smoldot 原生客户端前重算两个摘要和 genesis hash，并核对 checkpoint
+state root。仅验证 JSON 可解析、bootnode 数量、区块高度或字段形状不能替代这些检查。
 
 CitizenApp 的轻节点服务、钱包管理器和交易 RPC 同时耦合全局单例、Isar、日志、身份、
 聊天、广场或服务器中继，不能整文件复制进产品无关 SDK。以下层属于行为收编与适配，不宣称
@@ -253,10 +261,10 @@ Android `:citizen_sdk:testDebugUnitTest` JUnit 与 iOS Simulator `xcodebuild tes
 插件、发现测试或生成测试报告都不能替代执行。上述数量和命令描述测试套件合同，不是尚未完成
 的某次最终验收结果。
 
-2026-08-29 包边界重构前的 ProgramConsole `.work` 隔离快照已实际通过根 Flutter
+2026-08-29 包边界重构前的 TataConsole `.work` 隔离快照已实际通过根 Flutter
 230/230、独立 smoldot Dart 51/51、钱包定向 88/88、交易定向 85/85、signer Rust 6/6、
 FFI Rust 5/5、PoW Rust 290/290（另有 3 项上游 ignored、14 个 benchmark 目标成功）、
-Android JUnit 3/3、Release 合同 18/18、ProgramConsole 99/99 与统一数据字典定向合同 2/2；
+Android JUnit 3/3、Release 合同 18/18、TataConsole 99/99 与统一数据字典定向合同 2/2；
 这些历史结果不冒充本次目录重构后的验证结论。
 Android 最终冻结副本与产品真源逐字节目录比较无差异，生成的 CitizenSDK AAR 只包含
 `arm64-v8a/libsmoldot.so`。iOS ARM64 设备 Release App 与 ARM64 Simulator 测试包均完成

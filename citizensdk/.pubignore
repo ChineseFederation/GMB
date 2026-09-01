@@ -17,6 +17,13 @@
 /android/src/test/
 /ios/Tests/
 
+# Dart/Flutter 与各平台工具即使在 dry-run 副本中生成状态，也绝不能进入 Hosted 包。
+/.dart_tool/**
+/build/**
+/**/build/**
+/**/target/**
+/**/.gradle/**
+
 # 生产源码目录中的分层说明不是运行时文件；根 README 与法律声明继续保留。
 /lib/**/README.md
 /android/src/main/**/README.md

@@ -14,7 +14,7 @@ routes = [{ pattern = "www.crcfrcn.com/api/*", zone_name = "crcfrcn.com" }]
 [version_metadata]
 binding = "CF_VERSION_METADATA"
 
-# 正式部署由 ProgramConsole 一次性提交完整 Secret 集合；公开标识通过 Worker var 单独传入，
+# 正式部署由 TataConsole 一次性提交完整 Secret 集合；公开标识通过 Worker var 单独传入，
 # 不再把账户、Zone、URL、推送项目标识伪装成 Secret。
 [secrets]
 required = [
@@ -25,7 +25,7 @@ required = [
   "CHAT_AUTH_ED25519_PRIVATE_KEY",
 ]
 
-# CitizenServe Cloudflare 只保留唯一生产环境。普通变量与 Secret 都由 ProgramConsole 在发布
+# CitizenServe Cloudflare 只保留唯一生产环境。普通变量与 Secret 都由 TataConsole 在发布
 # 时经一次 Touch ID 读取；只有真正凭据进入 Worker Secret，值均不写入仓库。
 
 [[r2_buckets]]
@@ -42,7 +42,7 @@ binding = "DB"
 database_name = "citizenapp-db"
 database_id = "e49501dd-9921-4981-822e-3c764a7d11ca"
 
-# 公民链官网下载只保存编程控制台显式发布的四个平台指针，与 CitizenServe 业务数据物理隔离。
+# 公民链官网下载只保存塔塔控制台显式发布的四个平台指针，与 CitizenServe 业务数据物理隔离。
 [[d1_databases]]
 binding = "CITIZENCHAIN_DOWNLOAD_DB"
 database_name = "citizenchain-download-db"
@@ -98,7 +98,7 @@ max_retries = 3
 
 [triggers]
 # 五分钟事件执行通用清理、身份投影和唯一订阅投影；订阅投影只走既有国储会节点隧道。
-# ProgramConsole 发布器必须把这两条准确同步到生产，禁止保留旧五触发器残留。
+# TataConsole 发布器必须把这两条准确同步到生产，禁止保留旧五触发器残留。
 crons = ["*/5 * * * *", "4 3 * * *"]
 
 [vars]

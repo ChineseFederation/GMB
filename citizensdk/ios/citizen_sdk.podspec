@@ -1,15 +1,15 @@
 require 'pathname'
 
-native_dir = ENV['PROGRAM_CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
+native_dir = ENV['TATA_CONSOLE_NATIVE_IOS_DIR'] || File.dirname(__FILE__)
 library_path = File.expand_path('libsmoldot.a', native_dir)
 symbols_path = File.expand_path('exported_symbols.txt', native_dir)
 library_pattern = Pathname.new(library_path).relative_path_from(Pathname.new(__dir__)).to_s
 
 unless File.exist?(library_path)
-  raise "缺少 #{library_path}，请先由编程控制台生成 CitizenSDK iOS 原生产物"
+  raise "缺少 #{library_path}，请先由塔塔控制台生成 CitizenSDK iOS 原生产物"
 end
 unless File.exist?(symbols_path)
-  raise "缺少 #{symbols_path}，请先由编程控制台生成 CitizenSDK iOS 符号清单"
+  raise "缺少 #{symbols_path}，请先由塔塔控制台生成 CitizenSDK iOS 符号清单"
 end
 ffi_symbols = File.readlines(symbols_path).map(&:strip).reject(&:empty?)
 raise 'exported_symbols.txt 为空，CitizenSDK 原生产物异常' if ffi_symbols.empty?

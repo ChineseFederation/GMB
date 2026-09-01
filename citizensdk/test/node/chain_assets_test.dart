@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:citizen_sdk/src/node/bootstrap_manifest.dart';
+import 'package:citizen_sdk/src/node/chain_asset_manifest.dart';
 import 'package:citizen_sdk/src/node/chain_assets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,9 +23,26 @@ const _bootnodeHbs =
     '12D3KooWMXQoZ9F6nxMuoC2ZnzxEKAn4z2qPKAugP2CZFEcXDqkT';
 
 void main() {
+  test('Flutter 包只从 assets/citizenchain 三文件信任闭集加载', () {
+    expect(
+      CitizenChainAssets.manifestAsset,
+      'packages/citizen_sdk/assets/citizenchain/manifest.json',
+    );
+    expect(
+      CitizenChainAssets.chainSpecAsset,
+      'packages/citizen_sdk/assets/citizenchain/chainspec.json',
+    );
+    expect(
+      CitizenChainAssets.lightSyncStateAsset,
+      'packages/citizen_sdk/assets/citizenchain/light_sync_state.json',
+    );
+  });
+
   test('安装包 chainspec 只登记当前五个已部署 bootnode', () async {
     final spec =
-        jsonDecode(await File('assets/chainspec.json').readAsString())
+        jsonDecode(
+              await File('assets/citizenchain/chainspec.json').readAsString(),
+            )
             as Map<String, dynamic>;
     expect(spec['bootNodes'], <String>[
       _bootnodeA,
@@ -37,9 +55,14 @@ void main() {
 
   test('随包 chainspec 注入固定 #0 lightSyncState', () async {
     final bundle = CitizenChainAssets.combine(
-      chainSpecJson: await File('assets/chainspec.json').readAsString(),
+      assetManifestJson: await File(
+        'assets/citizenchain/manifest.json',
+      ).readAsString(),
+      chainSpecJson: await File(
+        'assets/citizenchain/chainspec.json',
+      ).readAsString(),
       lightSyncStateJson: await File(
-        'assets/light_sync_state.json',
+        'assets/citizenchain/light_sync_state.json',
       ).readAsString(),
     );
     expect(bundle.chainSpec, contains('lightSyncState'));
@@ -50,6 +73,44 @@ void main() {
     final header = '0x${List<String>.filled(32, '00').join()}04';
     expect(
       () => CitizenChainAssets.genesisHashFromCheckpoint(header),
+      throwsFormatException,
+    );
+  });
+
+  test('chainspec state root 与 #0 checkpoint 不一致时拒绝启动', () {
+    final chainSpecJson = jsonEncode(<String, dynamic>{
+      'id': 'citizenchain',
+      'protocolId': 'citizenchain',
+      'genesis': <String, dynamic>{'stateRootHash': '0x${'11' * 32}'},
+    });
+    final lightSyncStateJson = jsonEncode(<String, dynamic>{
+      'finalizedBlockHeader': '0x${'00' * 32}00${'22' * 32}${'00' * 32}00',
+      'grandpaAuthoritySet': '0x00',
+    });
+    final genesisHash = CitizenChainAssets.genesisHashFromCheckpoint(
+      (jsonDecode(lightSyncStateJson)
+              as Map<String, dynamic>)['finalizedBlockHeader']
+          as String,
+    );
+    final manifestJson = jsonEncode(<String, dynamic>{
+      'format_version': 1,
+      'product_id': 'citizensdk',
+      'chain_id': 'citizenchain',
+      'protocol_id': 'citizenchain',
+      'genesis_hash': genesisHash,
+      'chainspec_sha256': CitizenChainAssetManifest.sha256Utf8(chainSpecJson),
+      'light_sync_state_sha256': CitizenChainAssetManifest.sha256Utf8(
+        lightSyncStateJson,
+      ),
+      'sdk_min_version': '1.0.0',
+    });
+
+    expect(
+      () => CitizenChainAssets.combine(
+        assetManifestJson: manifestJson,
+        chainSpecJson: chainSpecJson,
+        lightSyncStateJson: lightSyncStateJson,
+      ),
       throwsFormatException,
     );
   });

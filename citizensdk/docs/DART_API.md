@@ -65,7 +65,10 @@ final sdk = CitizenSdk(
 
 ## 轻节点
 
-`CitizenLightClient` 从随包 `chainspec.json` 和 `light_sync_state.json` 启动，并可读取
+`CitizenLightClient` 从随包 `assets/citizenchain` 中的 `manifest.json`、`chainspec.json`
+和 `light_sync_state.json` 启动。加载器先核对正式 `citizenchain` 链/协议 ID、两个资产
+SHA-256、genesis hash 和 checkpoint state root，再把链规格交给 smoldot；任一不一致都在
+创建或初始化 smoldot 原生客户端前失败关闭。客户端仍可读取
 `/chain/citizensdk/bootstrap` 的 bootnode 建议。远端清单只接受
 `citizensdk.chain.bootstrap`，不能下发通用 RPC URL、链状态 checkpoint、聊天或业务服务。
 根对象以及 `chain`、`light_client`、`p2p`、`security` 四个嵌套对象都执行精确字段闭集校验，

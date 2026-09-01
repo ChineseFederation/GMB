@@ -5,6 +5,7 @@ import 'package:flutter/services.dart' show AssetBundle, rootBundle;
 import 'package:polkadart/polkadart.dart' show Hasher;
 
 import 'bootstrap_manifest.dart';
+import 'chain_asset_manifest.dart';
 
 /// 注入固定创世 checkpoint 后的公民链规格。
 final class CitizenChainBundle {
@@ -21,17 +22,20 @@ final class CitizenChainBundle {
 final class CitizenChainAssets {
   const CitizenChainAssets({AssetBundle? bundle}) : _bundle = bundle;
 
-  static const chainSpecAsset = 'packages/citizen_sdk/assets/chainspec.json';
-  static const lightSyncStateAsset =
-      'packages/citizen_sdk/assets/light_sync_state.json';
+  static const _assetRoot = 'packages/citizen_sdk/assets/citizenchain';
+  static const manifestAsset = '$_assetRoot/manifest.json';
+  static const chainSpecAsset = '$_assetRoot/chainspec.json';
+  static const lightSyncStateAsset = '$_assetRoot/light_sync_state.json';
 
   final AssetBundle? _bundle;
 
   Future<CitizenChainBundle> load({BootstrapManifest? bootstrap}) async {
     final bundle = _bundle ?? rootBundle;
+    final rawManifest = await bundle.loadString(manifestAsset);
     final rawChainSpec = await bundle.loadString(chainSpecAsset);
     final rawLightSyncState = await bundle.loadString(lightSyncStateAsset);
     return combine(
+      assetManifestJson: rawManifest,
       chainSpecJson: rawChainSpec,
       lightSyncStateJson: rawLightSyncState,
       bootstrap: bootstrap,
@@ -39,21 +43,49 @@ final class CitizenChainAssets {
   }
 
   static CitizenChainBundle combine({
+    required String assetManifestJson,
     required String chainSpecJson,
     required String lightSyncStateJson,
     BootstrapManifest? bootstrap,
   }) {
+    final assetManifest = CitizenChainAssetManifest.parse(assetManifestJson);
+    // 摘要必须先于任何链内容消费通过；损坏或被替换的 JSON 不能进入 smoldot。
+    assetManifest.verifyDigests(
+      chainSpecJson: chainSpecJson,
+      lightSyncStateJson: lightSyncStateJson,
+    );
     final chainSpec = _jsonObject(chainSpecJson, 'chainspec.json');
     final lightSyncState = _jsonObject(
       lightSyncStateJson,
       'light_sync_state.json',
     );
     final headerHex = lightSyncState['finalizedBlockHeader'];
-    if (headerHex is! String ||
-        lightSyncState['grandpaAuthoritySet'] is! String) {
+    final authoritySetHex = lightSyncState['grandpaAuthoritySet'];
+    if (headerHex is! String || authoritySetHex is! String) {
       throw const FormatException('light_sync_state.json 缺少必要 checkpoint 字段');
     }
-    final genesisHash = genesisHashFromCheckpoint(headerHex);
+    _decodeHex(authoritySetHex, 'grandpaAuthoritySet');
+    final checkpointBytes = _decodeGenesisCheckpoint(headerHex);
+    final genesisHash = _genesisHash(checkpointBytes);
+    final chainId = chainSpec['id'];
+    final protocolId = chainSpec['protocolId'];
+    if (chainId is! String || protocolId is! String) {
+      throw const FormatException('chainspec 缺少字符串 id 或 protocolId');
+    }
+    final genesis = chainSpec['genesis'];
+    final stateRoot = genesis is Map ? genesis['stateRootHash'] : null;
+    final checkpointStateRoot = '0x${_hex(checkpointBytes.sublist(33, 65))}';
+    if (stateRoot is! String ||
+        stateRoot.toLowerCase() != checkpointStateRoot) {
+      throw const FormatException(
+        'chainspec stateRootHash 与 #0 checkpoint 不匹配',
+      );
+    }
+    assetManifest.verifyIdentity(
+      actualChainId: chainId,
+      actualProtocolId: protocolId,
+      actualGenesisHash: genesisHash,
+    );
     // 远端清单只是非权威 bootnode 建议。任何链参数或 genesis 不匹配都必须
     // 忽略清单并继续使用随包 chainspec，不能让远端配置阻断本地可信
     // 启动路径。
@@ -76,10 +108,20 @@ final class CitizenChainAssets {
   }
 
   static String genesisHashFromCheckpoint(String headerHex) {
+    return _genesisHash(_decodeGenesisCheckpoint(headerHex));
+  }
+
+  static Uint8List _decodeGenesisCheckpoint(String headerHex) {
     final header = _decodeHex(headerHex, 'finalizedBlockHeader');
-    if (header.length <= 32 || header[32] != 0) {
-      throw const FormatException('内置 lightSyncState 必须固定为创世块 #0');
+    // Substrate header 前 32 字节是 parent hash，第 33 字节是 compact 编码的块高。
+    // #0 必须编码为单字节 0；随后至少要包含 32 字节 state root。
+    if (header.length < 65 || header[32] != 0) {
+      throw const FormatException('内置 lightSyncState 必须固定为完整创世块 #0 header');
     }
+    return header;
+  }
+
+  static String _genesisHash(Uint8List header) {
     final hash = Hasher.blake2b256.hash(header);
     return '0x${_hex(hash)}';
   }

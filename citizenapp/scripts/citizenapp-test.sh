@@ -12,14 +12,14 @@ REPO_ROOT="$(dirname "$CITIZENAPP_DIR")"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
 
 if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
-  PROGRAM_CONSOLE_TARGET_ROOT="${PROGRAM_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/programconsole/target}"
-  PROGRAM_CONSOLE_WORK_DIR="$PROGRAM_CONSOLE_TARGET_ROOT/.work/citizenapp-test"
-  helper=/Users/rhett/Only/programconsole/actions/local-build.sh
-  [[ -f "$helper" && "$PROGRAM_CONSOLE_WORK_DIR" == /Users/rhett/Only/programconsole/target/.work/citizenapp-test ]] \
-    || { echo '本机CitizenApp测试缺少ProgramConsole中央快照入口' >&2; exit 1; }
-  /usr/bin/find "$PROGRAM_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-  mkdir -p "$PROGRAM_CONSOLE_WORK_DIR"
-  export PROGRAM_CONSOLE_TARGET_ROOT PROGRAM_CONSOLE_WORK_DIR
+  TATA_CONSOLE_TARGET_ROOT="${TATA_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/tataconsole/target}"
+  TATA_CONSOLE_WORK_DIR="$TATA_CONSOLE_TARGET_ROOT/.work/citizenapp-test"
+  helper=/Users/rhett/Only/tataconsole/actions/local-build.sh
+  [[ -f "$helper" && "$TATA_CONSOLE_WORK_DIR" == /Users/rhett/Only/tataconsole/target/.work/citizenapp-test ]] \
+    || { echo '本机CitizenApp测试缺少TataConsole中央快照入口' >&2; exit 1; }
+  /usr/bin/find "$TATA_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+  mkdir -p "$TATA_CONSOLE_WORK_DIR"
+  export TATA_CONSOLE_TARGET_ROOT TATA_CONSOLE_WORK_DIR
   # shellcheck disable=SC1090
   source "$helper"
   snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
@@ -38,19 +38,19 @@ if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
     /usr/bin/ditto "$source_path" "$snapshot_path"
   done
   cleanup_snapshot() {
-    /usr/bin/find "$PROGRAM_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-    rmdir "$PROGRAM_CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
+    /usr/bin/find "$TATA_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
+    rmdir "$TATA_CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
   }
   trap cleanup_snapshot EXIT INT TERM HUP
-  GMB_CENTRAL_SNAPSHOT=1 PROGRAM_CONSOLE_TARGET_ROOT="$PROGRAM_CONSOLE_TARGET_ROOT" \
-    PROGRAM_CONSOLE_WORK_DIR="$PROGRAM_CONSOLE_WORK_DIR" \
+  GMB_CENTRAL_SNAPSHOT=1 TATA_CONSOLE_TARGET_ROOT="$TATA_CONSOLE_TARGET_ROOT" \
+    TATA_CONSOLE_WORK_DIR="$TATA_CONSOLE_WORK_DIR" \
     bash "$snapshot_root/citizenapp/scripts/citizenapp-test.sh" "$@"
   exit $?
 fi
 
 if [[ "${CI:-}" != true ]]; then
-  [[ "$CITIZENAPP_DIR" == "$PROGRAM_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
-    || { echo "CitizenApp本机测试源码不在ProgramConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
+  [[ "$CITIZENAPP_DIR" == "$TATA_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
+    || { echo "CitizenApp本机测试源码不在TataConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
   # 中央快照中的本机测试直接消费同一快照内 ChatSDK；覆盖文件随快照统一清理。
   cat > "$CITIZENAPP_DIR/pubspec_overrides.yaml" <<'YAML'
 dependency_overrides:

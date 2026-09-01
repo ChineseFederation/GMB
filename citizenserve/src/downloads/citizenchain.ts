@@ -93,7 +93,7 @@ export async function citizenchainPublicationRoute(
 ): Promise<Response> {
   const platform = parsePlatform(path);
   if (!platform) throw new HttpError(404, 'publication_target_not_found', '发布目标不存在');
-  await requireProgramConsoleSignature(request, env, path);
+  await requireTataConsoleSignature(request, env, path);
   if (request.method === 'GET') {
     return jsonResponse({ ok: true, publication: await readPublication(env, platform) });
   }
@@ -215,11 +215,11 @@ function parsePlatform(path: string): CitizenchainDownloadPlatform | null {
   return Object.hasOwn(platformContracts, value) ? value as CitizenchainDownloadPlatform : null;
 }
 
-async function requireProgramConsoleSignature(request: Request, env: Env, path: string): Promise<void> {
+async function requireTataConsoleSignature(request: Request, env: Env, path: string): Promise<void> {
   const secret = env.CITIZENCHAIN_DOWNLOAD_PUBLISH_SECRET;
-  const timestamp = request.headers.get('x-console-time') ?? '';
-  const nonce = request.headers.get('x-console-nonce') ?? '';
-  const signature = request.headers.get('x-console-signature') ?? '';
+  const timestamp = request.headers.get('x-tataconsole-time') ?? '';
+  const nonce = request.headers.get('x-tataconsole-nonce') ?? '';
+  const signature = request.headers.get('x-tataconsole-signature') ?? '';
   const timestampValue = Number(timestamp);
   if (!secret || new TextEncoder().encode(secret).byteLength < 32) {
     throw new HttpError(503, 'publication_auth_unavailable', '发布指针认证尚未配置');

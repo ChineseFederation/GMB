@@ -1,0 +1,24 @@
+[package]
+name = "citizen-sdk-engine"
+description = "CitizenSDK product-independent account, runtime, transaction, and state coordination engine."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+citizen-sdk-contracts = { path = "../contracts" }
+# Keep the same official crates.io Subxt core used by CitizenChain's verified
+# client tooling. This crate decodes metadata and System.Events only; it does
+# not add an online RPC client or a second light-node implementation.
+subxt-core = { version = "=0.43.0", default-features = true }
+
+[dev-dependencies]
+futures = "=0.3.31"
+

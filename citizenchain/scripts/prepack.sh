@@ -10,7 +10,7 @@
 set -euo pipefail
 
 if [[ "${CI:-}" != true ]]; then
-  echo '本机预打包已停用；请从ProgramConsole编译，禁止恢复公民链产品目录产物' >&2
+  echo '本机预打包已停用；请从TataConsole编译，禁止恢复公民链产品目录产物' >&2
   exit 1
 fi
 

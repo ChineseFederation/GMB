@@ -85,7 +85,7 @@ export async function routeRequest(
       ok: true,
       service: "citizenapp",
       storage_backend: "d1-r2",
-      // ProgramConsole 用此不可伪造的运行时绑定确认 Version Override 和正式切流命中同一候选版本。
+      // TataConsole 用此不可伪造的运行时绑定确认 Version Override 和正式切流命中同一候选版本。
       worker_version_id: env.CF_VERSION_METADATA?.id ?? null,
       // 广场正文元数据进入 D1，manifest、图片、视频和衍生图统一进入 R2。
       content_on_chain: false,
@@ -147,7 +147,7 @@ export async function routeRequest(
   if (request.method === "POST" && path === "/square/users/confirm") {
     return confirmFinalizedUsersRoute(request, env);
   }
-  // 稳定币充值购买公民币:App(config/submit/status)+ 本地部署编程控制台结算(settlement/*)。
+  // 稳定币充值购买公民币:App(config/submit/status)+ 本地部署塔塔控制台结算(settlement/*)。
   if (isTopupPath(path)) {
     return routeTopup(request, env, path);
   }
