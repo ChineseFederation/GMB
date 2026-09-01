@@ -10,15 +10,15 @@ pub mod state_import;
 pub mod system_events;
 pub mod transaction_outcome;
 
-pub use capabilities::{CapabilityProbe, resolve_capabilities};
+pub use capabilities::{resolve_capabilities, CapabilityProbe};
 pub use engine::{CitizenEngine, EngineComponents, EngineFuture};
 pub use error::EngineError;
 pub use runtime_context::{RuntimeContextCache, RuntimeContextRequest};
 pub use state_import::{
-    EngineLifecycle, MAX_CHAIN_DATABASE_BYTES, StateImportPolicy, StateImportRejection,
-    validate_import_startup, validate_state_export, validate_state_import,
+    validate_import_startup, validate_state_export, validate_state_import, EngineLifecycle,
+    StateImportPolicy, StateImportRejection, MAX_CHAIN_DATABASE_BYTES,
 };
-pub use system_events::{DecodedDispatchFailure, DecodedSystemOutcome, decode_system_outcome};
+pub use system_events::{decode_system_outcome, DecodedDispatchFailure, DecodedSystemOutcome};
 pub use transaction_outcome::{
-    TransactionEvidence, signed_extrinsic_hash, verify_transaction_outcome,
+    signed_extrinsic_hash, verify_transaction_outcome, TransactionEvidence,
 };

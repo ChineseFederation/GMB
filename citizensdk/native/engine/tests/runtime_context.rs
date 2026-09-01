@@ -20,9 +20,16 @@ fn late_old_best_completion_cannot_replace_new_best() {
     let old_request = cache.begin(old_block);
     let new_request = cache.begin(new_block);
 
-    assert!(cache.complete(new_request, context(new_block, 2, 2)).is_ok());
-    assert!(cache.complete(old_request, context(old_block, 1, 1)).is_ok());
-    assert_eq!(cache.current_best().map(RuntimeContext::block), Some(new_block));
+    assert!(cache
+        .complete(new_request, context(new_block, 2, 2))
+        .is_ok());
+    assert!(cache
+        .complete(old_request, context(old_block, 1, 1))
+        .is_ok());
+    assert_eq!(
+        cache.current_best().map(RuntimeContext::block),
+        Some(new_block)
+    );
     assert!(cache.get(old_block).is_some());
 }
 
@@ -61,3 +68,17 @@ fn finalized_context_does_not_change_best_identity() {
     assert!(cache.get(finalized).is_some());
 }
 
+#[test]
+fn same_hash_context_can_be_promoted_from_best_to_finalized() {
+    let hash = Hash32::from_bytes([7; 32]);
+    let best = VerifiedBlockRef::best(hash, 31);
+    let finalized = VerifiedBlockRef::finalized(hash, 31);
+    let mut cache = RuntimeContextCache::new();
+    let request = cache.begin(finalized);
+    let promoted = match cache.complete(request, context(best, 5, 5)) {
+        Ok(context) => context,
+        Err(error) => panic!("same block promotion failed: {error}"),
+    };
+    assert_eq!(promoted.block(), finalized);
+    assert_eq!(promoted.version().spec_version(), 5);
+}

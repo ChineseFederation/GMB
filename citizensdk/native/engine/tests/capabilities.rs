@@ -1,5 +1,5 @@
 use citizen_sdk_contracts::{CapabilityName, CapabilityReason};
-use citizen_sdk_engine::{CapabilityProbe, resolve_capabilities};
+use citizen_sdk_engine::{resolve_capabilities, CapabilityProbe};
 
 fn all_ready() -> Vec<CapabilityProbe> {
     CapabilityName::ALL
@@ -85,4 +85,3 @@ fn duplicate_or_missing_probes_fail_closed() {
     duplicate[9].name = CapabilityName::ChainRead;
     assert!(resolve_capabilities(2, duplicate).is_err());
 }
-

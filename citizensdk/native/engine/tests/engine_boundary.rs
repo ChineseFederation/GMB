@@ -1,22 +1,22 @@
-use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 
 use citizen_sdk_contracts::{
     ChainIdentity, ContractFuture, ContractStream, ExecutionConclusion, ExportedChainState,
     ExtrinsicWatchEvent, FinalizedBlockRef, Hash32, RuntimeContext, RuntimeVersion,
-    SignedExtrinsic, StateImportReceipt, SubmittedExtrinsic, UnverifiedReason,
-    VerifiedBlockRef, VerifiedChainClient,
+    SignedExtrinsic, StateImportReceipt, SubmittedExtrinsic, UnverifiedReason, VerifiedBlockRef,
+    VerifiedChainClient,
 };
 use citizen_sdk_engine::{
-    CitizenEngine, EngineComponents, EngineLifecycle, StateImportPolicy,
-    signed_extrinsic_hash,
+    signed_extrinsic_hash, CitizenEngine, EngineComponents, EngineLifecycle, StateImportPolicy,
 };
 
-const METADATA_HEX: &str = include_str!(
-    "../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex"
-);
-const EVENTS_HEX: &str = include_str!(
-    "../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex"
-);
+const METADATA_HEX: &str =
+    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+const EVENTS_HEX: &str =
+    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
 
 fn hex_bytes(value: &str) -> Vec<u8> {
     let value = value.trim();
@@ -117,34 +117,31 @@ impl VerifiedChainClient for FakeClient {
 
     fn export_state(&self) -> ContractFuture<'_, ExportedChainState> {
         Box::pin(async move {
-            ExportedChainState::try_new(
-                identity(7),
-                1,
-                self.block.require_finalized()?,
-                vec![1],
-            )
+            ExportedChainState::try_new(identity(7), 1, self.block.require_finalized()?, vec![1])
         })
     }
 
-    fn import_state(
-        &self,
-        state: ExportedChainState,
-    ) -> ContractFuture<'_, StateImportReceipt> {
+    fn import_state(&self, state: ExportedChainState) -> ContractFuture<'_, StateImportReceipt> {
         self.imports.fetch_add(1, Ordering::SeqCst);
         Box::pin(async move { Ok(StateImportReceipt::new(state.finalized())) })
     }
 }
 
-fn engine(events: Option<Vec<u8>>) -> (CitizenEngine, RuntimeContext, SignedExtrinsic, Arc<AtomicUsize>) {
+fn engine(
+    events: Option<Vec<u8>>,
+) -> (
+    CitizenEngine,
+    RuntimeContext,
+    SignedExtrinsic,
+    Arc<AtomicUsize>,
+) {
     let block = VerifiedBlockRef::finalized(Hash32::from_bytes([9; 32]), 100);
-    let context = match RuntimeContext::try_new(
-        block,
-        RuntimeVersion::new(100, 12),
-        hex_bytes(METADATA_HEX),
-    ) {
-        Ok(context) => context,
-        Err(error) => panic!("runtime fixture failed: {error}"),
-    };
+    let context =
+        match RuntimeContext::try_new(block, RuntimeVersion::new(100, 12), hex_bytes(METADATA_HEX))
+        {
+            Ok(context) => context,
+            Err(error) => panic!("runtime fixture failed: {error}"),
+        };
     let signed = match SignedExtrinsic::try_new(vec![0x0c, 0x84, 0x01, 0x02]) {
         Ok(extrinsic) => extrinsic,
         Err(error) => panic!("extrinsic fixture failed: {error}"),
@@ -157,16 +154,7 @@ fn engine(events: Option<Vec<u8>>) -> (CitizenEngine, RuntimeContext, SignedExtr
         events,
         imports: Arc::clone(&imports),
     });
-    let components = EngineComponents::new(
-        client,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-    );
+    let components = EngineComponents::new(client, None, None, None, None, None, None, None);
     (CitizenEngine::new(components), context, signed, imports)
 }
 
@@ -221,20 +209,18 @@ fn failed_import_preflight_never_reaches_provider() {
     let state = match ExportedChainState::try_new(
         chain.clone(),
         1,
-        context.block().require_finalized().unwrap_or_else(|error| {
-            panic!("finalized fixture failed: {error}")
-        }),
+        context
+            .block()
+            .require_finalized()
+            .unwrap_or_else(|error| panic!("finalized fixture failed: {error}")),
         vec![1],
     ) {
         Ok(state) => state,
         Err(error) => panic!("state fixture failed: {error}"),
     };
     let policy = StateImportPolicy::new(chain, 1, None);
-    let result = futures::executor::block_on(engine.import_state(
-        &policy,
-        EngineLifecycle::Running,
-        state,
-    ));
+    let result =
+        futures::executor::block_on(engine.import_state(&policy, EngineLifecycle::Running, state));
     assert!(result.is_err());
     assert_eq!(imports.load(Ordering::SeqCst), 0);
 }

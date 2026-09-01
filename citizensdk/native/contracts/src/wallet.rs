@@ -6,6 +6,9 @@ use crate::{
     AccountId32, ContractError, ContractErrorCode, ContractResult, SecretRef, VaultGeneration,
 };
 
+/// 与当前已验证热钱包一致的最大硬派生账户 index。
+pub const MAX_WALLET_ACCOUNT_INDEX: u32 = 1989;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WalletOrigin {
     Created,
@@ -109,6 +112,19 @@ impl WalletProfile {
             return Err(ContractError::new(
                 ContractErrorCode::InvalidArgument,
                 "钱包账户 index 与 AccountId 必须唯一",
+            ));
+        }
+        let account_zero_matches_master = accounts
+            .iter()
+            .any(|account| account.index() == 0 && account.account_id() == master_account_id);
+        if !account_zero_matches_master
+            || accounts
+                .iter()
+                .any(|account| account.index() > MAX_WALLET_ACCOUNT_INDEX)
+        {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "账户0必须是 masterAccountId，且账户 index 不得超过 1989",
             ));
         }
         if !account_ids.contains(&active_account_id)

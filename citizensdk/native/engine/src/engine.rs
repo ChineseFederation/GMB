@@ -1,24 +1,27 @@
-use std::{future::Future, pin::Pin, sync::{Arc, Mutex}};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::{Arc, Mutex},
+};
 
 use citizen_sdk_contracts::{
+    store::{
+        ChainDatabaseStore, EncryptedSecretBlobStore, RuntimeCacheStore, TransactionHistoryStore,
+        WalletProfileStore,
+    },
     ChainSigner, ExecutionConclusion, ExportedChainState, Hash32, RuntimeContext, SecretVault,
     SignedExtrinsic, StateImportReceipt, UnverifiedReason, VerifiedBlockRef, VerifiedChainClient,
-    store::{
-        ChainDatabaseStore, EncryptedSecretBlobStore, RuntimeCacheStore,
-        TransactionHistoryStore, WalletProfileStore,
-    },
 };
 
 use crate::{
     error::EngineError,
     runtime_context::RuntimeContextCache,
-    state_import::{EngineLifecycle, StateImportPolicy, validate_state_import},
-    transaction_outcome::{TransactionEvidence, verify_transaction_outcome},
+    state_import::{validate_state_import, EngineLifecycle, StateImportPolicy},
+    transaction_outcome::{verify_transaction_outcome, TransactionEvidence},
 };
 
 /// Engine async return type; the embedding layer chooses the executor.
-pub type EngineFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, EngineError>> + Send + 'a>>;
+pub type EngineFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, EngineError>> + Send + 'a>>;
 
 /// Typed providers and stores available in one host composition.
 ///
@@ -112,10 +115,7 @@ impl CitizenEngine {
     }
 
     /// Load a context at one exact block and reject provider cross-block data.
-    pub fn runtime_context_at(
-        &self,
-        block: VerifiedBlockRef,
-    ) -> EngineFuture<'_, RuntimeContext> {
+    pub fn runtime_context_at(&self, block: VerifiedBlockRef) -> EngineFuture<'_, RuntimeContext> {
         Box::pin(async move {
             let request = self
                 .runtime_contexts
@@ -254,8 +254,6 @@ const fn unverified(
 // twox128("System") ++ twox128("Events"), fixed by the Substrate storage
 // contract and equal to the existing CitizenApp/CitizenSDK Dart implementation.
 const SYSTEM_EVENTS_STORAGE_KEY: [u8; 32] = [
-    0x26, 0xaa, 0x39, 0x4e, 0xea, 0x56, 0x30, 0xe0, 0x7c, 0x48, 0xae, 0x0c, 0x95, 0x58,
-    0xce, 0xf7, 0x80, 0xd4, 0x1e, 0x5e, 0x16, 0x05, 0x67, 0x65, 0xbc, 0x84, 0x61, 0x85,
-    0x10, 0x72, 0xc9, 0xd7,
+    0x26, 0xaa, 0x39, 0x4e, 0xea, 0x56, 0x30, 0xe0, 0x7c, 0x48, 0xae, 0x0c, 0x95, 0x58, 0xce, 0xf7,
+    0x80, 0xd4, 0x1e, 0x5e, 0x16, 0x05, 0x67, 0x65, 0xbc, 0x84, 0x61, 0x85, 0x10, 0x72, 0xc9, 0xd7,
 ];
-

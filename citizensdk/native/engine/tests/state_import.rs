@@ -1,9 +1,7 @@
-use citizen_sdk_contracts::{
-    ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32,
-};
+use citizen_sdk_contracts::{ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32};
 use citizen_sdk_engine::{
-    EngineLifecycle, MAX_CHAIN_DATABASE_BYTES, StateImportPolicy, StateImportRejection,
-    validate_import_startup, validate_state_export, validate_state_import,
+    validate_import_startup, validate_state_export, validate_state_import, EngineLifecycle,
+    StateImportPolicy, StateImportRejection, MAX_CHAIN_DATABASE_BYTES,
 };
 
 fn identity(genesis: u8) -> ChainIdentity {
@@ -123,29 +121,19 @@ fn genesis_and_export_anchors_are_strict() {
     let anchor = FinalizedBlockRef::from_parts(Hash32::from_bytes([8; 32]), 20);
     let exported = state(chain, 1, anchor, vec![1, 2]);
     assert_eq!(
-        validate_state_export(
-            &policy,
-            EngineLifecycle::Running,
-            anchor,
-            &exported,
-            anchor,
-        ),
+        validate_state_export(&policy, EngineLifecycle::Running, anchor, &exported, anchor,),
         Ok(())
     );
     let moved = FinalizedBlockRef::from_parts(Hash32::from_bytes([9; 32]), 21);
     assert_eq!(
-        validate_state_export(
-            &policy,
-            EngineLifecycle::Running,
-            anchor,
-            &exported,
-            moved,
-        ),
+        validate_state_export(&policy, EngineLifecycle::Running, anchor, &exported, moved,),
         Err(StateImportRejection::ExportAnchorMoved)
     );
     assert_eq!(
-        validate_import_startup(anchor, FinalizedBlockRef::from_parts(Hash32::from_bytes([1; 32]), 19)),
+        validate_import_startup(
+            anchor,
+            FinalizedBlockRef::from_parts(Hash32::from_bytes([1; 32]), 19)
+        ),
         Err(StateImportRejection::StartupAnchorRegression)
     );
 }
-

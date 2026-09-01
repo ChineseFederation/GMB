@@ -1,17 +1,13 @@
 use citizen_sdk_contracts::{
-    ExecutionConclusion, Hash32, RuntimeContext, RuntimeVersion, SignedExtrinsic,
-    UnverifiedReason, VerifiedBlockRef,
+    ExecutionConclusion, Hash32, RuntimeContext, RuntimeVersion, SignedExtrinsic, UnverifiedReason,
+    VerifiedBlockRef,
 };
-use citizen_sdk_engine::{
-    TransactionEvidence, signed_extrinsic_hash, verify_transaction_outcome,
-};
+use citizen_sdk_engine::{signed_extrinsic_hash, verify_transaction_outcome, TransactionEvidence};
 
-const METADATA_HEX: &str = include_str!(
-    "../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex"
-);
-const EVENTS_HEX: &str = include_str!(
-    "../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex"
-);
+const METADATA_HEX: &str =
+    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+const EVENTS_HEX: &str =
+    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
 
 fn hex_bytes(value: &str) -> Vec<u8> {
     let value = value.trim();
@@ -201,14 +197,11 @@ fn malformed_metadata_events_and_wrong_index_never_guess_success() {
 
     let mut bad_metadata = context.metadata().to_vec();
     bad_metadata.push(0);
-    let bad_context = match RuntimeContext::try_new(
-        block,
-        RuntimeVersion::new(100, 12),
-        bad_metadata,
-    ) {
-        Ok(context) => context,
-        Err(error) => panic!("bad metadata fixture construction failed: {error}"),
-    };
+    let bad_context =
+        match RuntimeContext::try_new(block, RuntimeVersion::new(100, 12), bad_metadata) {
+            Ok(context) => context,
+            Err(error) => panic!("bad metadata fixture construction failed: {error}"),
+        };
     let rejected_metadata = verify_transaction_outcome(TransactionEvidence {
         block,
         runtime_context: &bad_context,
@@ -234,4 +227,3 @@ fn compact_length_prefix_is_part_of_the_transaction_hash() {
     let without_prefix = signed(&[0x84, 0x01, 0x02]);
     assert_ne!(hash(&context, &complete), hash(&context, &without_prefix));
 }
-

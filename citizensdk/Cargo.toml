@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "native/contracts",
+    "native/engine",
     "native/signer",
 ]
 resolver = "2"

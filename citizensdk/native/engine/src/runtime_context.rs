@@ -50,11 +50,25 @@ impl RuntimeContextCache {
         request: RuntimeContextRequest,
         context: RuntimeContext,
     ) -> Result<RuntimeContext, EngineError> {
-        if context.block() != request.block {
+        // A block's metadata is immutable when the same hash/height advances
+        // from best to finalized. Rebind only that verified finality marker;
+        // any hash or height difference remains a hard context error.
+        let context = if context.block() == request.block {
+            context
+        } else if context.block().hash() == request.block.hash()
+            && context.block().number() == request.block.number()
+        {
+            RuntimeContext::try_new(
+                request.block,
+                context.version(),
+                context.metadata().to_vec(),
+            )
+            .map_err(|error| EngineError::Contract(error.to_string()))?
+        } else {
             return Err(EngineError::BlockContextMismatch(
                 "runtime context does not match its request block".to_owned(),
             ));
-        }
+        };
         if self.contexts.iter().any(|existing| {
             existing.block().hash() == context.block().hash()
                 && existing.block().number() != context.block().number()

@@ -21,7 +21,9 @@ pub enum EngineError {
 impl fmt::Display for EngineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidMetadata(reason) => write!(formatter, "invalid runtime metadata: {reason}"),
+            Self::InvalidMetadata(reason) => {
+                write!(formatter, "invalid runtime metadata: {reason}")
+            }
             Self::InvalidEvents(reason) => write!(formatter, "invalid System.Events: {reason}"),
             Self::BlockContextMismatch(reason) => {
                 write!(formatter, "verified block context mismatch: {reason}")
@@ -36,4 +38,3 @@ impl fmt::Display for EngineError {
 }
 
 impl std::error::Error for EngineError {}
-

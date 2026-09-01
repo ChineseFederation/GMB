@@ -1,11 +1,11 @@
 use subxt_core::{
-    Metadata,
     config::SubstrateConfig,
     events::{Events, Phase},
     ext::{
-        codec::{Compact, Decode},
+        codec::{Compact, Decode, Encode},
         scale_value::{Composite, Value, ValueDef},
     },
+    Metadata,
 };
 
 use crate::error::EngineError;
@@ -56,6 +56,12 @@ pub fn decode_system_outcome(
         .map_err(|error| EngineError::InvalidEvents(error.to_string()))?
         .0;
     let prefix_length = events_bytes.len().saturating_sub(prefix_cursor.len());
+    let canonical_prefix = Compact(declared_count).encode();
+    if events_bytes.get(..prefix_length) != Some(canonical_prefix.as_slice()) {
+        return Err(EngineError::InvalidEvents(
+            "event vector uses a non-canonical Compact length".to_owned(),
+        ));
+    }
     let events = Events::<SubstrateConfig>::decode_from(events_bytes.to_vec(), metadata.clone());
     if events.len() != declared_count {
         return Err(EngineError::InvalidEvents(
@@ -221,11 +227,7 @@ fn first_byte(value: &Value<u32>) -> Option<u8> {
             .next()
             .and_then(Value::as_u128)
             .and_then(|value| u8::try_from(value).ok()),
-        ValueDef::Variant(variant) => variant
-            .values
-            .values()
-            .next()
-            .and_then(first_byte),
+        ValueDef::Variant(variant) => variant.values.values().next().and_then(first_byte),
         ValueDef::BitSequence(_) | ValueDef::Primitive(_) => None,
     }
 }

@@ -2,8 +2,7 @@
 
 use std::{
     future::Future,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use citizen_sdk_contracts::{
@@ -14,15 +13,9 @@ use citizen_sdk_contracts::{
     VerifiedBlockRef, WalletAccount, WalletOrigin, WalletProfile, WalletProfileStore, WalletState,
 };
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut context) {
@@ -204,6 +197,49 @@ fn wallet_profile_rejects_duplicate_or_cross_generation_secret_refs() {
         100,
         first_id,
         vec![first, foreign],
+    )
+    .is_err());
+}
+
+#[test]
+fn wallet_profile_requires_account_zero_master_and_bounded_indices() {
+    let generation = VaultGeneration::from_bytes([1; 16]);
+    let master = AccountId32::from_bytes([4; 32]);
+    let wrong_anchor = value_or_panic(WalletAccount::try_new(
+        1,
+        master,
+        secret_ref(1, 4),
+        "5CitizenMaster",
+        "master",
+        100,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        master,
+        WalletOrigin::Created,
+        100,
+        master,
+        vec![wrong_anchor],
+    )
+    .is_err());
+
+    let too_high = value_or_panic(WalletAccount::try_new(
+        1990,
+        master,
+        secret_ref(2, 4),
+        "5CitizenMaster",
+        "master",
+        100,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        master,
+        WalletOrigin::Created,
+        100,
+        master,
+        vec![too_high],
     )
     .is_err());
 }

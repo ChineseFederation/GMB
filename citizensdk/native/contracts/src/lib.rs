@@ -44,7 +44,7 @@ pub use transaction::{
 };
 pub use wallet::{
     WalletAccount, WalletCleanupPlan, WalletOrigin, WalletProfile, WalletProvisioningPlan,
-    WalletState,
+    WalletState, MAX_WALLET_ACCOUNT_INDEX,
 };
 
 /// 对象安全合同使用的异步返回值；具体 executor 由调用者决定。

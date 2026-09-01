@@ -112,7 +112,10 @@ impl SecretBuffer {
         })
     }
 
-    /// 只把秘密借给同步 Rust 闭包，禁止返回切片或移交普通 Vec。
+    /// 只直接借给同步 Rust 闭包；本 API 不直接归还切片或普通 `Vec`。
+    ///
+    /// 闭包实现仍属于受信任 Rust 边界，技术上可以复制输入，因此 provider 审查与后续
+    /// C ABI 的不透明所有权同样是安全合同的一部分，不能把本方法描述成进程内硬隔离。
     pub fn with_secret<T>(&self, operation: impl FnOnce(&[u8]) -> T) -> T {
         operation(self.bytes.as_slice())
     }

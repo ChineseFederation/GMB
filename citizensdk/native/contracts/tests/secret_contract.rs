@@ -2,8 +2,7 @@
 
 use std::{
     future::Future,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use citizen_sdk_contracts::{
@@ -13,15 +12,9 @@ use citizen_sdk_contracts::{
     SR25519_SIGNING_CONTEXT,
 };
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut context) {
@@ -142,7 +135,7 @@ impl SecretVault for FakeVault {
 }
 
 #[test]
-fn secret_debug_is_redacted_and_bytes_stay_inside_rust_closure() {
+fn secret_debug_is_redacted_and_direct_access_is_scoped_to_rust_closure() {
     let secret = value_or_panic(SecretBuffer::try_new(b"secret-never-print".to_vec()));
     let debug = format!("{secret:?}");
     assert_eq!(debug, "SecretBuffer([REDACTED])");

@@ -3,8 +3,7 @@
 use std::{
     future::Future,
     pin::Pin,
-    sync::Arc,
-    task::{Context, Poll, Wake, Waker},
+    task::{Context, Poll, Waker},
 };
 
 use citizen_sdk_contracts::{
@@ -15,15 +14,9 @@ use citizen_sdk_contracts::{
 };
 use futures_core::Stream;
 
-struct NoopWake;
-
-impl Wake for NoopWake {
-    fn wake(self: Arc<Self>) {}
-}
-
 fn block_on<F: Future>(future: F) -> F::Output {
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
     let mut future = std::pin::pin!(future);
     loop {
         match future.as_mut().poll(&mut context) {
@@ -191,8 +184,8 @@ fn verified_client_is_object_safe_and_never_implies_submit_success() {
 
     let watched = value_or_panic(SignedExtrinsic::try_new(vec![0x04, 0x84]));
     let mut stream = client.watch_extrinsic(watched);
-    let waker = Waker::from(Arc::new(NoopWake));
-    let mut poll_context = Context::from_waker(&waker);
+    let waker = Waker::noop();
+    let mut poll_context = Context::from_waker(waker);
     let event = match stream.as_mut().poll_next(&mut poll_context) {
         Poll::Ready(Some(result)) => value_or_panic(result),
         other => panic!("watch 没有返回预期事件: {other:?}"),

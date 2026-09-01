@@ -59,10 +59,7 @@ pub fn resolve_capabilities(
                 "capability probe disappeared during resolution".to_owned(),
             ));
         };
-        let base_ready = probe.supported
-            && probe.available
-            && probe.enabled
-            && probe.runtime_ready;
+        let base_ready = probe.supported && probe.available && probe.enabled && probe.runtime_ready;
         let dependencies_ready = dependencies(name)
             .iter()
             .all(|dependency| is_ready(*dependency, &by_name, &mut BTreeSet::new()));
@@ -122,8 +119,8 @@ fn is_ready(
 
 const fn dependencies(name: CapabilityName) -> &'static [CapabilityName] {
     use CapabilityName::{
-        BackgroundSync, ChainRead, HardwareVault, History, LocalSigning,
-        TransactionBuild, UserAuthentication, WalletProfile,
+        BackgroundSync, ChainRead, HardwareVault, History, LocalSigning, TransactionBuild,
+        UserAuthentication, WalletProfile,
     };
     match name {
         CapabilityName::ChainRead | HardwareVault | UserAuthentication | WalletProfile => &[],

@@ -2,11 +2,11 @@ use citizen_sdk_contracts::{
     DispatchFailure, ExecutionConclusion, Hash32, ModuleDispatchFailure, RuntimeContext,
     SignedExtrinsic, UnverifiedReason, VerifiedBlockRef,
 };
-use subxt_core::config::{Hasher, substrate::BlakeTwo256};
+use subxt_core::config::{substrate::BlakeTwo256, Hasher};
 
 use crate::{
     error::EngineError,
-    system_events::{DecodedDispatchFailure, DecodedSystemOutcome, decode_metadata_strict},
+    system_events::{decode_metadata_strict, DecodedDispatchFailure, DecodedSystemOutcome},
 };
 
 /// All already-verified block evidence required to decide one transaction's
@@ -42,7 +42,11 @@ pub fn verify_transaction_outcome(evidence: TransactionEvidence<'_>) -> Executio
         }
     };
     let hasher = BlakeTwo256::new(&metadata);
-    let local_hash = Hash32::from_bytes(hasher.hash(evidence.signed_extrinsic.as_bytes()).to_fixed_bytes());
+    let local_hash = Hash32::from_bytes(
+        hasher
+            .hash(evidence.signed_extrinsic.as_bytes())
+            .to_fixed_bytes(),
+    );
     if local_hash != evidence.submitted_hash {
         return unverified(
             Some(evidence.block),
@@ -131,11 +135,13 @@ pub fn verify_transaction_outcome(evidence: TransactionEvidence<'_>) -> Executio
             Some(extrinsic_index),
             UnverifiedReason::MetadataDecodeFailed,
         ),
-        Err(EngineError::InvalidEvents(reason)) if reason.contains("multiple System") => unverified(
-            Some(evidence.block),
-            Some(extrinsic_index),
-            UnverifiedReason::OutcomeEventAmbiguous,
-        ),
+        Err(EngineError::InvalidEvents(reason)) if reason.contains("multiple System") => {
+            unverified(
+                Some(evidence.block),
+                Some(extrinsic_index),
+                UnverifiedReason::OutcomeEventAmbiguous,
+            )
+        }
         Err(_) => unverified(
             Some(evidence.block),
             Some(extrinsic_index),
