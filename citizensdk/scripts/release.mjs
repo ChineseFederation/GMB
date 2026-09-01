@@ -86,6 +86,8 @@ const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
 const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'test',
+  'native/contracts/tests',
+  'native/engine/tests',
   'native/signer/tests',
   'android/src/test',
   'ios/Tests',
@@ -99,6 +101,15 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'android/src/test/kotlin/org/citizen/sdk/VaultEnvelopeTest.kt': 'a7c01a8c1794878b6bc7ec3e566f511ec80768d189b2c3430129408f77cfde65',
   'ios/Tests/SecureEnclaveSecretVaultTests.swift': 'a3e5d2433cbf1d426c1fc8ee18ac56fd13473fca7f8c8fe61d39ff332fb409aa',
   'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
+  'native/contracts/tests/capability_contract.rs': '2414480f0ffe218646a57aa531ba124ed69f23e61a61fddc556b56f24ff1828e',
+  'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
+  'native/contracts/tests/secret_contract.rs': '2c380ae3fe6f156ce1636b340c2430e78a561bb515344f9ffe49a4cb8cdc9ae9',
+  'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
+  'native/engine/tests/capabilities.rs': '1caa3698ff6bf6a0a6f42d1da142eb59e1981fa4e5df8614be1f7fc3369f30a2',
+  'native/engine/tests/engine_boundary.rs': 'a432f82ca557ab4b1520427063e5d1a3d7370fd0e6acb0d40847c1eab926db40',
+  'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
+  'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
+  'native/engine/tests/transaction_outcome.rs': '828b9fa34d338a15ef0e674581c5a0c22953939b8ddadd0f15d6c9c6de82e7e9',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
   'scripts/release.test.mjs': 'b65ee3671de2cd3ef547a790bf9ce1e5f89ec0b8f0ee8756507c5858327b94cf',
@@ -181,8 +192,68 @@ const SMOLDOT_LOCK_FILES = Object.freeze({
 // 根 signer workspace 与 Flutter 包的解析闭包同样属于正式来源输入；locked 模式
 // 只能保证使用当前锁，必须再固定锁文件自身，才能阻止依赖身份随提交静默漂移。
 const SDK_ROOT_LOCK_FILES = Object.freeze({
-  'Cargo.lock': '62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670',
+  'Cargo.lock': '9fd44520029d5fd6dfd195468e092fda9c27a0a0cb3946721178aef412a8e4a2',
   'pubspec.lock': '2a8bd55a877f037c425cfd21c279b89820ae3c61db698f48a15f298e6c977c41',
+});
+// contracts 与 engine 是 CitizenSDK 自有、可编译的 Rust 核心。它们不能借用
+// smoldot 的来源清单：这里独立固定两个目录的完整反向闭集，任何 build.rs、bin、
+// 示例或未登记文件都会改变编译/发布语义并因此失败关闭。
+const CORE_RUST_ROOTS = Object.freeze([
+  'native/contracts',
+  'native/engine',
+]);
+const CORE_RUST_FILES = Object.freeze({
+  'native/contracts/Cargo.toml': 'b533e0d262d5b56300b70f36a3a8f068a3446e7b36b5270fc820aa1e879f3350',
+  'native/contracts/README.md': '650f220a4af05b0a417d2048d6394a5f4e2da614822cdca7286984a8f16fd0f7',
+  'native/contracts/src/capability.rs': '2391e4f29a01f61f5ff0242fa735fa69e1351dadf28b528b0b2130a1be1799ba',
+  'native/contracts/src/chain.rs': 'b14ca7acacb9f72e014eebaca13030b865495ab0038b1455a8f8121be6f92106',
+  'native/contracts/src/chain_signer.rs': 'c20cf42f83f5be8607894934074d7608467d2f9a0d020e4a13b90bc31be12b16',
+  'native/contracts/src/error.rs': '14d17404dd5b30916b358b846c63ae4f8cf306281adc0f1babfc8a40f3a4bbc3',
+  'native/contracts/src/lib.rs': 'd05d0a47fe12ea8909e0242c63350e0ee9b2d6a67ad01b5de486ed28fd44ffae',
+  'native/contracts/src/secret_vault.rs': 'cd178bc8c4e4be14ef593f751c3d21fa307bf6da3f5823d680e6e228c791a3a4',
+  'native/contracts/src/store/chain_database.rs': '31a2e46f046fc8259de01fd776050625b0cfbfb4d8f516cc8695a7d5d1ce9c13',
+  'native/contracts/src/store/encrypted_secret_blob.rs': 'a6225c9b257aac99e6281807c686b13fda1c26540764e3cb2576a168159093af',
+  'native/contracts/src/store/mod.rs': '33c4a4e30b79abce7578a8d7c0c7d1e87bb3b0790f3f6f43f202c889b0025150',
+  'native/contracts/src/store/runtime_cache.rs': '152597dcc7b8f7bab6add541d1b9e638898c537e0b022d1e33f3f0b8b28675ac',
+  'native/contracts/src/store/transaction_history.rs': '4a072276f6cc5bcbfc409a0d1e6e9a5593090e02103ad4c795eabfbb96a81411',
+  'native/contracts/src/store/wallet_profile.rs': '9f22dc1da0f370ed70f9a5cb2e165319b8519789a7b494747929f96eb683b481',
+  'native/contracts/src/transaction.rs': '53fdbe9fcf9a4f6ce9203942b3c439820283f601f1e6a8ff37b1112a08dac1ce',
+  'native/contracts/src/wallet.rs': '125dd3acd7d8ca4517a12c07e64c0ef25ccfd491de8011a2071688450378886d',
+  'native/contracts/tests/capability_contract.rs': '2414480f0ffe218646a57aa531ba124ed69f23e61a61fddc556b56f24ff1828e',
+  'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
+  'native/contracts/tests/secret_contract.rs': '2c380ae3fe6f156ce1636b340c2430e78a561bb515344f9ffe49a4cb8cdc9ae9',
+  'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
+  'native/engine/Cargo.toml': '4879f147b03caaac07909664600c404e01b001eb9dad0c7ee4ad09099e5c071b',
+  'native/engine/README.md': '4c625461a4f5669cb98629278801452e8aad3dffd0ad4c37071d6b431bdc986c',
+  'native/engine/src/capabilities.rs': 'ac15b97bf12a3895ac0d08bd25272c82eb6bf2f9a7da3d4f80d5b42b138e53ef',
+  'native/engine/src/engine.rs': '8503fa19f7851f110944664d9fdcbf8b7c744c50b88072977b50587494aa3cb4',
+  'native/engine/src/error.rs': '327d39023394cb311eb9b68bf74bc0a99fe64d1355f30b736f65c5be1dfb008d',
+  'native/engine/src/lib.rs': '3fc5b2333c1738a3467b8aa92fe8d9a5d7e2f38d655ed3f51b471ad951aed1f4',
+  'native/engine/src/runtime_context.rs': '6d37193e9fba59ade6b80aaea00b903ee223cda92957930c90e8d01f604a5f92',
+  'native/engine/src/state_import.rs': 'd750dd59afaacb4ec27f684329d95d301aa4b807ef506788664f043df84836ad',
+  'native/engine/src/system_events.rs': '75eb8e1cb3f689e9067548d3cb40586e838c8295503361f8bef248e30267bf24',
+  'native/engine/src/transaction_outcome.rs': 'c0ce526c190d1749581b8632d711930658615fe87d47ff74faacb4da9efef21c',
+  'native/engine/tests/capabilities.rs': '1caa3698ff6bf6a0a6f42d1da142eb59e1981fa4e5df8614be1f7fc3369f30a2',
+  'native/engine/tests/engine_boundary.rs': 'a432f82ca557ab4b1520427063e5d1a3d7370fd0e6acb0d40847c1eab926db40',
+  'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
+  'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
+  'native/engine/tests/transaction_outcome.rs': '828b9fa34d338a15ef0e674581c5a0c22953939b8ddadd0f15d6c9c6de82e7e9',
+});
+// native 根只能拥有这五个直接条目，防止出现第二个未审查的 Rust 产品边界。
+const NATIVE_ROOT_ENTRIES = Object.freeze({
+  'README.md': 'file',
+  contracts: 'directory',
+  engine: 'directory',
+  signer: 'directory',
+  smoldot: 'directory',
+});
+// Core Rust 的 workspace 入口、解析闭包、边界说明和法律声明必须与源码闭集
+// 同步审核。THIRD_PARTY_NOTICES.md 的最终哈希在并发文档更新结束后统一收口。
+const CORE_RUST_BOUNDARY_FILES = Object.freeze({
+  'Cargo.toml': '61a0a0a9d094eb9598352ad61ba9083b3ca92ebae16798d491ac9cc91ff0ecc0',
+  'Cargo.lock': '9fd44520029d5fd6dfd195468e092fda9c27a0a0cb3946721178aef412a8e4a2',
+  'native/README.md': '47fe400b80e964eea5a78f72474c79a7e5566ba82be1eda8f69bd90068ec2730',
+  'THIRD_PARTY_NOTICES.md': 'd7d171c75036b1a74af5df435c3369db60f79d2411446177499c00ef81b099ce',
 });
 // 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
 // byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
@@ -385,6 +456,66 @@ export function assertSmoldotLocks(root) {
 
 export function assertSdkRootLocks(root) {
   assertPinnedFiles(root, SDK_ROOT_LOCK_FILES, 'SDK 根锁');
+}
+
+/**
+ * Verify the complete CitizenSDK-owned Rust core and its workspace boundary.
+ *
+ * This contract deliberately does not share smoldot's imported-source manifest:
+ * contracts/engine are maintained by CitizenSDK and therefore have their own
+ * reverse-enumerated closure. The native root is also closed so a new crate
+ * cannot enter a release merely because ROOT_DIRECTORIES recursively copies it.
+ */
+export function assertCoreRustSource(root) {
+  const sourceRoot = resolve(root);
+  const nativeRoot = join(sourceRoot, 'native');
+  if (!existsSync(nativeRoot)
+      || lstatSync(nativeRoot).isSymbolicLink()
+      || !lstatSync(nativeRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通 native 根目录');
+  }
+
+  const actualNativeEntries = readdirSync(nativeRoot).sort();
+  const expectedNativeEntries = Object.keys(NATIVE_ROOT_ENTRIES).sort();
+  if (JSON.stringify(actualNativeEntries) !== JSON.stringify(expectedNativeEntries)) {
+    const actual = new Set(actualNativeEntries);
+    const expected = new Set(expectedNativeEntries);
+    const missing = expectedNativeEntries.filter((path) => !actual.has(path));
+    const extra = actualNativeEntries.filter((path) => !expected.has(path));
+    fail(`CitizenSDK native 根闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  for (const [name, expectedType] of Object.entries(NATIVE_ROOT_ENTRIES)) {
+    const path = join(nativeRoot, name);
+    const info = lstatSync(path);
+    if (info.isSymbolicLink()
+        || (expectedType === 'file' ? !info.isFile() : !info.isDirectory())) {
+      fail(`CitizenSDK native 根条目类型漂移：${name}`);
+    }
+  }
+
+  for (const relativeRoot of CORE_RUST_ROOTS) {
+    const coreRoot = join(sourceRoot, ...relativeRoot.split('/'));
+    if (!existsSync(coreRoot)
+        || lstatSync(coreRoot).isSymbolicLink()
+        || !lstatSync(coreRoot).isDirectory()) {
+      fail(`CitizenSDK 缺少普通 Core Rust 来源目录：${relativeRoot}`);
+    }
+    const actualPaths = regularFiles(coreRoot)
+      .map((path) => `${relativeRoot}/${path}`)
+      .sort();
+    const expectedPaths = Object.keys(CORE_RUST_FILES)
+      .filter((path) => path.startsWith(`${relativeRoot}/`))
+      .sort();
+    if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+      const actual = new Set(actualPaths);
+      const expected = new Set(expectedPaths);
+      const missing = expectedPaths.filter((path) => !actual.has(path));
+      const extra = actualPaths.filter((path) => !expected.has(path));
+      fail(`CitizenSDK Core Rust 文件闭集漂移：${relativeRoot}；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    }
+  }
+  assertPinnedFiles(sourceRoot, CORE_RUST_FILES, 'Core Rust 来源');
+  assertPinnedFiles(sourceRoot, CORE_RUST_BOUNDARY_FILES, 'Core Rust 边界');
 }
 
 function assertPinnedFiles(root, files, label) {
@@ -746,6 +877,7 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   assertSmoldotDartSource(candidate);
   assertSmoldotLocks(candidate);
   assertSdkRootLocks(candidate);
+  assertCoreRustSource(candidate);
   assertSmoldotRustSource(candidate);
   assertSignerSource(candidate);
   assertChainAssets(candidate);
@@ -843,6 +975,7 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertSmoldotDartSource(source);
   assertSmoldotLocks(source);
   assertSdkRootLocks(source);
+  assertCoreRustSource(source);
   assertSmoldotRustSource(source);
   assertSignerSource(source);
   assertChainAssets(source);
