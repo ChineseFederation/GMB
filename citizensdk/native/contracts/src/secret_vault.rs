@@ -1,0 +1,221 @@
+//! 系统金库和 Rust 受控秘密缓冲区合同。
+
+use std::fmt;
+
+use zeroize::Zeroizing;
+
+use crate::{AccountId32, ContractError, ContractErrorCode, ContractFuture, ContractResult};
+
+/// 只能保存在热钱包中的账户 child mini-secret；本合同不增加第二套母种子持久化入口。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SecretKind {
+    AccountMiniSecret,
+}
+
+/// 每次钱包生命周期独占的 128 位硬件密钥 generation。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct VaultGeneration([u8; 16]);
+
+impl VaultGeneration {
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// 每个秘密槽不可复用的 128 位 owner。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SecretOwner([u8; 16]);
+
+impl SecretOwner {
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
+    }
+}
+
+/// 一份账户秘密的完整、不可复用身份，也作为系统金库 AAD 的结构化输入。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct SecretRef {
+    wallet_index: u32,
+    generation: VaultGeneration,
+    owner: SecretOwner,
+    account_id: AccountId32,
+    kind: SecretKind,
+}
+
+impl SecretRef {
+    pub const fn account_mini_secret(
+        wallet_index: u32,
+        generation: VaultGeneration,
+        owner: SecretOwner,
+        account_id: AccountId32,
+    ) -> Self {
+        Self {
+            wallet_index,
+            generation,
+            owner,
+            account_id,
+            kind: SecretKind::AccountMiniSecret,
+        }
+    }
+
+    pub const fn wallet_index(self) -> u32 {
+        self.wallet_index
+    }
+
+    pub const fn generation(self) -> VaultGeneration {
+        self.generation
+    }
+
+    pub const fn owner(self) -> SecretOwner {
+        self.owner
+    }
+
+    pub const fn account_id(self) -> AccountId32 {
+        self.account_id
+    }
+
+    pub const fn kind(self) -> SecretKind {
+        self.kind
+    }
+}
+
+/// 秘密只在 Rust 的受控、可清零内存中存在。
+///
+/// ```compile_fail
+/// use citizen_sdk_contracts::SecretBuffer;
+/// let secret = SecretBuffer::try_new(vec![7; 32]).unwrap();
+/// let copied = secret.clone();
+/// # let _ = copied;
+/// ```
+pub struct SecretBuffer {
+    bytes: Zeroizing<Vec<u8>>,
+}
+
+impl SecretBuffer {
+    pub fn try_new(bytes: Vec<u8>) -> ContractResult<Self> {
+        if bytes.is_empty() {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "秘密缓冲区不能为空",
+            ));
+        }
+        Ok(Self {
+            bytes: Zeroizing::new(bytes),
+        })
+    }
+
+    /// 只把秘密借给同步 Rust 闭包，禁止返回切片或移交普通 Vec。
+    pub fn with_secret<T>(&self, operation: impl FnOnce(&[u8]) -> T) -> T {
+        operation(self.bytes.as_slice())
+    }
+}
+
+impl fmt::Debug for SecretBuffer {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("SecretBuffer([REDACTED])")
+    }
+}
+
+/// 系统金库产生的密文信封；它不是秘密明文，可以交给专用密文仓储。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EncryptedSecretEnvelope {
+    format_version: u32,
+    associated_data_digest: Hash32Bytes,
+    ciphertext: Vec<u8>,
+}
+
+/// AAD 摘要使用独立类型，避免与区块哈希混用。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Hash32Bytes([u8; 32]);
+
+impl Hash32Bytes {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl EncryptedSecretEnvelope {
+    pub fn try_new(
+        format_version: u32,
+        associated_data_digest: Hash32Bytes,
+        ciphertext: Vec<u8>,
+    ) -> ContractResult<Self> {
+        if format_version == 0 || ciphertext.is_empty() {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "密文信封格式版本和正文必须有效",
+            ));
+        }
+        Ok(Self {
+            format_version,
+            associated_data_digest,
+            ciphertext,
+        })
+    }
+
+    pub const fn format_version(&self) -> u32 {
+        self.format_version
+    }
+
+    pub const fn associated_data_digest(&self) -> Hash32Bytes {
+        self.associated_data_digest
+    }
+
+    pub fn ciphertext(&self) -> &[u8] {
+        &self.ciphertext
+    }
+}
+
+/// 当前设备上的系统金库能力事实。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VaultAvailability {
+    Available,
+    NoStrongUserAuthentication,
+    Unsupported,
+    Unavailable,
+}
+
+/// 系统硬件/安全金库合同。它不能冒充 sr25519 签名器。
+pub trait SecretVault: Send + Sync {
+    fn availability(&self) -> ContractFuture<'_, VaultAvailability>;
+
+    /// 以 SecretRef 的完整身份作为 AAD 保护秘密；成功后输入缓冲区立即结束生命周期。
+    fn seal(
+        &self,
+        secret_ref: SecretRef,
+        secret: SecretBuffer,
+    ) -> ContractFuture<'_, EncryptedSecretEnvelope>;
+
+    /// 解锁后的秘密只返回 Rust `SecretBuffer`，后续绑定层不得导出它。
+    fn open(
+        &self,
+        secret_ref: SecretRef,
+        envelope: EncryptedSecretEnvelope,
+    ) -> ContractFuture<'_, SecretBuffer>;
+
+    fn has_wallet_key(
+        &self,
+        wallet_index: u32,
+        generation: VaultGeneration,
+    ) -> ContractFuture<'_, bool>;
+
+    /// 删除必须幂等；只有整钱包删除或已取得所有权的补偿计划可以调用。
+    fn delete_wallet_key(
+        &self,
+        wallet_index: u32,
+        generation: VaultGeneration,
+    ) -> ContractFuture<'_, ()>;
+}
+
