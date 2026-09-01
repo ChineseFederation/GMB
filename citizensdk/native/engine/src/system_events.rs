@@ -14,12 +14,18 @@ use crate::error::EngineError;
 /// `System.ExtrinsicFailed`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DecodedDispatchFailure {
+    /// SCALE variant index read directly from the DispatchError field bytes.
+    pub variant_index: u8,
     /// Runtime variant name such as `BadOrigin` or `Module`.
     pub variant: String,
     /// Pallet index when the runtime returned `DispatchError::Module`.
     pub module_index: Option<u8>,
     /// First module error byte when the runtime returned `Module`.
     pub error_index: Option<u8>,
+    /// Pallet name resolved from the exact block metadata for Module errors.
+    pub pallet_name: Option<String>,
+    /// Pallet error name resolved from the exact block metadata.
+    pub error_name: Option<String>,
     /// Lossless diagnostic rendering of the dynamically decoded error value.
     pub detail: String,
 }
@@ -50,7 +56,7 @@ pub fn decode_system_outcome(
         .map_err(|error| EngineError::InvalidEvents(error.to_string()))?
         .0;
     let prefix_length = events_bytes.len().saturating_sub(prefix_cursor.len());
-    let events = Events::<SubstrateConfig>::decode_from(events_bytes.to_vec(), metadata);
+    let events = Events::<SubstrateConfig>::decode_from(events_bytes.to_vec(), metadata.clone());
     if events.len() != declared_count {
         return Err(EngineError::InvalidEvents(
             "event vector length prefix was not preserved".to_owned(),
@@ -78,6 +84,8 @@ pub fn decode_system_outcome(
                     .map_err(|error| EngineError::InvalidEvents(error.to_string()))?;
                 Some(DecodedSystemOutcome::Failed(decode_dispatch_failure(
                     &fields,
+                    event.field_bytes(),
+                    &metadata,
                 )?))
             }
             _ => None,
@@ -100,7 +108,7 @@ pub fn decode_system_outcome(
     Ok(outcome)
 }
 
-fn decode_metadata_strict(bytes: &[u8]) -> Result<Metadata, EngineError> {
+pub(crate) fn decode_metadata_strict(bytes: &[u8]) -> Result<Metadata, EngineError> {
     let mut cursor = bytes;
     let metadata = Metadata::decode(&mut cursor)
         .map_err(|error| EngineError::InvalidMetadata(error.to_string()))?;
@@ -114,7 +122,14 @@ fn decode_metadata_strict(bytes: &[u8]) -> Result<Metadata, EngineError> {
 
 fn decode_dispatch_failure(
     fields: &Composite<u32>,
+    field_bytes: &[u8],
+    metadata: &Metadata,
 ) -> Result<DecodedDispatchFailure, EngineError> {
+    let Some(variant_index) = field_bytes.first().copied() else {
+        return Err(EngineError::InvalidEvents(
+            "ExtrinsicFailed has no DispatchError bytes".to_owned(),
+        ));
+    };
     let Some(dispatch_error) = fields.values().next() else {
         return Err(EngineError::InvalidEvents(
             "ExtrinsicFailed has no DispatchError field".to_owned(),
@@ -125,17 +140,50 @@ fn decode_dispatch_failure(
             "ExtrinsicFailed first field is not DispatchError".to_owned(),
         ));
     };
+    if known_dispatch_variant(&variant.name).is_some_and(|known| known != variant_index) {
+        return Err(EngineError::InvalidEvents(
+            "DispatchError bytes and metadata variant disagree".to_owned(),
+        ));
+    }
     let (module_index, error_index) = if variant.name == "Module" {
         decode_module_error(&variant.values)
     } else {
         (None, None)
     };
+    let pallet = module_index.and_then(|index| metadata.pallet_by_index(index));
+    let pallet_name = pallet.map(|pallet| pallet.name().to_owned());
+    let error_name = pallet
+        .and_then(|pallet| error_index.and_then(|index| pallet.error_variant_by_index(index)))
+        .map(|error| error.name.clone());
     Ok(DecodedDispatchFailure {
+        variant_index,
         variant: variant.name.clone(),
         module_index,
         error_index,
+        pallet_name,
+        error_name,
         detail: format!("{dispatch_error:?}"),
     })
+}
+
+fn known_dispatch_variant(name: &str) -> Option<u8> {
+    match name {
+        "Other" => Some(0),
+        "CannotLookup" => Some(1),
+        "BadOrigin" => Some(2),
+        "Module" => Some(3),
+        "ConsumerRemaining" => Some(4),
+        "NoProviders" => Some(5),
+        "TooManyConsumers" => Some(6),
+        "Token" => Some(7),
+        "Arithmetic" => Some(8),
+        "Transactional" => Some(9),
+        "Exhausted" => Some(10),
+        "Corruption" => Some(11),
+        "Unavailable" => Some(12),
+        "RootNotAllowed" => Some(13),
+        _ => None,
+    }
 }
 
 fn decode_module_error(values: &Composite<u32>) -> (Option<u8>, Option<u8>) {

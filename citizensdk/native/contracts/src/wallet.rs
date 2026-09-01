@@ -1,6 +1,6 @@
 //! 不含助记词、母种子、mini-secret 或私钥的钱包公开状态模型。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::{
     AccountId32, ContractError, ContractErrorCode, ContractResult, SecretRef, VaultGeneration,
@@ -182,7 +182,9 @@ impl WalletProvisioningPlan {
         secret_refs: Vec<SecretRef>,
         delete_wallet_key_on_rollback: bool,
     ) -> ContractResult<Self> {
+        let unique_refs: HashSet<_> = secret_refs.iter().copied().collect();
         if secret_refs.is_empty()
+            || unique_refs.len() != secret_refs.len()
             || secret_refs.iter().any(|secret_ref| {
                 secret_ref.wallet_index() != wallet_index || secret_ref.generation() != generation
             })
@@ -214,7 +216,7 @@ impl WalletProvisioningPlan {
         self.generation
     }
 
-    pub const fn previous_profile(&self) -> Option<&WalletProfile> {
+    pub fn previous_profile(&self) -> Option<&WalletProfile> {
         self.previous_profile.as_ref()
     }
 
@@ -245,9 +247,12 @@ impl WalletCleanupPlan {
         secret_refs: Vec<SecretRef>,
         delete_wallet_key: bool,
     ) -> ContractResult<Self> {
-        if secret_refs.iter().any(|secret_ref| {
-            secret_ref.wallet_index() != wallet_index || secret_ref.generation() != generation
-        }) {
+        let unique_refs: HashSet<_> = secret_refs.iter().copied().collect();
+        if unique_refs.len() != secret_refs.len()
+            || secret_refs.iter().any(|secret_ref| {
+                secret_ref.wallet_index() != wallet_index || secret_ref.generation() != generation
+            })
+        {
             return Err(ContractError::new(
                 ContractErrorCode::InvalidArgument,
                 "cleanup 计划不得命中其它钱包生命周期",
@@ -324,15 +329,15 @@ impl WalletState {
         self.revision
     }
 
-    pub const fn profile(&self) -> Option<&WalletProfile> {
+    pub fn profile(&self) -> Option<&WalletProfile> {
         self.profile.as_ref()
     }
 
-    pub const fn provisioning(&self) -> Option<&WalletProvisioningPlan> {
+    pub fn provisioning(&self) -> Option<&WalletProvisioningPlan> {
         self.provisioning.as_ref()
     }
 
-    pub const fn cleanup(&self) -> Option<&WalletCleanupPlan> {
+    pub fn cleanup(&self) -> Option<&WalletCleanupPlan> {
         self.cleanup.as_ref()
     }
 
@@ -340,4 +345,3 @@ impl WalletState {
         &self.cleanup_queue
     }
 }
-

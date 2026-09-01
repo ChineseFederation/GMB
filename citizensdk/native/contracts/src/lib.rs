@@ -19,21 +19,24 @@ pub mod store;
 pub mod transaction;
 pub mod wallet;
 
-pub use capability::{
-    CapabilityName, CapabilityReason, CapabilitySnapshot, CapabilityStatus,
-};
+pub use capability::{CapabilityName, CapabilityReason, CapabilitySnapshot, CapabilityStatus};
 pub use chain::{
     AccountId32, BlockFinality, ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32,
     RuntimeContext, RuntimeVersion, StateImportReceipt, VerifiedBlockRef, VerifiedChainClient,
 };
 pub use chain_signer::{
-    ChainSigner, DerivationJunction, Sr25519PublicKey, Sr25519Signature,
-    SR25519_SIGNING_CONTEXT,
+    ChainSigner, DerivationJunction, Sr25519PublicKey, Sr25519Signature, SR25519_SIGNING_CONTEXT,
 };
 pub use error::{ContractError, ContractErrorCode, ContractResult};
 pub use secret_vault::{
-    EncryptedSecretEnvelope, SecretBuffer, SecretKind, SecretOwner, SecretRef, SecretVault,
-    VaultAvailability, VaultGeneration,
+    EncryptedSecretEnvelope, Hash32Bytes, SecretBuffer, SecretKind, SecretOwner, SecretRef,
+    SecretVault, VaultAvailability, VaultGeneration,
+};
+pub use store::{
+    ChainDatabaseSnapshot, ChainDatabaseStore, EncryptedSecretBlobSnapshot,
+    EncryptedSecretBlobStore, FinalizedTransferRecord, HistoryTransactionStatus, RuntimeCacheStore,
+    TransactionHistoryCursor, TransactionHistoryRecord, TransactionHistoryState,
+    TransactionHistoryStore, WalletProfileStore,
 };
 pub use transaction::{
     DispatchFailure, ExecutionConclusion, ExtrinsicWatchEvent, ModuleDispatchFailure,
@@ -45,10 +48,7 @@ pub use wallet::{
 };
 
 /// 对象安全合同使用的异步返回值；具体 executor 由调用者决定。
-pub type ContractFuture<'a, T> =
-    Pin<Box<dyn Future<Output = ContractResult<T>> + Send + 'a>>;
+pub type ContractFuture<'a, T> = Pin<Box<dyn Future<Output = ContractResult<T>> + Send + 'a>>;
 
 /// 对象安全合同使用的事件流；每个事件都可以独立报告 provider 错误。
-pub type ContractStream<'a, T> =
-    Pin<Box<dyn Stream<Item = ContractResult<T>> + Send + 'a>>;
-
+pub type ContractStream<'a, T> = Pin<Box<dyn Stream<Item = ContractResult<T>> + Send + 'a>>;

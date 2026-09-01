@@ -1,0 +1,63 @@
+use citizen_sdk_contracts::{Hash32, RuntimeContext, RuntimeVersion, VerifiedBlockRef};
+use citizen_sdk_engine::RuntimeContextCache;
+
+fn context(block: VerifiedBlockRef, spec_version: u32, marker: u8) -> RuntimeContext {
+    match RuntimeContext::try_new(
+        block,
+        RuntimeVersion::new(spec_version, spec_version + 1),
+        vec![marker],
+    ) {
+        Ok(context) => context,
+        Err(error) => panic!("runtime context fixture failed: {error}"),
+    }
+}
+
+#[test]
+fn late_old_best_completion_cannot_replace_new_best() {
+    let old_block = VerifiedBlockRef::best(Hash32::from_bytes([1; 32]), 10);
+    let new_block = VerifiedBlockRef::best(Hash32::from_bytes([2; 32]), 11);
+    let mut cache = RuntimeContextCache::new();
+    let old_request = cache.begin(old_block);
+    let new_request = cache.begin(new_block);
+
+    assert!(cache.complete(new_request, context(new_block, 2, 2)).is_ok());
+    assert!(cache.complete(old_request, context(old_block, 1, 1)).is_ok());
+    assert_eq!(cache.current_best().map(RuntimeContext::block), Some(new_block));
+    assert!(cache.get(old_block).is_some());
+}
+
+#[test]
+fn context_must_match_request_and_remain_immutable() {
+    let first = VerifiedBlockRef::best(Hash32::from_bytes([3; 32]), 20);
+    let other = VerifiedBlockRef::best(Hash32::from_bytes([4; 32]), 21);
+    let same_hash_wrong_height = VerifiedBlockRef::best(Hash32::from_bytes([3; 32]), 99);
+    let mut cache = RuntimeContextCache::new();
+
+    let request = cache.begin(first);
+    assert!(cache.complete(request, context(other, 1, 1)).is_err());
+
+    let request = cache.begin(first);
+    assert!(cache.complete(request, context(first, 1, 1)).is_ok());
+    let request = cache.begin(first);
+    assert!(cache.complete(request, context(first, 2, 2)).is_err());
+    let request = cache.begin(same_hash_wrong_height);
+    assert!(cache
+        .complete(request, context(same_hash_wrong_height, 1, 1))
+        .is_err());
+}
+
+#[test]
+fn finalized_context_does_not_change_best_identity() {
+    let best = VerifiedBlockRef::best(Hash32::from_bytes([5; 32]), 30);
+    let finalized = VerifiedBlockRef::finalized(Hash32::from_bytes([6; 32]), 29);
+    let mut cache = RuntimeContextCache::new();
+    let best_request = cache.begin(best);
+    assert!(cache.complete(best_request, context(best, 4, 4)).is_ok());
+    let finalized_request = cache.begin(finalized);
+    assert!(cache
+        .complete(finalized_request, context(finalized, 3, 3))
+        .is_ok());
+    assert_eq!(cache.current_best().map(RuntimeContext::block), Some(best));
+    assert!(cache.get(finalized).is_some());
+}
+

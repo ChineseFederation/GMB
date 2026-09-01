@@ -7,7 +7,7 @@ use zeroize::Zeroizing;
 use crate::{AccountId32, ContractError, ContractErrorCode, ContractFuture, ContractResult};
 
 /// 只能保存在热钱包中的账户 child mini-secret；本合同不增加第二套母种子持久化入口。
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum SecretKind {
     AccountMiniSecret,
 }
@@ -218,4 +218,3 @@ pub trait SecretVault: Send + Sync {
         generation: VaultGeneration,
     ) -> ContractFuture<'_, ()>;
 }
-

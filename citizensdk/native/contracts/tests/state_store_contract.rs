@@ -1,0 +1,255 @@
+//! 五类数据仓储的强类型、对象安全和钱包公开状态合同。
+
+use std::{
+    future::Future,
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
+};
+
+use citizen_sdk_contracts::{
+    AccountId32, ChainDatabaseSnapshot, ChainDatabaseStore, ContractFuture, ContractResult,
+    EncryptedSecretBlobSnapshot, EncryptedSecretBlobStore, FinalizedBlockRef,
+    FinalizedTransferRecord, Hash32, RuntimeCacheStore, RuntimeContext, RuntimeVersion,
+    SecretOwner, SecretRef, TransactionHistoryState, TransactionHistoryStore, VaultGeneration,
+    VerifiedBlockRef, WalletAccount, WalletOrigin, WalletProfile, WalletProfileStore, WalletState,
+};
+
+struct NoopWake;
+
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+fn value_or_panic<T>(result: ContractResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => panic!("合同调用失败: {error}"),
+    }
+}
+
+struct MemoryChainDatabase;
+
+impl ChainDatabaseStore for MemoryChainDatabase {
+    fn load(&self) -> ContractFuture<'_, ChainDatabaseSnapshot> {
+        Box::pin(async { Ok(ChainDatabaseSnapshot::new(0, None)) })
+    }
+
+    fn compare_and_swap(
+        &self,
+        expected_revision: u64,
+        state: Option<citizen_sdk_contracts::ExportedChainState>,
+    ) -> ContractFuture<'_, ChainDatabaseSnapshot> {
+        Box::pin(async move { Ok(ChainDatabaseSnapshot::new(expected_revision + 1, state)) })
+    }
+}
+
+struct MemoryRuntimeCache;
+
+impl RuntimeCacheStore for MemoryRuntimeCache {
+    fn load(&self, _block_hash: Hash32) -> ContractFuture<'_, Option<RuntimeContext>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn store(&self, _context: RuntimeContext) -> ContractFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn delete(&self, _block_hash: Hash32) -> ContractFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+struct MemoryWalletProfiles;
+
+impl WalletProfileStore for MemoryWalletProfiles {
+    fn load(&self) -> ContractFuture<'_, WalletState> {
+        Box::pin(async { Ok(WalletState::empty()) })
+    }
+
+    fn compare_and_swap(
+        &self,
+        _expected_revision: u64,
+        next: WalletState,
+    ) -> ContractFuture<'_, WalletState> {
+        Box::pin(async move { Ok(next) })
+    }
+}
+
+struct MemoryHistory;
+
+impl TransactionHistoryStore for MemoryHistory {
+    fn load(&self) -> ContractFuture<'_, TransactionHistoryState> {
+        Box::pin(async { TransactionHistoryState::try_new(0, Vec::new(), Vec::new(), Vec::new()) })
+    }
+
+    fn compare_and_swap(
+        &self,
+        _expected_revision: u64,
+        next: TransactionHistoryState,
+    ) -> ContractFuture<'_, TransactionHistoryState> {
+        Box::pin(async move { Ok(next) })
+    }
+}
+
+struct MemoryEncryptedBlobs;
+
+impl EncryptedSecretBlobStore for MemoryEncryptedBlobs {
+    fn load(&self, _secret_ref: SecretRef) -> ContractFuture<'_, EncryptedSecretBlobSnapshot> {
+        Box::pin(async { Ok(EncryptedSecretBlobSnapshot::new(0, None)) })
+    }
+
+    fn compare_and_swap(
+        &self,
+        _secret_ref: SecretRef,
+        expected_revision: u64,
+        envelope: Option<citizen_sdk_contracts::EncryptedSecretEnvelope>,
+    ) -> ContractFuture<'_, EncryptedSecretBlobSnapshot> {
+        Box::pin(async move {
+            Ok(EncryptedSecretBlobSnapshot::new(
+                expected_revision + 1,
+                envelope,
+            ))
+        })
+    }
+}
+
+fn secret_ref(index: u32, account_byte: u8) -> SecretRef {
+    SecretRef::account_mini_secret(
+        7,
+        VaultGeneration::from_bytes([1; 16]),
+        SecretOwner::from_bytes([index as u8; 16]),
+        AccountId32::from_bytes([account_byte; 32]),
+    )
+}
+
+#[test]
+fn five_store_traits_are_separate_object_safe_boundaries() {
+    let chain: Box<dyn ChainDatabaseStore> = Box::new(MemoryChainDatabase);
+    let runtime: Box<dyn RuntimeCacheStore> = Box::new(MemoryRuntimeCache);
+    let wallet: Box<dyn WalletProfileStore> = Box::new(MemoryWalletProfiles);
+    let history: Box<dyn TransactionHistoryStore> = Box::new(MemoryHistory);
+    let blobs: Box<dyn EncryptedSecretBlobStore> = Box::new(MemoryEncryptedBlobs);
+
+    assert_eq!(value_or_panic(block_on(chain.load())).revision(), 0);
+    assert!(value_or_panic(block_on(runtime.load(Hash32::from_bytes([2; 32])))).is_none());
+    assert_eq!(value_or_panic(block_on(wallet.load())).revision(), 0);
+    assert_eq!(value_or_panic(block_on(history.load())).revision(), 0);
+    assert!(value_or_panic(block_on(blobs.load(secret_ref(3, 4))))
+        .envelope()
+        .is_none());
+}
+
+#[test]
+fn wallet_profile_rejects_duplicate_or_cross_generation_secret_refs() {
+    let generation = VaultGeneration::from_bytes([1; 16]);
+    let first_id = AccountId32::from_bytes([4; 32]);
+    let first = value_or_panic(WalletAccount::try_new(
+        0,
+        first_id,
+        secret_ref(1, 4),
+        "5CitizenFirst",
+        "first",
+        100,
+    ));
+    let duplicate_index = value_or_panic(WalletAccount::try_new(
+        0,
+        AccountId32::from_bytes([5; 32]),
+        secret_ref(2, 5),
+        "5CitizenSecond",
+        "second",
+        101,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        first_id,
+        WalletOrigin::Created,
+        100,
+        first_id,
+        vec![first.clone(), duplicate_index],
+    )
+    .is_err());
+
+    let foreign_ref = SecretRef::account_mini_secret(
+        8,
+        generation,
+        SecretOwner::from_bytes([3; 16]),
+        AccountId32::from_bytes([6; 32]),
+    );
+    let foreign = value_or_panic(WalletAccount::try_new(
+        1,
+        AccountId32::from_bytes([6; 32]),
+        foreign_ref,
+        "5CitizenForeign",
+        "foreign",
+        102,
+    ));
+    assert!(WalletProfile::try_new(
+        7,
+        generation,
+        first_id,
+        WalletOrigin::Created,
+        100,
+        first_id,
+        vec![first, foreign],
+    )
+    .is_err());
+}
+
+#[test]
+fn runtime_cache_value_carries_its_exact_block_identity() {
+    let block = VerifiedBlockRef::finalized(Hash32::from_bytes([9; 32]), 88);
+    let context = value_or_panic(RuntimeContext::try_new(
+        block,
+        RuntimeVersion::new(17, 3),
+        vec![1, 2, 3],
+    ));
+    assert_eq!(context.block(), block);
+    assert_eq!(context.version().spec_version(), 17);
+}
+
+#[test]
+fn finalized_transfer_history_rejects_zero_amount_and_duplicate_event_identity() {
+    let block = FinalizedBlockRef::from_parts(Hash32::from_bytes([7; 32]), 55);
+    assert!(FinalizedTransferRecord::try_new(
+        AccountId32::from_bytes([1; 32]),
+        AccountId32::from_bytes([2; 32]),
+        0,
+        block,
+        3,
+        Some(0),
+        "Balances",
+        None,
+    )
+    .is_err());
+
+    let transfer = value_or_panic(FinalizedTransferRecord::try_new(
+        AccountId32::from_bytes([1; 32]),
+        AccountId32::from_bytes([2; 32]),
+        100,
+        block,
+        3,
+        Some(0),
+        "Balances",
+        None,
+    ));
+    assert!(TransactionHistoryState::try_new(
+        1,
+        Vec::new(),
+        Vec::new(),
+        vec![transfer.clone(), transfer],
+    )
+    .is_err());
+}

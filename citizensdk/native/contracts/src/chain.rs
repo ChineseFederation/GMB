@@ -338,16 +338,43 @@ pub trait VerifiedChainClient: Send + Sync {
         keys: Vec<Vec<u8>>,
     ) -> ContractFuture<'_, Vec<Option<Vec<u8>>>>;
 
-    fn get_runtime_context_at(
+    /// finalized-only 强类型读取；余额、历史和不可逆事实必须使用该入口。
+    fn get_finalized_storage_at(
         &self,
-        block: VerifiedBlockRef,
-    ) -> ContractFuture<'_, RuntimeContext>;
+        block: FinalizedBlockRef,
+        key: Vec<u8>,
+    ) -> ContractFuture<'_, Option<Vec<u8>>> {
+        self.get_storage_at(block.into(), key)
+    }
+
+    /// finalized-only 批量读取，返回顺序必须与输入 key 完全一致。
+    fn get_finalized_storage_batch_at(
+        &self,
+        block: FinalizedBlockRef,
+        keys: Vec<Vec<u8>>,
+    ) -> ContractFuture<'_, Vec<Option<Vec<u8>>>> {
+        self.get_storage_batch_at(block.into(), keys)
+    }
+
+    fn get_runtime_context_at(&self, block: VerifiedBlockRef)
+        -> ContractFuture<'_, RuntimeContext>;
+
+    fn get_finalized_runtime_context_at(
+        &self,
+        block: FinalizedBlockRef,
+    ) -> ContractFuture<'_, RuntimeContext> {
+        self.get_runtime_context_at(block.into())
+    }
 
     /// 读取目标块完整 extrinsic 字节，供 Engine 按完整哈希定位准确 index。
-    fn get_block_extrinsics_at(
+    fn get_block_extrinsics_at(&self, block: VerifiedBlockRef) -> ContractFuture<'_, Vec<Vec<u8>>>;
+
+    fn get_finalized_block_extrinsics_at(
         &self,
-        block: VerifiedBlockRef,
-    ) -> ContractFuture<'_, Vec<Vec<u8>>>;
+        block: FinalizedBlockRef,
+    ) -> ContractFuture<'_, Vec<Vec<u8>>> {
+        self.get_block_extrinsics_at(block.into())
+    }
 
     /// 节点接收只返回提交事实，不代表入块、finalized 或 runtime 执行成功。
     fn submit_extrinsic(
@@ -364,9 +391,5 @@ pub trait VerifiedChainClient: Send + Sync {
     fn export_state(&self) -> ContractFuture<'_, ExportedChainState>;
 
     /// 只允许在 provider 启动前调用。Engine 仍须先核对身份、格式、finalized 与非倒退。
-    fn import_state(
-        &self,
-        state: ExportedChainState,
-    ) -> ContractFuture<'_, StateImportReceipt>;
+    fn import_state(&self, state: ExportedChainState) -> ContractFuture<'_, StateImportReceipt>;
 }
-

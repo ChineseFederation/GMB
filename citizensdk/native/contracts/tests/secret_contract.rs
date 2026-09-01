@@ -1,0 +1,180 @@
+//! SecretBuffer、ChainSigner 与 SecretVault 的隔离合同。
+
+use std::{
+    future::Future,
+    sync::Arc,
+    task::{Context, Poll, Wake, Waker},
+};
+
+use citizen_sdk_contracts::{
+    AccountId32, ChainSigner, ContractFuture, ContractResult, DerivationJunction,
+    EncryptedSecretEnvelope, Hash32Bytes, SecretBuffer, SecretOwner, SecretRef, SecretVault,
+    Sr25519PublicKey, Sr25519Signature, VaultAvailability, VaultGeneration,
+    SR25519_SIGNING_CONTEXT,
+};
+
+struct NoopWake;
+
+impl Wake for NoopWake {
+    fn wake(self: Arc<Self>) {}
+}
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let waker = Waker::from(Arc::new(NoopWake));
+    let mut context = Context::from_waker(&waker);
+    let mut future = std::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(output) => return output,
+            Poll::Pending => std::thread::yield_now(),
+        }
+    }
+}
+
+fn value_or_panic<T>(result: ContractResult<T>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(error) => panic!("合同调用失败: {error}"),
+    }
+}
+
+struct FakeSigner;
+
+impl ChainSigner for FakeSigner {
+    fn derive_hard<'a>(
+        &'a self,
+        parent: &'a SecretBuffer,
+        junction: DerivationJunction,
+    ) -> ContractFuture<'a, SecretBuffer> {
+        Box::pin(async move {
+            let child = parent.with_secret(|bytes| {
+                bytes
+                    .iter()
+                    .zip(junction.chain_code())
+                    .map(|(left, right)| *left ^ *right)
+                    .collect()
+            });
+            SecretBuffer::try_new(child)
+        })
+    }
+
+    fn public_key<'a>(&'a self, secret: &'a SecretBuffer) -> ContractFuture<'a, Sr25519PublicKey> {
+        Box::pin(async move {
+            let bytes = secret.with_secret(|secret_bytes| {
+                let mut output = [0_u8; 32];
+                output.copy_from_slice(secret_bytes);
+                output
+            });
+            Ok(Sr25519PublicKey::from_bytes(bytes))
+        })
+    }
+
+    fn sign<'a>(
+        &'a self,
+        secret: &'a SecretBuffer,
+        message: Vec<u8>,
+    ) -> ContractFuture<'a, Sr25519Signature> {
+        Box::pin(async move {
+            let marker = secret.with_secret(|bytes| bytes[0]) ^ message[0];
+            Ok(Sr25519Signature::from_bytes([marker; 64]))
+        })
+    }
+
+    fn verify(
+        &self,
+        _public_key: Sr25519PublicKey,
+        _message: Vec<u8>,
+        _signature: Sr25519Signature,
+    ) -> ContractFuture<'_, bool> {
+        Box::pin(async { Ok(true) })
+    }
+}
+
+struct FakeVault;
+
+impl SecretVault for FakeVault {
+    fn availability(&self) -> ContractFuture<'_, VaultAvailability> {
+        Box::pin(async { Ok(VaultAvailability::Available) })
+    }
+
+    fn seal(
+        &self,
+        _secret_ref: SecretRef,
+        secret: SecretBuffer,
+    ) -> ContractFuture<'_, EncryptedSecretEnvelope> {
+        Box::pin(async move {
+            let ciphertext =
+                secret.with_secret(|bytes| bytes.iter().map(|byte| *byte ^ 0xaa).collect());
+            EncryptedSecretEnvelope::try_new(1, Hash32Bytes::from_bytes([3; 32]), ciphertext)
+        })
+    }
+
+    fn open(
+        &self,
+        _secret_ref: SecretRef,
+        envelope: EncryptedSecretEnvelope,
+    ) -> ContractFuture<'_, SecretBuffer> {
+        Box::pin(async move {
+            let plaintext = envelope
+                .ciphertext()
+                .iter()
+                .map(|byte| *byte ^ 0xaa)
+                .collect();
+            SecretBuffer::try_new(plaintext)
+        })
+    }
+
+    fn has_wallet_key(
+        &self,
+        _wallet_index: u32,
+        _generation: VaultGeneration,
+    ) -> ContractFuture<'_, bool> {
+        Box::pin(async { Ok(true) })
+    }
+
+    fn delete_wallet_key(
+        &self,
+        _wallet_index: u32,
+        _generation: VaultGeneration,
+    ) -> ContractFuture<'_, ()> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+#[test]
+fn secret_debug_is_redacted_and_bytes_stay_inside_rust_closure() {
+    let secret = value_or_panic(SecretBuffer::try_new(b"secret-never-print".to_vec()));
+    let debug = format!("{secret:?}");
+    assert_eq!(debug, "SecretBuffer([REDACTED])");
+    assert!(!debug.contains("secret-never-print"));
+    assert_eq!(secret.with_secret(<[u8]>::len), 18);
+}
+
+#[test]
+fn signer_and_vault_are_distinct_object_safe_contracts() {
+    assert_eq!(SR25519_SIGNING_CONTEXT, b"substrate");
+    let signer: Box<dyn ChainSigner> = Box::new(FakeSigner);
+    let vault: Box<dyn SecretVault> = Box::new(FakeVault);
+    let generation = VaultGeneration::from_bytes([1; 16]);
+    let secret_ref = SecretRef::account_mini_secret(
+        0,
+        generation,
+        SecretOwner::from_bytes([2; 16]),
+        AccountId32::from_bytes([4; 32]),
+    );
+
+    assert_eq!(
+        value_or_panic(block_on(vault.availability())),
+        VaultAvailability::Available
+    );
+    let secret = value_or_panic(SecretBuffer::try_new(vec![7; 32]));
+    let envelope = value_or_panic(block_on(vault.seal(secret_ref, secret)));
+    let unlocked = value_or_panic(block_on(vault.open(secret_ref, envelope)));
+    let public_key = value_or_panic(block_on(signer.public_key(&unlocked)));
+    let signature = value_or_panic(block_on(signer.sign(&unlocked, b"payload".to_vec())));
+    assert!(value_or_panic(block_on(signer.verify(
+        public_key,
+        b"payload".to_vec(),
+        signature,
+    ))));
+}

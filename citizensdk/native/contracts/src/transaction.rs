@@ -1,7 +1,7 @@
 //! 产品无关的交易提交、观察和执行结论。
 
 use crate::{
-    ContractError, ContractErrorCode, ContractResult, Hash32, VerifiedBlockRef,
+    ContractError, ContractErrorCode, ContractResult, FinalizedBlockRef, Hash32, VerifiedBlockRef,
 };
 
 /// 已由 Engine 构造并签名的完整 SCALE extrinsic。
@@ -51,7 +51,7 @@ pub enum ExtrinsicWatchEvent {
     Broadcast { peer_count: u32 },
     Future,
     InBlock { block: VerifiedBlockRef },
-    Finalized { block: VerifiedBlockRef },
+    Finalized { block: FinalizedBlockRef },
     Retracted { block: VerifiedBlockRef },
     FinalityTimeout { block: Option<VerifiedBlockRef> },
     Dropped,
@@ -116,7 +116,7 @@ impl DispatchFailure {
         self.variant
     }
 
-    pub const fn module(&self) -> Option<&ModuleDispatchFailure> {
+    pub fn module(&self) -> Option<&ModuleDispatchFailure> {
         self.module.as_ref()
     }
 }
@@ -161,4 +161,3 @@ impl ExecutionConclusion {
         matches!(self, Self::Success { .. })
     }
 }
-

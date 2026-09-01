@@ -1,0 +1,18 @@
+//! 五个互不替代的类型化数据存储合同。
+//!
+//! `SecretVault` 是第六个安全边界，但它负责硬件保护与解锁，不属于普通数据仓储。
+
+mod chain_database;
+mod encrypted_secret_blob;
+mod runtime_cache;
+mod transaction_history;
+mod wallet_profile;
+
+pub use chain_database::{ChainDatabaseSnapshot, ChainDatabaseStore};
+pub use encrypted_secret_blob::{EncryptedSecretBlobSnapshot, EncryptedSecretBlobStore};
+pub use runtime_cache::RuntimeCacheStore;
+pub use transaction_history::{
+    FinalizedTransferRecord, HistoryTransactionStatus, TransactionHistoryCursor,
+    TransactionHistoryRecord, TransactionHistoryState, TransactionHistoryStore,
+};
+pub use wallet_profile::WalletProfileStore;

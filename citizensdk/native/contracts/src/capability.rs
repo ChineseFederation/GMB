@@ -18,7 +18,6 @@ pub enum CapabilityName {
     History,
     BackgroundSync,
 }
-
 impl CapabilityName {
     pub const ALL: [Self; 10] = [
         Self::ChainRead,
@@ -191,4 +190,3 @@ impl CapabilitySnapshot {
         self.statuses.iter().find(|status| status.name() == name)
     }
 }
-

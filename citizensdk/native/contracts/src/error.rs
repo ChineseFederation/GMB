@@ -82,4 +82,3 @@ impl fmt::Display for ContractError {
 impl Error for ContractError {}
 
 pub type ContractResult<T> = Result<T, ContractError>;
-

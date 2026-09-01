@@ -53,10 +53,7 @@ pub trait ChainSigner: Send + Sync {
         junction: DerivationJunction,
     ) -> ContractFuture<'a, SecretBuffer>;
 
-    fn public_key<'a>(
-        &'a self,
-        secret: &'a SecretBuffer,
-    ) -> ContractFuture<'a, Sr25519PublicKey>;
+    fn public_key<'a>(&'a self, secret: &'a SecretBuffer) -> ContractFuture<'a, Sr25519PublicKey>;
 
     fn sign<'a>(
         &'a self,
@@ -71,4 +68,3 @@ pub trait ChainSigner: Send + Sync {
         signature: Sr25519Signature,
     ) -> ContractFuture<'_, bool>;
 }
-
