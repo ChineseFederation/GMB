@@ -175,7 +175,33 @@ fn malformed_metadata_events_and_wrong_index_never_guess_success() {
         block_extrinsics: &body,
         system_events: Some(&trailing_events),
     });
-    assert!(matches!(trailing, ExecutionConclusion::Unverified { .. }));
+    assert!(matches!(
+        trailing,
+        ExecutionConclusion::Unverified {
+            reason: UnverifiedReason::SystemEventsMalformed,
+            ..
+        }
+    ));
+
+    let canonical_events = hex_bytes(EVENTS_HEX);
+    assert_eq!(canonical_events.first(), Some(&0x10));
+    let mut noncanonical_events = vec![0x11, 0x00];
+    noncanonical_events.extend_from_slice(&canonical_events[1..]);
+    let noncanonical = verify_transaction_outcome(TransactionEvidence {
+        block,
+        runtime_context: &context,
+        signed_extrinsic: &target,
+        submitted_hash: target_hash,
+        block_extrinsics: &body,
+        system_events: Some(&noncanonical_events),
+    });
+    assert!(matches!(
+        noncanonical,
+        ExecutionConclusion::Unverified {
+            reason: UnverifiedReason::SystemEventsMalformed,
+            ..
+        }
+    ));
 
     let third = signed(&[0x04, 0x99]);
     let third_body = vec![vec![0x04], vec![0x08], third.as_bytes().to_vec()];

@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   assertChainAssets,
+  assertCoreRustSource,
   assertHostedPackageSource,
   assertLicenseSources,
   assertNoSecrets,
@@ -51,6 +52,31 @@ function writeNativeFixture(root) {
     writeFileSync(destination, value);
   }
   return native;
+}
+
+function writeCoreRustFixture(root) {
+  const native = join(root, 'native');
+  mkdirSync(native, { recursive: true });
+  for (const directory of ['contracts', 'engine']) {
+    cpSync(
+      join(citizenSdkRoot, 'native', directory),
+      join(native, directory),
+      { recursive: true },
+    );
+  }
+  for (const directory of ['signer', 'smoldot']) {
+    mkdirSync(join(native, directory));
+  }
+  for (const path of [
+    'Cargo.toml',
+    'Cargo.lock',
+    'THIRD_PARTY_NOTICES.md',
+    'native/README.md',
+  ]) {
+    const destination = join(root, ...path.split('/'));
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(join(citizenSdkRoot, ...path.split('/')), destination);
+  }
 }
 
 // 中文注释：设备与 Simulator 必须共用唯一 iOS 16 常量，并把它直接传给各自
@@ -102,6 +128,80 @@ test('SDK 根 Cargo 与 Dart 锁文件固定已审查依赖闭包', () => {
     copyFileSync(join(citizenSdkRoot, 'Cargo.lock'), join(root, 'Cargo.lock'));
     writeFileSync(join(root, 'pubspec.lock'), 'drift\n');
     assert.throws(() => assertSdkRootLocks(root), /SDK 根锁文件哈希漂移：pubspec\.lock/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('CitizenSDK 自有 Core Rust 生产源码固定逐文件哈希', () => {
+  const root = mkdtempSync(join(workRoot, 'release-core-rust-source-test-'));
+  try {
+    writeCoreRustFixture(root);
+    assert.doesNotThrow(() => assertCoreRustSource(root));
+
+    const source = join(root, 'native', 'engine', 'src', 'lib.rs');
+    writeFileSync(source, `${readFileSync(source, 'utf8')}\n`);
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /Core Rust 来源文件哈希漂移：native\/engine\/src\/lib\.rs/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Core Rust 合同拒绝额外 build.rs 与未审查 native 产品目录', () => {
+  const root = mkdtempSync(join(workRoot, 'release-core-rust-closure-test-'));
+  try {
+    writeCoreRustFixture(root);
+    const buildScript = join(root, 'native', 'contracts', 'build.rs');
+    writeFileSync(buildScript, 'fn main() {}\n');
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /Core Rust 文件闭集漂移：native\/contracts.*额外=native\/contracts\/build\.rs/,
+    );
+
+    rmSync(buildScript);
+    mkdirSync(join(root, 'native', 'unreviewed-core'));
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /native 根闭集漂移.*额外=unreviewed-core/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Core Rust 合同拒绝 workspace Cargo manifest 与锁文件漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'release-core-rust-workspace-test-'));
+  try {
+    writeCoreRustFixture(root);
+    writeFileSync(join(root, 'Cargo.toml'), 'drift\n');
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /Core Rust 边界文件哈希漂移：Cargo\.toml/,
+    );
+
+    copyFileSync(join(citizenSdkRoot, 'Cargo.toml'), join(root, 'Cargo.toml'));
+    writeFileSync(join(root, 'Cargo.lock'), 'drift\n');
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /Core Rust 边界文件哈希漂移：Cargo\.lock/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Core Rust 合同拒绝第三方许可证与来源声明漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'release-core-rust-notices-test-'));
+  try {
+    writeCoreRustFixture(root);
+    writeFileSync(join(root, 'THIRD_PARTY_NOTICES.md'), 'drift\n');
+    assert.throws(
+      () => assertCoreRustSource(root),
+      /Core Rust 边界文件哈希漂移：THIRD_PARTY_NOTICES\.md/,
+    );
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -364,11 +464,13 @@ test('Release 拒绝与源码包版本不一致的请求版本', () => {
   }
 });
 
-test('SDK 自有测试源码固定根、signer、Android、iOS 与 Release 合同闭集', () => {
+test('SDK 自有测试源码固定 Core Rust、根、signer、Android、iOS 与 Release 合同闭集', () => {
   const root = mkdtempSync(join(workRoot, 'release-test-contract-test-'));
   try {
     for (const relativeRoot of [
       'test',
+      'native/contracts/tests',
+      'native/engine/tests',
       'native/signer/tests',
       'android/src/test',
       'ios/Tests',

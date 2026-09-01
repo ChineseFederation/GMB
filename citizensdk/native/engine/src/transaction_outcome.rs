@@ -142,10 +142,15 @@ pub fn verify_transaction_outcome(evidence: TransactionEvidence<'_>) -> Executio
                 UnverifiedReason::OutcomeEventAmbiguous,
             )
         }
+        Err(EngineError::InvalidEvents(_)) => unverified(
+            Some(evidence.block),
+            Some(extrinsic_index),
+            UnverifiedReason::SystemEventsMalformed,
+        ),
         Err(_) => unverified(
             Some(evidence.block),
             Some(extrinsic_index),
-            UnverifiedReason::OutcomeEventMissing,
+            UnverifiedReason::ProviderFailure,
         ),
     }
 }

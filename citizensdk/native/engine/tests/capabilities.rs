@@ -1,5 +1,5 @@
-use citizen_sdk_contracts::{CapabilityName, CapabilityReason};
-use citizen_sdk_engine::{resolve_capabilities, CapabilityProbe};
+use citizen_sdk_contracts::{CapabilityName, CapabilityReason, CapabilitySnapshot};
+use citizen_sdk_engine::{resolve_capabilities, CapabilityProbe, CapabilityTracker};
 
 fn all_ready() -> Vec<CapabilityProbe> {
     CapabilityName::ALL
@@ -84,4 +84,46 @@ fn duplicate_or_missing_probes_fail_closed() {
     let mut duplicate = all_ready();
     duplicate[9].name = CapabilityName::ChainRead;
     assert!(resolve_capabilities(2, duplicate).is_err());
+}
+
+#[test]
+fn tracker_advances_only_for_a_complete_semantic_change() {
+    let mut tracker = CapabilityTracker::new();
+    assert!(tracker.current().is_none());
+
+    let first = match tracker.update(all_ready()) {
+        Ok(snapshot) => snapshot,
+        Err(error) => panic!("initial capability update failed: {error}"),
+    };
+    assert_eq!(first.revision(), 1);
+
+    let unchanged = match tracker.update(all_ready()) {
+        Ok(snapshot) => snapshot,
+        Err(error) => panic!("unchanged capability update failed: {error}"),
+    };
+    assert_eq!(unchanged.revision(), 1);
+
+    let mut changed = all_ready();
+    let history = probe_mut(&mut changed, CapabilityName::History);
+    history.runtime_ready = false;
+    history.not_ready_reason = Some(CapabilityReason::StorageUnavailable);
+    let second = match tracker.update(changed) {
+        Ok(snapshot) => snapshot,
+        Err(error) => panic!("changed capability update failed: {error}"),
+    };
+    assert_eq!(second.revision(), 2);
+    assert_eq!(
+        second
+            .status(CapabilityName::History)
+            .and_then(|status| status.reason()),
+        Some(CapabilityReason::StorageUnavailable)
+    );
+
+    let mut invalid = all_ready();
+    let _ = invalid.pop();
+    assert!(tracker.update(invalid).is_err());
+    assert_eq!(
+        tracker.current().map(CapabilitySnapshot::revision),
+        Some(2)
+    );
 }

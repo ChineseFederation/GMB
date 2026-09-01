@@ -10,7 +10,7 @@ pub mod state_import;
 pub mod system_events;
 pub mod transaction_outcome;
 
-pub use capabilities::{resolve_capabilities, CapabilityProbe};
+pub use capabilities::{resolve_capabilities, CapabilityProbe, CapabilityTracker};
 pub use engine::{CitizenEngine, EngineComponents, EngineFuture};
 pub use error::EngineError;
 pub use runtime_context::{RuntimeContextCache, RuntimeContextRequest};

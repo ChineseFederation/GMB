@@ -132,6 +132,7 @@ pub enum UnverifiedReason {
     ExtrinsicNotFound,
     MultipleExtrinsicMatches,
     SystemEventsUnavailable,
+    SystemEventsMalformed,
     OutcomeEventMissing,
     OutcomeEventAmbiguous,
     ProviderFailure,

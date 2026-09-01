@@ -18,6 +18,51 @@ pub struct CapabilityProbe {
     pub not_ready_reason: Option<CapabilityReason>,
 }
 
+/// Process-local owner of the monotonically increasing capability revision.
+///
+/// Bindings must not invent revisions independently. The tracker compares the
+/// complete ten-capability semantics and advances exactly once only when that
+/// semantic state changes. A rejected update leaves the last valid snapshot
+/// untouched.
+#[derive(Default)]
+pub struct CapabilityTracker {
+    current: Option<CapabilitySnapshot>,
+}
+
+impl CapabilityTracker {
+    pub const fn new() -> Self {
+        Self { current: None }
+    }
+
+    pub fn current(&self) -> Option<&CapabilitySnapshot> {
+        self.current.as_ref()
+    }
+
+    pub fn update(
+        &mut self,
+        probes: Vec<CapabilityProbe>,
+    ) -> Result<CapabilitySnapshot, EngineError> {
+        let candidate = resolve_capabilities(0, probes)?;
+        if let Some(current) = self.current.as_ref() {
+            if current.statuses() == candidate.statuses() {
+                return Ok(current.clone());
+            }
+        }
+        let revision = match self.current.as_ref() {
+            Some(current) => current.revision().checked_add(1).ok_or_else(|| {
+                EngineError::CapabilityUnavailable(
+                    "capability revision overflowed and cannot remain monotonic".to_owned(),
+                )
+            })?,
+            None => 1,
+        };
+        let snapshot = CapabilitySnapshot::try_new(revision, candidate.statuses().to_vec())
+            .map_err(|error| EngineError::Contract(error.to_string()))?;
+        self.current = Some(snapshot.clone());
+        Ok(snapshot)
+    }
+}
+
 impl CapabilityProbe {
     pub const fn ready(name: CapabilityName) -> Self {
         Self {

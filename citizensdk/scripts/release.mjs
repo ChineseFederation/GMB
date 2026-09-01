@@ -112,7 +112,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/engine/tests/transaction_outcome.rs': '828b9fa34d338a15ef0e674581c5a0c22953939b8ddadd0f15d6c9c6de82e7e9',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': 'b65ee3671de2cd3ef547a790bf9ce1e5f89ec0b8f0ee8756507c5858327b94cf',
+  'scripts/release.test.mjs': 'c25b88ad25de0e3ac6edcc632c1ef4c06e156aed225b50890ce30a3c0d14dc3e',
   'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',

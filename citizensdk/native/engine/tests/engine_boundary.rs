@@ -17,6 +17,10 @@ const METADATA_HEX: &str =
     include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
 const EVENTS_HEX: &str =
     include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
+const SYSTEM_EVENTS_STORAGE_KEY: [u8; 32] = [
+    0x26, 0xaa, 0x39, 0x4e, 0xea, 0x56, 0x30, 0xe0, 0x7c, 0x48, 0xae, 0x0c, 0x95, 0x58, 0xce, 0xf7,
+    0x80, 0xd4, 0x1e, 0x5e, 0x16, 0x05, 0x67, 0x65, 0xbc, 0x84, 0x61, 0x85, 0x10, 0x72, 0xc9, 0xd7,
+];
 
 fn hex_bytes(value: &str) -> Vec<u8> {
     let value = value.trim();
@@ -74,9 +78,13 @@ impl VerifiedChainClient for FakeClient {
     fn get_storage_at(
         &self,
         _block: VerifiedBlockRef,
-        _key: Vec<u8>,
+        key: Vec<u8>,
     ) -> ContractFuture<'_, Option<Vec<u8>>> {
-        Box::pin(async move { Ok(self.events.clone()) })
+        Box::pin(async move {
+            Ok((key.as_slice() == SYSTEM_EVENTS_STORAGE_KEY)
+                .then(|| self.events.clone())
+                .flatten())
+        })
     }
 
     fn get_storage_batch_at(
