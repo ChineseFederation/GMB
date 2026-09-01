@@ -7,6 +7,14 @@ use crate::{
     ExtrinsicWatchEvent, SignedExtrinsic, SubmittedExtrinsic,
 };
 
+/// CitizenSDK 唯一正式链身份；不得由绑定层另造网络别名。
+pub const CITIZENCHAIN_CHAIN_ID: &str = "citizenchain";
+pub const CITIZENCHAIN_PROTOCOL_ID: &str = "citizenchain";
+pub const CITIZENCHAIN_GENESIS_HASH: Hash32 = Hash32::from_bytes([
+    0x18, 0x84, 0x7a, 0x5d, 0xfd, 0x26, 0x32, 0x72, 0xf2, 0xe7, 0x72, 0x78, 0x36, 0xfe, 0x65, 0x82,
+    0xf8, 0xc4, 0x46, 0x3f, 0xf4, 0x86, 0x09, 0xdf, 0x7b, 0x96, 0xd5, 0xe4, 0xd9, 0xdd, 0x24, 0xdd,
+]);
+
 /// 32 字节链哈希。区块哈希、genesis hash 和 extrinsic hash 共享字节宽度，调用处仍须
 /// 通过字段名保持业务语义，不允许从可变长度文本猜测。
 #[derive(Clone, Copy, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -218,6 +226,15 @@ pub struct ChainIdentity {
 }
 
 impl ChainIdentity {
+    /// 构造由随包资产 manifest 固定的唯一 CitizenChain 身份。
+    pub fn citizenchain() -> Self {
+        Self {
+            chain_id: CITIZENCHAIN_CHAIN_ID.to_owned(),
+            protocol_id: CITIZENCHAIN_PROTOCOL_ID.to_owned(),
+            genesis_hash: CITIZENCHAIN_GENESIS_HASH,
+        }
+    }
+
     pub fn try_new(
         chain_id: impl Into<String>,
         protocol_id: impl Into<String>,

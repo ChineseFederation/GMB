@@ -1,4 +1,4 @@
-# System events metadata fixture
+# System events metadata fixtures
 
 `substrate-v14-system-events-metadata.hex` 是只用于交易执行确认测试的
 Substrate v14 runtime metadata 快照，SHA-256 为
@@ -24,6 +24,11 @@ Substrate v14 runtime metadata 快照，SHA-256 为
 `System.ExtrinsicSuccess`，以及 index 1 的 `System.ExtrinsicFailed(BadOrigin)`。发送方为
 `0x11` 重复 32 字节，接收方为 `0x22` 重复 32 字节，金额为 `123456`，备注为
 `CitizenSDK production Runtime fixture`。
+
+第 2 步 Rust Engine 直接读取上述两份生产 CitizenChain 夹具，使用完整 signed extrinsic 哈希
+在块体中定位准确 index，再以同一份 metadata 解码该 index 的 System 终态：index 0 必须收敛
+为成功，index 1 必须收敛为 `BadOrigin` 失败。Rust 与 Dart 测试共用这里的同一组字节，不在
+`native/engine` 复制 metadata 或 events；缺失、畸形、矛盾或跨块证据只能得到未核实。
 
 复现时必须继续在上述 TataConsole 隔离目录中使用 CitizenChain 固定 `Cargo.lock` 和
 `rust-toolchain.toml`，把 `CARGO_TARGET_DIR` 指向

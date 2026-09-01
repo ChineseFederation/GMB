@@ -82,7 +82,8 @@ const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
   '.pubignore': '1ca77c41a09b72bd3dd4052a680e823d47d54c3454a359c5f710dfeb35c57421',
   'CHANGELOG.md': 'd6279d94fa9354be319317c41f44fe4aac46c65e0f820b8701a59c2e6a0f45c6',
 });
-// 根 Flutter、signer、Android、iOS 与 Release 合同测试共同构成 SDK 自有测试闭集。
+// 根 Flutter、Core Rust、signer、Android、iOS 与 Release 合同测试共同构成
+// SDK 自有测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
 const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'test',
@@ -105,11 +106,11 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
   'native/contracts/tests/secret_contract.rs': '2c380ae3fe6f156ce1636b340c2430e78a561bb515344f9ffe49a4cb8cdc9ae9',
   'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
-  'native/engine/tests/capabilities.rs': '1caa3698ff6bf6a0a6f42d1da142eb59e1981fa4e5df8614be1f7fc3369f30a2',
-  'native/engine/tests/engine_boundary.rs': 'a432f82ca557ab4b1520427063e5d1a3d7370fd0e6acb0d40847c1eab926db40',
+  'native/engine/tests/capabilities.rs': '3e20c52cc831f77495b2a8c9e9abfe61c31876171bb9f0f30d77dfb178cdb082',
+  'native/engine/tests/engine_boundary.rs': '62374d2f169c90d170d270d35dcbcb400ee8c370fdd7b5e880a6568b52ba6154',
   'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
   'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
-  'native/engine/tests/transaction_outcome.rs': '828b9fa34d338a15ef0e674581c5a0c22953939b8ddadd0f15d6c9c6de82e7e9',
+  'native/engine/tests/transaction_outcome.rs': '8f17a04c90c49962d5620db23c56c93baaba8bb409bc76569b72499aea2d9996',
   'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
   'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
   'scripts/release.test.mjs': 'c25b88ad25de0e3ac6edcc632c1ef4c06e156aed225b50890ce30a3c0d14dc3e',
@@ -217,7 +218,7 @@ const CORE_RUST_FILES = Object.freeze({
   'native/contracts/src/store/runtime_cache.rs': '152597dcc7b8f7bab6add541d1b9e638898c537e0b022d1e33f3f0b8b28675ac',
   'native/contracts/src/store/transaction_history.rs': '4a072276f6cc5bcbfc409a0d1e6e9a5593090e02103ad4c795eabfbb96a81411',
   'native/contracts/src/store/wallet_profile.rs': '9f22dc1da0f370ed70f9a5cb2e165319b8519789a7b494747929f96eb683b481',
-  'native/contracts/src/transaction.rs': '53fdbe9fcf9a4f6ce9203942b3c439820283f601f1e6a8ff37b1112a08dac1ce',
+  'native/contracts/src/transaction.rs': 'f028a9e00bc160cbdb3ba88f752be0b95f35df9db00b3fc96718d3463096b723',
   'native/contracts/src/wallet.rs': '125dd3acd7d8ca4517a12c07e64c0ef25ccfd491de8011a2071688450378886d',
   'native/contracts/tests/capability_contract.rs': '2414480f0ffe218646a57aa531ba124ed69f23e61a61fddc556b56f24ff1828e',
   'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
@@ -225,19 +226,19 @@ const CORE_RUST_FILES = Object.freeze({
   'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
   'native/engine/Cargo.toml': '4879f147b03caaac07909664600c404e01b001eb9dad0c7ee4ad09099e5c071b',
   'native/engine/README.md': '4c625461a4f5669cb98629278801452e8aad3dffd0ad4c37071d6b431bdc986c',
-  'native/engine/src/capabilities.rs': 'ac15b97bf12a3895ac0d08bd25272c82eb6bf2f9a7da3d4f80d5b42b138e53ef',
+  'native/engine/src/capabilities.rs': '5380981e667023a80be925ea4c8ee7642d572a563ef1cfc3fe6c1b075fb163cc',
   'native/engine/src/engine.rs': '8503fa19f7851f110944664d9fdcbf8b7c744c50b88072977b50587494aa3cb4',
   'native/engine/src/error.rs': '327d39023394cb311eb9b68bf74bc0a99fe64d1355f30b736f65c5be1dfb008d',
-  'native/engine/src/lib.rs': '3fc5b2333c1738a3467b8aa92fe8d9a5d7e2f38d655ed3f51b471ad951aed1f4',
+  'native/engine/src/lib.rs': '2dad656f405a206df87750d3c8c2112525d9801932b83f2ac6b2c54a2000a0f0',
   'native/engine/src/runtime_context.rs': '6d37193e9fba59ade6b80aaea00b903ee223cda92957930c90e8d01f604a5f92',
   'native/engine/src/state_import.rs': 'd750dd59afaacb4ec27f684329d95d301aa4b807ef506788664f043df84836ad',
   'native/engine/src/system_events.rs': '75eb8e1cb3f689e9067548d3cb40586e838c8295503361f8bef248e30267bf24',
-  'native/engine/src/transaction_outcome.rs': 'c0ce526c190d1749581b8632d711930658615fe87d47ff74faacb4da9efef21c',
-  'native/engine/tests/capabilities.rs': '1caa3698ff6bf6a0a6f42d1da142eb59e1981fa4e5df8614be1f7fc3369f30a2',
-  'native/engine/tests/engine_boundary.rs': 'a432f82ca557ab4b1520427063e5d1a3d7370fd0e6acb0d40847c1eab926db40',
+  'native/engine/src/transaction_outcome.rs': '19efcf69c62c79c329070636a69383417d064bc1ad5a312efd27543d29b86a5a',
+  'native/engine/tests/capabilities.rs': '3e20c52cc831f77495b2a8c9e9abfe61c31876171bb9f0f30d77dfb178cdb082',
+  'native/engine/tests/engine_boundary.rs': '62374d2f169c90d170d270d35dcbcb400ee8c370fdd7b5e880a6568b52ba6154',
   'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
   'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
-  'native/engine/tests/transaction_outcome.rs': '828b9fa34d338a15ef0e674581c5a0c22953939b8ddadd0f15d6c9c6de82e7e9',
+  'native/engine/tests/transaction_outcome.rs': '8f17a04c90c49962d5620db23c56c93baaba8bb409bc76569b72499aea2d9996',
 });
 // native 根只能拥有这五个直接条目，防止出现第二个未审查的 Rust 产品边界。
 const NATIVE_ROOT_ENTRIES = Object.freeze({

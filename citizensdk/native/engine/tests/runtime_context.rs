@@ -81,4 +81,9 @@ fn same_hash_context_can_be_promoted_from_best_to_finalized() {
     };
     assert_eq!(promoted.block(), finalized);
     assert_eq!(promoted.version().spec_version(), 5);
+
+    let changed_request = cache.begin(finalized);
+    assert!(cache
+        .complete(changed_request, context(finalized, 6, 6))
+        .is_err());
 }

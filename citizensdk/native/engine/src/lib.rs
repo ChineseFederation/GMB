@@ -16,7 +16,8 @@ pub use error::EngineError;
 pub use runtime_context::{RuntimeContextCache, RuntimeContextRequest};
 pub use state_import::{
     validate_import_startup, validate_state_export, validate_state_import, EngineLifecycle,
-    StateImportPolicy, StateImportRejection, MAX_CHAIN_DATABASE_BYTES,
+    StateImportPolicy, StateImportRejection, CHAIN_STATE_FORMAT_VERSION,
+    MAX_CHAIN_DATABASE_BYTES,
 };
 pub use system_events::{decode_system_outcome, DecodedDispatchFailure, DecodedSystemOutcome};
 pub use transaction_outcome::{

@@ -3,15 +3,20 @@
 ## 单一产品原则
 
 CitizenSDK 是一个产品、一个版本和一条分发链。轻节点、钱包和 signer 是内部能力层，
-不拆成可独立发布的第二套 SDK。Flutter/Dart API 与原生 C ABI 是同一产品的两个接入面。
+不拆成可独立发布的第二套 SDK。最终 Flutter/Dart、Swift、Kotlin/Java 与 C/C++ 都通过同一
+产品级 C ABI 使用 Rust Engine；第 2 步只建立 Core 合同与 Engine，第 3 步才建立该唯一 C ABI。
 
 依赖方向固定为：
 
-1. 宿主 App 依赖 `package:citizen_sdk/citizen_sdk.dart`。
-2. 公共门面组合轻节点、钱包、交易与公钥验签。
-3. 交易依赖本机轻节点 RPC 和钱包签名回调；钱包依赖公开事实仓储、安全存储及 signer。
-4. Android/iOS 适配层依赖系统硬件安全能力与统一原生核心。
-5. 原生核心依赖收编的 smoldot PoW 快照和 `schnorrkel` 等官方实现。
+1. 宿主 App 依赖对应官方语言绑定；当前已交付入口仍是
+   `package:citizen_sdk/citizen_sdk.dart`。
+2. 语言绑定只依赖第 3 步冻结的产品级 C ABI，不实现链、钱包、交易或密码学。
+3. C ABI 只调用 `CitizenSDK Core Engine`，固定生命周期、所有权、错误、事件和能力查询。
+4. Engine 只依赖类型化 contracts；smoldot、sr25519、系统金库和状态仓储实现这些合同。
+5. provider 分别依赖收编的 smoldot PoW、`schnorrkel` 和宿主操作系统安全设施。
+
+上述 2 至 3 项是完成态依赖方向。当前 Dart 仍直接组合轻节点、钱包与交易，尚未改接 Rust
+Engine；第 2 步没有删除或伪装这一过渡路径。
 
 原生核心与产品无关 Dart 层不得反向依赖 CitizenApp、CitizenWallet、TuyuLove、TuyuLife、
 TuyuBooking、聊天、广场、TUYU 协议、产品导航或产品数据库。
@@ -22,9 +27,11 @@ TuyuBooking、聊天、广场、TUYU 协议、产品导航或产品数据库。
 citizensdk/
 ├── lib/                    唯一 citizen_sdk 包及内嵌 smoldot Dart 绑定
 ├── native/
+│   ├── contracts/          VerifiedChainClient、signer、vault 与类型化存储合同
+│   ├── engine/             产品无关 Core 协调、核验与能力解析
 │   ├── signer/             唯一 sr25519 原生实现
 │   └── smoldot/
-│       ├── ffi/            轻节点与 signer 的稳定 C ABI
+│       ├── ffi/            当前 Dart 运行路径使用的轻节点与 signer 原生入口
 │       └── pow/            PoW + GRANDPA 轻节点 Rust 快照
 ├── android/                Android 插件与硬件金库
 ├── ios/                    iOS 插件与硬件金库
@@ -41,7 +48,38 @@ citizensdk/
 `docs/smoldot-dart`。smoldot 只作为 CitizenSDK 内部实现参与同一版本和同一发布，不形成
 第二个 SDK 或第二个源码真源。
 
-## 运行时分层
+`native/contracts` 和 `native/engine` 是 CitizenSDK 自有 Rust Core 源码，不属于从 CitizenApp
+逐字节复制的 smoldot 来源闭集，也不写入 `native/smoldot/SOURCE_SHA256.json`。根 Rust
+workspace 同时管理 contracts、engine 和 signer；engine 精确固定官方
+`subxt-core = 0.43.0`，只用于 SCALE metadata、`System.Events` 与 extrinsic 哈希语义。
+
+## Rust Core 合同与 Engine
+
+`native/contracts` 冻结以下边界：
+
+- `VerifiedChainClient`：只提供携带 best/finalized 语义的类型化区块、storage、runtime、
+  提交、观察和状态导入导出；不提供任意 `rpc(method, params)`。
+- `ChainSigner` 与 `SecretVault`：分别拥有 sr25519 和设备密文/认证职责，不能把 Secure
+  Enclave、Keystore 等系统金库冒充为 sr25519 signer。
+- `ChainDatabaseStore`、`RuntimeCacheStore`、`WalletProfileStore`、
+  `TransactionHistoryStore` 与 `EncryptedSecretBlobStore`：按数据等级隔离，最后一项只能
+  接受加密信封。加上 `SecretVault` 共六个隔离边界。
+- 十项固定能力的 revisioned snapshot：`CHAIN_READ`、`TRANSACTION_BUILD`、
+  `TRANSACTION_SUBMIT`、`TRANSACTION_VERIFY`、`WALLET_PROFILE`、`LOCAL_SIGNING`、
+  `HARDWARE_VAULT`、`USER_AUTHENTICATION`、`HISTORY`、`BACKGROUND_SYNC`。每项分别表达
+  `supported`、`available`、`enabled`、`ready` 和稳定 reason；能力发现不能替代敏感操作的
+  即时复核。
+
+`native/engine` 目前实现能力依赖收敛、准确区块 runtime context 缓存、仅启动前且不倒退的
+状态导入门禁，以及交易执行结论。完整签名 extrinsic 先按 Substrate 规则计算哈希，在准确
+块体中定位 index，再使用同一块 metadata 解码该 index 的 `System.ExtrinsicSuccess/Failed`；
+缺失、畸形、矛盾或跨块证据一律返回未核实。Engine 复用
+`test/transaction/fixtures` 的生产 CitizenChain metadata/events 夹具，没有复制第二份输入。
+
+这些 Rust 类型和规则已经存在并受合同测试约束，但 smoldot adapter、产品级 C ABI 和官方
+语言绑定尚未完成，因此当前 App 行为仍由下述 Dart 路径负责。
+
+## 当前 Dart 运行时分层
 
 - `CitizenSdk`：组合 `chain`、`rpc`、`wallet`、`transfers`、finalized 流水与 `signer`。
 - `CitizenLightClient`：管理 smoldot 生命周期、随包创世锚、bootnode、同步健康、
@@ -92,9 +130,10 @@ SDK 暴露底层仓储接口供受控集成和测试注入，因此宿主进程�
 
 ## 原生边界
 
-根 signer workspace、FFI workspace 与 PoW workspace 都是 CitizenSDK 内部构建边界，不是
-三个 SDK。FFI 的 Release profile 保持 `panic = "unwind"`，使 signer 的 `catch_unwind`
-能够把 panic 转成错误码。
+根 Rust workspace 的 contracts、engine、signer 三个 crate，以及现有 FFI workspace 与 PoW
+workspace 都是 CitizenSDK 内部构建边界，不是多个 SDK。现有 FFI 的 Release profile 保持
+`panic = "unwind"`，使 signer 的 `catch_unwind` 能够把 panic 转成错误码。产品级唯一
+`citizensdk_*` ABI 尚未在本步骤冻结，不能用现有 smoldot 原生入口替代第 3 步。
 
 轻客户端不收编全节点 `author` 出块代码，以及 identity keystore/seed phrase 私钥入口；
 只保留 JSON-RPC 所需的 `identity::ss58` 公钥地址编解码。全节点 SQLite 数据库源码按上游

@@ -25,6 +25,24 @@ Runner 中临时改号成 `1.0.0`，未来升级也必须先提交准确版本�
 版本冻结只证明候选身份，不等于 Hosted Registry 已接受该版本；首次不可逆发布必须另行取得
 明确授权，并以对应 GitHub Release 的同一候选为输入。
 
+## CitizenSDK 自有 Rust Core
+
+`native/contracts` 与 `native/engine` 是第 2 步新增的 CitizenSDK 自有实现，不是 CitizenApp
+或 smoldot 上游逐字节副本。contracts 固定 `VerifiedChainClient`、`ChainSigner`、
+`SecretVault`、十项能力状态、钱包公开模型与五类职责明确的状态仓储；engine 实现能力解析、
+准确区块 runtime context、受约束状态导入和同一 extrinsic index 的执行核验。两者依赖方向
+固定为 `engine -> contracts <- providers`，不依赖 Flutter、产品数据库或任意远程 RPC。
+
+engine 精确使用 crates.io 官方 `subxt-core = 0.43.0` 解析 SCALE metadata、
+`System.Events` 并遵循 Substrate extrinsic 哈希语义；它没有引入网络客户端或第二个轻节点。
+完整 35 文件 Core 闭集与其中 9 个合同测试由 Release 独立反向枚举、固定哈希并拒绝额外
+`build.rs`、`src/bin`、符号链接或未登记文件。该闭集不加入
+`native/smoldot/SOURCE_SHA256.json`，因为后者继续只证明 CitizenApp smoldot 收编来源。
+
+第 2 步没有把当前 Dart 运行时切换到 Rust Engine，也没有改变秘密经过 Dart/平台通道的现状；
+产品级唯一 C ABI、smoldot provider 和语言绑定改接属于后续批准步骤。不能把源码存在或合同
+测试通过解释为移动 App 已在使用该 Engine。
+
 ## 许可证原文
 
 根 `LICENSE` 是 CitizenSDK 组件许可证入口，明确 SDK 自有代码、smoldot Dart/FFI 与
@@ -199,6 +217,12 @@ runtime metadata 快照，SHA-256 为
 类型；CitizenSDK 不因此复制、编译或开放全节点出块能力，也不把该夹具作为运行时信任锚。
 Release 来源守卫同时固定该夹具哈希，防止测试和测试输入一起漂移后产生伪通过。
 
+Rust Engine 直接复用相邻
+`citizenchain-runtime-v14-metadata.hex` 与 `citizenchain-runtime-system-events.hex` 两份
+生产 CitizenChain 成对夹具，核对成功 index 0 与 `BadOrigin` 失败 index 1。它不复制第二份
+metadata/events；Dart 与 Rust 对同一生产输入建立差分行为锚。两份文件的来源、生成方式和
+固定 SHA-256 继续以 `test/transaction/fixtures/README.md` 为准。
+
 CitizenServe 的 `/chain/citizensdk/bootstrap` 使用逐字段投影生成 SDK 独立 wire schema，不把
 CitizenApp 的 `chain_name`、`chain_type`、`bootnodes_source` 或产品服务字段泄漏给 exact
 parser。服务端测试与 SDK 客户端测试共同读取
@@ -231,15 +255,17 @@ native/smoldot/ffi/Cargo.lock
 native/smoldot/pow/Cargo.lock
 ```
 
-唯一根 Dart 包、signer、FFI、PoW workspace 都在 CI/Release 使用 locked/enforce-lockfile
-模式。`docs/smoldot-dart/source-pubspec.lock` 只保存来源事实，不参与解析。锁文件属于源码输入，
+唯一根 Dart 包、contracts/engine/signer 根 workspace、FFI、PoW workspace 都在 CI/Release
+使用 locked/enforce-lockfile 模式。`docs/smoldot-dart/source-pubspec.lock` 只保存来源事实，
+不参与解析。锁文件属于源码输入，
 不是编译产物。Release 还逐字节固定根 `Cargo.lock`（SHA-256
-`62571bec0b3a1f40af270aa22415124ae201f07ebd1d0de35ab23884317d5670`）和根
+`9fd44520029d5fd6dfd195468e092fda9c27a0a0cb3946721178aef412a8e4a2`）和根
 `pubspec.lock`（SHA-256
-`d71a06a3c9b899872e8f1ea28c4a871da02707e2f3ccb0a47a140d33d8465e06`）；其中根 Cargo 锁是
-CitizenSDK signer 独立 workspace 的已审查解析闭包，不宣称与 CitizenApp 整份锁逐字节相同。
-当前闭包的密码学核心 `schnorrkel 0.11.5`、`zeroize 1.9.0` 与已验证来源一致，独立解析得到的
-`syn 3.0.4` 作为 SDK workspace 适配身份明确固定。任何依赖升级都必须显式更新哈希与合同测试。
+`2a8bd55a877f037c425cfd21c279b89820ae3c61db698f48a15f298e6c977c41`）；其中根 Cargo 锁是
+CitizenSDK contracts、engine、signer 统一 workspace 的已审查解析闭包，不宣称与 CitizenApp
+整份锁逐字节相同。当前闭包的密码学核心 `schnorrkel 0.11.5`、`zeroize 1.9.0` 与已验证来源
+一致，engine 的 `subxt-core 0.43.0` 和其 SCALE/metadata 依赖也由该锁固定。任何依赖升级都
+必须显式更新哈希与合同测试。
 Release 对 `native/signer` 做 6 个普通文件的逐字节哈希与反向闭集检查；两份生产真源、两份
 说明和两份合同测试缺一不可，额外 `build.rs`、`src/bin` 或其它文件也必须失败关闭。
 

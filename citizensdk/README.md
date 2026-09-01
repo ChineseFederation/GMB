@@ -14,6 +14,17 @@ finalized 数据库、多账户热钱包、硬件金库、任意协议载荷签�
 CitizenApp 现有功能和
 依赖保持不变；只有在 SDK 稳定后，才会另行设计 CitizenApp 的切换步骤。
 
+第 2 步已经在 `native/contracts` 建立类型化 Core 合同，并在 `native/engine` 建立产品无关的
+Rust 协调核心。它们固定 `VerifiedChainClient`、`ChainSigner`、`SecretVault`、五类状态仓储、
+十项能力状态、准确区块 runtime context、启动前状态导入门禁和同一 extrinsic index 的
+`System.ExtrinsicSuccess/Failed` 执行结论。Engine 仅使用官方 `subxt-core = 0.43.0` 解码
+metadata 与 `System.Events`，没有增加远程 RPC 客户端或第二个轻节点。
+
+这是已落地的核心边界，不是运行路径已经切换的声明。当前 Flutter 产品仍由现有 Dart
+`CitizenSdk`、钱包服务和内嵌 smoldot 绑定执行；产品级唯一 C ABI、provider 适配及 Dart
+改接安排在第 3 步。因此本步骤没有宣称助记词、mini-secret 或私钥已经不经过 Dart，也没有
+改变当前 Android/iOS API 或平台安全金库行为。
+
 `assets/README.md` 固定随包资产与设备运行状态的边界，正式链信任资产统一位于
 `assets/citizenchain`。SDK 在创建或初始化 smoldot 原生客户端前先验证固定 manifest、
 `chain_id = citizenchain`、`protocol_id = citizenchain`、genesis hash、chainspec 摘要和
@@ -47,6 +58,11 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   SDK 无法防止恶意宿主实现复制传入的秘密，产品集成必须审查这些注入点。
 
 ## 构建与分发
+
+根 Rust workspace 现在统一包含 `native/contracts`、`native/engine` 与 `native/signer`。
+contracts/engine 是 CitizenSDK 自有源码闭包，独立进入 Release 来源和测试闭集；既有
+`native/smoldot/SOURCE_SHA256.json` 仍只描述 CitizenApp 收编的 smoldot 来源，不被改写成
+Rust Core 清单。第 2 步没有新增平台原生产物；第 3 步完成唯一 C ABI 后才改变运行时链接面。
 
 GMB 的唯一顶层 Workflow 路由 `公民SDK · CI · SDK` 与
 `公民SDK · Release · SDK`。Release 会复核指定成功 CI 的 workflow、显示标题、产品目标、

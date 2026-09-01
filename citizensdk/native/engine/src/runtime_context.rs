@@ -77,6 +77,16 @@ impl RuntimeContextCache {
                 "one block hash was associated with multiple heights".to_owned(),
             ));
         }
+        if self.contexts.iter().any(|existing| {
+            existing.block().hash() == context.block().hash()
+                && existing.block().number() == context.block().number()
+                && (existing.version() != context.version()
+                    || existing.metadata() != context.metadata())
+        }) {
+            return Err(EngineError::BlockContextMismatch(
+                "runtime context changed while one block advanced finality".to_owned(),
+            ));
+        }
         if let Some(existing) = self
             .contexts
             .iter()

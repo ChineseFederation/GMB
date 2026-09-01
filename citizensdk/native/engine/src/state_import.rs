@@ -1,12 +1,19 @@
 use citizen_sdk_contracts::{ChainIdentity, ExportedChainState, FinalizedBlockRef};
 
+/// CitizenSDK 当前公开链数据库信封格式。
+pub const CHAIN_STATE_FORMAT_VERSION: u32 = 1;
+
 /// Provider lifecycle relevant to state import. Import is legal only while an
 /// Engine instance has never started its light client.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EngineLifecycle {
     Created,
+    ImportingState,
+    Starting,
     Running,
     Stopped,
+    StartFailed,
+    Disposed,
 }
 
 /// Stable, fail-closed reasons for rejecting imported light-client state.
@@ -39,14 +46,11 @@ pub struct StateImportPolicy {
 }
 
 impl StateImportPolicy {
-    pub const fn new(
-        identity: ChainIdentity,
-        format_version: u32,
-        current_finalized: Option<FinalizedBlockRef>,
-    ) -> Self {
+    /// 只建立 CitizenSDK 随包 manifest 对应的正式链策略；绑定层不能注入第二套链身份或格式。
+    pub fn citizenchain(current_finalized: Option<FinalizedBlockRef>) -> Self {
         Self {
-            identity,
-            format_version,
+            identity: ChainIdentity::citizenchain(),
+            format_version: CHAIN_STATE_FORMAT_VERSION,
             current_finalized,
         }
     }

@@ -20,6 +20,23 @@ checkpoint、manifest 或链资产摘要覆盖。本版本没有在线链资产�
 - mini-secret、展开后的 SecretKey 和签名临时字节在作用域结束时清零。
 - signer FFI 用 `catch_unwind` 把 panic 转为错误码；FFI Release profile 不允许破坏该契约。
 
+## Rust Core 的秘密与 provider 合同
+
+`native/contracts` 已经把 `ChainSigner` 与 `SecretVault` 分开：前者负责 sr25519 派生、签名与
+验签，后者只负责设备密文、硬件保护、解锁和用户认证。Android Keystore、Apple Secure
+Enclave 以及未来其它平台金库都是 `SecretVault` provider，不冒充能够原生执行 sr25519 的
+硬件 signer。
+
+合同层的 `SecretBuffer` 由 `Zeroizing` 持有字节，不实现 `Clone` 或序列化，`Debug` 始终
+脱敏，并只把借用交给同步 Rust 闭包。这个设计缩短 Rust Core 内明文生命周期，但不是同进程
+硬隔离：受信任闭包仍可主动复制字节，未来 C ABI/provider 实现必须继续审计。五类状态仓储
+分别承载轻节点数据库、runtime cache、钱包公开资料、交易历史和加密信封；加密信封仓储的
+类型不能接收明文秘密，系统金库仍是独立的第六边界。
+
+以上是已建立的 Rust 合同，不是移动运行时迁移已经完成。当前 Dart 钱包、MethodChannel/FFI
+和平台插件路径保持原状，助记词、child mini-secret 或私钥仍可能按现有实现经过 Dart 内存；
+第 3 步产品级 C ABI 与后续平台私有桥完成前，禁止声称秘密只存在 Rust buffer。
+
 ## 设备机密与受信任宿主
 
 助记词、母种子、child mini-secret 和私钥不得上传到 TuyuServe、TuyuBooking、Cloudflare、
@@ -90,6 +107,12 @@ runtime version 与 metadata 必须在同一 finalized/目标块上读取并按 
 前一代 in-flight 请求迟到不能覆盖新缓存。余额批量读取只走轻节点 finalized batch storage，
 手续费只信任同一 metadata 的链上常量。状态观察回调和订阅取消 Future 的异常均为
 best-effort 隔离，不能泄漏未处理错误或改变交易终态。
+
+Rust Engine 现在把上述规则固化为准确 `VerifiedBlockRef` 的 runtime context 和交易证据核验：
+它对完整 signed extrinsic 计算哈希、在准确块体定位 index，再只接受同块 metadata 解出的
+同 index System 终态。它还对导入的轻节点状态执行启动前、链/协议/genesis/格式/finality、
+最大 256 KiB 和不倒退门禁。engine 使用官方 `subxt-core = 0.43.0` 做 metadata/events 解码，
+不增加任意 RPC 或第二轻节点；实际网络 provider 接入仍属于后续步骤。
 
 公民链账户签名、TUYU challenge 签名和 TuyuBooking 员工登录是不同业务权限。它们可以在
 明确设计下使用同一用户 sr25519 公钥，但不得合并账户、授权或审计记录。

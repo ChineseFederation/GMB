@@ -6,6 +6,19 @@ CitizenSDK 在一台设备上管理一只无根热钱包，钱包内支持账户
 锚点，其 AccountId 同时是 `masterAccountId`；存在兄弟账户时不能单独删除账户0。
 CitizenWallet 冷钱包是独立产品，不属于 SDK。
 
+## Rust Core 模型边界
+
+第 2 步在 `native/contracts` 固定了与当前钱包语义一致的公开模型：账户范围仍是
+`//0..//1989`，账户0必须等于 `masterAccountId`，profile、provisioning、cleanup 与 exact
+secret reference 分离；`WalletProfileStore` 只保存公开事实，`EncryptedSecretBlobStore`
+只能保存加密信封，`SecretVault` 单独承担设备金库与认证。`ChainSigner` 是独立的 sr25519
+合同，不能与系统金库合并成同一业务接口。
+
+这些 Rust 类型用于冻结下一阶段 Engine/provider 边界，没有替代当前 Dart `WalletService`、
+`WalletRepository` 或 `SecureSeedStore`。当前钱包生命周期、CAS 和清理仍由本文下述 Dart
+实现执行，秘密仍可能经过现有 Dart 内存与平台通道；第 3 步唯一 C ABI 完成前不能声称钱包
+已经迁移到 Rust 或明文只存在 Rust buffer。
+
 ## 派生与存储
 
 ```text

@@ -15,6 +15,15 @@
   smoldot client is created or initialized.
 - Excluded generated build and tool state from the Hosted Package even when
   validation runs in a previously exercised disposable copy.
+- Established the product-independent Rust Core contracts and Engine for
+  typed verified-chain access, wallet/vault separation, capability snapshots,
+  exact-block runtime contexts, guarded state import, and verified transaction
+  outcomes.
+- Pinned official `subxt-core` 0.43.0 for metadata and `System.Events`
+  decoding without adding a remote RPC client or another light node.
+- Kept the existing Dart runtime active. The product-level stable C ABI and
+  binding switch remain a separate next step, so this entry does not claim
+  that mobile secrets have stopped traversing the current Dart path.
 
 ## 0.1.0 - 2026-08-29
 

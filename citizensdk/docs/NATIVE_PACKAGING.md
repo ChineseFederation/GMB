@@ -6,6 +6,11 @@
 `assets/citizenchain` 固定链资产、manifest、锁文件、文档和测试源码，
 不得保存 `.so`、`.a`、`target`、`build`、`.dart_tool`、Gradle/CocoaPods 状态或 Release 包。
 
+根 `Cargo.toml` workspace 现包含 `native/contracts`、`native/engine` 和 `native/signer`。
+前两项是 CitizenSDK 自有 Rust Core 源码与合同测试闭集；`engine` 精确依赖官方
+`subxt-core = 0.43.0`。它们不属于 CitizenApp smoldot 逐字节来源，因此 Release 独立反向
+枚举并固定其源码，既有 `native/smoldot/SOURCE_SHA256.json` 保持原有范围和语义。
+
 统一原生入口 `scripts/build-native.sh` 要求调用方提供源码树外的：
 
 ```text
@@ -22,6 +27,10 @@ CITIZENSDK_NATIVE_OUTPUT_DIR=<原生产物目录>
 `ios-simulator/libsmoldot.a` 和对应符号清单，只用于执行 iOS Swift XCTest；宿主
 `libsmoldot.dylib` 固定为 arm64+x86_64，同时适用于原生与 Rosetta `flutter_tester`。发布器不会把
 这些测试库复制进正式候选。
+
+第 2 步新增的 contracts/engine 目前不产生新的平台分发二进制，也没有改变上述现有原生注入
+格式。第 3 步才建立 `native/ffi` 与根 `include` 的产品级唯一 C ABI，届时再由同一 Rust Core
+生成平台运行件；不能把当前 `native/smoldot/ffi` 的内部入口描述为完成态产品 ABI。
 
 Android NDK 版本在 SDK 原生入口中固定为 `28.2.13676358`，与 GMB 官方依赖合同一致。
 调用方提供 `ANDROID_NDK_HOME` 时必须精确指向该版本；同时提供 `ANDROID_HOME` 与
@@ -93,6 +102,10 @@ CitizenSDK 复用 GMB 唯一顶层 Workflow 和现有产品流程：
 
 CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是来源绑定、独立重建与完整
 验证，不宣称不同 Runner、不同 run 的压缩包在所有环境下必然逐字节相同。
+
+第 2 步只更新 CitizenSDK canonical 源码/候选合同，没有修改 TataConsole Flow 的内嵌副本。
+任务卡已经明确这些 Flow 在第 9、10 步按当时完成的统一流程一次同步；在此之前不得把现态
+远程 CI/Release 当作已接入新 Rust Core 的验证渠道，也不得局部新增第二套流程。
 
 两条流程的测试命令合同相同：根包把原有 230 项与迁入的 smoldot 51 项合并，并以
 `flutter test --timeout=2m` 统一执行；外层两分钟超时必须长于来源测试内部的 30 秒活链订阅

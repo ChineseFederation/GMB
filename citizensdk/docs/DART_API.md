@@ -23,6 +23,18 @@ import 'package:citizen_sdk/citizen_sdk.dart';
 
 聊天、广场、TUYU v1 消息编码、旅行商品、预订和宿主导航不在公共 API 内。
 
+## 第 2 步过渡边界
+
+第 2 步没有修改上述 Dart 公共接口或其运行语义。`native/contracts` 与 `native/engine` 已经
+建立 Rust Core 的类型化合同和核验规则，但当前 `CitizenSdk` 仍由 Dart 直接协调钱包、交易、
+历史与内嵌 smoldot 绑定。第 3 步才建立产品级唯一 `citizensdk_*` C ABI，并设计 Dart 改接和
+删除绕过 Engine 的公开路径；在此之前不得把 Rust Core 的存在写成 App 已经使用它。
+
+同样，目标秘密生命周期虽然是 `SecretVault -> Rust SecretBuffer -> ChainSigner -> zeroize`，
+当前移动实现仍保留既有 Dart 钱包与平台通道路径。助记词、child mini-secret 或私钥是否经过
+Dart 的事实没有在本步骤改变；本文件现有关于 Dart `Uint8List`、不可擦除 `String` 和受信任
+宿主注入的风险约束继续全部适用。
+
 ## 构造与信任边界
 
 Android/iOS 标准装配：

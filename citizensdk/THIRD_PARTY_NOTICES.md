@@ -11,6 +11,19 @@ GPL with Classpath Exception 原文，以及根许可证入口中完整重现的
 `shared/citizen-signer`，许可证为 MIT；原文保存于根目录 `LICENSE-MIT`。该 crate 使用
 `schnorrkel`、`zeroize` 等官方生态依赖，解析闭包由根 `Cargo.lock` 固定。
 
+## CitizenSDK Rust Core
+
+`native/contracts` 与 `native/engine` 是 CitizenSDK 自有实现，继承根 `Cargo.toml` workspace
+声明的 MIT 许可证；原文保存于 `LICENSE-MIT`。contracts 使用 `zeroize 1.9.0` 保护短生命周期秘密缓冲区，并使用
+`futures-core 0.3.31` 表达不绑定具体 executor 的对象安全异步合同。
+
+engine 精确依赖 crates.io 官方 `subxt-core 0.43.0`；该依赖声明为
+`Apache-2.0 OR GPL-3.0`。CitizenSDK 只使用它解析 SCALE metadata、`System.Events` 和计算
+Substrate extrinsic 哈希，不把它当作网络客户端，也不由此引入远程 RPC 或第二份轻节点实现。
+准确依赖闭包和 registry checksum 由根 `Cargo.lock` 固定。Rust Core 的来源闭集独立受
+Release 合同保护，不写入只描述 CitizenApp smoldot 收编来源的
+`native/smoldot/SOURCE_SHA256.json`。
+
 ## smoldot Dart 与 FFI
 
 CitizenApp 已验证的 Dart smoldot 包已作为 CitizenSDK 内部实现并入 `lib/src/smoldot`，原六个

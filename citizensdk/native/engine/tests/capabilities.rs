@@ -122,8 +122,5 @@ fn tracker_advances_only_for_a_complete_semantic_change() {
     let mut invalid = all_ready();
     let _ = invalid.pop();
     assert!(tracker.update(invalid).is_err());
-    assert_eq!(
-        tracker.current().map(CapabilitySnapshot::revision),
-        Some(2)
-    );
+    assert_eq!(tracker.current().map(CapabilitySnapshot::revision), Some(2));
 }

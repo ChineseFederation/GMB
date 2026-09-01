@@ -23,6 +23,7 @@ pub use capability::{CapabilityName, CapabilityReason, CapabilitySnapshot, Capab
 pub use chain::{
     AccountId32, BlockFinality, ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32,
     RuntimeContext, RuntimeVersion, StateImportReceipt, VerifiedBlockRef, VerifiedChainClient,
+    CITIZENCHAIN_CHAIN_ID, CITIZENCHAIN_GENESIS_HASH, CITIZENCHAIN_PROTOCOL_ID,
 };
 pub use chain_signer::{
     ChainSigner, DerivationJunction, Sr25519PublicKey, Sr25519Signature, SR25519_SIGNING_CONTEXT,
