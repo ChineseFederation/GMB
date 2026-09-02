@@ -1,4 +1,7 @@
-import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/crypto/account_codec.dart';
+import 'package:citizen_sdk/src/platform/preferences_wallet_repository.dart';
+import 'package:citizen_sdk/src/wallet/models.dart';
+import 'package:citizen_sdk/src/wallet/wallet_error.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _walletGeneration = '10101010101010101010101010101010';

@@ -33,12 +33,7 @@ fn import_accepts_exact_non_regressing_pre_start_state() {
     let current = FinalizedBlockRef::from_parts(Hash32::from_bytes([8; 32]), 10);
     let imported = FinalizedBlockRef::from_parts(Hash32::from_bytes([9; 32]), 12);
     let policy = StateImportPolicy::citizenchain(Some(current));
-    let candidate = state(
-        chain,
-        CHAIN_STATE_FORMAT_VERSION,
-        imported,
-        vec![1, 2, 3],
-    );
+    let candidate = state(chain, CHAIN_STATE_FORMAT_VERSION, imported, vec![1, 2, 3]);
     assert_eq!(
         validate_state_import(&policy, EngineLifecycle::Created, &candidate),
         Ok(())

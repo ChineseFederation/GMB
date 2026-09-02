@@ -1,259 +1,81 @@
-# Building smoldot package
+# Archived smoldot Dart baseline build boundary
 
-This document explains how to build the Rust FFI library for the smoldot package across different platforms.
+This directory documents the Dart/smoldot implementation copied from the
+verified CitizenApp baseline. It is retained for source provenance,
+differential tests and migration review. It is **not** an independently
+published package, a public CitizenSDK API, or a second native build flow.
 
-## Prerequisites
+## Canonical product build
 
-### All Platforms
-- **Rust** 1.70+ (install from https://rustup.rs/)
-- **Dart SDK** 3.6+ (from https://dart.dev/get-dart)
+CitizenSDK has one native build entry point:
 
-### Platform-Specific
-
-#### macOS
-```bash
-# Install Xcode Command Line Tools
-xcode-select --install
-
-# Add macOS targets
-rustup target add x86_64-apple-darwin aarch64-apple-darwin
+```text
+/Users/rhett/GMB/citizensdk/scripts/build-native.sh
 ```
 
-#### Linux
-```bash
-# Install build essentials
-sudo apt-get update
-sudo apt-get install build-essential pkg-config
+Local callers must provide both `CITIZENSDK_WORK_DIR` and
+`CITIZENSDK_NATIVE_OUTPUT_DIR` as absolute descendants of:
 
-# Add Linux target
-rustup target add x86_64-unknown-linux-gnu
+```text
+/Users/rhett/TATA/tataconsole/target/citizensdk
 ```
 
-#### Windows
-```bash
-# Install Visual Studio Build Tools
-# Download from: https://visualstudio.microsoft.com/downloads/
+The script also places `CARGO_TARGET_DIR`, module caches, Gradle state,
+DerivedData-equivalent state, staging frameworks and candidate outputs below
+that controlled work root. Nothing generated may be written below
+`/Users/rhett/GMB/citizensdk`.
 
-# Add Windows target
-rustup target add x86_64-pc-windows-msvc
-```
+Do not run ad-hoc `cargo build`, copy libraries into this documentation tree,
+or restore the retired `native/{platform}` output layout. TataConsole and the
+repository workflows call the same product script; no smoldot-only build or
+release path exists.
 
-#### Android
-```bash
-# Install Android NDK (via Android Studio or standalone)
-# Set environment variable:
-export ANDROID_NDK_HOME=/path/to/android-ndk
+## Current mobile and Apple target contract
 
-# Install cargo-ndk
-cargo install cargo-ndk
+The current product target names and architectures are exact:
 
-# CitizenApp Android 只支持 64 位 ARM
-rustup target add aarch64-linux-android
-```
+| Product slice | Rust target | Purpose |
+|---|---|---|
+| Android | `aarch64-linux-android` | Android ARM64 product Core and JNI/AAR projection |
+| iOS | `aarch64-apple-ios` | Physical iPhone/iPad device ARM64 ABI |
+| iOS-Simulator | `aarch64-apple-ios-sim` | Apple-silicon Simulator ARM64 ABI |
+| macOS | `aarch64-apple-darwin` | macOS product ABI; supported architecture is ARM64 only |
 
-#### iOS
-```bash
-# Install Xcode from Mac App Store
+The two iOS slices both execute ARM64 instructions but use different Apple
+platform ABIs and SDKs. They therefore remain separate XCFramework slices.
+macOS supports ARM64 only and its product/slice name is always `macOS`; there
+is no x86, universal, or architecture-suffixed macOS product.
 
-# Add iOS targets
-rustup target add aarch64-apple-ios x86_64-apple-ios aarch64-apple-ios-sim
-```
+`CitizenSDK.xcframework` contains exactly `iOS`, `iOS-Simulator` and `macOS`.
+The iOS and iOS-Simulator slices use a shallow framework with install ID
+`@rpath/CitizenSDK.framework/CitizenSDK`; macOS uses the standard `Versions/A`
+framework with install ID
+`@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`. Only the five canonical
+relative links required by that macOS framework are permitted in a candidate.
+The framework carries the public C headers, the Swift module, the one Rust
+CitizenSDK Core, the three verified `citizenchain` assets and the privacy
+manifest. A legacy `libsmoldot.dylib` may be built under the central work root
+only for Dart differential tests; it is an ARM64 test binary for macOS, is not a product ABI and
+must never enter a CitizenSDK candidate.
 
-## Building
+Linux and Windows official projections are implemented only in their later
+task-card steps. This archived document does not claim that they are already
+available.
 
-### Desktop (macOS, Linux, Windows)
+## Verification boundary
 
-```bash
-cd packages/smoldot
-./tool/build_rust.sh
-```
+The canonical script and release verifier must reject:
 
-This will:
-1. Build the Rust library for your current platform
-2. Place the compiled library in `native/{platform}/`
-3. Generate Dart FFI bindings (if ffigen is available)
+- any generated file or cache in the CitizenSDK source tree;
+- any Apple slice other than the three listed above;
+- any macOS x86 or universal binary;
+- a product framework that leaks legacy `smoldot_*`, signer, dependency or
+  other non-CitizenSDK symbols;
+- chain assets that differ from `assets/citizenchain`;
+- a Flutter/Hosted package that exposes this archived implementation as a
+  runtime import path.
 
-### Android
-
-```bash
-cd packages/smoldot
-./tool/build_android.sh
-```
-
-Output: `native/android/{abi}/libsmoldot.so` for each ABI
-
-### iOS
-
-```bash
-cd packages/smoldot
-./tool/build_ios.sh
-```
-
-Output:
-- `native/ios/libsmoldot_device.a` - For iOS devices
-- `native/ios/libsmoldot_sim.a` - For iOS simulator
-- `native/ios/smoldot.xcframework` - Universal framework (if Xcode available)
-
-## Manual Build
-
-### Basic Build
-
-```bash
-cd packages/smoldot/rust
-cargo build --release
-```
-
-### Cross-Compilation
-
-```bash
-# For a specific target
-cargo build --release --target aarch64-apple-ios
-
-# For Android (using cargo-ndk)
-cargo ndk -t arm64-v8a build --release
-```
-
-## Generating FFI Bindings
-
-The Dart FFI bindings are auto-generated from the Rust code:
-
-```bash
-cd packages/smoldot
-
-# Install ffigen if not already installed
-dart pub global activate ffigen
-
-# Generate bindings
-dart run ffigen --config pubspec.yaml
-```
-
-This generates `lib/src/bindings_generated.dart`.
-
-## Directory Structure
-
-After building, you should have:
-
-```
-packages/smoldot/
-├── rust/
-│   ├── target/
-│   │   └── release/
-│   │       └── libsmoldot.{so,dylib,dll}
-│   └── ...
-├── native/
-│   ├── smoldot.h            # C header (generated)
-│   ├── linux/
-│   │   └── libsmoldot.so
-│   ├── macos/
-│   │   └── libsmoldot.dylib
-│   ├── windows/
-│   │   └── smoldot.dll
-│   ├── android/
-│   │   ├── arm64-v8a/libsmoldot.so
-│   └── ios/
-│       ├── libsmoldot_device.a
-│       ├── libsmoldot_sim.a
-│       └── smoldot.xcframework/
-└── lib/
-    └── src/
-        └── bindings_generated.dart
-```
-
-## Troubleshooting
-
-### Rust Compilation Errors
-
-```bash
-# Update Rust
-rustup update
-
-# Clean and rebuild
-cd packages/smoldot/rust
-cargo clean
-cargo build --release
-```
-
-### Missing Targets
-
-```bash
-# List installed targets
-rustup target list --installed
-
-# Add missing target
-rustup target add <target-name>
-```
-
-### Android NDK Issues
-
-```bash
-# Verify NDK installation
-echo $ANDROID_NDK_HOME
-ls $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/*/bin/
-
-# Reinstall cargo-ndk
-cargo install --force cargo-ndk
-```
-
-### macOS Universal Binary Issues
-
-```bash
-# Check architectures in library
-lipo -info native/macos/libsmoldot.dylib
-
-# Should output: Architectures in the fat file: ... are: x86_64 arm64
-```
-
-### FFI Binding Generation Fails
-
-```bash
-# Ensure C header exists
-ls ../include/smoldot.h
-
-# Regenerate header
-cd packages/smoldot/rust
-cargo build --release
-
-# Try ffigen again
-dart run ffigen --config pubspec.yaml
-```
-
-## CI/CD Integration
-
-For automated builds, see `.github/workflows/build_smoldot.yml`:
-
-```yaml
-- name: Build Rust library
-  run: |
-    cd packages/smoldot
-    ./tool/build_rust.sh
-```
-
-## Optimization
-
-The release builds are optimized for size and performance:
-
-- **Size optimization**: `opt-level = "z"`
-- **Link-time optimization**: `lto = true`
-- **Single codegen unit**: `codegen-units = 1`
-- **Symbol stripping**: `strip = true`
-- **Panic strategy**: `panic = "abort"`
-
-Typical binary sizes:
-- macOS (universal): ~8-10 MB
-- Linux: ~8-9 MB
-- Windows: ~8-9 MB
-- Android (per ABI): ~7-8 MB
-- iOS: ~14-16 MB (XCFramework includes simulator + device)
-
-## Development Build
-
-For faster iteration during development:
-
-```bash
-cd packages/smoldot/rust
-
-# Dev build (faster compilation, larger binary)
-cargo build
-
-# Dev build outputs to target/debug/
-```
+Source format, unit, contract, differential and consumer tests use temporary
+copies and target directories below TataConsole's central CitizenSDK work
+root. CI and Release execution remain separate task-card steps; this document
+does not authorize either operation.

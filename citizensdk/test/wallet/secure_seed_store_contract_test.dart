@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/wallet/secure_seed_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 const _generationA = '10101010101010101010101010101010';

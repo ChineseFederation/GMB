@@ -15,7 +15,46 @@
 /scripts/
 /test/
 /android/src/test/
-/ios/Tests/
+/darwin/Tests/
+/darwin/.build/
+/darwin/.swiftpm/
+/darwin/Pods/
+/darwin/DerivedData/
+
+# CitizenSDK 在 Android/Apple 已统一经固定 Flutter tuple 调用产品 C ABI。
+# 下列 Dart 实现仅作 CitizenApp 迁移差分、回归和来源审计输入；它们不是
+# Hosted 运行闭包，不得让宿主通过 implementation import 绕过 SDK API、密钥金库
+# 或已验证链客户端边界。account_codec.dart 是固定 tuple 运行闭包唯一保留的
+# crypto helper，只负责公开 AccountId/SS58 投影，不处理秘密。
+/lib/src/crypto/citizen_signer.dart
+/lib/src/crypto/native_sr25519.dart
+/lib/src/crypto/wallet_mini_secret.dart
+/lib/src/crypto/wallet_password.dart
+/lib/src/node/
+/lib/src/smoldot/
+/lib/src/transaction/
+/lib/src/wallet/
+/lib/src/platform/preferences_chain_database_store.dart
+/lib/src/platform/preferences_data_store.dart
+/lib/src/platform/preferences_finalized_transaction_repository.dart
+/lib/src/platform/preferences_wallet_repository.dart
+
+# Android Flutter compiles the one shared Kotlin facade directly. Native/AAR
+# build descriptions, C++ sources, tests and generated packages remain audit
+# inputs only; the shared production Kotlin under native/src/main/kotlin stays.
+/android/native/CMakeLists.txt
+/android/native/build.gradle
+/android/native/settings.gradle
+/android/native/consumer-rules.pro
+/android/native/README.md
+/android/native/src/main/AndroidManifest.xml
+/android/native/src/main/cpp/
+/android/native/src/main/jniLibs/
+/android/native/src/test/
+/android/native/src/androidTest/
+/android/native/**/*.aar
+/android/native/**/*.pom
+/android/citizensdk.aar
 
 # Dart/Flutter 与各平台工具即使在 dry-run 副本中生成状态，也绝不能进入 Hosted 包。
 /.dart_tool/**
@@ -27,3 +66,4 @@
 # 生产源码目录中的分层说明不是运行时文件；根 README 与法律声明继续保留。
 /lib/**/README.md
 /android/src/main/**/README.md
+/android/native/src/main/**/README.md

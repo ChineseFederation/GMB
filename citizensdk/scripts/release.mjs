@@ -2,15 +2,17 @@
 
 // CitizenSDK 确定性候选打包器。源码只读，所有候选和归档必须落在源码树之外。
 import { createHash } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, inflateRawSync } from 'node:zlib';
 import {
   copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
   readFileSync,
+  readlinkSync,
   realpathSync,
   readdirSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -18,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const PRODUCT_ID = 'citizensdk';
 const PACKAGE_NAME = 'citizen_sdk';
-const TATA_CONSOLE_TARGET_ROOT = '/Users/rhett/Only/tataconsole/target/citizensdk';
+const TATA_CONSOLE_TARGET_ROOT = '/Users/rhett/TATA/tataconsole/target/citizensdk';
 const ROOT_FILES = [
   '.gitignore',
   '.pubignore',
@@ -34,15 +36,101 @@ const ROOT_FILES = [
   'pubspec.lock',
   'pubspec.yaml',
 ];
-const ROOT_DIRECTORIES = ['android', 'assets', 'docs', 'ios', 'lib', 'native', 'scripts', 'test'];
+const ROOT_DIRECTORIES = [
+  'android',
+  'assets',
+  'darwin',
+  'docs',
+  'include',
+  'lib',
+  'native',
+  'scripts',
+  'test',
+];
 const FORBIDDEN_DIRECTORIES = new Set([
-  '.dart_tool', '.gradle', 'DerivedData', 'Pods', 'build', 'target',
+  '.build', '.dart_tool', '.gradle', '.kotlin', '.swiftpm', 'CitizenSDK.xcframework',
+  'DerivedData', 'Pods', 'build', 'target', 'xcuserdata',
 ]);
 const NATIVE_FILES = Object.freeze({
-  'android/src/main/jniLibs/arm64-v8a/libsmoldot.so': 'android/arm64-v8a/libsmoldot.so',
-  'ios/libsmoldot.a': 'ios/libsmoldot.a',
-  'ios/exported_symbols.txt': 'ios/exported_symbols.txt',
+  'android/citizensdk.aar': 'android/citizensdk.aar',
+  'android/src/main/jniLibs/arm64-v8a/libcitizensdk.so': 'android/arm64-v8a/libcitizensdk.so',
+  'android/src/main/jniLibs/arm64-v8a/libcitizensdk_jni.so': 'android/arm64-v8a/libcitizensdk_jni.so',
 });
+// Apple 三个 ARM64 slice 作为一个目录原子注入；源码树只保存 Swift/Flutter
+// consumer，唯一 native/ffi Core 只存在于这一个 XCFramework 产物中。
+const NATIVE_DIRECTORIES = Object.freeze({
+  'darwin/CitizenSDK.xcframework': 'apple/CitizenSDK.xcframework',
+});
+const APPLE_XCFRAMEWORK_PATH = 'darwin/CitizenSDK.xcframework';
+const APPLE_SLICES = Object.freeze({
+  iOS: Object.freeze({
+    binaryPath: 'CitizenSDK.framework/CitizenSDK',
+    bundlePlatform: 'iPhoneOS',
+    dtPlatform: 'iphoneos',
+    minimum: '16.0.0',
+    minimumKey: 'MinimumOSVersion',
+    installName: '@rpath/CitizenSDK.framework/CitizenSDK',
+    module: 'arm64-apple-ios',
+    platform: 2,
+    supportedPlatform: 'ios',
+    swiftTarget: 'arm64-apple-ios16.0',
+    variant: null,
+  }),
+  'iOS-Simulator': Object.freeze({
+    binaryPath: 'CitizenSDK.framework/CitizenSDK',
+    bundlePlatform: 'iPhoneSimulator',
+    dtPlatform: 'iphonesimulator',
+    minimum: '16.0.0',
+    minimumKey: 'MinimumOSVersion',
+    installName: '@rpath/CitizenSDK.framework/CitizenSDK',
+    module: 'arm64-apple-ios-simulator',
+    platform: 7,
+    supportedPlatform: 'ios',
+    swiftTarget: 'arm64-apple-ios16.0-simulator',
+    variant: 'simulator',
+  }),
+  macOS: Object.freeze({
+    binaryPath: 'CitizenSDK.framework/Versions/A/CitizenSDK',
+    bundlePlatform: 'MacOSX',
+    dtPlatform: 'macosx',
+    minimum: '13.0.0',
+    minimumKey: 'LSMinimumSystemVersion',
+    installName: '@rpath/CitizenSDK.framework/Versions/A/CitizenSDK',
+    module: 'arm64-apple-macos',
+    platform: 1,
+    supportedPlatform: 'macos',
+    swiftTarget: 'arm64-apple-macosx13.0',
+    variant: null,
+  }),
+});
+const APPLE_RESOURCE_FILES = Object.freeze({
+  'PrivacyInfo.xcprivacy': 'darwin/Sources/CitizenSDK/PrivacyInfo.xcprivacy',
+  'citizenchain/chainspec.json': 'assets/citizenchain/chainspec.json',
+  'citizenchain/light_sync_state.json': 'assets/citizenchain/light_sync_state.json',
+  'citizenchain/manifest.json': 'assets/citizenchain/manifest.json',
+});
+// macOS framework 必须采用 Apple 标准版本化布局。只有这五个 bundle 内部
+// 相对链接属于正式产物；iOS device/Simulator slice、XCFramework 其余位置和
+// SDK 源码继续保持零符号链接。固定目标还能同时拒绝绝对路径、`..`、悬空链接
+// 和指向 framework 外部的设备文件。
+const APPLE_MACOS_FRAMEWORK_SYMLINKS = Object.freeze({
+  CitizenSDK: 'Versions/Current/CitizenSDK',
+  Headers: 'Versions/Current/Headers',
+  Modules: 'Versions/Current/Modules',
+  Resources: 'Versions/Current/Resources',
+  'Versions/Current': 'A',
+});
+// 每个 Apple slice 必须携带 Swift 编译器生成的完整六文件模块闭包。
+// 任何 sidecar 缺失都会破坏同编译器快速导入、ABI 审计或源码信息；允许额外
+// 节点又会把未经审查的架构/模块混入单一 ARM64 产品，因此这里使用精确集合。
+const APPLE_SWIFT_MODULE_EXTENSIONS = Object.freeze([
+  'abi.json',
+  'private.swiftinterface',
+  'swiftdoc',
+  'swiftinterface',
+  'swiftmodule',
+  'swiftsourceinfo',
+]);
 // 两份运行时信任锚必须与 CitizenApp 已验证链资产逐字节一致；manifest 再把
 // CitizenSDK 产品、CitizenChain 正式链身份、genesis 和两个摘要固定为一个闭集。
 const CHAIN_ASSET_FILES = Object.freeze({
@@ -66,9 +154,13 @@ const CHAIN_ASSET_MANIFEST = Object.freeze({
 // metadata/events 对为正式解码输入；测试与夹具同时改写不能绕过
 // Release 的来源守卫。
 const SOURCE_FIXTURE_FILES = Object.freeze({
+  'test/transaction/fixtures/citizenchain-balance-fee-v1.json': '2cd5e648703c8cc389c59f07753470b63c034f7cfa63dac8ffa596c8128a0033',
   'test/transaction/fixtures/citizenchain-runtime-system-events.hex': '2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef',
   'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
+  'test/transaction/fixtures/citizenchain-transfer-build-v1.json': 'c43a1f01c22556d2b1e172088fb540358c25b9554c91ffc71f7b483fcd5a469b',
   'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
+  'test/wallet/fixtures/citizenchain-wallet-derivation-v1.json': '2d9bd9f5feeacea729154475475e0d4525e594bc88ede3a86494ffaf35301769',
+  'test/wallet/fixtures/citizenchain-wallet-password-v1.json': '0f8427f6ca542625626c7c1615608eef19246db496c4bb819937f15cfdec7250',
 });
 // Release 必须保留根级许可入口和两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
 const LICENSE_SOURCE_FILES = Object.freeze({
@@ -76,57 +168,376 @@ const LICENSE_SOURCE_FILES = Object.freeze({
   'LICENSE-GPL-3.0': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
   'LICENSE-MIT': '39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c',
 });
-// Hosted Package 不建立第二份候选：官方 Dart 发布工具直接读取已注入 Android/iOS
+// Hosted Package 不建立第二份候选：官方 Dart 发布工具直接读取已注入 Android/Apple
 // 原生库的 GitHub Release 候选，并由这份固定 .pubignore 只筛出运行时闭包。
 const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
-  '.pubignore': '1ca77c41a09b72bd3dd4052a680e823d47d54c3454a359c5f710dfeb35c57421',
-  'CHANGELOG.md': 'd6279d94fa9354be319317c41f44fe4aac46c65e0f820b8701a59c2e6a0f45c6',
+  '.pubignore': '570bd77638e96d346539ebd2bda1ca0d5250ce79be24bef8692c417fdc30b161',
+  'CHANGELOG.md': '0922cab16074aecbd13ad4d74ec07f8a5e1d8c308d0575133e5f53261bcf04fd',
 });
-// 根 Flutter、Core Rust、signer、Android、iOS 与 Release 合同测试共同构成
-// SDK 自有测试闭集。
+// pub.dev/Hosted 包只公开产品 API、公开模型、固定 Flutter tuple 与无秘密
+// AccountId/SS58 codec。其余 Dart 来源继续留在 GitHub 审计包作迁移差分，
+// 但必须被真实 .pubignore 投影排除，宿主不能 implementation-import 绕过 C ABI。
+const HOSTED_RUNTIME_DART_FILES = Object.freeze([
+  'lib/citizen_sdk.dart',
+  'lib/src/api/citizen_chain.dart',
+  'lib/src/api/citizen_sdk_client.dart',
+  'lib/src/api/citizen_sdk_error.dart',
+  'lib/src/api/citizen_sdk_events.dart',
+  'lib/src/api/citizen_transactions.dart',
+  'lib/src/api/citizen_wallet.dart',
+  'lib/src/crypto/account_codec.dart',
+  'lib/src/models/citizen_account.dart',
+  'lib/src/models/citizen_capability.dart',
+  'lib/src/models/citizen_chain_state.dart',
+  'lib/src/models/citizen_transaction.dart',
+  'lib/src/models/citizen_wallet.dart',
+  'lib/src/platform/citizen_sdk_flutter_codec.dart',
+  'lib/src/platform/citizen_sdk_flutter_sessions.dart',
+  'lib/src/platform/citizen_sdk_platform.dart',
+  'lib/src/platform/flutter_citizen_sdk_platform.dart',
+]);
+const HOSTED_MAIN_DEPENDENCIES = Object.freeze({
+  flutter: null,
+  polkadart_keyring: '^0.7.1',
+});
+const HOSTED_DEV_DEPENDENCIES = Object.freeze({
+  bip39_mnemonic: '^4.0.1',
+  characters: '^1.3.0',
+  convert: '^3.1.1',
+  crypto: '^3.0.7',
+  ffi: '^2.2.0',
+  flutter_lints: '^5.0.0',
+  flutter_test: null,
+  http: '^1.2.2',
+  meta: '^1.15.0',
+  path: '^1.9.1',
+  polkadart: '^0.7.0',
+  shared_preferences: '^2.5.5',
+  substrate_bip39: '^0.7.0',
+  unorm_dart: '^0.3.2',
+});
+// 根 include/ 是 CitizenSDK 唯一产品 ABI。三文件完整闭集既固定字节，也阻止
+// 上游 smoldot/signer 符号、任意 RPC 和秘密导出接口绕过 citizensdk_* 边界。
+const PUBLIC_ABI_FILES = Object.freeze({
+  'include/README.md': 'db20653b9e10ea0e0260c652ede8a6ede51c80901cbbcab44136b1f4562586ec',
+  'include/citizensdk.h': '8c6f23911ab79ccb3beeeac7e646ca81eade2d01fe8b712ef98a52270d54852f',
+  'include/citizensdk_types.h': '57923cd2c0ce5b7fb360a52125f36734611e386471e5b9e147db016134c95b4d',
+});
+// Dart（排除已有独立来源合同的 smoldot 快照）、Android root/native 与
+// Apple darwin 生产输入构成一个反向闭集。平台测试、文档和注入的 AAR/
+// XCFramework 分别由测试、文档与候选投影合同固定，不能在本表建立第二条来源。
+const MOBILE_BINDING_SOURCE_FILE_COUNT = 119;
+const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
+  'android/build.gradle': '2f25a0794d67c668d21656f66b8443326538f592447d29ec4ddcd9eb0280c701',
+  'android/gradle.properties': 'cf2c210cd35238888bb6c125c538bcadfebff01d28e97d664b83f96f31fa3160',
+  'android/native/build.gradle': 'ba58b5370f47962d35c1717f87038920bb3b0d4ba140f9f58a7689c156d0f3c4',
+  'android/native/consumer-rules.pro': '81c0d229a083f6b87647b45708e1b19ad116a65c5eed33bf5152ac35def7f2c0',
+  'android/native/src/main/AndroidManifest.xml': '4af8bd8f81dc572f010d489f9960baa1520f6d6573c7096e5d617033f876239a',
+  'android/native/src/main/cpp/CMakeLists.txt': '4cdae89392703d44d47a2961588e1da9623c1f4fb8fdaa4e9517b7e941134105',
+  'android/native/src/main/cpp/citizensdk_host_bridge.cpp': '23546edb5d4b2cfcccf5ad7c9bbe743d5fb994dd0b8625dbad7c815124533c3b',
+  'android/native/src/main/cpp/citizensdk_host_bridge.hpp': 'a35193fb915bc1c5c5dcfe4277444f7ba710db7d3ceda4d30d4d3927bd2546d4',
+  'android/native/src/main/cpp/citizensdk_jni.cpp': '635aedc52efbc7a07c6455d8f771b3759cb5f324594bacd9732aa77a793442e5',
+  'android/native/src/main/cpp/citizensdk_jni_support.hpp': '9bd0b22a8536d2c152191ccd1ed4c39816ce9d7bb4680d6afbc5280f76e96188',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdk.kt': '4f0bf9931219ec3717e194ac1fb89baef16adbe7214c77672909bd6d14d48c0e',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkError.kt': '2e286272bef5a88e9ea425083c28d4f3299f8ff203b92c21c4fefea7fd01c9e9',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkEvents.kt': '5c749db2c279963599aa3cf24aa942b55abe1fdafb069f4803ec68de5de29a6a',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkModels.kt': '06d233bc14f0aaf6be08dfc666f5319bef7aa354fe15c310c8188407deace231',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkOperation.kt': 'f623f51baff06efd8c9b39aade5968af2fd85860cca331e763d7c27bc5f4bc7c',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkPreparedWallet.kt': '74f08d32ce1ddeac586180d75dd80a034651da50a83387667355b7a5fd92b0ed',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkRecoveryPhrase.kt': 'a2f90846b60e59fa98339a60e2b19b0c3a9c5692c8caa93038ce2116ca8cfc29',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkAssets.kt': '28e6eb8a028f5c7b5404f68ef8ef886107c6f188838bd5c0dae2d111dafa7e79',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHardwareVault.kt': '3943b3f27b2f9a382acb957f192b519de82140903f85a1b89bfbac659af72911',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHostRecord.kt': '6cdb3638939976db4c1b179a5871d8de111dd4bf2a3c94eab378e281cbcc9b49',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHostServices.kt': 'e146a12af1ebeb7aae4b5de29451b1f8d6e69478b4f721168a7538ccdf4bb161',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNative.kt': '2de2b1f66f666401fe8a0d4dd090fd7e74f4710ae6ce27aa81b60fab7ca2591d',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNativeCodec.kt': 'f69f3e8db72febaadcf3e7b691a7e75d17c9ce440456385603762dfbb58ead01',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNativeResult.kt': 'a49301c203bf71f62692b66d428c54d33a9b1e3da5e7c137a1db1ad8a7b5a01d',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkPublicStore.kt': 'd252f511c22e10c70edc4a6a7320f3c0ee94c74ce2f2babdc18203b46067f2c1',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkRecordKey.kt': 'a43d9a8d303cd2a687bf11004ec5b95eb9e684a2f55befc364ca62b50f1c9a14',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkRequestRouter.kt': '888163b13007d6d21cd1e7c6372d4e9f591941b0e88d6a494f2b0640a692756a',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkSecureStore.kt': 'f4bf921761bb07728fb77beb02dc84f0ba019f7e702eee76780d32bf5739f9a8',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkSensitiveBytes.kt': 'fe2129f7612e3cad88ed7d2f38d66d371488554238794c94d9139c95729337c6',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkSqlite.kt': '0d8c1546edbe7b14ba24259b97ba77349613ca9ed8dc43952397d207c7a171e4',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkRecoveryContent.kt': '5de5a80491efaa7f1c7e2573bb14525446b99d466da5b5ef3b89543d85cc72df',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowActivity.kt': '65a8b4d2e3334c64b9e6c5f2178f35e5b004e5e12c8fd2a89bce627403b79a06',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowContract.kt': '54e02d8b77767d1ee341aa416c9d435f0a2444dddb6aad6449eb1f68a1d66e46',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowCoordinator.kt': 'fb3c504300446f8b09c65678baf2dbebbd9f3f48f656885c05774adaab20f140',
+  'android/settings.gradle': '762a06e85bef782194d141d475843ef3e96488d7144b087f0012aa308601b453',
+  'android/src/main/AndroidManifest.xml': '238e29dda0ae9883bafebcd6f79de39e60837c839993ecfac3407203b5ce22ba',
+  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt': '731bb214510ec1474b505f4c97aeb2c6b02103939baa26109eb58152dd8b5573',
+  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterSessions.kt': 'c75d4c65dd8d3d9ea7893c04652bf6602c16a59d586c31f682c66852f6a63215',
+  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterWalletFlow.kt': 'cd3c960595b5bdbee8659577253ab7c3f758b4d9f080c81304561a9a4045aa51',
+  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkPlugin.kt': '92fe14dcf007d368f73854c2b581edd51bce157c439ee9c6b843a9a729f2938a',
+  'darwin/Package.swift': '159c504cab86afb641fbef2b1fd35c59c20bbbe81d003cd7cdeec914a3ee91fc',
+  'darwin/Sources/CitizenSDK/CitizenSDK-Bridging-Header.h': 'dd01912fc8a386b64dfde1000a3ff2ffbdbe620da94969389f95edbc175de04b',
+  'darwin/Sources/CitizenSDK/CitizenSDK.swift': '513acf40672d386abd3da2b858d4165c56952817f2f2e4684fbca48310a67df3',
+  'darwin/Sources/CitizenSDK/CitizenSDKAssets.swift': '0a674251ab01920e2d782d5cb2c0357c66693043e098c1876583c498ff4fef81',
+  'darwin/Sources/CitizenSDK/CitizenSDKError.swift': '51a7f249764ff7c07ba7a75e228b9462c5bf7a5aef70b553a5d56ef12db2f9d1',
+  'darwin/Sources/CitizenSDK/CitizenSDKEvents.swift': '449c39d3a33491b50acb99e4304ff42dbf23ed93fde9edbf08700ad15e745c34',
+  'darwin/Sources/CitizenSDK/CitizenSDKHostBridge.swift': 'd18f3e8a3c898eecdab1ca8238c106c224249a81922cfdb94f7a7d399ac04067',
+  'darwin/Sources/CitizenSDK/CitizenSDKHostRecord.swift': '70d951817f68a0ca5adb55a0a82323d8919920a1605b062e042c3122b9b391d8',
+  'darwin/Sources/CitizenSDK/CitizenSDKInputLimits.swift': '948aa60e444b8eb5bdf8e460529ac7648d47d4116c52d91cd60e03bce067ef67',
+  'darwin/Sources/CitizenSDK/CitizenSDKModels.swift': '30009838ae9e9374255baf669f2c670dddcb1e02c035d86b3efc2cf56eb8eebf',
+  'darwin/Sources/CitizenSDK/CitizenSDKNative.swift': '7a43c3979992f6a80e9ff2812079a3040c0818520ad61af8ef02c7f9ff43caca',
+  'darwin/Sources/CitizenSDK/CitizenSDKNativeCodec.swift': 'f5b705bbd3299773792545c8a8fb190b30de11d9faeba2d2b8f65c686edfffe8',
+  'darwin/Sources/CitizenSDK/CitizenSDKOperation.swift': 'a36da7031a4775e90328c80b2ef8749a88af89759c89eec278dcdc561c803646',
+  'darwin/Sources/CitizenSDK/CitizenSDKPreparedWallet.swift': 'e405d16b3a45b774400e737300bf0c6a9e0caa7990c15a53ccbc16fa7c522d10',
+  'darwin/Sources/CitizenSDK/CitizenSDKPublicStore.swift': '2b71d655f9d45a2e40e1305e05d41be9845a8fc289820d5e19d2fcc48c48566e',
+  'darwin/Sources/CitizenSDK/CitizenSDKRecordKey.swift': '391ae299ca0b7b8ecde2dd6dcee43499315c3db9c40141ffcacc9c5b9c076f14',
+  'darwin/Sources/CitizenSDK/CitizenSDKRecoveryPhrase.swift': '5600c386b88b6b17299a13e758655337ae2441e1cea4a08426bdd69ed0815a34',
+  'darwin/Sources/CitizenSDK/CitizenSDKSQLite.swift': '357aa704f852e09d6d4678bfc52f2ae3719c814119e1cf17800658cdf3f19008',
+  'darwin/Sources/CitizenSDK/CitizenSDKScreenSecurity.swift': '8501af1dcf92faf8f62d0113bd8831569f7060cbe825994d1d2915a908469c70',
+  'darwin/Sources/CitizenSDK/CitizenSDKSecretVault.swift': '34a25ffba7a2abf0d06616c1576cde627d87c55fabd1eaa95536a1e34d1a6629',
+  'darwin/Sources/CitizenSDK/CitizenSDKSecureStore.swift': '2f279244a15e977adf066b4dcb94f262535429f21a561a3d0da33b9a7f1cda72',
+  'darwin/Sources/CitizenSDK/CitizenSDKSensitiveBuffer.swift': '2b92446c0fb99663105dcbe070a9bd0718ba492d807ce8ff1966d41a512ed25a',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlow.swift': '62db70d6916c973578200c0f2803d93cb9d6cf55acc962a47ea6f400f497ab7e',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowIOS.swift': 'a6721c14bd8b6aadaeb474600843cdf9a888139a5f9c7721b1132e0c14bc474c',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowMacOS.swift': 'ea317b136672538108c73f3e7ad8570e8a0b88e7f942a5955491b5fc43048e92',
+  'darwin/Sources/CitizenSDK/PrivacyInfo.xcprivacy': 'bc417321bb94066c1bca08840349eea542c3c13e6addfc8248533791627434f3',
+  'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift': 'e9622e10686c67964eb105324878480421e812a9bc7d699e6a8a7d9c21e38009',
+  'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterSessions.swift': '9e91b605f57ed3e09bdc6f6bf1fdea97f34619c301f081e245c82b7ea71dcd2f',
+  'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterWalletFlow.swift': 'd42155f474abffbd52ede30b6cfb8f4ba0439542e2a1005ba8db82bd52f318ad',
+  'darwin/Sources/CitizenSDKFlutter/CitizenSdkPlugin.swift': '7d634d9c4db67486b62339a9e7f95fd99f97bc54fa3e9049be8948f5a86506e5',
+  'darwin/citizen_sdk.podspec': '0407e833b3f1d82f19b8c7ef4142e8606a848ef5bf59733ad6766eb5948158e0',
+  'lib/citizen_sdk.dart': '09ab6543d082882dd299b55f24c738979e055b27fafe27066b08206e47c21858',
+  'lib/src/api/citizen_chain.dart': '1c5e919a933608cd06896d1e4538534752875ec279e79d4c62329868d610bd72',
+  'lib/src/api/citizen_sdk_client.dart': '65408b8b41d692f879002aa39279c788bddd9318890c102af4831a433b048ec1',
+  'lib/src/api/citizen_sdk_error.dart': 'e26382dc9af2da918da3e4eb1921f6340b1d9edb0e8956ba2f374eb9925d3f5f',
+  'lib/src/api/citizen_sdk_events.dart': 'c0117d1b2e849e826046f4f4b38fe8313f48d5ab994d58f58ebc62bd310f5cb7',
+  'lib/src/api/citizen_transactions.dart': 'bc66a6c4ca6a522d5d0b19221a418e022aced230431ab14cf40da2c314d60bdd',
+  'lib/src/api/citizen_wallet.dart': '49f4f10ec1bed6ba7b8b5101b2429f362292e03c0d95dda8be162bfeaa7e4e7f',
+  'lib/src/crypto/account_codec.dart': 'ce72262d96193ae47da43a9f675d6141f5c565eed05bb9e9755b575d96fcbc84',
+  'lib/src/crypto/citizen_signer.dart': '4745b5992a9116780184b8d87357289e32d65c9ddf904cb88db8d388ec8db161',
+  'lib/src/crypto/native_sr25519.dart': '1e3819103c847a051dd9557d47b05587f715af6fcfc704a40ddcceb9eb56568d',
+  'lib/src/crypto/wallet_mini_secret.dart': '0ffed1efd9b91350895ef0830c5c69e6ed89afa617e8dc38d3f35e31584653d8',
+  'lib/src/crypto/wallet_password.dart': '6e36f405a62829244f8550d848cb683c96a31eb23adaac0c776328eaebb7fa0a',
+  'lib/src/models/citizen_account.dart': '086319ca3010b0c848eba635954299c6425519b8c4eefd84b18ec26b2763ec4f',
+  'lib/src/models/citizen_capability.dart': 'f5d80517cc18ccb4b026742f5d4caf2d360ba979d9abc7e3cf286a7b81ed0ee0',
+  'lib/src/models/citizen_chain_state.dart': 'f1a32d30a294106a23d03a3479792d85decdf184f6d828c83bae27a56713cc89',
+  'lib/src/models/citizen_transaction.dart': 'f16ed24a536254b3023b34e2fa5f7f21160aeaab83c460265f86e74e2466f94a',
+  'lib/src/models/citizen_wallet.dart': '2bf4da3e2e8fe8b833ba20175eb40acf1e54852cfe5922e90f4dcb9f99b8ea52',
+  'lib/src/node/bootstrap_client.dart': '66d4d47b0d49c374c47be4d98d880718c5d8be205280f179748079c29060afbd',
+  'lib/src/node/bootstrap_manifest.dart': 'a80c053de76e901a9fda3fe0c763032db8a8412570675eb020fe9c36b64d6245',
+  'lib/src/node/chain_asset_manifest.dart': '6225ff05bf0a9a47721e457845a3db0ea71043b101563fd57ee2c88d687ed26b',
+  'lib/src/node/chain_assets.dart': 'c4305884a3535f4f9fdeeb6f827e5b98e2afcb7e893c71ba5dbdd0d4ff4cf34f',
+  'lib/src/node/chain_database_store.dart': '648ba15ad86c9b9afba41d4a6d923c916be72f84318fc906e5b70b79658bf30a',
+  'lib/src/node/chain_event_subscription.dart': 'e6020c9e247b4a37e0bb27397798c72b462024340a8274974a867e241afad05a',
+  'lib/src/node/chain_health.dart': 'bb85e68ccf12f1d305b7834352ce4e11729e568c53e36267f04ffb1e437a7edc',
+  'lib/src/node/light_client.dart': 'dda86c3cc22434d8761612cbbe311cf977fb904aafcee10be4057363fa643c78',
+  'lib/src/node/sdk_log.dart': '668bcb7b520c573b8bf5cd7592337c55a8c445d6168ed7d1ee07a6fa11fc352b',
+  'lib/src/platform/citizen_sdk_flutter_codec.dart': '4921673ba75062ac4018270f38a3df0d50ac28c577a5d9da243fe5d6ef532ce1',
+  'lib/src/platform/citizen_sdk_flutter_sessions.dart': 'c34155c9c7b37eb4c71cd4adb378e0811ae5825e95817f83a58a409a74e9cf10',
+  'lib/src/platform/citizen_sdk_platform.dart': '295798fba26533cdbba0ec993acd215cf48889b9b744b43c2192e6566fe29f6c',
+  'lib/src/platform/flutter_citizen_sdk_platform.dart': '05ab45cfeefd1e39e4a89355d5f0e845b596c8695f7b4d79639b1ffa4dbd8953',
+  'lib/src/platform/preferences_chain_database_store.dart': '8cf0647a688af0e2cc87c6d86b934b340f6255397e76e326f38de2505da35337',
+  'lib/src/platform/preferences_data_store.dart': '0ee490b8d0dbd342963de640576779fd44c290ee9a698c54b35e0a0e7a0028c7',
+  'lib/src/platform/preferences_finalized_transaction_repository.dart': '34c7e373f808ba57cadbccf6344397053a8392c4603ed41ea5754e4460fbc4b6',
+  'lib/src/platform/preferences_wallet_repository.dart': 'b71885a2c1d0b27cf6e79169a6c3c5e963c49b2e170476ac138c77581d34aae8',
+  'lib/src/transaction/chain_rpc.dart': 'c1cbf31295d33ef24fb418004c7f1ae4ce833f3ecd62b7ed57c0692ac805d1ad',
+  'lib/src/transaction/chain_transfer_event_decoder.dart': 'ec30b3169737865f637d398cc5910bd143e0c8de346b7afd72cbd376b392da61',
+  'lib/src/transaction/finalized_transaction_models.dart': '3ab3e57840c4a27059b8164fd76e04a1fe25a6fdf3fe6e24cd5f92c55897e9e4',
+  'lib/src/transaction/finalized_transaction_repository.dart': '4515ef75b4972e793f8483f8e09b7230dc77c2e4696d1dc532cdfa48c9649761',
+  'lib/src/transaction/finalized_transaction_scanner.dart': 'd84db8b521093b8063e0bff7e36bc6d422f80a9cd8c403aa55e42be42f7a21f5',
+  'lib/src/transaction/pallet_registry.dart': 'dbbd0bb7752a41b8ba59be1631b55059b4559ed7f6449906d03ff5bccef7592b',
+  'lib/src/transaction/signed_extrinsic_builder.dart': '2e3727b7622c3962dfdfbaa0c00901040716800defe08f0ce0e242fa89b71395',
+  'lib/src/transaction/transaction_status.dart': '9ab379df29ece36b6b5cf8fdecd8398cba76841e3d7d610d0828d8f30d7261a2',
+  'lib/src/transaction/transfer_service.dart': '4b9333055406abf10bd49498b9f5dc4b352681bb1666d3f254e6907d9548fa1a',
+  'lib/src/wallet/models.dart': '19d86fc05978e5ca06565ee4b49e26d97ac88c9e5790e6b9518c20d84971cef4',
+  'lib/src/wallet/secure_seed_store.dart': '571c0fa8b1de6cebfb3f341600ab2afdea413d4f8d7a5317e721332dda5ca46f',
+  'lib/src/wallet/wallet_error.dart': '58afeaf234b1c6b7c18a75cf2c5a86f8206f1a51348965ce4d88ceb43247217b',
+  'lib/src/wallet/wallet_repository.dart': '08ca473679979ab5627d2807754aeb61667b9f9f5eb46dae43acc91d448225bf',
+  'lib/src/wallet/wallet_service.dart': '9fdaf97646524c90c2545696cb85c7f90e981f0ca646a7b3d4e57ecd34d6b9c3',
+});
+// 产品根说明、架构文档及平台/Dart 模块说明共同构成 30 文件文档闭集。
+// docs/smoldot-dart、测试说明、许可证、CHANGELOG、
+// THIRD_PARTY_NOTICES、资产/include/Core/signer/smoldot/test 说明分别由既有
+// 更窄的权威来源合同固定，不能在这里建立第二套来源流程。
+const DOCUMENTATION_FILE_COUNT = 30;
+const DOCUMENTATION_SHA256 = Object.freeze({
+  'README.md': '3c4c5af0dfedc4352d7a34e8a4cbeac0b1615c06699c6225845d6ea48f0be8bd',
+  'android/README.md': 'b3140a230ccf7d11e92e54b2131c3a89b2cf87dd1c2de91bc2137d77c9ea0e10',
+  'android/native/README.md': 'e2e959994f558eefe75085c4818650510c283708db8eb02f8df96913b97da595',
+  'android/native/src/main/cpp/README.md': 'ccbd436d19620fa3069f2407236765366358d27c8f4f72cddf0a6fd91044b289',
+  'android/native/src/main/kotlin/README.md': 'c3d0c931f7b5f57ca2ebeeb37fa4ca7dedd96668735bb4cd7bc60f8255942bc8',
+  'android/native/src/main/kotlin/org/README.md': '578730640cf686d61ae0855d726ca55de4e701be90241261197eb8b5c4f4c5b2',
+  'android/native/src/main/kotlin/org/citizen/README.md': 'fee4f0a93cde3cad9fef94095215b2e64f8784086ee1a5217f8bfc78e3b01444',
+  'android/native/src/main/kotlin/org/citizen/sdk/README.md': '1543e3d000eb835e60bb48c4875939de2f28934bc2d0d1449b33556fa8a2a7a0',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/README.md': '106769b2d73004597d4dbcf1829d138792b949809168e5f278bc2d747401eae7',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/README.md': '2b285d5e5855414cb3728ed3a97b78d7f1c2a16fa24b84eb7acacbc3551e7c60',
+  'android/src/main/kotlin/README.md': 'cd06f97683e5b86c1a4ce4e5a5e19ca7e91239d2130b45594b58d27320582fdd',
+  'android/src/main/kotlin/org/README.md': '74cbcbc590e49ae488097691b67911df3b001aba71b553f463e6dbd2eb36e53b',
+  'android/src/main/kotlin/org/citizen/README.md': '1a7193606a774df8d6ad9d7c3c64dbb0b28a0cc7f6f61d0052a71726ec5400ef',
+  'darwin/README.md': '58d03fddf5dd9843cf8487955e571d0ece036251b028335d724ebf2ddbee3e8b',
+  'darwin/Sources/CitizenSDKFlutter/README.md': '5bc38bab7a72890919779f6cfb01bd43e91e82a5f420b9ccdf9883f089d6a8c3',
+  'docs/ARCHITECTURE.md': '27adab4b16796f2986e3e2b5a55620c629ad86b270e920b99f9b36e7561cef71',
+  'docs/C_ABI.md': 'b15a962396437eca5025ee0a36f34503132fb171be5ec9618122c65a9866015e',
+  'docs/DART_API.md': 'a29ffc9a2c12db12167ccc7bdc8996bf61f59b7307a9d979b87d90a20ad16397',
+  'docs/MOBILE_PLATFORM.md': 'bae7c4bf7008d4f2c3c2b69a9244b50f7ab2fbb8e165406c5543ceacbe9aa9b6',
+  'docs/NATIVE_PACKAGING.md': '0ee89f845e0cc9be1e13be2c014173ab1b475f2c5aa7c57cd56ff8affb1c0bd0',
+  'docs/SECURITY.md': '4de6de519f0dc84f85bf64fb7454d0caf063c60023f408aa0b74b56e024ac5db',
+  'docs/SOURCE_PROVENANCE.md': '80e439de8bd007d1ad8f3b039c4f32b928f7995b9c9d6adb0a97691dae7e73df',
+  'docs/WALLET_MODEL.md': 'd5f408249270dfe554f08e865e2dd085c6b0671e229fe93327b897cc45e9fbc2',
+  'lib/src/api/README.md': 'd9bb9da863796084a9dac85c37ce7a3cb480626cc93457727e8927514b87ad8b',
+  'lib/src/crypto/README.md': 'f5d051b65879c9d361ee42700be7c694f3d83dc28145bd3e57e573af145353a6',
+  'lib/src/models/README.md': '5506efb021f3c238a8c2cc2badebc7d1f442a5352c16182e5dcd9241b0a6224a',
+  'lib/src/node/README.md': 'dd2b3e11181ec1195c8ad985249613c8c0ba798a1d2b0e752e06de8a13174fdc',
+  'lib/src/platform/README.md': '2d6e4b0235acf5e72ba24470bdfc151897f7bb6098ec15bc94dc57604140fdd8',
+  'lib/src/transaction/README.md': '464649ceb1e05e32c21cb53bccfd985aa96b9f95593837ed99186b327244418c',
+  'lib/src/wallet/README.md': '7caa07c6b73fe1cc1583e537eee43b660520d403f2e7e1a9cb06c2371d83cf25',
+});
+// 根 Flutter、Core Rust/FFI、smoldot provider、signer、Android、Apple 与
+// Release 合同测试共同构成 SDK 自有 142 文件反向测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
+const SDK_TEST_CONTRACT_FILE_COUNT = 142;
 const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'test',
   'native/contracts/tests',
   'native/engine/tests',
+  'native/ffi/tests',
   'native/signer/tests',
+  'native/smoldot/provider/tests',
   'android/src/test',
-  'ios/Tests',
+  'android/native/src/test',
+  'android/native/src/androidTest',
+  'darwin/Tests',
 ]);
+// scripts/ 同时包含生产构建器，不能把整个目录误当成测试目录；只反向枚举
+// Node 正式测试命名 `*.test.mjs`，避免新增测试未进入固定闭集却仍被文档宣称已覆盖。
+const SDK_SCRIPT_TEST_ROOT = 'scripts';
+const SDK_EMBEDDED_TEST_ROOTS = Object.freeze([
+  'native/engine/src',
+  'native/ffi/src',
+]);
+// scripts/ 只允许一个已固定的生产构建器、当前正在执行的 Release 真源和一份
+// 已由 SDK_TEST_CONTRACT_FILES 固定的合同测试。release.mjs 不能自哈希，否则任何
+// 合法更新都会形成不可解的自引用循环。
+const SDK_SCRIPT_ENTRIES = Object.freeze({
+  'build-native.sh': 'pinned-production',
+  'release.mjs': 'executing-source',
+  'release.test.mjs': 'pinned-test',
+});
+const SDK_PRODUCTION_SCRIPT_FILES = Object.freeze({
+  'scripts/build-native.sh': '66aee5e685575db8ec41546f121b30bbdd9fc3406f7f5e650df7ab82d8099244',
+});
 const SDK_TEST_CONTRACT_FILES = Object.freeze({
-  'android/src/test/README.md': '1febb9bdc7414053cff9844028f10dfb291a7293a270754a6806f7f4f216b57f',
-  'android/src/test/kotlin/README.md': 'c9f29a30f65f17d7b43d46982c9a7812418b4ba84420ce77408fb3d3f399436a',
-  'android/src/test/kotlin/org/README.md': '2a4c0f4f8a1f6ff813ad4c94d91aded7078bdb81a650db5de54920956dfbbb80',
-  'android/src/test/kotlin/org/citizen/README.md': 'af7c4dd6b81841a7b96c4b101c20432b58d8d197b72283f9c5b846b9531af5eb',
-  'android/src/test/kotlin/org/citizen/sdk/HardwareSecretVaultTest.kt': '28dac0330e788e4f5de0842d5250655b07d1a8c15c21683e1d83e6e21ca3b816',
-  'android/src/test/kotlin/org/citizen/sdk/VaultEnvelopeTest.kt': 'a7c01a8c1794878b6bc7ec3e566f511ec80768d189b2c3430129408f77cfde65',
-  'ios/Tests/SecureEnclaveSecretVaultTests.swift': 'a3e5d2433cbf1d426c1fc8ee18ac56fd13473fca7f8c8fe61d39ff332fb409aa',
-  'ios/Tests/VaultEnvelopeTests.swift': '348efae4595498c8b591f811390fc318daa8910fd62829ebd3d93a1b5cd6fdc8',
-  'native/contracts/tests/capability_contract.rs': '2414480f0ffe218646a57aa531ba124ed69f23e61a61fddc556b56f24ff1828e',
-  'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
-  'native/contracts/tests/secret_contract.rs': '2c380ae3fe6f156ce1636b340c2430e78a561bb515344f9ffe49a4cb8cdc9ae9',
-  'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
-  'native/engine/tests/capabilities.rs': '3e20c52cc831f77495b2a8c9e9abfe61c31876171bb9f0f30d77dfb178cdb082',
-  'native/engine/tests/engine_boundary.rs': '62374d2f169c90d170d270d35dcbcb400ee8c370fdd7b5e880a6568b52ba6154',
-  'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
-  'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
-  'native/engine/tests/transaction_outcome.rs': '8f17a04c90c49962d5620db23c56c93baaba8bb409bc76569b72499aea2d9996',
-  'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
-  'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
-  'scripts/release.test.mjs': 'c25b88ad25de0e3ac6edcc632c1ef4c06e156aed225b50890ce30a3c0d14dc3e',
-  'test/citizen_sdk_facade_test.dart': '85e350601517285a808238b641ab1becdf242240a90adc30c6a964228c91182c',
+  'android/native/src/androidTest/README.md': 'fc7724688dc94982b92077881caec5f5126e79c15eb7317dcde2aff8bdbdca54',
+  'android/native/src/androidTest/kotlin/README.md': 'd44a06282ecd8c781d7b954acae7496a847bb8b80a1f36a7cdab5ff8c2a73cec',
+  'android/native/src/androidTest/kotlin/org/README.md': '0e29cc6c8238a1e6dac76629c85a79da9e4ac8f07fae0a74ffc41f714f48c5cb',
+  'android/native/src/androidTest/kotlin/org/citizen/README.md': 'd93747837a96c766ea95954a17ace8e68715967327caba1b6794dbcce5759d5a',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/CitizenSdkHardwareVaultTest.kt': 'b0839202b8035eb5104c2ffb3a353f0ae11a6f8e66f1074a71141f0c072e929a',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/CitizenSdkLifecycleTest.kt': 'f3dcb93ebfa32033e83db309e75aa9a1dad8f76d83fbfae31e02dfdd65f08767',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/CitizenSdkNativeAbiTest.kt': 'cf94a45afecdd321e1d1bbd23ec57ca78100e89279b97c3c95aed3769f1e9bc5',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/CitizenSdkStateStoreTest.kt': 'a6b61d018d63ae999be84ea7e9ffc19bb9b605bcf2d97b6c296e9c96d81a6fd9',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/README.md': '4ab5a2940f4c8de302b4306b6e6b477fefe2f173fa5439f557196198cb05cbc9',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowCancellationTest.kt': '43437c234ac4ae9b8305220347b0c0d3c1aed399f8f14646fa91489e20625ee1',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowSecretBoundaryTest.kt': 'e34e53d30e322f229eb62bedb61e02303fae0e49c43155b73d71138b73775ba2',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/ui/README.md': 'b26206bf92c79821995478fccf87990d54f6d20b72d9d45c6ee1aed313993c7a',
+  'android/native/src/test/README.md': 'eb01e909e3f6e64ff5c0f000d945426fa5df9fdd517f65c9ba505d9d5cd0e54e',
+  'android/native/src/test/java/README.md': '5e6309edd00fcf1e85c1d0cab7892b0b72906ec34794059427a66e1604be4f1f',
+  'android/native/src/test/java/org/README.md': '42bebe2ea2fc58bdcf36dfaac6f2acd8086c3e854bf7bbb22ba46ec2ab6ce2ad',
+  'android/native/src/test/java/org/citizen/README.md': '0b8e34c20efe7a80718f67546da599ad1a26f5d6719905fa8f8552be09c3ccd5',
+  'android/native/src/test/java/org/citizen/sdk/CitizenSdkJavaApiTest.java': '14831f3885786a8c04bb8425b257f2baa7bf4205f42e579236ca3fa63c75506f',
+  'android/native/src/test/java/org/citizen/sdk/CitizenSdkJavaOwnershipTest.java': '102ff8ef18cf144d7b99405e0cde3e3c5d959df3da5856b40085471ea1c8145b',
+  'android/native/src/test/java/org/citizen/sdk/README.md': '7ed4d84adc7605077103fe72eea4bdd897f9bc302f98312d181df8336eab3b67',
+  'android/native/src/test/kotlin/README.md': '1aa4f5e20f051146479c58b35b480aa68f55c6dc357e8e604a52cf480c64cff2',
+  'android/native/src/test/kotlin/org/README.md': 'b84fc49220742e4ab75fc629d0c884dc075895c1592f2507f503e5d5e771a0be',
+  'android/native/src/test/kotlin/org/citizen/README.md': '6f52d6e4728845e0bb1fe128af3e284bc18cbd76df974dca9828530ab8e6423a',
+  'android/native/src/test/kotlin/org/citizen/sdk/CitizenSdkApiContractTest.kt': '9111361e575ab2b58a26601013d3a75a7c547729306212815f4fef6eecb68f5f',
+  'android/native/src/test/kotlin/org/citizen/sdk/CitizenSdkPreparedWalletTest.kt': 'a790f3a925dde741cfd593c1c222443fb568e2696ec5646d3a3256ea35e55064',
+  'android/native/src/test/kotlin/org/citizen/sdk/README.md': '8a4ebb109480a809238e1a088f8c775d7e042696f206976965620979b07e2e0c',
+  'android/native/src/test/kotlin/org/citizen/sdk/internal/CitizenSdkHostOperationTest.kt': '3bce1aa84f6c58967413e1fb4bfeeced4eb25e87377d97823b297f310afbf427',
+  'android/native/src/test/kotlin/org/citizen/sdk/internal/CitizenSdkRecordKeyTest.kt': 'b83832d2431e40caaea3b9356390c3ea7c03624c93733fc821d3a6f832aed634',
+  'android/native/src/test/kotlin/org/citizen/sdk/internal/CitizenSdkVaultIdentityTest.kt': '995a25c4742c3098e96f869379ea4f7e77289e2230cd4c211462712ec4ba1acb',
+  'android/native/src/test/kotlin/org/citizen/sdk/internal/README.md': '5fd0f31750c10c5b8e32f72534fa1c735422d6873f590d831f1131a09b1642ef',
+  'android/src/test/README.md': '6a56d6f908206de3385bf9fd5838293dd1789586bb5d7245e0ea5c242d50866f',
+  'android/src/test/kotlin/README.md': 'ef036e967503cb908827489c5a2098f6f358abec5599af81b4bb7d60551ed501',
+  'android/src/test/kotlin/org/README.md': 'e8d1bd08d668ab54c7facc744de1d6361d0bdac00881dda3e7ef8c0a8df3f50c',
+  'android/src/test/kotlin/org/citizen/README.md': 'ef7a2cca8d60f9be88c34ba98da89514ac023056977aa4265a60eb72d7b07189',
+  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterCodecTest.kt': '98bd042948ca5a12b3f7c1ee86bd0f8c701894f2b36e465cf6c7837eced6de57',
+  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterSessionsTest.kt': '87542c022211cc3a3b51edfc40adc2e73bce819cee334be8e238041deb3b62c8',
+  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterWalletFlowTest.kt': '7fd69e4894919703e26d8220bb9198c67965abe5344321aa373c6d3cc46cb048',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterCodecTests.swift': 'c5965014e3c959677f37561f67184f73bf8f6948af07aa40a75064da03931b8b',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterPluginTests.swift': 'd905fda42ad2303ec3fdf7e7b1e6993694747be02b2fb949de1089164aa71923',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterSecretBoundaryTests.swift': '8cbf137577e52f58f532c52f3877ec1775836e180900bfe5f1b9bc6fd3816f99',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterSessionsTests.swift': '1c0846a45d14d9c11ae34cd44035c462376495ca320706954b9bb4bd86d05fd1',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterWalletFlowTests.swift': 'f0608acf7375703d4eadd2c16e9e127fba33486737ec9eacb1d4f71fbb5720f5',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKApiContractTests.swift': '34c229f12902b1e05dd98394746ad575862188150f5afba5844602a52121773c',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKHostOperationTests.swift': '109be3ae384db564139db63537895b0151fe29b59fc7c2370d51553e7fe5f3c5',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKLifecycleTests.swift': '0f28e4c5f8de8338dc97bc24c4d66e0e0743abb4762b4b7086e5cc0c14d96707',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKNativeAbiTests.swift': '29150ee5925cd5af930847d9a1acd5acc419d6fa0249a028acf592692b1b150f',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKPublicStoreTests.swift': '827fe701c78f4bf56677704411b91ebb2c699e5caef038fd0377094887266fbc',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKRecordKeyTests.swift': 'a212973d86872255c092305a9989e728c9da7d98e3c369d0bfd3c8baf9c9829e',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKSecretVaultTests.swift': '5ef8f62597d4245c9d0d80888b3ed1d3eb8be0f5be8b80ae65f1417040b6fcf7',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKSecureStoreTests.swift': 'af1ee11996f8706b419494d4615fe9ba268480792e2786b1d4cddbe2118271d3',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKSensitiveBufferTests.swift': 'd5163c7df3fd41897dceb3f1f1e175ef4982d92918eef498e0b6817bbdb93cbc',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKWalletFlowTests.swift': 'd3575c5c889f68197d5022e97d2160d7da08ada34942ba77d925515b44007c9c',
+  'darwin/Tests/README.md': '03ef87d88f67079e7cd895faf0f9b37fee697f87b483d76e508ec0802b310173',
+  'native/contracts/tests/account_contract.rs': '2f2af9930ccaba2cf73a21c1ea3593295a6e7d8633a95db05fbcb642e7c74992',
+  'native/contracts/tests/capability_contract.rs': '7a94545fbf1572e127d12a4d4a9ce1478fa3dcc22fb7aa688fde747135a89f7f',
+  'native/contracts/tests/chain_contract.rs': '69e216bee1d74258348f84e6b8086b474a44d6b68470bd0cef22cbfa4ed75100',
+  'native/contracts/tests/secret_contract.rs': 'e5585e0a2b584f3955a2516f6dff11615ca1fe299764a41289d0313d71ff1554',
+  'native/contracts/tests/state_store_contract.rs': '71c582e47b278a5930ec8565c643a33c4c70f37f00bd76f8badf4dc86cd9b0cc',
+  'native/contracts/tests/transaction_build_contract.rs': 'e3652344c31dbb01e6b3273b240296929bdaf2ed1aa2c2f1c7727a723ef649f0',
+  'native/engine/src/finalized_events_tests.rs': 'a1bfa1b974e36a03cd6124b5f6f7f8fd611735eef17734872e3908a792b070b7',
+  'native/engine/src/finalized_history_runtime_tests.rs': 'dd907c135ff8d3645fab2f354c321f37a61df607c96842322474851b9fce3b57',
+  'native/engine/src/transaction_builder_tests.rs': '64fb03ac64e86d07ce1bc0b0cd2429eb3150d6f561f3a58877d85e4df1680c6e',
+  'native/engine/src/transaction_history_tests.rs': '1ffe7303ad77af6222d443bb38ffb44e97418f462290d4123c9c442c06005d65',
+  'native/engine/src/wallet_derivation_tests.rs': '6f81cc64f0f3c82d3510ea316aa04705ae40c27d53237f25293480fcfa504e5f',
+  'native/engine/src/wallet_service_tests.rs': 'f480b8a776be7d0d5c5e46b74e21e476e5b9d5590a316f4c626dc206e46fa5a0',
+  'native/engine/src/wallet_transfer_watch_tests.rs': 'ab6e5595dacc4fb5fcecf599195c75d1c85bbe6e1b58521a30b59805ab9d9b1c',
+  'native/engine/tests/account_state.rs': '3271646a267cfb325ae4a4ccd2142975c00325383d81380d62e424822230208a',
+  'native/engine/tests/capabilities.rs': '8878d8cbbbdca8fa6ef4f5eefdb4f808bd21260d0ea7dcae31f593538ba37046',
+  'native/engine/tests/chain_access.rs': 'af994070a14732dafaa9aa53804ee6383522854a8619d6dd0112993689f01fba',
+  'native/engine/tests/engine_boundary.rs': '6c8493c39561fb5784c17814a7a999a062f9627e24d2eadf9e7cc08aeea32050',
+  'native/engine/tests/runtime_context.rs': 'e5eb9f999668b6664d29ba61a0c8b2fd8b2e9fe37f7830bb4f4b7732b9c4fe43',
+  'native/engine/tests/state_import.rs': '6937752568de3531a32b8ad35b1fd7270abad120c4b5aac423ae7df970d3f917',
+  'native/engine/tests/transaction_outcome.rs': '24422882e1cb4f929fef69263de854f053cb45343fc5c5b4224d2e8a4e7a2946',
+  'native/ffi/src/composition_tests.rs': 'ddec359df53dc28bf778ac4b035bb8b2431a131e42f2c85bbefbbcbfebe2b82e',
+  'native/ffi/src/host_codec_tests.rs': 'b8490a7f85d446f50c4b3330c93debfaaa39e73c6570d47e0e8dd386df2c9422',
+  'native/ffi/src/wallet_abi_tests.rs': '411b86c63277473e7ed8c39466713287577a89320898c79a4697350b6850c5a4',
+  'native/ffi/tests/abi_layout.rs': '5ccba7c43fdfe78c317d3ffd23de627df4af1cad13e895aae11bf7a75527113f',
+  'native/ffi/tests/asset_boundary.rs': 'a0a56cba330088ce01e807ac37191195b8d90013aba895ac2c7acf98b9a6ecfe',
+  'native/ffi/tests/c_header_c11.c': '26f90252182189932277d77236d8ef50a44410b60c8fa17e30b4169f542edf73',
+  'native/ffi/tests/c_header_cpp17.cc': 'bc9e01786ef55af8ac47396960028483205207c711fb380195506065e52e9eb5',
+  'native/ffi/tests/capability_contract.rs': 'd0ba2b94dab377dfbead8f2c341cf1a42697189f461572ed5ce5986c5d8dca38',
+  'native/ffi/tests/error_contract.rs': 'ae585490b05768b64401b1e6774789ba1beb1eede552e4d3e70a99cd1d395d91',
+  'native/ffi/tests/event_contract.rs': 'e39b153cbebf7510d8f72af6692cf99ac8aec43f254bcc305dc5c741b063fd11',
+  'native/ffi/tests/handle_contract.rs': '9823bfe3ddf579c021bac6c33bea7a43e9dc828ad946f0ee1a10baed654e494a',
+  'native/ffi/tests/host_provider_contract.rs': 'a1aabe53e73e31e5eefe0669c1eceb3f4f0b09f5c9d65bb2661a9c142793e209',
+  'native/ffi/tests/ownership_contract.rs': 'b75c13b228598177b1f8fabaa9a2cf5b1e62d8674a5dff662fed06616308ba0e',
+  'native/ffi/tests/request_contract.rs': '816038c6de732cac1b85bdd15c72bfaac7b0eec2ace307937ce410f280204e42',
+  'native/ffi/tests/symbol_contract.rs': 'f307bb95a762e0dcc618f5c92aaa5db567bc71af3ca5ba551c0734e11f5c9559',
+  'native/ffi/tests/wallet_abi_contract.rs': '845070da4704549b9bd48c460de978da6dfb0c2fb93a372d7f9fcf3afd639449',
+  'native/signer/tests/chain_signer_contract.rs': 'd4e53512dffab3f75ee213a08b71909dbc6c667b4b287df39cd9ac3e62824b31',
+  'native/signer/tests/ffi_contract.rs': 'bf38f650394011e7f68219ee8ba435453f616281f91649634c536b8620407038',
+  'native/signer/tests/legacy_parity.rs': '984a1521042d8a5b2285a43459383ef3972058db20e8f05154c1f75a2a11d70f',
+  'native/signer/tests/substrate_vectors.rs': 'f5587dbce91f9c2014c559bece142e56fe65c81c7cf097df66b6c8125d45eef9',
+  'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
+  'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
+  'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
+  'scripts/release.test.mjs': '209b3c407a5cb210ae1f63f48b9480d7f436910d2d001ac0755b6471b14b957e',
+  'test/api/README.md': 'ed68766c48511a96cd740eac977979ce34f4cd17f9502430d953bc0de11468be',
+  'test/api/citizen_sdk_client_test.dart': '3dc9fef93da7d07b5135a41e1ecd09b8dd1ba0560d7a2f398870eb5e413b736c',
+  'test/api/citizen_transaction_test.dart': 'bec8491d8e6e693b2db7c3e10335c5edf5ec06ef9ea80422320840745bf1a950',
+  'test/api/citizen_wallet_flow_test.dart': '10c966b9aaece6d2f0009732e2bab5ea3547df76572096191b0c8d31d07b09d8',
+  'test/api/public_api_contract_test.dart': '7f732ec26e8f632e26408c9138fac69ded1d2828e9f5100bcb6556736bf0f61d',
+  'test/citizen_sdk_facade_test.dart': 'a2c097f44432ef97916d5d81fe781f5042618a069dd6e16e682be39a5e665d09',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
   'test/node/bootstrap_client_test.dart': '80edc9da38ae330df6717672a2dece53c6ec92a321cff0e5afe10fb4bd978953',
   'test/node/chain_asset_manifest_test.dart': '78fb24dfe5eb7ae7476416bf2e41aa59f16c46e4af89c8875a148de54ffa4696',
   'test/node/chain_assets_test.dart': 'aaf0507df1dd311c4a7cfff4e7bae806f0675e8e1316b769f6079ddb53f449d6',
   'test/node/citizensdk_bootstrap_manifest.json': '33bd8e2c7407abea376f21a7adf7c9df644aedb7a9e985211075bba6cde28a00',
-  'test/node/light_client_lifecycle_test.dart': '32f25fce798836b3b13b3ff80c2c9da4c53769bf86569ede81bd9036549bb11f',
-  'test/platform/hardware_bound_seed_store_test.dart': 'fb6c3a66f04d9dae6ffabb479d381c017f1a2ba5796ddfd407eb3dcd57480cb3',
-  'test/platform/hardware_secret_vault_test.dart': '868cc66b5dc728e6b51186df4ea67c9e66743bf4e35f53a153252c4d3bf2f1f7',
-  'test/platform/preferences_chain_database_store_test.dart': '032f34f0a0402444264db190b240b434e52021fe41894e4ed7e2606fca868139',
+  'test/node/light_client_lifecycle_test.dart': '2c124a81c80a5521aa4568fcd866c67d0ce83736fb94ff76172da8a339d18f3c',
+  'test/models/README.md': '4cd13881d38d345f2a43767e6101413943cd60628c9474e4e7a8c81f086e3813',
+  'test/models/public_models_test.dart': '579164a13fb5359598d7ed68372444445f90bc0d26ad537662ad72cda1b675a5',
+  'test/models/u128_codec_test.dart': 'e406f077258130ed22481af2e228066a4030dab19b765731eaefcfdc2f0ca6f5',
+  'test/platform/flutter_codec_test.dart': '5b75c0c67a109509238e8716920e46be0a18e32d93fca6eaa7012d9b958391ea',
+  'test/platform/flutter_secret_boundary_test.dart': 'd2a6926afb33882417551539d00b78e8c027895df2adf271993fdbdc8d58d214',
+  'test/platform/flutter_sessions_test.dart': 'b3937d559a02121eb26fce501aff9b551cd3bcc909f57f8b24df0faec3254238',
+  'test/platform/preferences_chain_database_store_test.dart': 'e02e7ca4fa428817b474a0776d5284599e42c73fb42a9ead4103785a5ad5e0cb',
   'test/platform/preferences_finalized_transaction_repository_test.dart': '3797b1bc9630707765ad73a9c97633573d77e97eff1fac89d7cb8b27bf149530',
-  'test/platform/preferences_wallet_repository_test.dart': 'a2b0a095ed96713fa087c5d9648671cadc944932bfc7773e252cdb5e68bdd890',
+  'test/platform/preferences_wallet_repository_test.dart': '44a70bc5055da5bedf182ca91b9032b5bbf75a577ba60cc4bf0da70d5db3dcee',
   'test/smoldot/chain_info_test.dart': '5de74abf31c75c579716366d72a457e91339352972a4a118ec7fe18de005b158',
   'test/smoldot/client_basic_test.dart': '4617fc86f8fc4a555e837f04ad747a25b501d93532532f8f0565e1d51e17a5cc',
   'test/smoldot/ffi_basic_test.dart': 'd7f16ab19bfd842f4414f43e989a3536d6725a1ba9e2eab78ac6f53dd7fa6cef',
@@ -138,15 +549,19 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'test/transaction/chain_rpc_test.dart': 'faeeb377f4bfc3608868594f0784a933a19f59814dacffd38405560a864ab733',
   'test/transaction/chain_transfer_event_decoder_test.dart': 'b1599e10a16401cf19beb4b1400f4c4ae52acf43a78ad7df1ac7670df4c736ad',
   'test/transaction/finalized_transaction_scanner_test.dart': 'e7dc85abf5ec51a3086de248a02c194ac74e1180d490075efc82e9c3738ab1b1',
-  'test/transaction/fixtures/README.md': 'ff48e406f4eb945544589180acc0453325d5db8be7310879278488a24a70b61b',
+  'test/transaction/fixtures/README.md': 'b53b5ea9a0b6cb027223538d8ce2a3644b07498d2ccd862743dc2e7deba60940',
+  'test/transaction/fixtures/citizenchain-balance-fee-v1.json': '2cd5e648703c8cc389c59f07753470b63c034f7cfa63dac8ffa596c8128a0033',
   'test/transaction/fixtures/citizenchain-runtime-system-events.hex': '2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef',
   'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex': 'da62207dfa342ce5285bb214a116761fd0a38c7c329ab8953506ad52471ed681',
+  'test/transaction/fixtures/citizenchain-transfer-build-v1.json': 'c43a1f01c22556d2b1e172088fb540358c25b9554c91ffc71f7b483fcd5a469b',
   'test/transaction/fixtures/substrate-v14-system-events-metadata.hex': '95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b',
   'test/transaction/signed_extrinsic_builder_test.dart': '75952dd740d3f37b339177cf9d929127aa4546e11f30bac4a602b679e0171c1f',
   'test/transaction/transaction_status_test.dart': '9afb279e5b70e1e4099a33e6bf01fa4a7da52ed216ce81b704eac0d1366a6c83',
   'test/transaction/transfer_service_test.dart': 'a9ddd0f88149e464ed830660a30938a6cf060a7a7932238617f18541bb5f1af3',
-  'test/wallet/secure_seed_store_contract_test.dart': '01456c50783ded684eceb400242cd00afd2c2ddcb470ecfdae8dbc2935a982e4',
-  'test/wallet/wallet_service_test.dart': '5f12a0a33bab91355072420f519a1aa6e72c04e2f57163692effe05a9fd643d8',
+  'test/wallet/fixtures/citizenchain-wallet-derivation-v1.json': '2d9bd9f5feeacea729154475475e0d4525e594bc88ede3a86494ffaf35301769',
+  'test/wallet/fixtures/citizenchain-wallet-password-v1.json': '0f8427f6ca542625626c7c1615608eef19246db496c4bb819937f15cfdec7250',
+  'test/wallet/secure_seed_store_contract_test.dart': 'a2e338bd081c4a572467cfa17227285440b9b19a64713c9a7a7f0bda8cdc6c86',
+  'test/wallet/wallet_service_test.dart': 'ccedd39fc259fa762979621ac976842b4f28921a011a36e54bfe22cb204ec3d2',
 });
 // smoldot Dart 包边界已并入唯一 citizen_sdk 根包。三处迁移目录共同构成固定闭集：
 // 生产绑定、来源测试与历史审计资料缺一不可，且不允许重新出现第二份 pubspec 包边界。
@@ -156,13 +571,13 @@ const SMOLDOT_DART_ROOTS = Object.freeze([
   'test/smoldot',
 ]);
 const SMOLDOT_DART_FILES = Object.freeze({
-  'docs/smoldot-dart/BUILD.md': '8260e070ee9b84eb2f4e4a51623aa93d25a820e7d7fd843839fb0910ef9286e8',
+  'docs/smoldot-dart/BUILD.md': 'c76efcacfc196ddaca3cb3924b09c02651a54e228f6d2b5f6c9cb40fe72b050e',
   'docs/smoldot-dart/CHANGELOG.md': 'd9adb01f7c62313a14bb86dbfd7f4077d925745e9c17a14f153eef79c45f8b94',
   'docs/smoldot-dart/INTEGRATION.md': '1ca0a278ebef38f7b795555afb432127865c6f73dc63a7104245526a1bf14e95',
   'docs/smoldot-dart/LICENSE': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
-  'docs/smoldot-dart/README.md': 'c024610fdaf73b3fbc8d68460c289d87297620dd2090d0c3ba1346b820f7b6be',
+  'docs/smoldot-dart/README.md': '5335a694135b9542abdd6ea2132424547d39b62cc4399a92c49a950e27804b38',
   'docs/smoldot-dart/UPSTREAM.md': 'ed3f21bc62a6c6dc76beb870bf6f224914123a2cc95bdbab8b5cb453c4767539',
-  'docs/smoldot-dart/example/README.md': '3521a3de97fcef5be155a17137ac52e87d3fa2c5442d555821854bd401b4d445',
+  'docs/smoldot-dart/example/README.md': 'ab4a278a713916ab98b90db57078bc8142a903ac459f3986bd600f3e7d8f349a',
   'docs/smoldot-dart/example/smoldot_example.dart': '60aea4e2d738ab7702fbd056626e6647f8c23174739f3c1b7e564133c80ee2e7',
   'docs/smoldot-dart/source-analysis_options.yaml': 'e67b963f89cf75f675a0ed25d258bae038d216832c22b84782e5e3a90b8d3076',
   'docs/smoldot-dart/source-pubspec.lock': '91ad4c26c8abdf6384292e1f01f335ba7ce50443a99b01b45e2f4efa72dab25a',
@@ -171,7 +586,7 @@ const SMOLDOT_DART_FILES = Object.freeze({
   'lib/src/smoldot/chain.dart': '43f3fbc8420f61d335acb0c48ee471a7885ebbd71d320d8b820805b1537d8053',
   'lib/src/smoldot/client.dart': '916fd74c20f4daefca2e17e668e8a2fb16c59219b8f3bdd3148d10454a71ddff',
   'lib/src/smoldot/json_rpc.dart': 'c3a030b236814731f773bb8b1aa9dd1e5789bc7d0809f3c0dd7011d59b401d01',
-  'lib/src/smoldot/platform.dart': '640e88e465a80677fa5532f5c667758986dae3d3e801ce31bf82cf1c8b044a61',
+  'lib/src/smoldot/platform.dart': '240dd591e08db6c460d0c8c6a2001d1f86c990f77d3e7ede92f3c54f8c0f5d9b',
   'lib/src/smoldot/smoldot.dart': 'cb1b47bb6873081129fba69b0c64fceef77f69d6aeb354d1824994cbc51b9676',
   'lib/src/smoldot/types.dart': 'e20b6f97d0b6e289c2b492e12dd66afafc1133adc0fc5fe5a547106ed3338e89',
   'test/smoldot/chain_info_test.dart': '5de74abf31c75c579716366d72a457e91339352972a4a118ec7fe18de005b158',
@@ -187,107 +602,194 @@ const SMOLDOT_DART_FILES = Object.freeze({
 // 保留的 registry 包必须继续使用 CitizenApp 已验证的版本与校验和，且不得在
 // CI、Release 或本机编译时更新。
 const SMOLDOT_LOCK_FILES = Object.freeze({
-  'native/smoldot/ffi/Cargo.lock': '05190e2ed21987a8ca61c023c47eadc29f9cb415a065308843af5c4ad37537e7',
+  'native/smoldot/ffi/Cargo.lock': '117c9ca6ad5cb034c8fc5792028d9085dbc6483194e1aae25123b536c8c0cddb',
   'native/smoldot/pow/Cargo.lock': '6d832fb629bbf19ff6c2cce589c6285c3367cbcb3b55f4819beb7e733d9e038b',
 });
 // 根 signer workspace 与 Flutter 包的解析闭包同样属于正式来源输入；locked 模式
 // 只能保证使用当前锁，必须再固定锁文件自身，才能阻止依赖身份随提交静默漂移。
 const SDK_ROOT_LOCK_FILES = Object.freeze({
-  'Cargo.lock': '9fd44520029d5fd6dfd195468e092fda9c27a0a0cb3946721178aef412a8e4a2',
-  'pubspec.lock': '2a8bd55a877f037c425cfd21c279b89820ae3c61db698f48a15f298e6c977c41',
+  'Cargo.lock': '338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32',
+  'pubspec.lock': '358c27199fd644fc0644fe5da0a398f1c88a60666e8d6a93c658579493866836',
 });
-// contracts 与 engine 是 CitizenSDK 自有、可编译的 Rust 核心。它们不能借用
-// smoldot 的来源清单：这里独立固定两个目录的完整反向闭集，任何 build.rs、bin、
+// Cargo.lock 会按 registry package 合并整个根 workspace 的 feature。Engine 为钱包
+// 显式启用 BIP-39 NFKD 后，smoldot 闭包里的同一个 bip39 条目会多出这一项依赖；它不是
+// PoW 来源依赖漂移。例外必须同时由准确 checksum 和一个本地 workspace owner 的直接依赖
+// 证明，新增任何其它 root-only 闭包项仍失败关闭。
+const PROVIDER_LOCK_FEATURE_UNION_EXCEPTIONS = Object.freeze({
+  'unicode-normalization 0.1.25': Object.freeze({
+    checksum: '5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8',
+    owner: 'citizen-sdk-engine',
+  }),
+});
+// 同一 registry package 也可能因为根 workspace 启用更多 feature 而拥有比 PoW 锁更多的
+// 依赖边。这里逐 owner 固定全部、且仅有的额外边；未登记边、PoW 边缺失或解析到不同版本
+// 都必须失败，避免“包集合相同但实际依赖图不同”绕过来源闭包证明。
+const PROVIDER_LOCK_FEATURE_UNION_EDGE_EXCEPTIONS = Object.freeze({
+  'bip39 2.2.2': Object.freeze([
+    'serde 1.0.229',
+    'unicode-normalization 0.1.25',
+    'zeroize 1.9.0',
+  ]),
+  'futures 0.3.34': Object.freeze([
+    'futures-executor 0.3.34',
+  ]),
+  'pbkdf2 0.12.2': Object.freeze([
+    'hmac 0.12.1',
+  ]),
+});
+// contracts、engine 与产品 ffi 是 CitizenSDK 自有、可编译的 Rust 核心。它们不能借用
+// smoldot 的来源清单：这里独立固定三个目录的 88 文件完整反向闭集，任何 build.rs、bin、
 // 示例或未登记文件都会改变编译/发布语义并因此失败关闭。
+const CORE_RUST_FILE_COUNT = 88;
 const CORE_RUST_ROOTS = Object.freeze([
   'native/contracts',
   'native/engine',
+  'native/ffi',
 ]);
 const CORE_RUST_FILES = Object.freeze({
-  'native/contracts/Cargo.toml': 'b533e0d262d5b56300b70f36a3a8f068a3446e7b36b5270fc820aa1e879f3350',
-  'native/contracts/README.md': '650f220a4af05b0a417d2048d6394a5f4e2da614822cdca7286984a8f16fd0f7',
-  'native/contracts/src/capability.rs': '2391e4f29a01f61f5ff0242fa735fa69e1351dadf28b528b0b2130a1be1799ba',
-  'native/contracts/src/chain.rs': 'b14ca7acacb9f72e014eebaca13030b865495ab0038b1455a8f8121be6f92106',
+  'native/contracts/Cargo.toml': '9bda2e7d8b80ba215bff5d0157bc7210fb0fbd891d1d16e0404f204c1c922c14',
+  'native/contracts/README.md': '91fdddf0168658ed2edf433e5c9ef7220c643dc062328719121f3a7d27495f38',
+  'native/contracts/src/account.rs': 'c9e128bbfecf910d574c2a8a8467214e580452a900ebc321b5c89463b09297f3',
+  'native/contracts/src/capability.rs': '6de3134866cf48c514caaddcdf5faca5b926cd2971c7039d77d07d04e20f6eae',
+  'native/contracts/src/chain.rs': 'a3fc4698b67b5db3731f93b67d2abcfd11880193686c04661ddef4be1055556b',
   'native/contracts/src/chain_signer.rs': 'c20cf42f83f5be8607894934074d7608467d2f9a0d020e4a13b90bc31be12b16',
   'native/contracts/src/error.rs': '14d17404dd5b30916b358b846c63ae4f8cf306281adc0f1babfc8a40f3a4bbc3',
-  'native/contracts/src/lib.rs': 'd05d0a47fe12ea8909e0242c63350e0ee9b2d6a67ad01b5de486ed28fd44ffae',
-  'native/contracts/src/secret_vault.rs': 'cd178bc8c4e4be14ef593f751c3d21fa307bf6da3f5823d680e6e228c791a3a4',
+  'native/contracts/src/lib.rs': '5d2d4053dc939d1be67edce3bd648309c23ab8ba27654bebef44462757003f09',
+  'native/contracts/src/secret_vault.rs': 'd79cc63b96f917c09eb40164df7aa24e65a83f6c780cd34118aded0da9d01c27',
   'native/contracts/src/store/chain_database.rs': '31a2e46f046fc8259de01fd776050625b0cfbfb4d8f516cc8695a7d5d1ce9c13',
-  'native/contracts/src/store/encrypted_secret_blob.rs': 'a6225c9b257aac99e6281807c686b13fda1c26540764e3cb2576a168159093af',
-  'native/contracts/src/store/mod.rs': '33c4a4e30b79abce7578a8d7c0c7d1e87bb3b0790f3f6f43f202c889b0025150',
+  'native/contracts/src/store/encrypted_secret_blob.rs': '619588b892cfb736ceea543ea75d694257430460efc8548c6813223f4d05b2d2',
+  'native/contracts/src/store/mod.rs': 'e90fd25990d365187ae728ed2c73f1a992d5342fb6ef5929e887c04265b5a190',
   'native/contracts/src/store/runtime_cache.rs': '152597dcc7b8f7bab6add541d1b9e638898c537e0b022d1e33f3f0b8b28675ac',
-  'native/contracts/src/store/transaction_history.rs': '4a072276f6cc5bcbfc409a0d1e6e9a5593090e02103ad4c795eabfbb96a81411',
+  'native/contracts/src/store/transaction_history.rs': 'e9426fe6075c92a8efddee7dcc7d0894284a8e3c4288b12c6830eb5d9d7ce05c',
   'native/contracts/src/store/wallet_profile.rs': '9f22dc1da0f370ed70f9a5cb2e165319b8519789a7b494747929f96eb683b481',
   'native/contracts/src/transaction.rs': 'f028a9e00bc160cbdb3ba88f752be0b95f35df9db00b3fc96718d3463096b723',
-  'native/contracts/src/wallet.rs': '125dd3acd7d8ca4517a12c07e64c0ef25ccfd491de8011a2071688450378886d',
-  'native/contracts/tests/capability_contract.rs': '2414480f0ffe218646a57aa531ba124ed69f23e61a61fddc556b56f24ff1828e',
-  'native/contracts/tests/chain_contract.rs': '23a3fd9ef41dd8306d899577930f5f420f456ee1aef90e9292a202751fecc72f',
-  'native/contracts/tests/secret_contract.rs': '2c380ae3fe6f156ce1636b340c2430e78a561bb515344f9ffe49a4cb8cdc9ae9',
-  'native/contracts/tests/state_store_contract.rs': 'd7c797ac38b9593efc87960fa3b39734a32576182f73224bf387a2269a74339f',
-  'native/engine/Cargo.toml': '4879f147b03caaac07909664600c404e01b001eb9dad0c7ee4ad09099e5c071b',
-  'native/engine/README.md': '4c625461a4f5669cb98629278801452e8aad3dffd0ad4c37071d6b431bdc986c',
-  'native/engine/src/capabilities.rs': '5380981e667023a80be925ea4c8ee7642d572a563ef1cfc3fe6c1b075fb163cc',
-  'native/engine/src/engine.rs': '8503fa19f7851f110944664d9fdcbf8b7c744c50b88072977b50587494aa3cb4',
-  'native/engine/src/error.rs': '327d39023394cb311eb9b68bf74bc0a99fe64d1355f30b736f65c5be1dfb008d',
-  'native/engine/src/lib.rs': '2dad656f405a206df87750d3c8c2112525d9801932b83f2ac6b2c54a2000a0f0',
-  'native/engine/src/runtime_context.rs': '6d37193e9fba59ade6b80aaea00b903ee223cda92957930c90e8d01f604a5f92',
-  'native/engine/src/state_import.rs': 'd750dd59afaacb4ec27f684329d95d301aa4b807ef506788664f043df84836ad',
-  'native/engine/src/system_events.rs': '75eb8e1cb3f689e9067548d3cb40586e838c8295503361f8bef248e30267bf24',
-  'native/engine/src/transaction_outcome.rs': '19efcf69c62c79c329070636a69383417d064bc1ad5a312efd27543d29b86a5a',
-  'native/engine/tests/capabilities.rs': '3e20c52cc831f77495b2a8c9e9abfe61c31876171bb9f0f30d77dfb178cdb082',
-  'native/engine/tests/engine_boundary.rs': '62374d2f169c90d170d270d35dcbcb400ee8c370fdd7b5e880a6568b52ba6154',
-  'native/engine/tests/runtime_context.rs': 'e6545a2edc7d1f9e7f302e13e23e77071d6723c1844788c2d74248a01b7a68a4',
-  'native/engine/tests/state_import.rs': 'fd9dab3af101c4e5e52bfc4d75ee8bb6b3c23d6f503a1ba3f21046eb0851fdb4',
-  'native/engine/tests/transaction_outcome.rs': '8f17a04c90c49962d5620db23c56c93baaba8bb409bc76569b72499aea2d9996',
+  'native/contracts/src/transaction_build.rs': 'e32422a4bcd9c9c5c6a185a4ff78da1846710eb646e54183b7729f9f94127889',
+  'native/contracts/src/wallet.rs': 'bb1e39788ee3198732f0bc683b1fbe90485ed83cde14c2b89c7f46619731f88a',
+  'native/contracts/tests/account_contract.rs': '2f2af9930ccaba2cf73a21c1ea3593295a6e7d8633a95db05fbcb642e7c74992',
+  'native/contracts/tests/capability_contract.rs': '7a94545fbf1572e127d12a4d4a9ce1478fa3dcc22fb7aa688fde747135a89f7f',
+  'native/contracts/tests/chain_contract.rs': '69e216bee1d74258348f84e6b8086b474a44d6b68470bd0cef22cbfa4ed75100',
+  'native/contracts/tests/secret_contract.rs': 'e5585e0a2b584f3955a2516f6dff11615ca1fe299764a41289d0313d71ff1554',
+  'native/contracts/tests/state_store_contract.rs': '71c582e47b278a5930ec8565c643a33c4c70f37f00bd76f8badf4dc86cd9b0cc',
+  'native/contracts/tests/transaction_build_contract.rs': 'e3652344c31dbb01e6b3273b240296929bdaf2ed1aa2c2f1c7727a723ef649f0',
+  'native/engine/Cargo.toml': '6df564b67cef7597161d8f832a5405333ed40b8b80efe75acc702c1df77120ce',
+  'native/engine/README.md': 'ef14f7ed134b3d5fd2fa13fff42dcc5c741cd2735b4ec4a8645542773f0242fd',
+  'native/engine/src/account_state.rs': '4c933ad2fd5877e62078c3830971d8d28ff00776f30a7efa3a153d76476bfd0a',
+  'native/engine/src/capabilities.rs': 'eb5f10ff24a2a2b9cbdc8781509f312e65f998d78a66d025e7d47de7602bef77',
+  'native/engine/src/engine.rs': '6b50f7f62447c77686147f7bfd341ba56ca6d27fb9dc22b8612da9cba2d08d2a',
+  'native/engine/src/error.rs': '5c8ca237baf1bccbe16ae575d93a3806d59093f1816fc7b4eea4ff0a22988064',
+  'native/engine/src/finalized_events.rs': 'ca9c271317338d6173bb97b84e3a662148c4cf116e6f0f3ab93e2ec1c943fdd0',
+  'native/engine/src/finalized_events_tests.rs': 'a1bfa1b974e36a03cd6124b5f6f7f8fd611735eef17734872e3908a792b070b7',
+  'native/engine/src/finalized_history_runtime.rs': 'dcad4516037c139eda7b89107c80ce5976a1dc8740300afb4de107f5adc279a9',
+  'native/engine/src/finalized_history_runtime_tests.rs': 'dd907c135ff8d3645fab2f354c321f37a61df607c96842322474851b9fce3b57',
+  'native/engine/src/lib.rs': '1f768a8b3bedebeb9398280350aa8d2176d60b80f458b0cb4e55b83bb73a0ed5',
+  'native/engine/src/runtime_context.rs': '947335419cb7d814a41900c7ff6b8d6be55183a178b196a3cfe574757148b0d3',
+  'native/engine/src/state_import.rs': '1308efbbc2626bfd5f9cc936a8e3c6e4984dbc6e2e2dda9dc0917b24d98eaa01',
+  'native/engine/src/system_events.rs': 'c9d0837979617ee46a5aab5645fd33099cb306623218654e0ca2c8acb64c28ee',
+  'native/engine/src/transaction_builder.rs': '671fff14a7b6070e245fa459c111ae19dc12e644f8b8d4059d1b6eafd1114cbf',
+  'native/engine/src/transaction_builder_tests.rs': '64fb03ac64e86d07ce1bc0b0cd2429eb3150d6f561f3a58877d85e4df1680c6e',
+  'native/engine/src/transaction_history.rs': 'ca206d547b68d9be280e6b7941b2a8f5d05a33e308ac5df8df44a05d9986bade',
+  'native/engine/src/transaction_history_tests.rs': '1ffe7303ad77af6222d443bb38ffb44e97418f462290d4123c9c442c06005d65',
+  'native/engine/src/transaction_outcome.rs': 'a8efac7d37f2d119ad435e3d162dcb82dd0991367ccdd40ce4aed6b73152c1ed',
+  'native/engine/src/wallet_derivation.rs': 'd54cf20571aeed9433062393311df0656d2e6357a4e8e01587efa4531f581c07',
+  'native/engine/src/wallet_derivation_tests.rs': '6f81cc64f0f3c82d3510ea316aa04705ae40c27d53237f25293480fcfa504e5f',
+  'native/engine/src/wallet_service.rs': '5fe503bdae8299da0f2b208965197567389e89dc6f9c7ec7890b3d5f9fd50f2d',
+  'native/engine/src/wallet_service_tests.rs': 'f480b8a776be7d0d5c5e46b74e21e476e5b9d5590a316f4c626dc206e46fa5a0',
+  'native/engine/src/wallet_transfer_watch.rs': 'dfc32284e3d99002603de398c813ed37149b9a24991da57fc73b1ad0f6c5e12c',
+  'native/engine/src/wallet_transfer_watch_tests.rs': 'ab6e5595dacc4fb5fcecf599195c75d1c85bbe6e1b58521a30b59805ab9d9b1c',
+  'native/engine/tests/account_state.rs': '3271646a267cfb325ae4a4ccd2142975c00325383d81380d62e424822230208a',
+  'native/engine/tests/capabilities.rs': '8878d8cbbbdca8fa6ef4f5eefdb4f808bd21260d0ea7dcae31f593538ba37046',
+  'native/engine/tests/chain_access.rs': 'af994070a14732dafaa9aa53804ee6383522854a8619d6dd0112993689f01fba',
+  'native/engine/tests/engine_boundary.rs': '6c8493c39561fb5784c17814a7a999a062f9627e24d2eadf9e7cc08aeea32050',
+  'native/engine/tests/runtime_context.rs': 'e5eb9f999668b6664d29ba61a0c8b2fd8b2e9fe37f7830bb4f4b7732b9c4fe43',
+  'native/engine/tests/state_import.rs': '6937752568de3531a32b8ad35b1fd7270abad120c4b5aac423ae7df970d3f917',
+  'native/engine/tests/transaction_outcome.rs': '24422882e1cb4f929fef69263de854f053cb45343fc5c5b4224d2e8a4e7a2946',
+  'native/ffi/Cargo.toml': '5b4497bd4b992cc8c2cab4d273ad2e32a12240928db43d030aeff5f79e65a38c',
+  'native/ffi/README.md': '56d0a54b02f7ddaef3444d61ed538bd3fe17b46cf126987881eeddd6c5a65804',
+  'native/ffi/src/abi.rs': '5554ffa80f39d84e5f3e8fe46ea5d385eb41e0fe21a45f7d4510a5b2524d3a82',
+  'native/ffi/src/assets.rs': '38ec1fc759746e68967ced815b7fcd4d1312be8ccc8da80cc4f8c60b4278ac67',
+  'native/ffi/src/capabilities.rs': '491634510b9e76374d6101f408e57b2ee1c576569dc2f69e5a70e5952e2b5506',
+  'native/ffi/src/composition.rs': 'd9ad0e306e9d555a2514def9d0d48353cd43a7ab3c5f9257db8e1812c5007ddb',
+  'native/ffi/src/composition_tests.rs': 'ddec359df53dc28bf778ac4b035bb8b2431a131e42f2c85bbefbbcbfebe2b82e',
+  'native/ffi/src/error.rs': '5599d3082a3250093b2193ce08327866f2c9e08a75309c006a43737d8bc3d875',
+  'native/ffi/src/events.rs': 'c06490cb0f334261f19e3f8f6d41544332b6555c05cafe1572cb5745d4f0f7da',
+  'native/ffi/src/handles.rs': '9e248ecb6fb9506b85d098172b731c22787f9860ccb53926ebc793da1fffd0c9',
+  'native/ffi/src/host_codec.rs': '2844085303370ffc6bf25599debee01fb9738eb01c6d0cf601d40b4f83d7fbbd',
+  'native/ffi/src/host_codec_tests.rs': 'b8490a7f85d446f50c4b3330c93debfaaa39e73c6570d47e0e8dd386df2c9422',
+  'native/ffi/src/host_providers.rs': 'b1a7d456e475d014aec8a2399ce117bf83552ed84a6f11811207a67860b3f2d1',
+  'native/ffi/src/lib.rs': '5e56243f734fe722df60beb72332b0d9845ce924158fd691f2207293fd0ef914',
+  'native/ffi/src/ownership.rs': '107c8420dd1979e101fd18b7b5e7671e6368310529c612963acf4c2ff55c4eb8',
+  'native/ffi/src/requests.rs': '3b9f1aa5f8cfc2727e563a80b9f5198b095420c8bd944ff5931cd2193ad7ece4',
+  'native/ffi/src/runtime.rs': '505e3a0226e3ca66da82977fe728fef2d96574291c4aa8354e63e0be999f6d29',
+  'native/ffi/src/wallet_abi.rs': '04250c979567342e14ec25af5364aba3d3daa488acc2d1cc62c278a4b2686217',
+  'native/ffi/src/wallet_abi_tests.rs': '411b86c63277473e7ed8c39466713287577a89320898c79a4697350b6850c5a4',
+  'native/ffi/tests/abi_layout.rs': '5ccba7c43fdfe78c317d3ffd23de627df4af1cad13e895aae11bf7a75527113f',
+  'native/ffi/tests/asset_boundary.rs': 'a0a56cba330088ce01e807ac37191195b8d90013aba895ac2c7acf98b9a6ecfe',
+  'native/ffi/tests/c_header_c11.c': '26f90252182189932277d77236d8ef50a44410b60c8fa17e30b4169f542edf73',
+  'native/ffi/tests/c_header_cpp17.cc': 'bc9e01786ef55af8ac47396960028483205207c711fb380195506065e52e9eb5',
+  'native/ffi/tests/capability_contract.rs': 'd0ba2b94dab377dfbead8f2c341cf1a42697189f461572ed5ce5986c5d8dca38',
+  'native/ffi/tests/error_contract.rs': 'ae585490b05768b64401b1e6774789ba1beb1eede552e4d3e70a99cd1d395d91',
+  'native/ffi/tests/event_contract.rs': 'e39b153cbebf7510d8f72af6692cf99ac8aec43f254bcc305dc5c741b063fd11',
+  'native/ffi/tests/handle_contract.rs': '9823bfe3ddf579c021bac6c33bea7a43e9dc828ad946f0ee1a10baed654e494a',
+  'native/ffi/tests/host_provider_contract.rs': 'a1aabe53e73e31e5eefe0669c1eceb3f4f0b09f5c9d65bb2661a9c142793e209',
+  'native/ffi/tests/ownership_contract.rs': 'b75c13b228598177b1f8fabaa9a2cf5b1e62d8674a5dff662fed06616308ba0e',
+  'native/ffi/tests/request_contract.rs': '816038c6de732cac1b85bdd15c72bfaac7b0eec2ace307937ce410f280204e42',
+  'native/ffi/tests/symbol_contract.rs': 'f307bb95a762e0dcc618f5c92aaa5db567bc71af3ca5ba551c0734e11f5c9559',
+  'native/ffi/tests/wallet_abi_contract.rs': '845070da4704549b9bd48c460de978da6dfb0c2fb93a372d7f9fcf3afd639449',
 });
-// native 根只能拥有这五个直接条目，防止出现第二个未审查的 Rust 产品边界。
+// native 根只能拥有这些已审核直接条目，防止出现第二个未审查的 Rust 产品边界。
 const NATIVE_ROOT_ENTRIES = Object.freeze({
   'README.md': 'file',
   contracts: 'directory',
   engine: 'directory',
+  ffi: 'directory',
   signer: 'directory',
   smoldot: 'directory',
 });
 // Core Rust 的 workspace 入口、解析闭包、边界说明和法律声明必须与源码闭集
-// 同步审核。THIRD_PARTY_NOTICES.md 的最终哈希在并发文档更新结束后统一收口。
+// 同步审核；每个边界文件都固定最终审核字节，任何后续漂移均失败关闭。
 const CORE_RUST_BOUNDARY_FILES = Object.freeze({
-  'Cargo.toml': '61a0a0a9d094eb9598352ad61ba9083b3ca92ebae16798d491ac9cc91ff0ecc0',
-  'Cargo.lock': '9fd44520029d5fd6dfd195468e092fda9c27a0a0cb3946721178aef412a8e4a2',
-  'native/README.md': '47fe400b80e964eea5a78f72474c79a7e5566ba82be1eda8f69bd90068ec2730',
-  'THIRD_PARTY_NOTICES.md': 'd7d171c75036b1a74af5df435c3369db60f79d2411446177499c00ef81b099ce',
+  'Cargo.toml': 'c2001e230187da0e5ca7df7227696d60e4c99d0f44622e389ba8dac8ee949b24',
+  'Cargo.lock': '338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32',
+  'docs/C_ABI.md': 'b15a962396437eca5025ee0a36f34503132fb171be5ec9618122c65a9866015e',
+  'native/README.md': '43f8c07453b72446bcc910b75974a5e9e7c3a0e3ddf8b1280bdad29466eb964e',
+  'THIRD_PARTY_NOTICES.md': 'fdf170677cdb59c12f43ea56741b4c6f678d8c0bf003f171f2eda2d14dfe5b5b',
 });
 // 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
 // byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
 // SDK 边界。清单自身再由此哈希固定，CI/Release 不回指 CitizenApp。
 const SMOLDOT_RUST_SOURCE_MANIFEST = Object.freeze({
   path: 'native/smoldot/SOURCE_SHA256.json',
-  sha256: 'a2cd085e6b0db65a72c11258f257a5c7fa0bbf6e494fe68a91007537ec4326f2',
+  sha256: '15632ce2d0bcfbb26b58e5bcd1f18c6877f84e039c5e038061f6147ed664525c',
 });
 // 这些文件位于各来源单元之外，但仍属于 Release 的正式输入：许可证、来源说明、
-// 公共 ABI 头文件以及由 light-base 示例通过 include_str! 编译引用的链规范。
-// 它们与来源清单、213 个 Rust 单元文件共同组成 native/smoldot 的 223 文件完整闭集；
+// smoldot 原始 ABI 头文件以及由 light-base 示例通过 include_str! 编译引用的链规范。
+// 它们与来源清单中的全部来源单元共同组成 native/smoldot 的动态完整闭集；
 // Dart 绑定已迁出本原生目录并由 SMOLDOT_DART_FILES 独立固定。
 const SMOLDOT_SUPPORT_FILES = Object.freeze({
   'native/smoldot/LICENSE': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
   'native/smoldot/LICENSE-APACHE-2.0': '4524e4d70a6295dfa882b0411cc49fcca03273e959fea68bbfe7df7ed63e7d78',
-  'native/smoldot/README.md': '5eb02391d53347f28cad43229fde751c5f54bb905ba63a61318dbeb9211ed0e1',
-  'native/smoldot/UPSTREAM.md': '9826a09529ebf2eabb253d05bcccbf8b2107e9c39950ee0aa200b06b5e4feb94',
-  'native/smoldot/include/README.md': '2ae510563d3b87a852bc990d462ad940d92578b05fbe9809a9c82d63c16503bc',
-  'native/smoldot/include/citizensdk.h': '18c476d67cd00822b1a14fe4317330d56195712a7f8e33f39a487d84ad1a0819',
+  'native/smoldot/README.md': 'e8a9abc704ee2fbaa949312727bc251690d8d11666b0401464be2863c493242b',
+  'native/smoldot/UPSTREAM.md': 'e0953f44b2382f50882acbd3d775ec1fe80b60e8a40b3d74e216e638a9a9b16b',
+  'native/smoldot/include/README.md': '06c704f1d46c36bddde762b5973e2ceaf38d63ec3d963948381b3b6070754ec3',
   'native/smoldot/include/smoldot.h': 'f7c2645588809f73f8aa799975b363a4a7b22e8de7149da9d0b4c2ea20c90a20',
   'native/smoldot/pow/demo-chain-specs/polkadot.json': '859c8ade8b740e6a106082e0fdb4ae14075d79f8a277f02124bf9856d8a302aa',
   'native/smoldot/pow/demo-chain-specs/polkadot_asset_hub.json': '4909f824189edd0c7c64e444f81a4082fe5bc433861a5ac9e8b00838203a35ab',
 });
 // signer 是可编译的 Rust crate，正式输入不能只固定 Cargo.toml 与 lib.rs；README
-// 和两份合同测试也必须进入同一 6 文件闭集，任何 build.rs、src/bin 或其他新增文件
+// sr25519 单一实现、ChainSigner 适配和四份合同测试共同进入同一 10 文件闭集；
+// 任何 build.rs、src/bin 或其他新增文件
 // 都会改变 Cargo 行为，因此一律失败关闭。
 const SIGNER_FILES = Object.freeze({
-  'native/signer/Cargo.toml': '4b063da8dbf821d14798be37b41366be35418f5c14ed2b451420be80d424d3d8',
-  'native/signer/README.md': 'c4b6de1df02a82b42e30f520b58266e296d49135fa0abc82804e5f195c2dca26',
-  'native/signer/src/README.md': '9e3d90810c32ef0ea73dda76fa4c75745849066cbd45261c841a401f85e373e3',
-  'native/signer/src/lib.rs': '4fcdcda78e3050ab2daff782881b2c223ddabf61dc00113f4f83f799b5436f9d',
-  'native/signer/tests/ffi_contract.rs': 'a12689cd59350505c742612a7c29ea5afd5fe9bf9bfcc9f6e415b42a92cdb787',
-  'native/signer/tests/substrate_vectors.rs': '29926f71fe95b44ce2619d7324aed7836995dd0b4c14e362e85fb5a1eb94e23d',
+  'native/signer/Cargo.toml': 'fe18e5a7729c7f42060bdfa53aad214452ee4ca70bd5650cef6bd7a0dc5be8d0',
+  'native/signer/README.md': 'f1dca0079d2a556c88d768451a39caa2807fd8ef4f8d171b9b5c67df248c2a81',
+  'native/signer/src/README.md': '8ebeede79dc755afa1427bdd19f033fe0ae253cd71393baac15cbf20142a2a43',
+  'native/signer/src/chain_signer.rs': '3461762743fb5723575b892171465ef31801b781262e1f3963ae5cbe12958a36',
+  'native/signer/src/lib.rs': 'd1d2a35a70a8fbd7453e02f441a875f5c482cb22a98ccb27695594f7b006a869',
+  'native/signer/src/sr25519.rs': 'c1159ff1a357b6c08b59d8a22d14a6b4a6cee313166ad0a435487192754f8ab4',
+  'native/signer/tests/chain_signer_contract.rs': 'd4e53512dffab3f75ee213a08b71909dbc6c667b4b287df39cd9ac3e62824b31',
+  'native/signer/tests/ffi_contract.rs': 'bf38f650394011e7f68219ee8ba435453f616281f91649634c536b8620407038',
+  'native/signer/tests/legacy_parity.rs': '984a1521042d8a5b2285a43459383ef3972058db20e8f05154c1f75a2a11d70f',
+  'native/signer/tests/substrate_vectors.rs': 'f5587dbce91f9c2014c559bece142e56fe65c81c7cf097df66b6c8125d45eef9',
 });
 
 function fail(message) {
@@ -296,6 +798,16 @@ function fail(message) {
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function lstatExists(path) {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if (error?.code === 'ENOENT') return false;
+    throw error;
+  }
 }
 
 function stableJson(value) {
@@ -379,7 +891,7 @@ function copySourceTree(source, output, relativePath) {
     return;
   }
   if (!info.isFile()) fail(`SDK 候选只允许普通文件和目录：${relativePath}`);
-  if (/\.(?:a|dylib|dll|exe|o|so)$/i.test(relativePath) || relativePath.endsWith('/exported_symbols.txt')) {
+  if (/\.(?:a|aar|dylib|dll|exe|o|so)$/i.test(relativePath) || relativePath.endsWith('/exported_symbols.txt')) {
     fail(`SDK 源码树包含原生编译产物：${relativePath}`);
   }
   const destination = join(output, ...relativePath.split('/'));
@@ -387,21 +899,101 @@ function copySourceTree(source, output, relativePath) {
   copyFileSync(sourcePath, destination);
 }
 
-function regularFiles(root) {
+function prefixedSymlinkContract(prefix, contract) {
+  return Object.freeze(Object.fromEntries(
+    Object.entries(contract).map(([path, target]) => [
+      prefix.length === 0 ? path : `${prefix}/${path}`,
+      target,
+    ]),
+  ));
+}
+
+function appleXcframeworkSymlinkContract(prefix = '') {
+  const framework = 'macOS/CitizenSDK.framework';
+  return prefixedSymlinkContract(
+    prefix.length === 0 ? framework : `${prefix}/${framework}`,
+    APPLE_MACOS_FRAMEWORK_SYMLINKS,
+  );
+}
+
+/**
+ * Enumerate a tree without following links and fail closed on every non-file
+ * entry. A caller may admit a complete, exact link contract; every declared
+ * link must exist, must keep its literal relative target, and must resolve
+ * inside the enumerated root. This is intentionally not a generic
+ * "allow symlinks" switch.
+ */
+function treeEntries(root, allowedSymlinks = Object.freeze({})) {
   const files = [];
+  const symlinks = [];
+  const seenSymlinks = new Set();
+  const treeRoot = resolve(root);
+  if (!existsSync(treeRoot) || lstatSync(treeRoot).isSymbolicLink()
+      || !lstatSync(treeRoot).isDirectory()) {
+    fail(`SDK 候选树根必须是普通目录：${treeRoot}`);
+  }
+  const realTreeRoot = realpathSync(treeRoot);
   const visit = (directory) => {
     for (const name of readdirSync(directory).sort()) {
       const path = join(directory, name);
       const info = lstatSync(path);
-      const relativePath = relative(root, path).split(sep).join('/');
-      if (info.isSymbolicLink()) fail(`SDK 候选禁止符号链接：${relativePath}`);
+      const relativePath = relative(treeRoot, path).split(sep).join('/');
+      if (info.isSymbolicLink()) {
+        const expectedTarget = allowedSymlinks[relativePath];
+        if (expectedTarget === undefined) {
+          fail(`SDK 候选禁止未声明符号链接：${relativePath}`);
+        }
+        const actualTarget = readlinkSync(path);
+        if (actualTarget !== expectedTarget
+            || actualTarget.startsWith('/')
+            || actualTarget.split('/').includes('..')) {
+          fail(`SDK 候选符号链接目标漂移：${relativePath}`);
+        }
+        let realTarget;
+        try {
+          realTarget = realpathSync(path);
+        } catch (error) {
+          if (error?.code === 'ENOENT' || error?.code === 'ELOOP') {
+            fail(`SDK 候选符号链接悬空或成环：${relativePath}`);
+          }
+          throw error;
+        }
+        if (realTarget !== realTreeRoot && !realTarget.startsWith(`${realTreeRoot}${sep}`)) {
+          fail(`SDK 候选符号链接越出受控根：${relativePath}`);
+        }
+        symlinks.push(relativePath);
+        seenSymlinks.add(relativePath);
+        continue;
+      }
       if (info.isDirectory()) visit(path);
       else if (info.isFile()) files.push(relativePath);
       else fail(`SDK 候选只允许普通文件和目录：${relativePath}`);
     }
   };
-  visit(root);
-  return files.sort();
+  visit(treeRoot);
+  const expectedSymlinks = Object.keys(allowedSymlinks).sort();
+  const actualSymlinks = [...seenSymlinks].sort();
+  if (JSON.stringify(actualSymlinks) !== JSON.stringify(expectedSymlinks)) {
+    const actual = new Set(actualSymlinks);
+    const missing = expectedSymlinks.filter((path) => !actual.has(path));
+    fail(`SDK 候选缺少已声明符号链接：${missing.join(',') || '无'}`);
+  }
+  return { files: files.sort(), symlinks: actualSymlinks };
+}
+
+function regularFiles(root) {
+  return treeEntries(root).files;
+}
+
+function releaseCandidateEntries(root) {
+  const candidate = resolve(root);
+  const xcframework = join(candidate, ...APPLE_XCFRAMEWORK_PATH.split('/'));
+  const symlinks = existsSync(xcframework)
+    && !lstatSync(xcframework).isSymbolicLink()
+    && lstatSync(xcframework).isDirectory()
+    ? appleXcframeworkSymlinkContract(APPLE_XCFRAMEWORK_PATH)
+    : Object.freeze({});
+  return treeEntries(candidate, symlinks);
 }
 
 /**
@@ -459,16 +1051,222 @@ export function assertSdkRootLocks(root) {
   assertPinnedFiles(root, SDK_ROOT_LOCK_FILES, 'SDK 根锁');
 }
 
+function cargoLockString(block, field, label, required = true) {
+  const pattern = new RegExp(`^${field} = ("(?:[^"\\\\]|\\\\.)*")$`, 'gm');
+  const matches = [...block.matchAll(pattern)];
+  if (matches.length === 0 && !required) return null;
+  if (matches.length !== 1) fail(`${label} 的 ${field} 字段必须精确出现一次`);
+  try {
+    return JSON.parse(matches[0][1]);
+  } catch {
+    fail(`${label} 的 ${field} 不是有效字符串`);
+  }
+}
+
+function parseCargoLock(path, label) {
+  if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+    fail(`CitizenSDK 缺少普通${label}：${path}`);
+  }
+  const source = readFileSync(path, 'utf8');
+  if (!/^version = 4$/m.test(source)) fail(`CitizenSDK ${label}必须是 Cargo.lock v4`);
+  const blocks = source.split(/^\[\[package\]\]\s*$/m).slice(1);
+  if (blocks.length === 0) fail(`CitizenSDK ${label}没有 package 条目`);
+  return blocks.map((block, index) => {
+    const entryLabel = `${label} package[${index}]`;
+    const name = cargoLockString(block, 'name', entryLabel);
+    const version = cargoLockString(block, 'version', entryLabel);
+    const registrySource = cargoLockString(block, 'source', entryLabel, false);
+    const checksum = cargoLockString(block, 'checksum', entryLabel, false);
+    const dependenciesMatch = block.match(/^dependencies = \[\n([\s\S]*?)^\]$/m);
+    const dependencies = [];
+    if (dependenciesMatch) {
+      for (const line of dependenciesMatch[1].split('\n')) {
+        if (line.trim().length === 0) continue;
+        const match = line.match(/^ ("(?:[^"\\]|\\.)*"),$/);
+        if (!match) fail(`${entryLabel} 含无法解析的 dependency 行`);
+        try {
+          dependencies.push(JSON.parse(match[1]));
+        } catch {
+          fail(`${entryLabel} 含无效 dependency 字符串`);
+        }
+      }
+    }
+    if (registrySource !== null) {
+      if (registrySource !== 'registry+https://github.com/rust-lang/crates.io-index'
+          || !/^[0-9a-f]{64}$/.test(checksum ?? '')) {
+        fail(`${entryLabel} 不是带固定 checksum 的官方 registry 包`);
+      }
+    } else if (checksum !== null) {
+      fail(`${entryLabel} 的 path 包禁止携带孤立 checksum`);
+    }
+    return { name, version, source: registrySource, checksum, dependencies };
+  });
+}
+
+function resolveCargoDependency(packages, dependency, ownerLabel) {
+  const match = dependency.match(/^([^ ]+)(?: ([^ ]+))?(?: \(([^)]+)\))?$/);
+  if (!match) fail(`${ownerLabel} 含无法解析的依赖引用：${dependency}`);
+  const [, name, version, source] = match;
+  const candidates = packages.filter((entry) => entry.name === name
+    && (version === undefined || entry.version === version)
+    && (source === undefined || entry.source === source));
+  if (candidates.length !== 1) {
+    fail(`${ownerLabel} 的依赖引用不唯一或缺失：${dependency}`);
+  }
+  return candidates[0];
+}
+
+function cargoPackageIdentity(entry) {
+  return `${entry.name}\u0000${entry.version}\u0000${entry.source ?? 'path'}`;
+}
+
+function cargoRegistryEdgeIdentity(entry) {
+  if (entry.source === null) return null;
+  return `${entry.name} ${entry.version}`;
+}
+
+function collectCargoClosure(packages, rootEntry, label) {
+  const closure = new Map();
+  const pending = [rootEntry];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    const identity = cargoPackageIdentity(current);
+    if (closure.has(identity)) continue;
+    closure.set(identity, current);
+    for (const dependency of current.dependencies) {
+      pending.push(resolveCargoDependency(
+        packages,
+        dependency,
+        `${label} ${current.name} ${current.version}`,
+      ));
+    }
+  }
+  return closure;
+}
+
+/**
+ * Prove offline that every registry package recursively reachable through the
+ * product provider's bundled `smoldot-light` edge has the exact
+ * name/version/checksum already fixed by the bundled PoW smoldot lock. The only
+ * permitted root-only item is an exact, checksum-pinned Cargo feature-union
+ * dependency that is also a direct dependency of its declared local workspace
+ * owner. Provider-only dependencies remain pinned by the root-lock byte hash;
+ * they are not falsely claimed to originate in the upstream PoW lock. No Cargo
+ * invocation or network fallback is allowed here.
+ */
+export function assertProviderLockParity(root) {
+  const sourceRoot = resolve(root);
+  const rootPackages = parseCargoLock(join(sourceRoot, 'Cargo.lock'), '根 Cargo.lock');
+  const powPackages = parseCargoLock(
+    join(sourceRoot, 'native', 'smoldot', 'pow', 'Cargo.lock'),
+    'smoldot PoW Cargo.lock',
+  );
+  const providers = rootPackages.filter((entry) => entry.name === 'citizen-sdk-smoldot-provider');
+  if (providers.length !== 1 || providers[0].source !== null) {
+    fail('CitizenSDK 根锁必须精确包含一个本地 smoldot provider');
+  }
+
+  const smoldotDependencies = providers[0].dependencies
+    .map((dependency) => resolveCargoDependency(
+      rootPackages,
+      dependency,
+      '根 Cargo.lock citizen-sdk-smoldot-provider',
+    ))
+    .filter((entry) => entry.name === 'smoldot-light' && entry.source === null);
+  if (smoldotDependencies.length !== 1) {
+    fail('CitizenSDK provider 必须唯一依赖随包 smoldot-light');
+  }
+
+  const rootClosure = collectCargoClosure(
+    rootPackages,
+    smoldotDependencies[0],
+    '根 Cargo.lock',
+  );
+  const registryClosure = new Map(
+    [...rootClosure].filter(([, entry]) => entry.source !== null),
+  );
+  if (registryClosure.size === 0) {
+    fail('CitizenSDK provider 的随包 smoldot-light 锁闭包没有 registry 依赖');
+  }
+
+  const powSmoldotDependencies = powPackages.filter(
+    (entry) => entry.name === 'smoldot-light' && entry.source === null,
+  );
+  if (powSmoldotDependencies.length !== 1) {
+    fail('smoldot PoW 锁必须精确包含一个本地 smoldot-light');
+  }
+  const powClosure = collectCargoClosure(
+    powPackages,
+    powSmoldotDependencies[0],
+    'smoldot PoW Cargo.lock',
+  );
+
+  for (const [identity, entry] of registryClosure) {
+    const matchedEntry = powClosure.get(identity);
+    if (matchedEntry?.checksum === entry.checksum) continue;
+
+    const exception = PROVIDER_LOCK_FEATURE_UNION_EXCEPTIONS[`${entry.name} ${entry.version}`];
+    const owners = rootPackages.filter((candidate) => candidate.name === exception?.owner
+      && candidate.source === null);
+    const ownerHasExactDependency = owners.length === 1 && owners[0].dependencies.some(
+      (dependency) => resolveCargoDependency(
+        rootPackages,
+        dependency,
+        `根 Cargo.lock ${owners[0].name} ${owners[0].version}`,
+      ) === entry,
+    );
+    if (!exception
+        || entry.checksum !== exception.checksum
+        || !ownerHasExactDependency) {
+      fail(`CitizenSDK provider registry 锁闭包漂移：${entry.name} ${entry.version}`);
+    }
+  }
+
+  for (const [identity, entry] of registryClosure) {
+    const matchedEntry = powClosure.get(identity);
+    if (matchedEntry === undefined) continue;
+
+    const rootEdges = entry.dependencies.map((dependency) => cargoRegistryEdgeIdentity(
+      resolveCargoDependency(
+        rootPackages,
+        dependency,
+        `根 Cargo.lock ${entry.name} ${entry.version}`,
+      ),
+    )).filter((edge) => edge !== null).sort();
+    const powEdges = matchedEntry.dependencies.map((dependency) => cargoRegistryEdgeIdentity(
+      resolveCargoDependency(
+        powPackages,
+        dependency,
+        `smoldot PoW Cargo.lock ${matchedEntry.name} ${matchedEntry.version}`,
+      ),
+    )).filter((edge) => edge !== null).sort();
+    const rootEdgeSet = new Set(rootEdges);
+    const powEdgeSet = new Set(powEdges);
+    const missing = powEdges.filter((edge) => !rootEdgeSet.has(edge));
+    const extra = rootEdges.filter((edge) => !powEdgeSet.has(edge));
+    const owner = `${entry.name} ${entry.version}`;
+    const allowedExtra = [...(PROVIDER_LOCK_FEATURE_UNION_EDGE_EXCEPTIONS[owner] ?? [])]
+      .sort();
+    if (missing.length > 0 || JSON.stringify(extra) !== JSON.stringify(allowedExtra)) {
+      fail(`CitizenSDK provider registry 依赖边漂移：${owner}`);
+    }
+  }
+  return registryClosure.size;
+}
+
 /**
  * Verify the complete CitizenSDK-owned Rust core and its workspace boundary.
  *
  * This contract deliberately does not share smoldot's imported-source manifest:
- * contracts/engine are maintained by CitizenSDK and therefore have their own
+ * contracts/engine/ffi are maintained by CitizenSDK and therefore have their own
  * reverse-enumerated closure. The native root is also closed so a new crate
  * cannot enter a release merely because ROOT_DIRECTORIES recursively copies it.
  */
 export function assertCoreRustSource(root) {
   const sourceRoot = resolve(root);
+  if (Object.keys(CORE_RUST_FILES).length !== CORE_RUST_FILE_COUNT) {
+    fail(`CitizenSDK Core Rust 固定清单必须精确为 ${CORE_RUST_FILE_COUNT} 文件`);
+  }
   const nativeRoot = join(sourceRoot, 'native');
   if (!existsSync(nativeRoot)
       || lstatSync(nativeRoot).isSymbolicLink()
@@ -532,6 +1330,99 @@ function assertPinnedFiles(root, files, label) {
   }
 }
 
+function stripCComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/[^\r\n]*/g, ' ');
+}
+
+/** Verify the root C/C++ header closure and its product-only safety boundary. */
+export function assertPublicAbiHeaders(root) {
+  const sourceRoot = resolve(root);
+  const includeRoot = join(sourceRoot, 'include');
+  if (!existsSync(includeRoot)
+      || lstatSync(includeRoot).isSymbolicLink()
+      || !lstatSync(includeRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通根 include 目录');
+  }
+  const actualPaths = readdirSync(includeRoot).map((path) => `include/${path}`).sort();
+  const expectedPaths = Object.keys(PUBLIC_ABI_FILES).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`CitizenSDK 根 include 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  for (const relativePath of expectedPaths) {
+    const path = join(sourceRoot, ...relativePath.split('/'));
+    if (lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK 根 include 条目必须是普通文件：${relativePath}`);
+    }
+  }
+
+  const headers = expectedPaths
+    .filter((path) => path.endsWith('.h'))
+    .map((path) => readFileSync(join(sourceRoot, ...path.split('/')), 'utf8'))
+    .join('\n');
+  const publicSource = stripCComments(headers);
+  const forbiddenSymbol = publicSource.match(
+    /\b(?:smoldot|citizen_sr25519|account_crypto)_[A-Za-z0-9_]*\b/,
+  );
+  if (forbiddenSymbol) {
+    fail(`CitizenSDK 公共 ABI 泄漏非产品符号：${forbiddenSymbol[0]}`);
+  }
+
+  const withoutDirectives = publicSource.replace(/^[ \t]*#.*$/gm, ' ');
+  const apparentFunctions = [
+    ...withoutDirectives.matchAll(
+      /^[ \t]*(?!typedef\b)((?:CITIZENSDK_API[ \t]+)?[A-Za-z_][A-Za-z0-9_]*(?:[ \t*]+[A-Za-z_][A-Za-z0-9_]*)*[ \t*\r\n]+([A-Za-z_][A-Za-z0-9_]*)\s*\([^;{}]*\)\s*;)/gm,
+    ),
+  ];
+  for (const prototype of apparentFunctions) {
+    if (!prototype[1].trimStart().startsWith('CITIZENSDK_API ')) {
+      fail(`CitizenSDK 公共 ABI 只允许带导出标记的 citizensdk_* 函数：${prototype[2]}`);
+    }
+  }
+
+  const declarations = [
+    ...publicSource.matchAll(/^[ \t]*CITIZENSDK_API\b([\s\S]*?);/gm),
+  ];
+  if (declarations.length === 0) fail('CitizenSDK 公共 ABI 没有导出函数');
+  for (const declaration of declarations) {
+    const normalized = declaration[1].replace(/\s+/g, ' ').trim();
+    const functionName = normalized.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\(/)?.[1];
+    if (!functionName || !/^citizensdk_[a-z0-9_]+$/.test(functionName)) {
+      fail(`CitizenSDK 公共 ABI 只允许 citizensdk_* 函数：${functionName ?? '<unparsed>'}`);
+    }
+    const hasMethodAndParams = /method/i.test(normalized) && /params/i.test(normalized);
+    if (/(?:^|_)rpc(?:_|$)/i.test(functionName) || hasMethodAndParams) {
+      fail(`CitizenSDK 公共 ABI 禁止任意 rpc(method, params)：${functionName}`);
+    }
+    const forbiddenPrivateMaterial = /(?:private_?key|mini_?secret|child_?secret|(?:^|_)seed(?:_|$))/i
+      .test(normalized);
+    const carriesGenericSecret = /(?:^|_)secret(?:_|\b)/i.test(normalized);
+    const carriesMnemonic = /mnemonic/i.test(normalized);
+    const mnemonicFunctions = new Set([
+      'citizensdk_import_wallet',
+      'citizensdk_add_wallet_accounts',
+      'citizensdk_prepared_wallet_copy_mnemonic',
+    ]);
+    if (forbiddenPrivateMaterial
+        || carriesGenericSecret
+        || (carriesMnemonic && !mnemonicFunctions.has(functionName))) {
+      fail(`CitizenSDK 公共 ABI 禁止助记词、私钥或秘密导出：${functionName}`);
+    }
+    if (functionName === 'citizensdk_prepared_wallet_copy_mnemonic'
+        && (!/\bcitizensdk_handle_t\s+handle\b/.test(normalized)
+          || !/\bcitizensdk_prepared_wallet_handle_t\s+prepared_wallet\b/.test(normalized)
+          || /\bout_[A-Za-z0-9_]*mnemonic[A-Za-z0-9_]*\b/i.test(normalized))) {
+      fail('CitizenSDK 助记词备份 ABI 必须绑定所属 instance/prepared handle，并只写调用方通用缓冲区');
+    }
+  }
+  assertPinnedFiles(sourceRoot, PUBLIC_ABI_FILES, '公共 ABI');
+}
+
 export function assertChainAssets(root) {
   const sourceRoot = resolve(root);
   const assetsRoot = join(sourceRoot, 'assets');
@@ -581,9 +1472,269 @@ export function assertLicenseSources(root) {
   assertPinnedFiles(root, LICENSE_SOURCE_FILES, '许可证原文');
 }
 
+function isDocumentationFile(relativePath) {
+  const name = relativePath.split('/').at(-1);
+  return /\.(?:adoc|md|rst|txt)$/i.test(name)
+    || /^(?:CHANGELOG|LICENSE|README|UPSTREAM)(?:[-.].*)?$/i.test(name);
+}
+
+function isAndroidTestPath(relativePath) {
+  return relativePath.startsWith('src/test/')
+    || relativePath.startsWith('native/src/test/')
+    || relativePath.startsWith('native/src/androidTest/');
+}
+
+function isInjectedAndroidArtifact(relativePath) {
+  return relativePath === 'citizensdk.aar'
+    || relativePath.startsWith('src/main/jniLibs/');
+}
+
+function isDarwinTestOrInjectedArtifact(relativePath) {
+  return relativePath.startsWith('Tests/')
+    || relativePath === 'CitizenSDK.xcframework'
+    || relativePath.startsWith('CitizenSDK.xcframework/');
+}
+
+// 源码检查默认不允许 Darwin 树出现任何链接。只有最终候选的调用点可以显式
+// 开启 Apple 产物投影；即使开启，也必须逐条匹配 macOS framework 的标准五
+// 链接，iOS、iOS-Simulator 和 Darwin 其余路径仍保持零链接。
+function darwinBindingFiles(darwinRoot, allowAppleReleaseProjection) {
+  const allowedSymlinks = allowAppleReleaseProjection
+    ? appleXcframeworkSymlinkContract('CitizenSDK.xcframework')
+    : Object.freeze({});
+  return treeEntries(darwinRoot, allowedSymlinks).files;
+}
+
+/** Verify every non-smoldot Dart, Android and Apple production input. */
+export function assertMobileBindingSource(
+  root,
+  { allowAppleReleaseProjection = false } = {},
+) {
+  const sourceRoot = resolve(root);
+  if (Object.keys(MOBILE_BINDING_SOURCE_FILES).length !== MOBILE_BINDING_SOURCE_FILE_COUNT) {
+    fail(`CitizenSDK 移动绑定固定清单必须精确为 ${MOBILE_BINDING_SOURCE_FILE_COUNT} 文件`);
+  }
+  const libRoot = join(sourceRoot, 'lib');
+  const androidRoot = join(sourceRoot, 'android');
+  const darwinRoot = join(sourceRoot, 'darwin');
+  for (const [path, label] of [
+    [libRoot, 'lib'],
+    [androidRoot, 'android'],
+    [darwinRoot, 'darwin'],
+  ]) {
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isDirectory()) {
+      fail(`CitizenSDK 缺少普通移动绑定来源目录：${label}`);
+    }
+  }
+  // Kotlin 编译器的 project persistent state 只能写入 TataConsole 中央
+  // work dir；即使 android/.kotlin 为空，也不能让它进入源码或候选闭包。
+  const kotlinSourceState = join(androidRoot, '.kotlin');
+  if (existsSync(kotlinSourceState) || lstatExists(kotlinSourceState)) {
+    fail('CitizenSDK 源码禁止存在 Android Kotlin 持久状态目录：android/.kotlin');
+  }
+  const actualPaths = [
+    ...regularFiles(libRoot)
+      .filter((path) => path.endsWith('.dart') && !path.startsWith('src/smoldot/'))
+      .map((path) => `lib/${path}`),
+    ...regularFiles(androidRoot)
+      .filter((path) => !isAndroidTestPath(path)
+        && !isInjectedAndroidArtifact(path)
+        && (!isDocumentationFile(path) || path.endsWith('/CMakeLists.txt')))
+      .map((path) => `android/${path}`),
+    ...darwinBindingFiles(darwinRoot, allowAppleReleaseProjection)
+      .filter((path) => !isDarwinTestOrInjectedArtifact(path)
+        && !isDocumentationFile(path))
+      .map((path) => `darwin/${path}`),
+  ].sort();
+  const expectedPaths = Object.keys(MOBILE_BINDING_SOURCE_FILES).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`CitizenSDK 移动绑定文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  assertPinnedFiles(sourceRoot, MOBILE_BINDING_SOURCE_FILES, '移动绑定来源');
+}
+
+/**
+ * Verify the CitizenSDK-owned documentation that was not already closed by a
+ * narrower source contract. The top-level docs/ product documents are closed
+ * as an entire subtree except for docs/smoldot-dart/, whose imported snapshot
+ * remains authoritative in SMOLDOT_DART_FILES. Android, Apple and Dart trees
+ * contain production sources, so only documentation-shaped files are listed.
+ */
+export function assertDocumentationSource(
+  root,
+  { allowAppleReleaseProjection = false } = {},
+) {
+  const sourceRoot = resolve(root);
+  if (Object.keys(DOCUMENTATION_SHA256).length !== DOCUMENTATION_FILE_COUNT) {
+    fail(`CitizenSDK 文档固定清单必须精确为 ${DOCUMENTATION_FILE_COUNT} 文件`);
+  }
+
+  const actualPaths = [];
+  const rootReadme = join(sourceRoot, 'README.md');
+  if (existsSync(rootReadme)) {
+    const info = lstatSync(rootReadme);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      fail('CitizenSDK 根 README.md 必须是普通文件');
+    }
+    actualPaths.push('README.md');
+  }
+
+  const docsRoot = join(sourceRoot, 'docs');
+  if (!existsSync(docsRoot)
+      || lstatSync(docsRoot).isSymbolicLink()
+      || !lstatSync(docsRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通产品文档目录：docs');
+  }
+  actualPaths.push(...regularFiles(docsRoot)
+    .map((path) => `docs/${path}`)
+    .filter((path) => !path.startsWith('docs/smoldot-dart/')));
+
+  for (const relativeRoot of ['android', 'darwin', 'lib/src']) {
+    const documentationRoot = join(sourceRoot, ...relativeRoot.split('/'));
+    if (!existsSync(documentationRoot)
+        || lstatSync(documentationRoot).isSymbolicLink()
+        || !lstatSync(documentationRoot).isDirectory()) {
+      fail(`CitizenSDK 缺少普通产品文档来源目录：${relativeRoot}`);
+    }
+    const documentationFiles = relativeRoot === 'darwin'
+      ? darwinBindingFiles(documentationRoot, allowAppleReleaseProjection)
+      : regularFiles(documentationRoot);
+    actualPaths.push(...documentationFiles
+      .filter((path) => isDocumentationFile(path)
+        && path !== 'native/src/main/cpp/CMakeLists.txt'
+        && (relativeRoot !== 'android' || !isAndroidTestPath(path))
+        && (relativeRoot !== 'darwin' || !isDarwinTestOrInjectedArtifact(path)))
+      .map((path) => `${relativeRoot}/${path}`));
+  }
+
+  actualPaths.sort();
+  const expectedPaths = Object.keys(DOCUMENTATION_SHA256).sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`CitizenSDK 产品文档闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  assertPinnedFiles(sourceRoot, DOCUMENTATION_SHA256, '产品文档');
+}
+
+function compileRootedPubignoreRule(rawRule) {
+  const negated = rawRule.startsWith('!');
+  const rule = negated ? rawRule.slice(1) : rawRule;
+  if (!rule.startsWith('/')) {
+    fail(`CitizenSDK .pubignore 只允许可审计的根路径规则：${rawRule}`);
+  }
+  const directory = rule.endsWith('/');
+  const pattern = directory ? rule.slice(1, -1) : rule.slice(1);
+  let expression = '';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === '*') {
+      if (pattern[index + 1] === '*') {
+        expression += '.*';
+        index += 1;
+      } else {
+        expression += '[^/]*';
+      }
+    } else if (character === '?') {
+      expression += '[^/]';
+    } else {
+      expression += character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return {
+    ignored: !negated,
+    pattern: new RegExp(`^${expression}${directory ? '(?:/.*)?' : ''}$`),
+  };
+}
+
+function hostedPubignoreRules(sourceRoot) {
+  const path = join(sourceRoot, '.pubignore');
+  if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+    fail('CitizenSDK 缺少普通 .pubignore');
+  }
+  return readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'))
+    .map(compileRootedPubignoreRule);
+}
+
+function isHostedIgnored(relativePath, rules) {
+  let ignored = false;
+  for (const rule of rules) {
+    if (rule.pattern.test(relativePath)) ignored = rule.ignored;
+  }
+  return ignored;
+}
+
+/** Verify the Dart files that the real pinned .pubignore exposes to Hosted consumers. */
+export function assertHostedRuntimeDartProjection(root) {
+  const sourceRoot = resolve(root);
+  const libRoot = join(sourceRoot, 'lib');
+  if (!existsSync(libRoot) || lstatSync(libRoot).isSymbolicLink()
+      || !lstatSync(libRoot).isDirectory()) {
+    fail('CitizenSDK Hosted Package 缺少普通 lib 目录');
+  }
+  const rules = hostedPubignoreRules(sourceRoot);
+  const actualPaths = regularFiles(libRoot)
+    .filter((path) => path.endsWith('.dart'))
+    .map((path) => `lib/${path}`)
+    .filter((path) => !isHostedIgnored(path, rules))
+    .sort();
+  const expectedPaths = [...HOSTED_RUNTIME_DART_FILES].sort();
+  if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+    const actual = new Set(actualPaths);
+    const expected = new Set(expectedPaths);
+    const missing = expectedPaths.filter((path) => !actual.has(path));
+    const extra = actualPaths.filter((path) => !expected.has(path));
+    fail(`CitizenSDK Hosted Dart 运行闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+}
+
+function yamlTopLevelSection(source, name) {
+  const lines = source.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `${name}:`);
+  if (start < 0) fail(`CitizenSDK Hosted Package 缺少 ${name}`);
+  const section = [];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (/^[A-Za-z_][A-Za-z0-9_-]*:/.test(lines[index])) break;
+    section.push(lines[index]);
+  }
+  return section.join('\n');
+}
+
+function assertHostedDependencySection(pubspec, name, expected) {
+  const section = yamlTopLevelSection(pubspec, name);
+  const direct = [...section.matchAll(/^  ([A-Za-z_][A-Za-z0-9_-]*):(.*)$/gm)]
+    .map((match) => [match[1], match[2].trim()]);
+  const actualNames = direct.map(([dependency]) => dependency).sort();
+  const expectedNames = Object.keys(expected).sort();
+  if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
+    fail(`CitizenSDK Hosted Package ${name} 闭集漂移：${actualNames.join(',') || '无'}`);
+  }
+  for (const [dependency, constraint] of Object.entries(expected)) {
+    const value = direct.find(([name]) => name === dependency)?.[1];
+    if (constraint === null) {
+      const escaped = dependency.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      if (value !== '' || !new RegExp(`^  ${escaped}:\\n    sdk: flutter$`, 'm').test(section)) {
+        fail(`CitizenSDK Hosted Package ${name} SDK 依赖漂移：${dependency}`);
+      }
+    } else if (value !== constraint) {
+      fail(`CitizenSDK Hosted Package ${name} 依赖约束漂移：${dependency}`);
+    }
+  }
+}
+
 export function assertHostedPackageSource(root) {
   const sourceRoot = resolve(root);
   assertPinnedFiles(sourceRoot, HOSTED_PACKAGE_SOURCE_FILES, 'Hosted Package 合同');
+  assertHostedRuntimeDartProjection(sourceRoot);
   const pubspecPath = join(sourceRoot, 'pubspec.yaml');
   if (!existsSync(pubspecPath)
       || lstatSync(pubspecPath).isSymbolicLink()
@@ -603,19 +1754,11 @@ export function assertHostedPackageSource(root) {
   if (/^[ \t]{4,}(?:git|path):/m.test(pubspec)) {
     fail('CitizenSDK Hosted Package 禁止 git/path 依赖');
   }
-  for (const [dependency, constraint] of [
-    ['bip39_mnemonic', '^4.0.1'],
-    ['crypto', '^3.0.7'],
-    ['polkadart_keyring', '^0.7.1'],
-  ]) {
-    const escaped = constraint.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    if (!new RegExp(`^  ${dependency}: ${escaped}$`, 'm').test(pubspec)) {
-      fail(`CitizenSDK Hosted Package 依赖约束漂移：${dependency}`);
-    }
-  }
+  assertHostedDependencySection(pubspec, 'dependencies', HOSTED_MAIN_DEPENDENCIES);
+  assertHostedDependencySection(pubspec, 'dev_dependencies', HOSTED_DEV_DEPENDENCIES);
   const platformVersions = [
     ['android/build.gradle', /^version = '(\d+\.\d{1,2}\.\d{1,2})'$/m],
-    ['ios/citizen_sdk.podspec', /^  s\.version\s+= '(\d+\.\d{1,2}\.\d{1,2})'$/m],
+    ['darwin/citizen_sdk.podspec', /^  spec\.version\s+= '(\d+\.\d{1,2}\.\d{1,2})'$/m],
   ].map(([relativePath, pattern]) => {
     const path = join(sourceRoot, ...relativePath.split('/'));
     if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
@@ -635,6 +1778,9 @@ export function assertHostedPackageSource(root) {
 
 export function assertSdkTestContracts(root) {
   const sourceRoot = resolve(root);
+  if (Object.keys(SDK_TEST_CONTRACT_FILES).length !== SDK_TEST_CONTRACT_FILE_COUNT) {
+    fail(`CitizenSDK 测试合同固定清单必须精确为 ${SDK_TEST_CONTRACT_FILE_COUNT} 文件`);
+  }
   for (const relativeRoot of SDK_TEST_CONTRACT_ROOTS) {
     const testRoot = join(sourceRoot, ...relativeRoot.split('/'));
     if (!existsSync(testRoot)
@@ -656,7 +1802,74 @@ export function assertSdkTestContracts(root) {
       fail(`CitizenSDK 测试文件闭集漂移：${relativeRoot}；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
     }
   }
+  for (const relativeRoot of SDK_EMBEDDED_TEST_ROOTS) {
+    const testRoot = join(sourceRoot, ...relativeRoot.split('/'));
+    const actualPaths = regularFiles(testRoot)
+      .filter((path) => path.endsWith('_tests.rs'))
+      .map((path) => `${relativeRoot}/${path}`)
+      .sort();
+    const expectedPaths = Object.keys(SDK_TEST_CONTRACT_FILES)
+      .filter((path) => path.startsWith(`${relativeRoot}/`) && path.endsWith('_tests.rs'))
+      .sort();
+    if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
+      const actual = new Set(actualPaths);
+      const expected = new Set(expectedPaths);
+      const missing = expectedPaths.filter((path) => !actual.has(path));
+      const extra = actualPaths.filter((path) => !expected.has(path));
+      fail(`CitizenSDK 内嵌测试文件闭集漂移：${relativeRoot}；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    }
+  }
+  const scriptRoot = join(sourceRoot, SDK_SCRIPT_TEST_ROOT);
+  if (!existsSync(scriptRoot)
+      || lstatSync(scriptRoot).isSymbolicLink()
+      || !lstatSync(scriptRoot).isDirectory()) {
+    fail(`CitizenSDK 缺少普通测试目录：${SDK_SCRIPT_TEST_ROOT}`);
+  }
+  const actualScriptTests = regularFiles(scriptRoot)
+    .map((path) => `${SDK_SCRIPT_TEST_ROOT}/${path}`)
+    .filter((path) => path.endsWith('.test.mjs'))
+    .sort();
+  const expectedScriptTests = Object.keys(SDK_TEST_CONTRACT_FILES)
+    .filter((path) => path.startsWith(`${SDK_SCRIPT_TEST_ROOT}/`) && path.endsWith('.test.mjs'))
+    .sort();
+  if (JSON.stringify(actualScriptTests) !== JSON.stringify(expectedScriptTests)) {
+    const actual = new Set(actualScriptTests);
+    const expected = new Set(expectedScriptTests);
+    const missing = expectedScriptTests.filter((path) => !actual.has(path));
+    const extra = actualScriptTests.filter((path) => !expected.has(path));
+    fail(`CitizenSDK 测试文件闭集漂移：${SDK_SCRIPT_TEST_ROOT}；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
   assertPinnedFiles(sourceRoot, SDK_TEST_CONTRACT_FILES, '测试合同');
+}
+
+export function assertSdkScriptSource(root) {
+  const sourceRoot = resolve(root);
+  const scriptRoot = join(sourceRoot, 'scripts');
+  if (!existsSync(scriptRoot)
+      || lstatSync(scriptRoot).isSymbolicLink()
+      || !lstatSync(scriptRoot).isDirectory()) {
+    fail('CitizenSDK 缺少普通 scripts 目录');
+  }
+  const actualEntries = readdirSync(scriptRoot).sort();
+  const expectedEntries = Object.keys(SDK_SCRIPT_ENTRIES).sort();
+  if (JSON.stringify(actualEntries) !== JSON.stringify(expectedEntries)) {
+    const actual = new Set(actualEntries);
+    const expected = new Set(expectedEntries);
+    const missing = expectedEntries.filter((path) => !actual.has(path));
+    const extra = actualEntries.filter((path) => !expected.has(path));
+    fail(`CitizenSDK scripts 根闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  for (const name of expectedEntries) {
+    const path = join(scriptRoot, name);
+    if (lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK scripts 条目必须是普通文件：${name}`);
+    }
+  }
+  const executingRelease = readFileSync(fileURLToPath(import.meta.url));
+  if (!readFileSync(join(scriptRoot, 'release.mjs')).equals(executingRelease)) {
+    fail('CitizenSDK 候选 release.mjs 与当前执行真源不一致');
+  }
+  assertPinnedFiles(sourceRoot, SDK_PRODUCTION_SCRIPT_FILES, '生产脚本');
 }
 
 export function assertSmoldotRustSource(root) {
@@ -678,6 +1891,11 @@ export function assertSmoldotRustSource(root) {
   if (manifest.schema !== 'citizensdk.smoldot.source-sha256.v1'
       || !manifest.units || typeof manifest.units !== 'object') {
     fail('CitizenSDK smoldot Rust 来源清单 schema 无效');
+  }
+  const providerUnit = manifest.units.provider;
+  if (!providerUnit || providerUnit.root !== 'native/smoldot/provider'
+      || providerUnit.recursive !== true) {
+    fail('CitizenSDK smoldot Rust 来源清单缺少递归 provider 单元');
   }
   const manifestPaths = [];
   for (const [name, unit] of Object.entries(manifest.units)) {
@@ -763,7 +1981,7 @@ export function assertSmoldotRustSource(root) {
     const expected = new Set(expectedClosure);
     const missing = expectedClosure.filter((path) => !actual.has(path));
     const extra = actualClosure.filter((path) => !expected.has(path));
-    fail(`CitizenSDK smoldot 223 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    fail(`CitizenSDK smoldot 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
   }
 }
 
@@ -788,7 +2006,7 @@ export function assertSignerSource(root) {
     const expected = new Set(expectedClosure);
     const missing = expectedClosure.filter((path) => !actual.has(path));
     const extra = actualClosure.filter((path) => !expected.has(path));
-    fail(`CitizenSDK signer 6 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+    fail(`CitizenSDK signer 10 文件闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
   }
 }
 
@@ -802,16 +2020,761 @@ function replaceExact(path, pattern, replacement, label) {
 function applySoftwareVersion(output, version) {
   replaceExact(join(output, 'pubspec.yaml'), /^version: \d+\.\d{1,2}\.\d{1,2}$/gm, `version: ${version}`, 'pubspec.yaml');
   replaceExact(join(output, 'android/build.gradle'), /^version = '\d+\.\d{1,2}\.\d{1,2}'$/gm, `version = '${version}'`, 'android/build.gradle');
-  replaceExact(join(output, 'ios/citizen_sdk.podspec'), /^  s\.version\s+= '\d+\.\d{1,2}\.\d{1,2}'$/gm, `  s.version          = '${version}'`, 'citizen_sdk.podspec');
+  replaceExact(join(output, 'darwin/citizen_sdk.podspec'), /^  spec\.version\s+= '\d+\.\d{1,2}\.\d{1,2}'$/gm, `  spec.version          = '${version}'`, 'citizen_sdk.podspec');
+}
+
+function nativeArtifactSource(nativeRoot, sourcePath, expectedType = 'file') {
+  const components = sourcePath.split('/');
+  let current = nativeRoot;
+  for (let index = 0; index < components.length; index += 1) {
+    current = join(current, components[index]);
+    let info;
+    try {
+      info = lstatSync(current);
+    } catch (error) {
+      if (error?.code === 'ENOENT') fail(`缺少原生产物：${sourcePath}`);
+      throw error;
+    }
+    if (info.isSymbolicLink()) {
+      fail(`原生产物路径禁止符号链接：${sourcePath}`);
+    }
+    const isFinal = index === components.length - 1;
+    const finalTypeMatches = expectedType === 'file' ? info.isFile() : info.isDirectory();
+    if ((!isFinal && !info.isDirectory()) || (isFinal && !finalTypeMatches)) {
+      fail(`原生产物路径类型无效：${sourcePath}`);
+    }
+  }
+  const realSource = realpathSync(current);
+  if (!realSource.startsWith(`${nativeRoot}${sep}`)) {
+    fail(`原生产物真实路径越出受控根：${sourcePath}`);
+  }
+  return current;
+}
+
+/**
+ * Reject every native-input link except the five exact versioned-macOS
+ * framework links. The XCFramework directory itself and all ancestors remain
+ * ordinary directories, so an allowed internal link cannot redirect the
+ * native source root.
+ */
+export function assertNativeArtifactSources(nativeRoot) {
+  const root = assertSafeTargetPath(nativeRoot, '原生产物目录');
+  if (!existsSync(root) || lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) {
+    fail('CitizenSDK 原生产物目录不存在或不是普通目录');
+  }
+  if (realpathSync(root) !== root) fail('CitizenSDK 原生产物目录真实路径漂移');
+  const files = Object.fromEntries(
+    Object.entries(NATIVE_FILES).map(([destinationPath, sourcePath]) => [
+      destinationPath,
+      nativeArtifactSource(root, sourcePath),
+    ]),
+  );
+  const directories = Object.fromEntries(
+    Object.entries(NATIVE_DIRECTORIES).map(([destinationPath, sourcePath]) => {
+      const source = nativeArtifactSource(root, sourcePath, 'directory');
+      // 这里只承认标准 macOS framework 的五个精确内部链接；遍历不会跟随
+      // 链接，并会拒绝 iOS slice 或其它位置出现的任何链接。
+      const entries = treeEntries(source, appleXcframeworkSymlinkContract());
+      if (entries.files.length === 0) fail(`原生产物目录为空：${sourcePath}`);
+      return [destinationPath, source];
+    }),
+  );
+  return { directories, files };
 }
 
 function copyNativeFiles(nativeRoot, output) {
-  for (const [destinationPath, sourcePath] of Object.entries(NATIVE_FILES)) {
-    const source = join(nativeRoot, ...sourcePath.split('/'));
-    if (!existsSync(source) || !lstatSync(source).isFile()) fail(`缺少原生产物：${sourcePath}`);
+  const sources = assertNativeArtifactSources(nativeRoot);
+  for (const [destinationPath, source] of Object.entries(sources.files)) {
     const destination = join(output, ...destinationPath.split('/'));
     mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
     copyFileSync(source, destination);
+  }
+  for (const [destinationPath, source] of Object.entries(sources.directories)) {
+    const destinationRoot = join(output, ...destinationPath.split('/'));
+    if (existsSync(destinationRoot)) fail(`原生产物目录目标已存在：${destinationPath}`);
+    mkdirSync(destinationRoot, { recursive: true, mode: 0o700 });
+    const entries = treeEntries(source, appleXcframeworkSymlinkContract());
+    for (const relativePath of entries.files) {
+      const destination = join(destinationRoot, ...relativePath.split('/'));
+      mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+      copyFileSync(join(source, ...relativePath.split('/')), destination);
+    }
+    // 不复制任意来源链接；只按已验证的文字合同重建五个相对链接。
+    for (const relativePath of entries.symlinks) {
+      const destination = join(destinationRoot, ...relativePath.split('/'));
+      mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+      symlinkSync(
+        appleXcframeworkSymlinkContract()[relativePath],
+        destination,
+      );
+    }
+  }
+}
+
+function zipEntries(bytes, label) {
+  const minimumEocd = 22;
+  const maximumComment = 0xffff;
+  let eocd = -1;
+  for (let offset = bytes.length - minimumEocd;
+    offset >= Math.max(0, bytes.length - minimumEocd - maximumComment);
+    offset -= 1) {
+    if (bytes.readUInt32LE(offset) === 0x06054b50) {
+      eocd = offset;
+      break;
+    }
+  }
+  if (eocd < 0) fail(`${label} 不是普通 ZIP`);
+  const disk = bytes.readUInt16LE(eocd + 4);
+  const centralDisk = bytes.readUInt16LE(eocd + 6);
+  const diskEntries = bytes.readUInt16LE(eocd + 8);
+  const entryCount = bytes.readUInt16LE(eocd + 10);
+  const centralSize = bytes.readUInt32LE(eocd + 12);
+  const centralOffset = bytes.readUInt32LE(eocd + 16);
+  const commentLength = bytes.readUInt16LE(eocd + 20);
+  if (disk !== 0 || centralDisk !== 0 || diskEntries !== entryCount
+      || entryCount === 0 || entryCount === 0xffff
+      || centralSize === 0xffffffff || centralOffset === 0xffffffff
+      || entryCount > 10000 || eocd + minimumEocd + commentLength !== bytes.length
+      || centralOffset + centralSize !== eocd) {
+    fail(`${label} ZIP 中央目录无效或使用了不支持的 ZIP64/分卷格式`);
+  }
+
+  const entries = new Map();
+  let cursor = centralOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (cursor + 46 > eocd || bytes.readUInt32LE(cursor) !== 0x02014b50) {
+      fail(`${label} ZIP 中央目录条目无效`);
+    }
+    const flags = bytes.readUInt16LE(cursor + 8);
+    const method = bytes.readUInt16LE(cursor + 10);
+    const compressedSize = bytes.readUInt32LE(cursor + 20);
+    const uncompressedSize = bytes.readUInt32LE(cursor + 24);
+    const nameLength = bytes.readUInt16LE(cursor + 28);
+    const extraLength = bytes.readUInt16LE(cursor + 30);
+    const entryCommentLength = bytes.readUInt16LE(cursor + 32);
+    const localOffset = bytes.readUInt32LE(cursor + 42);
+    const next = cursor + 46 + nameLength + extraLength + entryCommentLength;
+    if (next > eocd || nameLength === 0 || (flags & 0x1) !== 0
+        || ![0, 8].includes(method) || compressedSize === 0xffffffff
+        || uncompressedSize === 0xffffffff || localOffset === 0xffffffff) {
+      fail(`${label} ZIP 条目属性无效`);
+    }
+    const nameBytes = bytes.subarray(cursor + 46, cursor + 46 + nameLength);
+    const name = nameBytes.toString('utf8');
+    if (!Buffer.from(name, 'utf8').equals(nameBytes)
+        || name.includes('\0') || name.includes('\\') || name.startsWith('/')
+        || name.split('/').includes('..') || entries.has(name)) {
+      fail(`${label} ZIP 条目路径无效或重复`);
+    }
+    if (localOffset + 30 > centralOffset || bytes.readUInt32LE(localOffset) !== 0x04034b50) {
+      fail(`${label} ZIP local header 无效`);
+    }
+    const localFlags = bytes.readUInt16LE(localOffset + 6);
+    const localMethod = bytes.readUInt16LE(localOffset + 8);
+    const localNameLength = bytes.readUInt16LE(localOffset + 26);
+    const localExtraLength = bytes.readUInt16LE(localOffset + 28);
+    const localNameStart = localOffset + 30;
+    const dataStart = localNameStart + localNameLength + localExtraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (localFlags !== flags || localMethod !== method || dataEnd > centralOffset
+        || !bytes.subarray(localNameStart, localNameStart + localNameLength).equals(nameBytes)) {
+      fail(`${label} ZIP local/central 条目不一致`);
+    }
+    const compressed = bytes.subarray(dataStart, dataEnd);
+    let content;
+    try {
+      content = method === 0 ? Buffer.from(compressed) : inflateRawSync(compressed);
+    } catch {
+      fail(`${label} ZIP 条目无法解压：${name}`);
+    }
+    if (content.length !== uncompressedSize) {
+      fail(`${label} ZIP 条目长度不一致：${name}`);
+    }
+    entries.set(name, content);
+    cursor = next;
+  }
+  if (cursor !== eocd) fail(`${label} ZIP 中央目录包含未解析字节`);
+  return entries;
+}
+
+/** Verify the Android AAR and Flutter projection are the same two native bytes. */
+export function assertAndroidReleaseProjection(root) {
+  const candidate = resolve(root);
+  const aarPath = join(candidate, 'android', 'citizensdk.aar');
+  const corePath = join(
+    candidate,
+    'android',
+    'src',
+    'main',
+    'jniLibs',
+    'arm64-v8a',
+    'libcitizensdk.so',
+  );
+  const jniPath = join(
+    candidate,
+    'android',
+    'src',
+    'main',
+    'jniLibs',
+    'arm64-v8a',
+    'libcitizensdk_jni.so',
+  );
+  for (const [path, label] of [
+    [aarPath, 'Android AAR'],
+    [corePath, 'Flutter Android Core 库'],
+    [jniPath, 'Flutter Android JNI 库'],
+  ]) {
+    if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
+      fail(`CitizenSDK 候选缺少普通${label}`);
+    }
+  }
+
+  const aarEntries = zipEntries(readFileSync(aarPath), 'CitizenSDK Android AAR');
+  const nativeEntries = [...aarEntries.keys()]
+    .filter((path) => path.startsWith('jni/') && !path.endsWith('/'))
+    .sort();
+  const expectedNativeEntries = [
+    'jni/arm64-v8a/libcitizensdk.so',
+    'jni/arm64-v8a/libcitizensdk_jni.so',
+  ];
+  if (JSON.stringify(nativeEntries) !== JSON.stringify(expectedNativeEntries)) {
+    fail(`CitizenSDK Android AAR 双库闭集漂移：${nativeEntries.join(',') || '无'}`);
+  }
+  for (const required of ['AndroidManifest.xml', 'classes.jar']) {
+    if (!aarEntries.has(required)) fail(`CitizenSDK Android AAR 缺少 ${required}`);
+  }
+  const packagedAssets = [...aarEntries.keys()]
+    .filter((path) => path.startsWith('assets/') && !path.endsWith('/'))
+    .sort();
+  const expectedAssets = Object.keys(CHAIN_ASSET_FILES).sort();
+  if (JSON.stringify(packagedAssets) !== JSON.stringify(expectedAssets)) {
+    fail(`CitizenSDK Android AAR 链资产闭集漂移：${packagedAssets.join(',') || '无'}`);
+  }
+  for (const required of expectedAssets) {
+    if (!aarEntries.get(required).equals(
+      readFileSync(join(candidate, ...required.split('/')),
+    ))) {
+      fail(`CitizenSDK Android AAR 链资产与候选信任锚字节不一致：${required}`);
+    }
+  }
+  if ([...aarEntries.keys()].some((path) => path.endsWith('.aar')
+      || /(?:^|\/)(?:libsmoldot|libc\+\+_shared)\.so$/.test(path))) {
+    fail('CitizenSDK Android AAR 混入嵌套 AAR、legacy 或共享 C++ 运行库');
+  }
+  if (!aarEntries.get(expectedNativeEntries[0]).equals(readFileSync(corePath))
+      || !aarEntries.get(expectedNativeEntries[1]).equals(readFileSync(jniPath))) {
+    fail('CitizenSDK Android AAR 与 Flutter 投影的双原生库字节不一致');
+  }
+
+  const classEntries = zipEntries(aarEntries.get('classes.jar'), 'CitizenSDK Android classes.jar');
+  for (const required of [
+    'org/citizen/sdk/CitizenSdk.class',
+    'org/citizen/sdk/CitizenSdkLifecycle.class',
+    'org/citizen/sdk/CitizenSdkException.class',
+    'org/citizen/sdk/CitizenSdkEvents.class',
+    'org/citizen/sdk/CitizenWalletProfile.class',
+    'org/citizen/sdk/CitizenSdkOperation.class',
+    'org/citizen/sdk/internal/CitizenSdkNative.class',
+    'org/citizen/sdk/internal/CitizenSdkHardwareVault.class',
+    'org/citizen/sdk/internal/CitizenSdkHostServices.class',
+    'org/citizen/sdk/internal/CitizenSdkRequestRouter.class',
+    'org/citizen/sdk/ui/CitizenSdkWalletFlowActivity.class',
+    'org/citizen/sdk/ui/CitizenSdkWalletFlowContract.class',
+    'org/citizen/sdk/ui/CitizenSdkWalletFlowCoordinator.class',
+  ]) {
+    if (!classEntries.has(required)) {
+      fail(`CitizenSDK Android classes.jar 缺少必需实现：${required}`);
+    }
+  }
+  for (const [path, content] of classEntries) {
+    if (path.startsWith('io/flutter/') || content.includes(Buffer.from('io/flutter/'))) {
+      fail('CitizenSDK Android 原生 AAR 混入或引用 Flutter API');
+    }
+  }
+  const aarFiles = regularFiles(join(candidate, 'android'))
+    .filter((path) => path.endsWith('.aar'))
+    .sort();
+  if (JSON.stringify(aarFiles) !== JSON.stringify(['citizensdk.aar'])) {
+    fail(`CitizenSDK Android 候选 AAR 闭集漂移：${aarFiles.join(',') || '无'}`);
+  }
+}
+
+function decodePlistXmlText(value, label) {
+  return value.replace(/&(?:#(x[0-9a-fA-F]+|[0-9]+)|amp|apos|gt|lt|quot);/g, (entity, number) => {
+    if (number !== undefined) {
+      const radix = number.startsWith('x') ? 16 : 10;
+      const digits = number.startsWith('x') ? number.slice(1) : number;
+      const codePoint = Number.parseInt(digits, radix);
+      if (!Number.isSafeInteger(codePoint) || codePoint > 0x10ffff) {
+        fail(`${label} plist 含无效字符实体`);
+      }
+      return String.fromCodePoint(codePoint);
+    }
+    return {
+      '&amp;': '&',
+      '&apos;': "'",
+      '&gt;': '>',
+      '&lt;': '<',
+      '&quot;': '"',
+    }[entity];
+  });
+}
+
+/** Parse the small XML-plist subset emitted for framework metadata. */
+function parseXmlPlist(bytes, label) {
+  let source = bytes.toString('utf8');
+  source = source
+    .replace(/^\uFEFF/, '')
+    .replace(/<\?xml[\s\S]*?\?>/g, '')
+    .replace(/<!DOCTYPE[\s\S]*?>/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .trim();
+  const tokens = [...source.matchAll(/<[^>]+>|[^<]+/g)]
+    .map((match) => match[0])
+    .filter((token) => token.startsWith('<') || token.trim().length > 0);
+  let cursor = 0;
+  const take = () => tokens[cursor++];
+  const expect = (expected) => {
+    const actual = take();
+    if (actual !== expected) fail(`${label} plist 结构无效；期望=${expected}；实际=${actual ?? '<eof>'}`);
+  };
+  const parseValue = () => {
+    const token = take();
+    if (token === '<dict>') {
+      const value = Object.create(null);
+      while (tokens[cursor] !== '</dict>') {
+        expect('<key>');
+        const keyText = take();
+        if (!keyText || keyText.startsWith('<')) fail(`${label} plist key 无效`);
+        expect('</key>');
+        const key = decodePlistXmlText(keyText.trim(), label);
+        if (Object.hasOwn(value, key)) fail(`${label} plist key 重复：${key}`);
+        value[key] = parseValue();
+      }
+      cursor += 1;
+      return value;
+    }
+    if (token === '<array>') {
+      const value = [];
+      while (tokens[cursor] !== '</array>') value.push(parseValue());
+      cursor += 1;
+      return value;
+    }
+    if (token === '<true/>') return true;
+    if (token === '<false/>') return false;
+    const scalar = token?.match(/^<(string|integer)>$/)?.[1];
+    if (!scalar) fail(`${label} plist 含不支持的值：${token ?? '<eof>'}`);
+    const text = take();
+    if (text === `</${scalar}>`) return scalar === 'integer' ? 0 : '';
+    if (!text || text.startsWith('<')) fail(`${label} plist 标量无效`);
+    expect(`</${scalar}>`);
+    const decoded = decodePlistXmlText(text.trim(), label);
+    if (scalar === 'string') return decoded;
+    if (!/^-?(?:0|[1-9][0-9]*)$/.test(decoded)) fail(`${label} plist integer 无效`);
+    const integer = Number(decoded);
+    if (!Number.isSafeInteger(integer)) fail(`${label} plist integer 超界`);
+    return integer;
+  };
+  if (!/^<plist(?: version="1\.0")?>$/.test(tokens[cursor] ?? '')) {
+    fail(`${label} 不是 XML plist 1.0`);
+  }
+  cursor += 1;
+  const value = parseValue();
+  expect('</plist>');
+  if (cursor !== tokens.length) fail(`${label} plist 含尾随内容`);
+  return value;
+}
+
+function encodedMachOVersion(value) {
+  return `${value >>> 16}.${(value >>> 8) & 0xff}.${value & 0xff}`;
+}
+
+function machOCString(bytes, start, end, label) {
+  const zero = bytes.indexOf(0, start);
+  if (start < 0 || start >= end || zero < start || zero >= end) {
+    fail(`${label} Mach-O 字符串越界或未终止`);
+  }
+  return bytes.subarray(start, zero).toString('utf8');
+}
+
+/** Read the thin ARM64 Mach-O identity and external defined symbol table. */
+function readAppleMachO(bytes, label) {
+  if (bytes.length < 32 || bytes.readUInt32LE(0) !== 0xfeedfacf) {
+    fail(`${label} 必须是 thin 64-bit Mach-O`);
+  }
+  const cpuType = bytes.readUInt32LE(4);
+  const fileType = bytes.readUInt32LE(12);
+  const commandCount = bytes.readUInt32LE(16);
+  const commandBytes = bytes.readUInt32LE(20);
+  if (cpuType !== 0x0100000c || fileType !== 6
+      || commandCount === 0 || commandCount > 4096
+      || commandBytes > bytes.length - 32) {
+    fail(`${label} 必须是单一 ARM64 动态 framework 二进制`);
+  }
+  let cursor = 32;
+  const commandEnd = cursor + commandBytes;
+  let identity = null;
+  let build = null;
+  let symbolTable = null;
+  for (let index = 0; index < commandCount; index += 1) {
+    if (cursor + 8 > commandEnd) fail(`${label} Mach-O load command 截断`);
+    const command = bytes.readUInt32LE(cursor);
+    const size = bytes.readUInt32LE(cursor + 4);
+    if (size < 8 || cursor + size > commandEnd) fail(`${label} Mach-O load command 越界`);
+    if (command === 0x0d) {
+      if (identity !== null || size < 24) fail(`${label} LC_ID_DYLIB 无效或重复`);
+      const nameOffset = bytes.readUInt32LE(cursor + 8);
+      identity = machOCString(bytes, cursor + nameOffset, cursor + size, label);
+    } else if (command === 0x32) {
+      if (build !== null || size < 24) fail(`${label} LC_BUILD_VERSION 无效或重复`);
+      build = {
+        platform: bytes.readUInt32LE(cursor + 8),
+        minimum: encodedMachOVersion(bytes.readUInt32LE(cursor + 12)),
+      };
+    } else if (command === 0x02) {
+      if (symbolTable !== null || size < 24) fail(`${label} LC_SYMTAB 无效或重复`);
+      symbolTable = {
+        symbolOffset: bytes.readUInt32LE(cursor + 8),
+        symbolCount: bytes.readUInt32LE(cursor + 12),
+        stringOffset: bytes.readUInt32LE(cursor + 16),
+        stringSize: bytes.readUInt32LE(cursor + 20),
+      };
+    }
+    cursor += size;
+  }
+  if (cursor !== commandEnd || identity === null || build === null || symbolTable === null) {
+    fail(`${label} 缺少唯一 install name、build version 或 symbol table`);
+  }
+  const symbolsEnd = symbolTable.symbolOffset + symbolTable.symbolCount * 16;
+  const stringsEnd = symbolTable.stringOffset + symbolTable.stringSize;
+  if (symbolTable.symbolCount > 1000000 || symbolsEnd > bytes.length
+      || symbolTable.stringSize === 0 || stringsEnd > bytes.length) {
+    fail(`${label} Mach-O symbol table 越界`);
+  }
+  const symbols = new Set();
+  for (let index = 0; index < symbolTable.symbolCount; index += 1) {
+    const offset = symbolTable.symbolOffset + index * 16;
+    const stringIndex = bytes.readUInt32LE(offset);
+    const type = bytes[offset + 4];
+    const isDebug = (type & 0xe0) !== 0;
+    const isPrivateExternal = (type & 0x10) !== 0;
+    const isExternal = (type & 0x01) !== 0;
+    const isUndefined = (type & 0x0e) === 0;
+    // ld64 keeps hidden symbols as N_PEXT in the ordinary symbol table. They
+    // remain usable inside the image but are not part of the dynamic product
+    // boundary, so only public external defined symbols belong in this set.
+    if (isDebug || isPrivateExternal || !isExternal || isUndefined) continue;
+    if (stringIndex === 0 || stringIndex >= symbolTable.stringSize) {
+      fail(`${label} Mach-O symbol string index 越界`);
+    }
+    const name = machOCString(
+      bytes,
+      symbolTable.stringOffset + stringIndex,
+      stringsEnd,
+      label,
+    );
+    symbols.add(name.startsWith('_') ? name.slice(1) : name);
+  }
+  return { build, identity, symbols };
+}
+
+function expectedCitizenSdkSymbols(root) {
+  const header = readFileSync(join(root, 'include', 'citizensdk.h'), 'utf8');
+  const symbols = [...new Set(
+    [...header.matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]),
+  )].sort();
+  if (symbols.length !== 70) fail('CitizenSDK 产品头必须精确声明 70 个 citizensdk_* 函数');
+  return symbols;
+}
+
+function assertAppleFrameworkSlice(candidate, xcframework, identifier, contract) {
+  const label = `CitizenSDK ${identifier}`;
+  const sliceRoot = join(xcframework, identifier);
+  const framework = join(sliceRoot, 'CitizenSDK.framework');
+  if (!existsSync(sliceRoot) || lstatSync(sliceRoot).isSymbolicLink()
+      || !lstatSync(sliceRoot).isDirectory()
+      || JSON.stringify(readdirSync(sliceRoot).sort())
+        !== JSON.stringify(['CitizenSDK.framework'])) {
+    fail(`${label} slice 根闭集漂移`);
+  }
+  if (!existsSync(framework) || lstatSync(framework).isSymbolicLink()
+      || !lstatSync(framework).isDirectory()) {
+    fail(`${label} framework 缺失或不是普通目录`);
+  }
+  const isMacOS = identifier === 'macOS';
+  // 单 slice 校验也必须独立关闭链接边界，不能依赖外层调用顺序。
+  treeEntries(
+    framework,
+    isMacOS ? APPLE_MACOS_FRAMEWORK_SYMLINKS : Object.freeze({}),
+  );
+  const expectedTopEntries = isMacOS
+    ? ['CitizenSDK', 'Headers', 'Modules', 'Resources', 'Versions']
+    : ['CitizenSDK', 'Headers', 'Info.plist', 'Modules', 'Resources'];
+  const topEntries = readdirSync(framework).sort();
+  if (JSON.stringify(topEntries) !== JSON.stringify(expectedTopEntries)) {
+    fail(`${label} framework 根闭集漂移`);
+  }
+  const contentRoot = isMacOS ? join(framework, 'Versions', 'A') : framework;
+  if (isMacOS) {
+    const versionEntries = readdirSync(join(framework, 'Versions')).sort();
+    const contentEntries = readdirSync(contentRoot).sort();
+    if (JSON.stringify(versionEntries) !== JSON.stringify(['A', 'Current'])
+        || JSON.stringify(contentEntries)
+          !== JSON.stringify(['CitizenSDK', 'Headers', 'Modules', 'Resources'])) {
+      fail(`${label} 版本化 framework 闭集漂移`);
+    }
+  }
+  const binaryPath = join(contentRoot, 'CitizenSDK');
+  if (!existsSync(binaryPath) || lstatSync(binaryPath).isSymbolicLink()
+      || !lstatSync(binaryPath).isFile()) {
+    fail(`${label} 二进制必须是普通文件`);
+  }
+  const binary = readAppleMachO(readFileSync(binaryPath), label);
+  if (binary.identity !== contract.installName) {
+    fail(`${label} install name 漂移`);
+  }
+  if (binary.build.platform !== contract.platform
+      || binary.build.minimum !== contract.minimum) {
+    fail(`${label} 平台或最低系统版本漂移`);
+  }
+  const expectedSymbols = expectedCitizenSdkSymbols(candidate);
+  const allSymbols = [...binary.symbols].sort();
+  const actualSymbols = allSymbols
+    .filter((symbol) => symbol.startsWith('citizensdk_'))
+    .sort();
+  if (JSON.stringify(actualSymbols) !== JSON.stringify(expectedSymbols)) {
+    fail(`${label} 必须精确导出 70 个 citizensdk_* 产品符号`);
+  }
+  const forbidden = [...binary.symbols]
+    .filter((symbol) => /^(?:smoldot_|citizen_sr25519_|account_crypto_)/.test(symbol))
+    .sort();
+  if (forbidden.length > 0) fail(`${label} 泄漏 legacy 低层符号：${forbidden.join(',')}`);
+  const swiftSymbols = allSymbols.filter((symbol) => symbol.startsWith('$s10CitizenSDK'));
+  if (swiftSymbols.length === 0) fail(`${label} 缺少 CitizenSDK Swift 模块导出`);
+  const foreign = allSymbols.filter(
+    (symbol) => !symbol.startsWith('citizensdk_')
+      && !symbol.startsWith('$s10CitizenSDK'),
+  );
+  if (foreign.length > 0) {
+    fail(`${label} 泄漏非 CitizenSDK 产品符号：${foreign.join(',')}`);
+  }
+
+  const headersRoot = join(contentRoot, 'Headers');
+  if (JSON.stringify(readdirSync(headersRoot).sort())
+      !== JSON.stringify(['citizensdk.h', 'citizensdk_types.h'])) {
+    fail(`${label} Headers 目录闭集漂移`);
+  }
+  const headerPaths = regularFiles(headersRoot);
+  const expectedHeaders = ['citizensdk.h', 'citizensdk_types.h'];
+  if (JSON.stringify(headerPaths) !== JSON.stringify(expectedHeaders)) {
+    fail(`${label} 产品头闭集漂移`);
+  }
+  for (const header of expectedHeaders) {
+    if (!readFileSync(join(headersRoot, header)).equals(
+      readFileSync(join(candidate, 'include', header)),
+    )) {
+      fail(`${label} 产品头与根 ABI 字节不一致：${header}`);
+    }
+  }
+
+  const modulesRoot = join(contentRoot, 'Modules');
+  const moduleMapPath = join(modulesRoot, 'module.modulemap');
+  const swiftModuleRoot = join(modulesRoot, 'CitizenSDK.swiftmodule');
+  if (!existsSync(moduleMapPath) || lstatSync(moduleMapPath).isSymbolicLink()
+      || !lstatSync(moduleMapPath).isFile()
+      || !existsSync(swiftModuleRoot) || lstatSync(swiftModuleRoot).isSymbolicLink()
+      || !lstatSync(swiftModuleRoot).isDirectory()) {
+    fail(`${label} Clang/Swift module 不完整`);
+  }
+  if (JSON.stringify(readdirSync(modulesRoot).sort())
+      !== JSON.stringify(['CitizenSDK.swiftmodule', 'module.modulemap'])) {
+    fail(`${label} Modules 目录闭集漂移`);
+  }
+  const moduleMap = readFileSync(moduleMapPath, 'utf8');
+  if (!moduleMap.includes('framework module CitizenSDK')
+      || !moduleMap.includes('umbrella header "citizensdk.h"')
+      || /(?:smoldot_|citizen_sr25519_|account_crypto_)/.test(moduleMap)) {
+    fail(`${label} module.modulemap 边界无效`);
+  }
+  const swiftModules = regularFiles(swiftModuleRoot);
+  if (readdirSync(swiftModuleRoot).some((path) => {
+    const info = lstatSync(join(swiftModuleRoot, path));
+    return info.isSymbolicLink() || !info.isFile();
+  })) {
+    fail(`${label} Swift module 只允许普通文件`);
+  }
+  const expectedSwiftModules = APPLE_SWIFT_MODULE_EXTENSIONS
+    .map((extension) => `${contract.module}.${extension}`)
+    .sort();
+  if (JSON.stringify(swiftModules) !== JSON.stringify(expectedSwiftModules)) {
+    fail(`${label} Swift module 六文件闭集或架构身份漂移`);
+  }
+  const publicInterface = readFileSync(
+    join(swiftModuleRoot, `${contract.module}.swiftinterface`), 'utf8',
+  );
+  const privateInterface = readFileSync(
+    join(swiftModuleRoot, `${contract.module}.private.swiftinterface`), 'utf8',
+  );
+  for (const [kind, swiftInterface] of [
+    ['public', publicInterface],
+    ['private', privateInterface],
+  ]) {
+    if (!/^\/\/ swift-interface-format-version:/m.test(swiftInterface)
+        || !/^@_exported import CitizenSDK$/m.test(swiftInterface)) {
+      fail(`${label} ${kind} Swift interface 未固定同名 underlying Clang module`);
+    }
+    const moduleFlags = swiftInterface.match(/^\/\/ swift-module-flags:.*$/gm) ?? [];
+    if (moduleFlags.length !== 1
+        || !new RegExp(`(?:^| )-target ${contract.swiftTarget.replaceAll('.', '\\.')}(?: |$)`)
+          .test(moduleFlags[0])) {
+      fail(`${label} ${kind} Swift interface target triple 漂移`);
+    }
+  }
+  const expectedSpi = [
+    '  @_spi(CitizenSDKFlutter) final public func supervisedClose() async throws',
+    '  @_spi(CitizenSDKFlutter) final public func enqueueForSupervisedClose()',
+  ];
+  const publicSpi = publicInterface.split('\n').filter((line) => line.includes('@_spi('));
+  const privateSpi = privateInterface.split('\n').filter((line) => line.includes('@_spi('));
+  if (publicSpi.length !== 0
+      || JSON.stringify(privateSpi) !== JSON.stringify(expectedSpi)
+      || privateInterface.split('\n').filter((line) => !expectedSpi.includes(line)).join('\n')
+        !== publicInterface) {
+    fail(`${label} public/private Swift interface 或 CitizenSDKFlutter SPI 闭集漂移`);
+  }
+  if (/\b(?:CitizenSDKNative|CitizenSdkNativeResult|CitizenSDKPreparedWallet|CitizenSDKHandle|CitizenSDKSecretVault)\b/.test(publicInterface)) {
+    fail(`${label} public Swift interface 泄漏底层 native/secret/handle 类型`);
+  }
+
+  const resourcesRoot = join(contentRoot, 'Resources');
+  const expectedResourceEntries = [
+    'PrivacyInfo.xcprivacy',
+    'citizenchain',
+    ...(isMacOS ? ['Info.plist'] : []),
+  ].sort();
+  if (JSON.stringify(readdirSync(resourcesRoot).sort())
+      !== JSON.stringify(expectedResourceEntries)
+      || JSON.stringify(readdirSync(join(resourcesRoot, 'citizenchain')).sort())
+        !== JSON.stringify(['chainspec.json', 'light_sync_state.json', 'manifest.json'])) {
+    fail(`${label} Resources 目录闭集漂移`);
+  }
+  const resources = regularFiles(resourcesRoot);
+  const expectedResources = [
+    ...Object.keys(APPLE_RESOURCE_FILES),
+    ...(isMacOS ? ['Info.plist'] : []),
+  ].sort();
+  if (JSON.stringify(resources) !== JSON.stringify(expectedResources)) {
+    fail(`${label} Resources 闭集漂移`);
+  }
+  for (const [resource, source] of Object.entries(APPLE_RESOURCE_FILES)) {
+    if (!readFileSync(join(resourcesRoot, ...resource.split('/'))).equals(
+      readFileSync(join(candidate, ...source.split('/'))),
+    )) {
+      fail(`${label} Resource 与唯一来源字节不一致：${resource}`);
+    }
+  }
+
+  const frameworkInfo = parseXmlPlist(
+    readFileSync(isMacOS
+      ? join(resourcesRoot, 'Info.plist')
+      : join(framework, 'Info.plist')),
+    `${label} Info.plist`,
+  );
+  const sdkVersion = readFileSync(join(candidate, 'pubspec.yaml'), 'utf8')
+    .match(/^version: (\d+\.\d{1,2}\.\d{1,2})$/m)?.[1];
+  const expectedInfoKeys = [
+    'CFBundleDevelopmentRegion',
+    'CFBundleExecutable',
+    'CFBundleIdentifier',
+    'CFBundleInfoDictionaryVersion',
+    'CFBundleName',
+    'CFBundlePackageType',
+    'CFBundleShortVersionString',
+    'CFBundleSupportedPlatforms',
+    'CFBundleVersion',
+    'DTPlatformName',
+    contract.minimumKey,
+  ].sort();
+  if (!sdkVersion
+      || JSON.stringify(Object.keys(frameworkInfo).sort()) !== JSON.stringify(expectedInfoKeys)
+      || frameworkInfo.CFBundleDevelopmentRegion !== 'en'
+      || frameworkInfo.CFBundleExecutable !== 'CitizenSDK'
+      || frameworkInfo.CFBundleIdentifier !== 'org.citizen.sdk'
+      || frameworkInfo.CFBundleInfoDictionaryVersion !== '6.0'
+      || frameworkInfo.CFBundleName !== 'CitizenSDK'
+      || frameworkInfo.CFBundlePackageType !== 'FMWK'
+      || frameworkInfo.CFBundleShortVersionString !== sdkVersion
+      || frameworkInfo.CFBundleVersion !== sdkVersion
+      || JSON.stringify(frameworkInfo.CFBundleSupportedPlatforms)
+        !== JSON.stringify([contract.bundlePlatform])
+      || frameworkInfo.DTPlatformName !== contract.dtPlatform
+      || frameworkInfo[contract.minimumKey] !== contract.minimum.replace(/\.0$/, '')) {
+    fail(`${label} framework Info.plist 身份漂移`);
+  }
+}
+
+/** Verify one Apple product with iOS, iOS-Simulator and macOS ARM64 slices. */
+export function assertAppleReleaseProjection(root) {
+  const candidate = resolve(root);
+  const xcframework = join(candidate, ...APPLE_XCFRAMEWORK_PATH.split('/'));
+  if (!existsSync(xcframework) || lstatSync(xcframework).isSymbolicLink()
+      || !lstatSync(xcframework).isDirectory()) {
+    fail('CitizenSDK 候选缺少普通 CitizenSDK.xcframework');
+  }
+  // 全树只允许 macOS framework 的标准五链接；这同时保证两个 iOS slice、
+  // XCFramework Info.plist 和所有资源/模块均不存在链接旁路。
+  treeEntries(xcframework, appleXcframeworkSymlinkContract());
+  const expectedEntries = ['Info.plist', ...Object.keys(APPLE_SLICES)].sort();
+  const entries = readdirSync(xcframework).sort();
+  if (JSON.stringify(entries) !== JSON.stringify(expectedEntries)) {
+    fail(`CitizenSDK.xcframework 三 slice 闭集漂移：${entries.join(',') || '无'}`);
+  }
+  const info = parseXmlPlist(
+    readFileSync(join(xcframework, 'Info.plist')),
+    'CitizenSDK.xcframework Info.plist',
+  );
+  if (JSON.stringify(Object.keys(info).sort()) !== JSON.stringify([
+    'AvailableLibraries',
+    'CFBundlePackageType',
+    'XCFrameworkFormatVersion',
+  ])
+      || info.CFBundlePackageType !== 'XFWK'
+      || info.XCFrameworkFormatVersion !== '1.0'
+      || !Array.isArray(info.AvailableLibraries)
+      || info.AvailableLibraries.length !== 3) {
+    fail('CitizenSDK.xcframework Info.plist 格式或 slice 数量无效');
+  }
+  const libraries = new Map();
+  for (const library of info.AvailableLibraries) {
+    if (!library || Array.isArray(library) || typeof library !== 'object'
+        || typeof library.LibraryIdentifier !== 'string'
+        || libraries.has(library.LibraryIdentifier)) {
+      fail('CitizenSDK.xcframework LibraryIdentifier 无效或重复');
+    }
+    libraries.set(library.LibraryIdentifier, library);
+  }
+  for (const [identifier, contract] of Object.entries(APPLE_SLICES)) {
+    const library = libraries.get(identifier);
+    if (!library
+        || library.BinaryPath !== contract.binaryPath
+        || library.LibraryPath !== 'CitizenSDK.framework'
+        || JSON.stringify(library.SupportedArchitectures) !== JSON.stringify(['arm64'])
+        || library.SupportedPlatform !== contract.supportedPlatform
+        || (library.SupportedPlatformVariant ?? null) !== contract.variant) {
+      fail(`CitizenSDK.xcframework slice 元数据漂移：${identifier}`);
+    }
+    const expectedKeys = [
+      'BinaryPath',
+      'LibraryIdentifier',
+      'LibraryPath',
+      'SupportedArchitectures',
+      'SupportedPlatform',
+      ...(contract.variant === null ? [] : ['SupportedPlatformVariant']),
+    ].sort();
+    if (JSON.stringify(Object.keys(library).sort()) !== JSON.stringify(expectedKeys)) {
+      fail(`CitizenSDK.xcframework slice 字段闭集漂移：${identifier}`);
+    }
+    assertAppleFrameworkSlice(candidate, xcframework, identifier, contract);
   }
 }
 
@@ -819,7 +2782,7 @@ export function assertNoSecrets(root) {
   const forbiddenName = /(^|\/)(\.env(?:\.|$)|\.dev\.vars(?:\.|$)|.*\.(?:jks|keystore|p8|p12|pem))$/i;
   // 分段构造使扫描器源码本身不携带完整 PEM 标记，同时仍逐字节检查候选内容。
   const privateMaterial = Buffer.from(['PRIVATE', ' KEY-----'].join(''));
-  for (const relativePath of regularFiles(root)) {
+  for (const relativePath of releaseCandidateEntries(root).files) {
     if (forbiddenName.test(relativePath)) fail(`SDK 候选包含禁止的本地或密钥文件：${relativePath}`);
     if (readFileSync(join(root, ...relativePath.split('/'))).includes(privateMaterial)) {
       fail(`SDK 候选疑似包含私钥材料：${relativePath}`);
@@ -837,22 +2800,63 @@ function writeOctal(buffer, offset, length, value) {
   buffer.write(`${text}\0`, offset, length, 'ascii');
 }
 
+function writeUstarPath(header, relativePath) {
+  if (Buffer.byteLength(relativePath) <= 100) {
+    header.write(relativePath, 0, 100, 'utf8');
+    return;
+  }
+  const separators = [...relativePath.matchAll(/\//g)].map((match) => match.index);
+  for (let index = separators.length - 1; index >= 0; index -= 1) {
+    const separator = separators[index];
+    const prefix = relativePath.slice(0, separator);
+    const name = relativePath.slice(separator + 1);
+    if (Buffer.byteLength(prefix) <= 155 && Buffer.byteLength(name) <= 100) {
+      header.write(name, 0, 100, 'utf8');
+      header.write(prefix, 345, 155, 'utf8');
+      return;
+    }
+  }
+  fail(`CitizenSDK 归档路径超过 ustar 限制：${relativePath}`);
+}
+
 function deterministicTar(candidatePath, excludedPaths = new Set()) {
   const chunks = [];
-  for (const relativePath of regularFiles(candidatePath)) {
+  const candidateEntries = releaseCandidateEntries(candidatePath);
+  const entries = [
+    ...candidateEntries.files.map((path) => ({ path, type: 'file' })),
+    ...candidateEntries.symlinks.map((path) => ({
+      path,
+      target: appleXcframeworkSymlinkContract(APPLE_XCFRAMEWORK_PATH)[path],
+      type: 'symlink',
+    })),
+  ].sort((left, right) => left.path.localeCompare(right.path));
+  for (const entry of entries) {
+    const relativePath = entry.path;
     if (excludedPaths.has(relativePath)) continue;
-    if (Buffer.byteLength(relativePath) > 100) fail(`CitizenSDK 归档路径过长：${relativePath}`);
     const path = join(candidatePath, ...relativePath.split('/'));
-    const content = readFileSync(path);
+    const content = entry.type === 'file' ? readFileSync(path) : Buffer.alloc(0);
     const header = Buffer.alloc(512);
-    header.write(relativePath, 0, 100, 'utf8');
-    writeOctal(header, 100, 8, (lstatSync(path).mode & 0o111) === 0 ? 0o600 : 0o700);
+    writeUstarPath(header, relativePath);
+    writeOctal(
+      header,
+      100,
+      8,
+      entry.type === 'symlink'
+        ? 0o777
+        : ((lstatSync(path).mode & 0o111) === 0 ? 0o600 : 0o700),
+    );
     writeOctal(header, 108, 8, 0);
     writeOctal(header, 116, 8, 0);
     writeOctal(header, 124, 12, content.length);
     writeOctal(header, 136, 12, 0);
     header.fill(0x20, 148, 156);
-    header[156] = '0'.charCodeAt(0);
+    header[156] = (entry.type === 'symlink' ? '2' : '0').charCodeAt(0);
+    if (entry.type === 'symlink') {
+      if (Buffer.byteLength(entry.target) > 100) {
+        fail(`CitizenSDK 归档链接目标超过 ustar 限制：${relativePath}`);
+      }
+      header.write(entry.target, 157, 100, 'utf8');
+    }
     header.write('ustar\0', 257, 6, 'ascii');
     header.write('00', 263, 2, 'ascii');
     const checksum = header.reduce((sum, byte) => sum + byte, 0);
@@ -878,14 +2882,21 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   assertSmoldotDartSource(candidate);
   assertSmoldotLocks(candidate);
   assertSdkRootLocks(candidate);
+  assertProviderLockParity(candidate);
   assertCoreRustSource(candidate);
   assertSmoldotRustSource(candidate);
   assertSignerSource(candidate);
+  assertPublicAbiHeaders(candidate);
+  assertMobileBindingSource(candidate, { allowAppleReleaseProjection: true });
   assertChainAssets(candidate);
   assertSourceFixtures(candidate);
   assertLicenseSources(candidate);
+  assertDocumentationSource(candidate, { allowAppleReleaseProjection: true });
   const hostedSoftwareVersion = assertHostedPackageSource(candidate);
   assertSdkTestContracts(candidate);
+  assertSdkScriptSource(candidate);
+  assertAndroidReleaseProjection(candidate);
+  assertAppleReleaseProjection(candidate);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const keys = Object.keys(manifest).sort();
   const expectedKeys = ['files', 'git_commit_sha', 'package_name', 'platforms', 'product_id', 'software_version'];
@@ -897,7 +2908,9 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   if (expectedGitSha !== null && manifest.git_commit_sha !== expectedGitSha) fail('CitizenSDK 候选 Git SHA 不匹配');
   const expectedPlatforms = [
     { abi: 'arm64-v8a', platform: 'android' },
-    { abi: 'arm64', platform: 'ios' },
+    { abi: 'arm64', platform: 'iOS' },
+    { abi: 'arm64', platform: 'iOS-Simulator' },
+    { abi: 'arm64', platform: 'macOS' },
   ];
   if (stableJson(manifest.platforms) !== stableJson(expectedPlatforms)) fail('CitizenSDK 候选平台集合不正确');
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail('CitizenSDK 候选文件清单为空');
@@ -925,6 +2938,7 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
     'LICENSE',
     'pubspec.yaml',
     ...Object.keys(NATIVE_FILES),
+    `${APPLE_XCFRAMEWORK_PATH}/Info.plist`,
   ]) {
     if (!paths.includes(required)) fail(`CitizenSDK 候选缺少必需文件：${required}`);
   }
@@ -933,7 +2947,10 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
     'citizensdk-release.json',
     ...(expectExternalSums ? ['SHA256SUMS'] : []),
   ].sort();
-  if (JSON.stringify(regularFiles(candidate)) !== JSON.stringify(expectedFiles)) fail('CitizenSDK 候选包含未登记文件');
+  if (JSON.stringify(releaseCandidateEntries(candidate).files)
+      !== JSON.stringify(expectedFiles)) {
+    fail('CitizenSDK 候选包含未登记文件');
+  }
   assertNoSecrets(candidate);
   return { candidate, manifest, manifestPath, sumsPath };
 }
@@ -976,14 +2993,19 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertSmoldotDartSource(source);
   assertSmoldotLocks(source);
   assertSdkRootLocks(source);
+  assertProviderLockParity(source);
   assertCoreRustSource(source);
   assertSmoldotRustSource(source);
   assertSignerSource(source);
+  assertPublicAbiHeaders(source);
+  assertMobileBindingSource(source);
   assertChainAssets(source);
   assertSourceFixtures(source);
   assertLicenseSources(source);
+  assertDocumentationSource(source);
   const sourceSoftwareVersion = assertHostedPackageSource(source);
   assertSdkTestContracts(source);
+  assertSdkScriptSource(source);
   if (!/^[0-9a-f]{40}$/.test(gitCommitSha)) fail('Git commit SHA 必须是 40 位小写十六进制');
   if (!/^\d+\.\d{1,2}\.\d{1,2}$/.test(softwareVersion)) fail('CitizenSDK 软件版本无效');
   if (softwareVersion !== sourceSoftwareVersion) {
@@ -1002,7 +3024,7 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   for (const path of ROOT_DIRECTORIES) copySourceTree(source, output, path);
   applySoftwareVersion(output, softwareVersion);
   copyNativeFiles(native, output);
-  const payloadPaths = regularFiles(output);
+  const payloadPaths = releaseCandidateEntries(output).files;
   const manifest = {
     product_id: PRODUCT_ID,
     package_name: PACKAGE_NAME,
@@ -1010,7 +3032,9 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
     git_commit_sha: gitCommitSha,
     platforms: [
       { platform: 'android', abi: 'arm64-v8a' },
-      { platform: 'ios', abi: 'arm64' },
+      { platform: 'iOS', abi: 'arm64' },
+      { platform: 'iOS-Simulator', abi: 'arm64' },
+      { platform: 'macOS', abi: 'arm64' },
     ],
     files: fileEntries(output, payloadPaths),
   };

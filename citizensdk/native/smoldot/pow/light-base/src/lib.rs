@@ -89,13 +89,14 @@ extern crate alloc;
 use alloc::{
     borrow::ToOwned as _,
     boxed::Box,
+    collections::BTreeMap,
     format,
     string::{String, ToString as _},
     sync::Arc,
     vec,
     vec::Vec,
 };
-use core::{num::NonZero, ops, pin::Pin, time::Duration};
+use core::{fmt, num::NonZero, ops, pin::Pin, time::Duration};
 use hashbrown::{HashMap, hash_map::Entry};
 use itertools::Itertools as _;
 use platform::PlatformRef;
@@ -112,10 +113,7 @@ mod runtime_service;
 mod sync_service;
 mod transactions_service;
 
-pub use sync_service::{
-    StartupFinalizedSource, SyncPhase,
-    WarpFailure,
-};
+pub use sync_service::{StartupFinalizedSource, SyncPhase, WarpFailure};
 mod util;
 
 pub mod network_service;
@@ -303,6 +301,7 @@ struct ChainServices<TPlat: platform::PlatformRef> {
     runtime_service: Arc<runtime_service::RuntimeService<TPlat>>,
     transactions_service: Arc<transactions_service::TransactionsService<TPlat>>,
     recent_block_cache: Arc<async_lock::Mutex<RecentBlockCache>>,
+    finalized_ancestry_cache: Arc<async_lock::Mutex<FinalizedAncestryAnchorCache>>,
 }
 
 impl<TPlat: platform::PlatformRef> Clone for ChainServices<TPlat> {
@@ -314,7 +313,210 @@ impl<TPlat: platform::PlatformRef> Clone for ChainServices<TPlat> {
             runtime_service: self.runtime_service.clone(),
             transactions_service: self.transactions_service.clone(),
             recent_block_cache: self.recent_block_cache.clone(),
+            finalized_ancestry_cache: self.finalized_ancestry_cache.clone(),
         }
+    }
+}
+
+/// Proof-derived finalized anchors have an independent trust domain from the mixed best cache.
+/// 4,096 anchors at an initial 64-block stride cover 262,144 heights; when full, the cache
+/// doubles its stride and deterministically compacts. Eviction only increases network work.
+const FINALIZED_ANCESTRY_BASE_STRIDE: u64 = 64;
+const FINALIZED_ANCESTRY_MAX_ANCHORS: usize = 4_096;
+/// 至少容纳四个正式 120-block batch；当前 batch 在淘汰时始终受保护。
+const FINALIZED_EXACT_RECENT_CAPACITY: usize = 512;
+
+struct FinalizedAncestryAnchorCache {
+    stride: u64,
+    anchors: BTreeMap<u64, [u8; 32]>,
+    exact_recent: BTreeMap<u64, [u8; 32]>,
+    last_verified_upper: Option<(u64, [u8; 32])>,
+}
+
+impl FinalizedAncestryAnchorCache {
+    fn new() -> Self {
+        Self {
+            stride: FINALIZED_ANCESTRY_BASE_STRIDE,
+            anchors: BTreeMap::new(),
+            exact_recent: BTreeMap::new(),
+            last_verified_upper: None,
+        }
+    }
+
+    fn observe_verified_upper(&mut self, number: u64, hash: [u8; 32]) -> Result<(), String> {
+        if let Some((previous_number, previous_hash)) = self.last_verified_upper {
+            if number < previous_number {
+                self.invalidate();
+                return Err("Verified finalized upper bound regressed".to_owned());
+            }
+            if number == previous_number && hash != previous_hash {
+                self.invalidate();
+                return Err(
+                    "Verified finalized upper hash conflicted at the same height".to_owned(),
+                );
+            }
+        }
+        if self
+            .anchors
+            .get(&number)
+            .is_some_and(|existing| *existing != hash)
+            || self
+                .exact_recent
+                .get(&number)
+                .is_some_and(|existing| *existing != hash)
+        {
+            self.invalidate();
+            return Err(
+                "Verified finalized upper conflicted with a proof-derived anchor".to_owned(),
+            );
+        }
+        self.last_verified_upper = Some((number, hash));
+        self.insert_proven_anchor(number, hash)
+    }
+
+    fn nearest_anchor_at_or_above(
+        &self,
+        number: u64,
+        verified_upper_number: u64,
+    ) -> Option<(u64, [u8; 32])> {
+        self.anchors
+            .range(number..=verified_upper_number)
+            .next()
+            .map(|(height, hash)| (*height, *hash))
+    }
+
+    fn exact_blocks(
+        &self,
+        start_number: u64,
+        end_number: u64,
+    ) -> Option<Vec<ChainFinalizedBlockSnapshot>> {
+        let expected_len = end_number
+            .checked_sub(start_number)?
+            .checked_add(1)
+            .and_then(|length| usize::try_from(length).ok())?;
+        let blocks = self
+            .exact_recent
+            .range(start_number..=end_number)
+            .map(|(number, hash)| ChainFinalizedBlockSnapshot {
+                block_number: *number,
+                block_hash: *hash,
+            })
+            .collect::<Vec<_>>();
+        (blocks.len() == expected_len).then_some(blocks)
+    }
+
+    fn insert_proven_anchor(&mut self, number: u64, hash: [u8; 32]) -> Result<(), String> {
+        if let Some(existing) = self.anchors.get(&number) {
+            if *existing != hash {
+                self.invalidate();
+                return Err(
+                    "Conflicting proof-derived finalized hash at the same height".to_owned(),
+                );
+            }
+            return Ok(());
+        }
+        if number % self.stride != 0 {
+            return Ok(());
+        }
+        self.anchors.insert(number, hash);
+        self.compact();
+        Ok(())
+    }
+
+    /// 一次 ancestry 全部验证成功后，原子登记 sparse path 与请求区间的 exact identities。
+    fn commit_proven_batch(
+        &mut self,
+        staged_stride: u64,
+        sparse_path: &[(u64, [u8; 32])],
+        exact_blocks: &[ChainFinalizedBlockSnapshot],
+    ) -> Result<(), String> {
+        if exact_blocks.is_empty()
+            || exact_blocks.len() > FINALIZED_EXACT_RECENT_CAPACITY
+            || exact_blocks
+                .windows(2)
+                .any(|pair| pair[0].block_number.checked_add(1) != Some(pair[1].block_number))
+        {
+            self.invalidate();
+            return Err(
+                "Proof-derived exact finalized batch has an invalid length or order".to_owned(),
+            );
+        }
+
+        let conflicts = sparse_path.iter().any(|(number, hash)| {
+            self.anchors
+                .get(number)
+                .is_some_and(|existing| existing != hash)
+                || self
+                    .exact_recent
+                    .get(number)
+                    .is_some_and(|existing| existing != hash)
+        }) || exact_blocks.iter().any(|block| {
+            self.anchors
+                .get(&block.block_number)
+                .is_some_and(|existing| *existing != block.block_hash)
+                || self
+                    .exact_recent
+                    .get(&block.block_number)
+                    .is_some_and(|existing| *existing != block.block_hash)
+        });
+        if conflicts {
+            self.invalidate();
+            return Err("Conflicting proof-derived finalized hash at the same height".to_owned());
+        }
+
+        if staged_stride > self.stride {
+            self.stride = staged_stride;
+            let stride = self.stride;
+            self.anchors
+                .retain(|number, _| *number == 0 || *number % stride == 0);
+        }
+        for (number, hash) in sparse_path {
+            if *number % self.stride == 0 {
+                self.anchors.insert(*number, *hash);
+            }
+        }
+        self.compact();
+
+        for block in exact_blocks {
+            self.exact_recent
+                .insert(block.block_number, block.block_hash);
+        }
+        let protected_start = exact_blocks
+            .first()
+            .map(|block| block.block_number)
+            .ok_or_else(|| "Proof-derived exact batch lost its start".to_owned())?;
+        let protected_end = exact_blocks
+            .last()
+            .map(|block| block.block_number)
+            .ok_or_else(|| "Proof-derived exact batch lost its end".to_owned())?;
+        while self.exact_recent.len() > FINALIZED_EXACT_RECENT_CAPACITY {
+            let eviction = self
+                .exact_recent
+                .keys()
+                .copied()
+                .find(|number| *number < protected_start || *number > protected_end)
+                .ok_or_else(|| {
+                    "Exact finalized cache cannot retain the current batch".to_owned()
+                })?;
+            self.exact_recent.remove(&eviction);
+        }
+        Ok(())
+    }
+
+    fn compact(&mut self) {
+        while self.anchors.len() > FINALIZED_ANCESTRY_MAX_ANCHORS {
+            self.stride = self.stride.checked_mul(2).unwrap_or(u64::MAX);
+            let stride = self.stride;
+            self.anchors
+                .retain(|number, _| *number == 0 || *number % stride == 0);
+        }
+    }
+
+    fn invalidate(&mut self) {
+        self.stride = FINALIZED_ANCESTRY_BASE_STRIDE;
+        self.anchors.clear();
+        self.exact_recent.clear();
+        self.last_verified_upper = None;
     }
 }
 
@@ -371,7 +573,7 @@ impl RecentBlockCache {
         .map_err(|error| format!("Failed to decode finalized block header: {error}"))?
         .number;
 
-        self.finalized = Some((finalized_number, finalized_hash));
+        self.begin_subscription_reset(finalized_number, finalized_hash)?;
         self.best = Some((finalized_number, finalized_hash));
         self.observed_blocks.clear();
         self.observed_blocks.insert(
@@ -400,6 +602,46 @@ impl RecentBlockCache {
 
         self.rebuild_canonical_chain();
         Ok(())
+    }
+
+    /// 在重建订阅视图前只保留旧 finalized 边界已经证明的历史。
+    ///
+    /// 旧 best 分支中高于旧 finalized 的条目仍可能被新订阅重组。若直接按
+    /// `number < new_finalized` 继承，旧 A 分支会被拼到新 B finalized head 下面并被
+    /// `chain_known_block_hash` 错误提升为 finalized canonical。旧 finalized 及以前的
+    /// 条目已经由轻客户端 finality 证明，可以安全保留；中间缺口必须等待新视图提供
+    /// 可验证祖先，当前无法证明时宁可返回 `None`。
+    fn begin_subscription_reset(
+        &mut self,
+        finalized_number: u64,
+        finalized_hash: [u8; 32],
+    ) -> Result<(), String> {
+        if let Some((previous_number, previous_hash)) = self.finalized {
+            if finalized_number < previous_number {
+                return Err("Finalized block regressed while rebuilding recent block cache".into());
+            }
+            if finalized_number == previous_number && finalized_hash != previous_hash {
+                return Err(
+                    "Finalized block hash changed at the same height while rebuilding recent block cache"
+                        .into(),
+                );
+            }
+            self.canonical_chain.retain(|(number, hash)| {
+                *number < previous_number || (*number == previous_number && *hash == previous_hash)
+            });
+        } else {
+            self.canonical_chain.clear();
+        }
+        self.finalized = Some((finalized_number, finalized_hash));
+        Ok(())
+    }
+
+    /// 丢弃无法继续证明的整个按高度视图；调用方随后必须从新订阅重新建立。
+    fn invalidate(&mut self) {
+        self.canonical_chain.clear();
+        self.observed_blocks.clear();
+        self.finalized = None;
+        self.best = None;
     }
 
     fn apply_notification(
@@ -562,6 +804,48 @@ impl RecentBlockCache {
     }
 }
 
+#[cfg(test)]
+mod recent_block_cache_tests {
+    use super::RecentBlockCache;
+
+    #[test]
+    fn subscription_reset_never_promotes_old_unfinalized_fork() {
+        let finalized_90 = [0x90; 32];
+        let old_99 = [0xa9; 32];
+        let old_100 = [0xaa; 32];
+        let new_100 = [0xbb; 32];
+        let mut cache = RecentBlockCache::new(128);
+        cache.finalized = Some((90, finalized_90));
+        cache.canonical_chain = vec![
+            (100, old_100),
+            (99, old_99),
+            (90, finalized_90),
+            (89, [0x89; 32]),
+        ];
+
+        cache
+            .begin_subscription_reset(100, new_100)
+            .unwrap_or_else(|error| panic!("forward finalized reset must succeed: {error}"));
+        cache.best = Some((100, new_100));
+        cache.rebuild_canonical_chain();
+
+        assert_eq!(cache.block_hash(100), Some(new_100));
+        assert_eq!(cache.block_hash(99), None);
+        assert_eq!(cache.block_hash(90), Some(finalized_90));
+        assert_eq!(cache.block_hash(89), Some([0x89; 32]));
+    }
+
+    #[test]
+    fn subscription_reset_rejects_finality_regression_and_same_height_conflict() {
+        let mut cache = RecentBlockCache::new(128);
+        cache.finalized = Some((90, [0x90; 32]));
+
+        assert!(cache.begin_subscription_reset(89, [0x89; 32]).is_err());
+        assert!(cache.begin_subscription_reset(90, [0xff; 32]).is_err());
+        assert!(cache.begin_subscription_reset(90, [0x90; 32]).is_ok());
+    }
+}
+
 /// Returns by [`Client::add_chain`] on success.
 pub struct AddChainSuccess<TPlat: PlatformRef> {
     /// Newly-allocated identifier for the chain.
@@ -617,6 +901,524 @@ pub struct ChainStatusSnapshot {
     pub warp_verified_fragment_count: u64,
     pub warp_rejected_fragment_count: u64,
     pub warp_last_failure: Option<WarpFailure>,
+}
+
+/// Proof-backed storage values together with the exact block snapshot selected
+/// by the synchronization service.
+///
+/// The block identity is part of the result contract so callers never need to
+/// infer it from a head sampled before or after this asynchronous operation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChainStorageValuesSnapshot {
+    /// Number of the block whose state root verified `values`.
+    pub block_number: u64,
+    /// Hash of the block whose state root verified `values`.
+    pub block_hash: [u8; 32],
+    /// Values in the same order as the requested storage keys, including
+    /// duplicate keys and explicit `None` entries.
+    pub values: Vec<Option<Vec<u8>>>,
+}
+
+/// 同一次已固定 best runtime 调用得到的账户 nonce 与准确块身份。
+///
+/// `block_hash`、`block_number` 和 `nonce` 在一个 runtime subscription/pin 生命周期内
+/// 产生；调用方不得用调用前后的 head 采样替代本快照，因为中间可能发生 A→B→A。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChainAccountNonceSnapshot {
+    /// 发起本次 runtime 调用的原始 AccountId 字节。
+    pub account_id: Vec<u8>,
+    /// 本次 runtime 调用实际固定的 best 块高度。
+    pub block_number: u64,
+    /// 本次 runtime 调用实际固定的 best 块 hash。
+    pub block_hash: [u8; 32],
+    /// `AccountNonceApi_account_nonce` 在该准确块返回的 nonce。
+    pub nonce: u64,
+}
+
+/// 由 verified finalized ancestry 证明的一个 canonical 块身份。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ChainFinalizedBlockSnapshot {
+    pub block_number: u64,
+    pub block_hash: [u8; 32],
+}
+
+/// 从同一个 verified finalized 上界回溯得到的升序 canonical 块闭区间。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ChainFinalizedBlocksSnapshot {
+    pub upper_block_number: u64,
+    pub upper_block_hash: [u8; 32],
+    pub blocks: Vec<ChainFinalizedBlockSnapshot>,
+}
+
+/// finalized ancestry 的强类型失败分类，供上层保持安全错误语义。
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ChainFinalizedAncestryError {
+    InvalidArgument(String),
+    AboveVerifiedUpper(String),
+    Integrity(String),
+    Unavailable(String),
+}
+
+impl fmt::Display for ChainFinalizedAncestryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidArgument(message)
+            | Self::AboveVerifiedUpper(message)
+            | Self::Integrity(message)
+            | Self::Unavailable(message) => formatter.write_str(message),
+        }
+    }
+}
+
+fn validated_finalized_ancestry_range_len(
+    start_number: u64,
+    end_number: u64,
+    maximum_blocks: NonZero<u64>,
+) -> Result<usize, ChainFinalizedAncestryError> {
+    if start_number > end_number {
+        return Err(ChainFinalizedAncestryError::InvalidArgument(
+            "Finalized ancestry start is above end".to_owned(),
+        ));
+    }
+    let length = end_number
+        .checked_sub(start_number)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| {
+            ChainFinalizedAncestryError::InvalidArgument(
+                "Finalized ancestry range length overflow".to_owned(),
+            )
+        })?;
+    if length > maximum_blocks.get() {
+        return Err(ChainFinalizedAncestryError::InvalidArgument(
+            "Finalized ancestry range exceeds the caller's hard limit".to_owned(),
+        ));
+    }
+    usize::try_from(length).map_err(|_| {
+        ChainFinalizedAncestryError::InvalidArgument(
+            "Finalized ancestry range exceeds platform limits".to_owned(),
+        )
+    })
+}
+
+/// 对网络返回的 header 逐步执行 hash/number/parent ancestry 验证。
+///
+/// 唯一信任根是同步状态机给出的 exact verified finalized 上界；best 通知、recent block
+/// cache 和 peer 自报高度都不会进入本状态机。
+struct FinalizedAncestryVerifier {
+    upper_block_number: u64,
+    upper_block_hash: [u8; 32],
+    start_number: u64,
+    end_number: u64,
+    next_number: Option<u64>,
+    next_hash: Option<[u8; 32]>,
+    descending_blocks: Vec<ChainFinalizedBlockSnapshot>,
+}
+
+impl FinalizedAncestryVerifier {
+    fn try_new(
+        upper_block_number: u64,
+        upper_block_hash: [u8; 32],
+        start_number: u64,
+        end_number: u64,
+    ) -> Result<Self, String> {
+        if start_number > end_number {
+            return Err("Finalized ancestry start is above end".to_owned());
+        }
+        if end_number > upper_block_number {
+            return Err("Finalized ancestry end is above verified upper bound".to_owned());
+        }
+        Ok(Self {
+            upper_block_number,
+            upper_block_hash,
+            start_number,
+            end_number,
+            next_number: Some(upper_block_number),
+            next_hash: Some(upper_block_hash),
+            descending_blocks: Vec::new(),
+        })
+    }
+
+    fn next_request(&self) -> Option<(u64, [u8; 32])> {
+        self.next_number.zip(self.next_hash)
+    }
+
+    fn accept(
+        &mut self,
+        block_data: codec::BlockData,
+        block_number_bytes: usize,
+    ) -> Result<(), String> {
+        let (expected_number, expected_hash) = self
+            .next_request()
+            .ok_or_else(|| "Finalized ancestry received an unexpected extra header".to_owned())?;
+        if block_data.hash != expected_hash {
+            return Err("Finalized ancestry response hash differs from requested hash".to_owned());
+        }
+        let encoded_header = block_data
+            .header
+            .ok_or_else(|| "Finalized ancestry response is missing its header".to_owned())?;
+        if header::hash_from_scale_encoded_header(&encoded_header) != expected_hash {
+            return Err("Finalized ancestry header hash differs from requested hash".to_owned());
+        }
+        let decoded = header::decode(&encoded_header, block_number_bytes)
+            .map_err(|error| format!("Failed to decode finalized ancestry header: {error}"))?;
+        if decoded.number != expected_number {
+            return Err("Finalized ancestry header number differs from expected height".to_owned());
+        }
+
+        if expected_number <= self.end_number {
+            self.descending_blocks.push(ChainFinalizedBlockSnapshot {
+                block_number: expected_number,
+                block_hash: expected_hash,
+            });
+        }
+
+        if expected_number == self.start_number {
+            self.next_number = None;
+            self.next_hash = None;
+        } else {
+            let parent_number = expected_number.checked_sub(1).ok_or_else(|| {
+                "Finalized ancestry reached genesis before requested start".to_owned()
+            })?;
+            self.next_number = Some(parent_number);
+            self.next_hash = Some(*decoded.parent_hash);
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<ChainFinalizedBlocksSnapshot, String> {
+        if self.next_request().is_some() {
+            return Err("Finalized ancestry ended before the requested start height".to_owned());
+        }
+        self.descending_blocks.reverse();
+        let expected_len_u64 = self
+            .end_number
+            .checked_sub(self.start_number)
+            .and_then(|distance| distance.checked_add(1))
+            .ok_or_else(|| "Finalized ancestry range length overflow".to_owned())?;
+        let expected_len = usize::try_from(expected_len_u64)
+            .map_err(|_| "Finalized ancestry range exceeds platform limits".to_owned())?;
+        if self.descending_blocks.len() != expected_len
+            || self
+                .descending_blocks
+                .iter()
+                .enumerate()
+                .any(|(index, block)| {
+                    u64::try_from(index)
+                        .ok()
+                        .and_then(|offset| self.start_number.checked_add(offset))
+                        != Some(block.block_number)
+                })
+        {
+            return Err("Finalized ancestry result is incomplete or non-contiguous".to_owned());
+        }
+        Ok(ChainFinalizedBlocksSnapshot {
+            upper_block_number: self.upper_block_number,
+            upper_block_hash: self.upper_block_hash,
+            blocks: self.descending_blocks,
+        })
+    }
+}
+
+#[cfg(test)]
+mod finalized_ancestry_tests {
+    use super::*;
+
+    fn encode_header(parent_hash: [u8; 32], number: u64) -> Vec<u8> {
+        let mut encoded = Vec::with_capacity(100);
+        encoded.extend_from_slice(&parent_hash);
+        if number < 1 << 6 {
+            encoded.push((number as u8) << 2);
+        } else if number < 1 << 14 {
+            encoded.extend_from_slice(&(((number as u16) << 2) | 0b01).to_le_bytes());
+        } else {
+            panic!("test header helper only supports heights below 2^14");
+        }
+        encoded.extend_from_slice(&[0x11; 32]);
+        encoded.extend_from_slice(&[0x22; 32]);
+        encoded.push(0);
+        encoded
+    }
+
+    fn block_data(header: Vec<u8>) -> codec::BlockData {
+        codec::BlockData {
+            hash: header::hash_from_scale_encoded_header(&header),
+            header: Some(header),
+            body: None,
+            justifications: None,
+        }
+    }
+
+    fn chain(last: u64) -> Vec<codec::BlockData> {
+        let mut blocks = Vec::new();
+        let mut parent_hash = [0; 32];
+        for number in 0..=last {
+            let header = encode_header(parent_hash, number);
+            let block = block_data(header);
+            parent_hash = block.hash;
+            blocks.push(block);
+        }
+        blocks
+    }
+
+    #[test]
+    fn ancestry_walk_supports_more_than_recent_cache_capacity_and_orders_batch() {
+        let blocks = chain(200);
+        let upper = blocks[200].hash;
+        let mut verifier = FinalizedAncestryVerifier::try_new(200, upper, 5, 124)
+            .unwrap_or_else(|error| panic!("valid range: {error}"));
+        for number in (5..=200).rev() {
+            assert_eq!(
+                verifier.next_request(),
+                Some((number, blocks[number as usize].hash))
+            );
+            verifier
+                .accept(blocks[number as usize].clone(), 4)
+                .unwrap_or_else(|error| panic!("valid ancestry step: {error}"));
+        }
+        let snapshot = verifier
+            .finish()
+            .unwrap_or_else(|error| panic!("valid ancestry result: {error}"));
+        assert_eq!(snapshot.upper_block_number, 200);
+        assert_eq!(snapshot.upper_block_hash, upper);
+        assert_eq!(snapshot.blocks.len(), 120);
+        assert_eq!(
+            snapshot.blocks.first().map(|block| block.block_number),
+            Some(5)
+        );
+        assert_eq!(
+            snapshot.blocks.last().map(|block| block.block_number),
+            Some(124)
+        );
+    }
+
+    #[test]
+    fn public_range_gate_accepts_120_and_rejects_121_and_overflow() {
+        let maximum = NonZero::<u64>::new(120).unwrap_or_else(|| panic!("120 is non-zero"));
+        assert_eq!(
+            validated_finalized_ancestry_range_len(1, 120, maximum).ok(),
+            Some(120)
+        );
+        assert!(validated_finalized_ancestry_range_len(1, 121, maximum).is_err());
+        assert!(validated_finalized_ancestry_range_len(0, u64::MAX, maximum).is_err());
+    }
+
+    #[test]
+    fn ancestry_bounds_fail_before_any_header_is_accepted() {
+        assert!(FinalizedAncestryVerifier::try_new(10, [1; 32], 8, 7).is_err());
+        assert!(FinalizedAncestryVerifier::try_new(10, [1; 32], 8, 11).is_err());
+    }
+
+    #[test]
+    fn missing_malformed_wrong_hash_and_wrong_number_fail_closed() {
+        let blocks = chain(2);
+        let upper = blocks[2].hash;
+
+        let mut missing = FinalizedAncestryVerifier::try_new(2, upper, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        let mut no_header = blocks[2].clone();
+        no_header.header = None;
+        assert!(missing.accept(no_header, 4).is_err());
+
+        let malformed_header = vec![0x01, 0x02];
+        let malformed_data = block_data(malformed_header);
+        let mut malformed = FinalizedAncestryVerifier::try_new(2, malformed_data.hash, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        assert!(malformed.accept(malformed_data, 4).is_err());
+
+        let mut response_hash = FinalizedAncestryVerifier::try_new(2, upper, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        let mut wrong_response_hash = blocks[2].clone();
+        wrong_response_hash.hash = [0xee; 32];
+        assert!(response_hash.accept(wrong_response_hash, 4).is_err());
+
+        let wrong_number_header = encode_header(blocks[1].hash, 1);
+        let wrong_number_hash = header::hash_from_scale_encoded_header(&wrong_number_header);
+        let mut wrong_number = FinalizedAncestryVerifier::try_new(2, wrong_number_hash, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        assert!(
+            wrong_number
+                .accept(block_data(wrong_number_header), 4)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fork_and_wrong_parent_cannot_escape_verified_anchor() {
+        let canonical = chain(3);
+        let mut fork_header = encode_header(canonical[1].hash, 2);
+        fork_header[40] ^= 0x01;
+        let fork = block_data(fork_header);
+
+        let mut wrong_fork = FinalizedAncestryVerifier::try_new(2, canonical[2].hash, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        let mut fork_as_canonical = fork;
+        fork_as_canonical.hash = canonical[2].hash;
+        assert!(wrong_fork.accept(fork_as_canonical, 4).is_err());
+
+        let wrong_parent_header = encode_header([0xaa; 32], 3);
+        let wrong_parent_hash = header::hash_from_scale_encoded_header(&wrong_parent_header);
+        let mut wrong_parent = FinalizedAncestryVerifier::try_new(3, wrong_parent_hash, 2, 2)
+            .unwrap_or_else(|error| panic!("valid verifier: {error}"));
+        wrong_parent
+            .accept(block_data(wrong_parent_header), 4)
+            .unwrap_or_else(|error| panic!("anchored upper header itself is valid: {error}"));
+        assert_eq!(wrong_parent.next_request(), Some((2, [0xaa; 32])));
+        assert!(wrong_parent.accept(canonical[2].clone(), 4).is_err());
+    }
+
+    #[test]
+    fn sparse_anchor_makes_second_batch_avoid_rewalking_from_upper() {
+        let blocks = chain(500);
+        let mut cache = FinalizedAncestryAnchorCache::new();
+        cache
+            .observe_verified_upper(500, blocks[500].hash)
+            .unwrap_or_else(|error| panic!("verified upper: {error}"));
+
+        let mut first_request_count = 0_u64;
+        for number in (0..=500).rev() {
+            first_request_count += 1;
+            cache
+                .insert_proven_anchor(number, blocks[number as usize].hash)
+                .unwrap_or_else(|error| panic!("proof-derived anchor: {error}"));
+        }
+        assert_eq!(first_request_count, 501);
+
+        let (second_anchor, _) = cache
+            .nearest_anchor_at_or_above(239, 500)
+            .unwrap_or_else(|| panic!("second batch must find a sparse anchor"));
+        let second_request_count = second_anchor - 120 + 1;
+        assert_eq!(second_anchor, 256);
+        assert_eq!(second_request_count, 137);
+        assert!(second_request_count < 500 - 120 + 1);
+    }
+
+    #[test]
+    fn exact_recent_serves_three_per_block_validations_without_more_headers() {
+        let blocks = chain(200);
+        let mut cache = FinalizedAncestryAnchorCache::new();
+        cache
+            .observe_verified_upper(200, blocks[200].hash)
+            .unwrap_or_else(|error| panic!("verified upper: {error}"));
+        let exact = (81..=200)
+            .map(|number| ChainFinalizedBlockSnapshot {
+                block_number: number,
+                block_hash: blocks[number as usize].hash,
+            })
+            .collect::<Vec<_>>();
+        let sparse = (0..=200)
+            .filter(|number| number % FINALIZED_ANCESTRY_BASE_STRIDE == 0)
+            .map(|number| (number, blocks[number as usize].hash))
+            .collect::<Vec<_>>();
+        cache
+            .commit_proven_batch(FINALIZED_ANCESTRY_BASE_STRIDE, &sparse, &exact)
+            .unwrap_or_else(|error| panic!("complete proof batch: {error}"));
+
+        let header_request_count = 120_u64;
+        for number in 81..=200 {
+            for _operation in ["runtime", "body", "storage"] {
+                let hit = cache
+                    .exact_blocks(number, number)
+                    .unwrap_or_else(|| panic!("every exact block must remain cached"));
+                assert_eq!(hit.len(), 1);
+                assert_eq!(hit[0].block_hash, blocks[number as usize].hash);
+            }
+        }
+        assert_eq!(header_request_count, 120);
+        assert_eq!(cache.exact_recent.len(), 120);
+    }
+
+    #[test]
+    fn sparse_cache_is_bounded_and_conflict_invalidates_before_reuse() {
+        let mut cache = FinalizedAncestryAnchorCache::new();
+        for index in 0..=(FINALIZED_ANCESTRY_MAX_ANCHORS as u64 + 32) {
+            let number = index * FINALIZED_ANCESTRY_BASE_STRIDE;
+            cache
+                .insert_proven_anchor(number, [index as u8; 32])
+                .unwrap_or_else(|error| panic!("unique anchor: {error}"));
+        }
+        assert!(cache.anchors.len() <= FINALIZED_ANCESTRY_MAX_ANCHORS);
+        assert!(cache.stride > FINALIZED_ANCESTRY_BASE_STRIDE);
+
+        let conflicting_height = cache
+            .anchors
+            .keys()
+            .next()
+            .copied()
+            .unwrap_or_else(|| panic!("compacted cache must retain an anchor"));
+        let existing = cache.anchors[&conflicting_height];
+        let mut conflicting = existing;
+        conflicting[0] ^= 0xff;
+        assert!(
+            cache
+                .insert_proven_anchor(conflicting_height, conflicting)
+                .is_err()
+        );
+        assert!(cache.anchors.is_empty());
+        assert!(cache.exact_recent.is_empty());
+        assert!(cache.last_verified_upper.is_none());
+    }
+
+    #[test]
+    fn verified_upper_regression_or_same_height_fork_invalidates_cache() {
+        let mut cache = FinalizedAncestryAnchorCache::new();
+        cache
+            .observe_verified_upper(10, [0xaa; 32])
+            .unwrap_or_else(|error| panic!("first upper: {error}"));
+        assert!(cache.observe_verified_upper(10, [0xbb; 32]).is_err());
+        assert!(cache.last_verified_upper.is_none());
+
+        cache
+            .observe_verified_upper(11, [0xcc; 32])
+            .unwrap_or_else(|error| panic!("fresh upper after invalidation: {error}"));
+        assert!(cache.observe_verified_upper(10, [0xaa; 32]).is_err());
+        assert!(cache.last_verified_upper.is_none());
+    }
+
+    #[test]
+    fn lock_linearized_resample_does_not_misread_legal_upper_progress_as_regression() {
+        let mut cache = FinalizedAncestryAnchorCache::new();
+
+        // 请求 A 在等待 cache 锁之前看到 #100；请求 B 先获得锁，并在线性化区间内
+        // 看到、提交 #101。生产路径要求 A 取得锁后重新采样，所以它随后也观察 #101，
+        // 不能把锁外的旧 #100 交给 cache。
+        let stale_sample_before_lock = (100, [0x10; 32]);
+        let request_b_sample_inside_lock = (101, [0x11; 32]);
+        cache
+            .observe_verified_upper(
+                request_b_sample_inside_lock.0,
+                request_b_sample_inside_lock.1,
+            )
+            .unwrap_or_else(|error| panic!("legal finalized advance: {error}"));
+
+        let request_a_resample_inside_lock = request_b_sample_inside_lock;
+        cache
+            .observe_verified_upper(
+                request_a_resample_inside_lock.0,
+                request_a_resample_inside_lock.1,
+            )
+            .unwrap_or_else(|error| panic!("same linearized verified upper: {error}"));
+        assert_eq!(
+            cache.last_verified_upper,
+            Some(request_b_sample_inside_lock)
+        );
+        assert_ne!(stale_sample_before_lock, request_a_resample_inside_lock);
+    }
+
+    #[test]
+    fn lock_linearized_observation_still_rejects_real_regression_and_same_height_conflict() {
+        let mut cache = FinalizedAncestryAnchorCache::new();
+        cache
+            .observe_verified_upper(101, [0x11; 32])
+            .unwrap_or_else(|error| panic!("initial verified upper: {error}"));
+        assert!(cache.observe_verified_upper(100, [0x10; 32]).is_err());
+        assert!(cache.last_verified_upper.is_none());
+
+        cache
+            .observe_verified_upper(101, [0x11; 32])
+            .unwrap_or_else(|error| panic!("upper after invalidation: {error}"));
+        assert!(cache.observe_verified_upper(101, [0x12; 32]).is_err());
+        assert!(cache.last_verified_upper.is_none());
+    }
 }
 
 /// 统一 runtime 近头启发式与同步状态机阶段的完成语义。
@@ -822,6 +1624,129 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
         }))
     }
 
+    /// 从同步状态机的 exact verified finalized 锚回溯并验证一个 canonical 高度闭区间。
+    ///
+    /// 每一步都按上一步 header 的 parent hash 请求下一条 header，并核对响应 hash、完整
+    /// SCALE header hash 与期望高度。该过程不读取 best 通知或 mixed recent block cache，
+    /// 因而 stale best、通知延迟和 A→B fork 不会改变 finalized 结论。
+    pub fn chain_finalized_blocks_at(
+        &self,
+        chain_id: ChainId,
+        start_number: u64,
+        end_number: u64,
+        maximum_blocks: NonZero<u64>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn core::future::Future<
+                        Output = Result<ChainFinalizedBlocksSnapshot, ChainFinalizedAncestryError>,
+                    > + Send,
+            >,
+        >,
+        ChainFinalizedAncestryError,
+    > {
+        // 先做纯算术门禁；超大范围不能触发 service clone、网络请求或结果分配。
+        let _expected_len =
+            validated_finalized_ancestry_range_len(start_number, end_number, maximum_blocks)?;
+        let services = self
+            .clone_chain_services(chain_id)
+            .map_err(ChainFinalizedAncestryError::Unavailable)?;
+        let block_number_bytes = services.sync_service.block_number_bytes();
+
+        Ok(Box::pin(async move {
+            // 先取得独立 finalized proof cache 的串行化锁，再读取同步状态机的 verified
+            // 字段。否则并发调用可能让较早采到 upper=100 的请求排在已提交 upper=101 的
+            // 请求之后进入缓存，把合法推进误判成回退。该锁本来就覆盖整次 ancestry walk，
+            // 因而把快照采样移入锁内不会扩大并发边界。
+            let mut anchor_cache = services.finalized_ancestry_cache.lock().await;
+            // 必须直接读取同步状态机的 verified 字段；surface finalized/best 通知可能仍旧。
+            let activity = services.sync_service.sync_activity_snapshot().await;
+            if end_number > activity.current_verified_finalized_block_number {
+                return Err(ChainFinalizedAncestryError::AboveVerifiedUpper(
+                    "Finalized ancestry end is above verified upper bound".to_owned(),
+                ));
+            }
+            anchor_cache
+                .observe_verified_upper(
+                    activity.current_verified_finalized_block_number,
+                    activity.current_verified_finalized_block_hash,
+                )
+                .map_err(ChainFinalizedAncestryError::Integrity)?;
+            // exact recent 只能来自此前完整成功的 ancestry batch；命中仍已先完成 current
+            // verified upper 的单调性/同高 hash 复核，因此它是性能索引而非第二安全真源。
+            if let Some(blocks) = anchor_cache.exact_blocks(start_number, end_number) {
+                return Ok(ChainFinalizedBlocksSnapshot {
+                    upper_block_number: activity.current_verified_finalized_block_number,
+                    upper_block_hash: activity.current_verified_finalized_block_hash,
+                    blocks,
+                });
+            }
+            // 只选此前从 verified ancestry 推导并保持无冲突的独立 sparse anchor。
+            // 缓存淘汰时回退到当前 verified upper，仅影响请求数量，不改变验证步骤。
+            let (proof_anchor_number, proof_anchor_hash) = anchor_cache
+                .nearest_anchor_at_or_above(
+                    end_number,
+                    activity.current_verified_finalized_block_number,
+                )
+                .unwrap_or((
+                    activity.current_verified_finalized_block_number,
+                    activity.current_verified_finalized_block_hash,
+                ));
+            let mut verifier = FinalizedAncestryVerifier::try_new(
+                proof_anchor_number,
+                proof_anchor_hash,
+                start_number,
+                end_number,
+            )
+            .map_err(ChainFinalizedAncestryError::Integrity)?;
+            let mut staged_stride = anchor_cache.stride;
+            let mut staged_sparse_path = Vec::new();
+
+            while let Some((expected_number, expected_hash)) = verifier.next_request() {
+                let block_data = services
+                    .sync_service
+                    .clone()
+                    .block_query_unknown_number(
+                        expected_hash,
+                        codec::BlocksRequestFields {
+                            header: true,
+                            body: false,
+                            justifications: false,
+                        },
+                        3,
+                        Duration::from_secs(12),
+                        NonZero::<u32>::new(1).unwrap(),
+                    )
+                    .await
+                    .map_err(|_| {
+                        ChainFinalizedAncestryError::Unavailable(
+                            "Failed to download a finalized ancestry header by exact hash"
+                                .to_owned(),
+                        )
+                    })?;
+                verifier
+                    .accept(block_data, block_number_bytes)
+                    .map_err(ChainFinalizedAncestryError::Integrity)?;
+                if expected_number % staged_stride == 0 {
+                    staged_sparse_path.push((expected_number, expected_hash));
+                    if staged_sparse_path.len() > FINALIZED_ANCESTRY_MAX_ANCHORS {
+                        staged_stride = staged_stride.checked_mul(2).unwrap_or(u64::MAX);
+                        staged_sparse_path
+                            .retain(|(number, _)| *number == 0 || *number % staged_stride == 0);
+                    }
+                }
+            }
+
+            let snapshot = verifier
+                .finish()
+                .map_err(ChainFinalizedAncestryError::Integrity)?;
+            anchor_cache
+                .commit_proven_batch(staged_stride, &staged_sparse_path, &snapshot.blocks)
+                .map_err(ChainFinalizedAncestryError::Integrity)?;
+            Ok(snapshot)
+        }))
+    }
+
     /// Returns a block hash if it is already present in the local sync view.
     pub fn chain_known_block_hash(
         &self,
@@ -919,6 +1844,10 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
     }
 
     /// Returns multiple storage values of the current best block without going through legacy JSON-RPC.
+    ///
+    /// This compatibility projection intentionally discards the observed block
+    /// identity. Security-sensitive consumers should call
+    /// [`Client::chain_storage_values_snapshot`] and verify that identity.
     pub fn chain_storage_values(
         &self,
         chain_id: ChainId,
@@ -927,14 +1856,34 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
         Pin<Box<dyn core::future::Future<Output = Result<Vec<Option<Vec<u8>>>, String>> + Send>>,
         String,
     > {
+        if storage_keys.is_empty() {
+            return Ok(Box::pin(async { Ok(Vec::new()) }));
+        }
+        let snapshot = self.chain_storage_values_snapshot(chain_id, storage_keys)?;
+        Ok(Box::pin(async move {
+            snapshot.await.map(|snapshot| snapshot.values)
+        }))
+    }
+
+    /// Returns proof-backed storage values and the exact best block observed by
+    /// the synchronization service for this operation.
+    pub fn chain_storage_values_snapshot(
+        &self,
+        chain_id: ChainId,
+        storage_keys: Vec<Vec<u8>>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn core::future::Future<Output = Result<ChainStorageValuesSnapshot, String>>
+                    + Send,
+            >,
+        >,
+        String,
+    > {
         let services = self.clone_chain_services(chain_id)?;
         let block_number_bytes = services.sync_service.block_number_bytes();
 
         Ok(Box::pin(async move {
-            if storage_keys.is_empty() {
-                return Ok(Vec::new());
-            }
-
             let subscribe_all = services.sync_service.subscribe_all(16, false).await;
             let (block_number, block_hash, block_state_trie_root_hash) =
                 if let Some(best_non_finalized) = subscribe_all
@@ -968,6 +1917,14 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                         *decoded_header.state_root,
                     )
                 };
+
+            if storage_keys.is_empty() {
+                return Ok(ChainStorageValuesSnapshot {
+                    block_number,
+                    block_hash,
+                    values: Vec::new(),
+                });
+            }
 
             let mut values: Vec<Option<Option<Vec<u8>>>> =
                 (0..storage_keys.len()).map(|_| None).collect();
@@ -1010,11 +1967,19 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                 }
             }
 
-            Ok(values.into_iter().map(|value| value.flatten()).collect())
+            Ok(ChainStorageValuesSnapshot {
+                block_number,
+                block_hash,
+                values: values.into_iter().map(|value| value.flatten()).collect(),
+            })
         }))
     }
 
     /// Returns multiple storage values of the latest finalized block without going through legacy JSON-RPC.
+    ///
+    /// This compatibility projection intentionally discards the observed block
+    /// identity. Security-sensitive consumers should call
+    /// [`Client::chain_finalized_storage_values_snapshot`] and verify it.
     pub fn chain_finalized_storage_values(
         &self,
         chain_id: ChainId,
@@ -1023,14 +1988,34 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
         Pin<Box<dyn core::future::Future<Output = Result<Vec<Option<Vec<u8>>>, String>> + Send>>,
         String,
     > {
+        if storage_keys.is_empty() {
+            return Ok(Box::pin(async { Ok(Vec::new()) }));
+        }
+        let snapshot = self.chain_finalized_storage_values_snapshot(chain_id, storage_keys)?;
+        Ok(Box::pin(async move {
+            snapshot.await.map(|snapshot| snapshot.values)
+        }))
+    }
+
+    /// Returns proof-backed storage values and the exact finalized block
+    /// observed by the synchronization service for this operation.
+    pub fn chain_finalized_storage_values_snapshot(
+        &self,
+        chain_id: ChainId,
+        storage_keys: Vec<Vec<u8>>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn core::future::Future<Output = Result<ChainStorageValuesSnapshot, String>>
+                    + Send,
+            >,
+        >,
+        String,
+    > {
         let services = self.clone_chain_services(chain_id)?;
         let block_number_bytes = services.sync_service.block_number_bytes();
 
         Ok(Box::pin(async move {
-            if storage_keys.is_empty() {
-                return Ok(Vec::new());
-            }
-
             let subscribe_all = services.sync_service.subscribe_all(16, false).await;
             let decoded_header = header::decode(
                 &subscribe_all.finalized_block_scale_encoded_header,
@@ -1042,6 +2027,14 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                 &subscribe_all.finalized_block_scale_encoded_header,
             );
             let block_state_trie_root_hash = *decoded_header.state_root;
+
+            if storage_keys.is_empty() {
+                return Ok(ChainStorageValuesSnapshot {
+                    block_number,
+                    block_hash,
+                    values: Vec::new(),
+                });
+            }
 
             // 中文注释：金额展示统一读 finalized 状态根，避免 best 头上短暂可见的余额
             // 和最终确认后的余额不一致；交易三段状态仍由上层监听 best/inBlock/finalized。
@@ -1088,7 +2081,11 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                 }
             }
 
-            Ok(values.into_iter().map(|value| value.flatten()).collect())
+            Ok(ChainStorageValuesSnapshot {
+                block_number,
+                block_hash,
+                values: values.into_iter().map(|value| value.flatten()).collect(),
+            })
         }))
     }
 
@@ -1219,12 +2216,35 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
         }))
     }
 
-    /// Returns the next usable account nonce of the current best block without going through legacy JSON-RPC.
+    /// 返回当前 best 块的账户 nonce；保留给现有 FFI 的兼容投影。
+    ///
+    /// 本入口刻意丢弃准确块身份。安全敏感调用方必须改用
+    /// [`Client::chain_account_next_index_snapshot`]。
     pub fn chain_account_next_index(
         &self,
         chain_id: ChainId,
         account_id: Vec<u8>,
-    ) -> Result<Pin<Box<dyn core::future::Future<Output = Result<u64, String>>>>, String> {
+    ) -> Result<Pin<Box<dyn core::future::Future<Output = Result<u64, String>> + Send>>, String>
+    {
+        let snapshot = self.chain_account_next_index_snapshot(chain_id, account_id)?;
+        Ok(Box::pin(async move {
+            snapshot.await.map(|snapshot| snapshot.nonce)
+        }))
+    }
+
+    /// 不经过 legacy JSON-RPC，返回 nonce 与同次 runtime call 固定的准确 best 块身份。
+    pub fn chain_account_next_index_snapshot(
+        &self,
+        chain_id: ChainId,
+        account_id: Vec<u8>,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn core::future::Future<Output = Result<ChainAccountNonceSnapshot, String>> + Send,
+            >,
+        >,
+        String,
+    > {
         let services = self.clone_chain_services(chain_id)?;
 
         Ok(Box::pin(async move {
@@ -1274,6 +2294,9 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                     )
                 };
 
+            // 保留调用账户用于结果身份绑定；传给 runtime 的字节来自同一份输入，不允许
+            // provider 在返回后重新拼接另一账户。
+            let requested_account_id = account_id.clone();
             let nonce_result = services
                 .runtime_service
                 .runtime_call(
@@ -1303,7 +2326,12 @@ impl<TPlat: platform::PlatformRef, TChain> Client<TPlat, TChain> {
                 .as_slice()
                 .try_into()
                 .map_err(|_| "Failed to decode runtime output".to_string())?;
-            Ok(u64::from(u32::from_le_bytes(nonce_bytes)))
+            Ok(ChainAccountNonceSnapshot {
+                account_id: requested_account_id,
+                block_number,
+                block_hash,
+                nonce: u64::from(u32::from_le_bytes(nonce_bytes)),
+            })
         }))
     }
 
@@ -2391,6 +3419,8 @@ fn start_services<TPlat: platform::PlatformRef>(
     let recent_block_cache = Arc::new(async_lock::Mutex::new(RecentBlockCache::new(
         RECENT_BLOCK_CACHE_CAPACITY,
     )));
+    let finalized_ancestry_cache =
+        Arc::new(async_lock::Mutex::new(FinalizedAncestryAnchorCache::new()));
     spawn_recent_block_cache_task(
         platform,
         log_name.clone(),
@@ -2422,6 +3452,7 @@ fn start_services<TPlat: platform::PlatformRef>(
         sync_service,
         transactions_service,
         recent_block_cache,
+        finalized_ancestry_cache,
     }
 }
 
@@ -2440,9 +3471,22 @@ fn spawn_recent_block_cache_task<TPlat: platform::PlatformRef>(
                 .subscribe_all(RECENT_BLOCK_CACHE_SUBSCRIPTION_BUFFER, false)
                 .await;
 
-            {
+            let reset_succeeded = {
                 let mut cache = recent_block_cache.lock().await;
-                let _ = cache.reset_from_subscription(&subscribe_all, block_number_bytes);
+                if cache
+                    .reset_from_subscription(&subscribe_all, block_number_bytes)
+                    .is_ok()
+                {
+                    true
+                } else {
+                    // finality 回退、同高度冲突或畸形 header 都使旧视图失去可组合性。
+                    // 清空后重新订阅，期间历史查询只会返回 `None`，不会把旧分支提升。
+                    cache.invalidate();
+                    false
+                }
+            };
+            if !reset_succeeded {
+                continue;
             }
 
             let new_blocks = subscribe_all.new_blocks;

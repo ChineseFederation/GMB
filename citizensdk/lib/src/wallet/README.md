@@ -1,8 +1,13 @@
-# 无根热钱包
+# 旧 Dart 无根热钱包差分基线
 
 CitizenSDK 保持 CitizenApp 已验证的 ROOTLESS 模型：设备只保存每个 `//index` 账户的
 child mini-secret，绝不保存助记词或母种子。账户公开资料、秘密写入计划与待清理计划进入
 `WalletRepository`，私钥材料只进入 `SecureSeedStore`。
+
+Android、iOS 与 macOS 正式公共 API 均不再导出或调用本目录。创建、导入和追加账户由
+SDK-owned 原生界面处理明确输入，Rust Core 负责派生、加密和清零；Dart 只接收
+`CitizenWalletProfile`。本目录及其显式内部导入测试仅作为归档差分基线；删除或更新时必须
+同步审查来源闭集、行为测试和发布门禁。
 
 SDK 当前固定一只热钱包、多个账户；独立 CitizenWallet 冷钱包不在本产品范围。创建时
 助记词只返回一次，恢复或追加账户要求用户重新输入助记词与可选 password。

@@ -59,14 +59,23 @@ fn identity_namespace_contains_only_public_ss58_capability() {
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for relative in ["src/identity/keystore.rs", "src/identity/seed_phrase.rs"] {
-        assert!(!root.join(relative).exists(), "出现第二套私钥管理文件: {relative}");
+        assert!(
+            !root.join(relative).exists(),
+            "出现第二套私钥管理文件: {relative}"
+        );
     }
 }
 
 #[test]
 fn product_features_are_absent_from_state_runtime_roots() {
     let sources = [DATABASE, EXECUTOR, IDENTITY, JSON_RPC, SS58, TRIE];
-    for forbidden in ["chat_mls", "openmls", "account_crypto", "account-crypto", "tuyu"] {
+    for forbidden in [
+        "chat_mls",
+        "openmls",
+        "account_crypto",
+        "account-crypto",
+        "tuyu",
+    ] {
         assert!(
             sources
                 .iter()

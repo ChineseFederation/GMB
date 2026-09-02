@@ -8,7 +8,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/isar/app_isar.dart';
 import 'package:citizenapp/isar/isar_core_bootstrap.dart';
 import 'package:citizenapp/isar/user_isar.dart';

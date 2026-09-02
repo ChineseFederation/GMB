@@ -57,7 +57,7 @@ impl CapabilityTracker {
             None => 1,
         };
         let snapshot = CapabilitySnapshot::try_new(revision, candidate.statuses().to_vec())
-            .map_err(|error| EngineError::Contract(error.to_string()))?;
+            .map_err(EngineError::from)?;
         self.current = Some(snapshot.clone());
         Ok(snapshot)
     }
@@ -134,11 +134,10 @@ pub fn resolve_capabilities(
             ready,
             reason,
         )
-        .map_err(|error| EngineError::Contract(error.to_string()))?;
+        .map_err(EngineError::from)?;
         statuses.push(status);
     }
-    CapabilitySnapshot::try_new(revision, statuses)
-        .map_err(|error| EngineError::Contract(error.to_string()))
+    CapabilitySnapshot::try_new(revision, statuses).map_err(EngineError::from)
 }
 
 fn is_ready(

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:citizenapp/chat/chat_product_policy.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 
 void main() {
   const mib = 1024 * 1024;

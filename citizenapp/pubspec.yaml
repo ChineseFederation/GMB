@@ -82,10 +82,9 @@ dependencies:
   image: ^4.9.1
   # 文章正文富文本编辑器；11.5.1 实现 Flutter 3.44 新增的 TextInputClient.onFocusReceived。
   flutter_quill: 11.5.1
-  # 本机脚本使用临时 pubspec_overrides.yaml 直连同仓 ChatSDK；该文件退出即删。
-  # ChatSDK 首次正式 Release 后，本依赖再固定到准确 chatsdk-sdk-v* Git Tag。
-  gmb_chat_sdk:
-    path: ../chatsdk
+  # CitizenApp 本机开发直接读取 TATA 仓库中的 TataChatSDK 唯一源码。
+  tatachat_sdk:
+    path: ../../TATA/tatachatsdk
 dev_dependencies:
   flutter_test:
     sdk: flutter

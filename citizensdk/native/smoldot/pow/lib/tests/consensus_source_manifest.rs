@@ -48,13 +48,22 @@ const REQUIRED_FILES: [(&str, &[u8]); 26] = [
         "src/finality/verify.rs",
         include_bytes!("../src/finality/verify.rs"),
     ),
-    ("src/header/aura.rs", include_bytes!("../src/header/aura.rs")),
-    ("src/header/babe.rs", include_bytes!("../src/header/babe.rs")),
+    (
+        "src/header/aura.rs",
+        include_bytes!("../src/header/aura.rs"),
+    ),
+    (
+        "src/header/babe.rs",
+        include_bytes!("../src/header/babe.rs"),
+    ),
     (
         "src/header/grandpa.rs",
         include_bytes!("../src/header/grandpa.rs"),
     ),
-    ("src/header/tests.rs", include_bytes!("../src/header/tests.rs")),
+    (
+        "src/header/tests.rs",
+        include_bytes!("../src/header/tests.rs"),
+    ),
     (
         "src/header/tests/header-kusama-7472481",
         include_bytes!("../src/header/tests/header-kusama-7472481"),
@@ -63,8 +72,14 @@ const REQUIRED_FILES: [(&str, &[u8]); 26] = [
         "src/header/tests/header-polkadot-512271",
         include_bytes!("../src/header/tests/header-polkadot-512271"),
     ),
-    ("src/verify/aura.rs", include_bytes!("../src/verify/aura.rs")),
-    ("src/verify/babe.rs", include_bytes!("../src/verify/babe.rs")),
+    (
+        "src/verify/aura.rs",
+        include_bytes!("../src/verify/aura.rs"),
+    ),
+    (
+        "src/verify/babe.rs",
+        include_bytes!("../src/verify/babe.rs"),
+    ),
     (
         "src/verify/body_only.rs",
         include_bytes!("../src/verify/body_only.rs"),

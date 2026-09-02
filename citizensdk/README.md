@@ -4,26 +4,99 @@ CitizenSDK 是 GMB 根目录下的独立公民链客户端产品，向宿主应�
 无根热钱包、sr25519 本地签名和链上交易能力。源码唯一目录是
 `/Users/rhett/GMB/citizensdk`，Dart 包名为 `citizen_sdk`，产品 ID 为 `citizensdk`。
 
-当前源码已经收编 CitizenApp 使用的公民链 smoldot PoW 轻节点闭包、Dart smoldot 包、
-sr25519 signer、链资产与依赖锁，并在产品无关的 Dart/Flutter 层实现轻节点生命周期、
-finalized 数据库、多账户热钱包、硬件金库、任意协议载荷签名和
-钱包完整可用性核验、账户改名、用户主动的子账户私钥导出、finalized 单/批余额读取、链上
-手续费估算，以及 `OnchainTransaction.transfer_with_remark` 交易提交与执行结果核对。
-标准移动装配还提供广播前 pending 持久化、逐账户 finalized 流水、重启游标补扫与明确
-`System.ExtrinsicSuccess/Failed` 终态收敛。
+当前源码已经收编 CitizenApp 使用的公民链 smoldot PoW 轻节点闭包、sr25519 signer、链资产与
+依赖锁。根公开 Dart API、Android Kotlin/Java 与 Flutter 投影，以及 Apple 共享 Darwin 源码的
+Swift 与 Flutter 投影，已经统一通过产品 C ABI 调用 Rust Core，由 Core 实现轻节点生命周期、
+finalized 数据库、多账户热钱包、硬件金库、任意协议载荷
+签名、钱包完整可用性核验、账户改名、finalized 单/批余额、链上手续费估算，以及
+`transfer_with_remark` 的构造、签名、pending-before-broadcast、观察和执行结果核验。
+从 CitizenApp 收编的旧 Dart smoldot、钱包、交易与私钥导出代码只在 `lib/src` 内保留为归档与
+差分测试基线，已经从根入口移除；Android、iOS 和 macOS 正式绑定均不导出或调用这些实现。
 CitizenApp 现有功能和
 依赖保持不变；只有在 SDK 稳定后，才会另行设计 CitizenApp 的切换步骤。
 
-第 2 步已经在 `native/contracts` 建立类型化 Core 合同，并在 `native/engine` 建立产品无关的
-Rust 协调核心。它们固定 `VerifiedChainClient`、`ChainSigner`、`SecretVault`、五类状态仓储、
-十项能力状态、准确区块 runtime context、启动前状态导入门禁和同一 extrinsic index 的
-`System.ExtrinsicSuccess/Failed` 执行结论。Engine 仅使用官方 `subxt-core = 0.43.0` 解码
-metadata 与 `System.Events`，没有增加远程 RPC 客户端或第二个轻节点。
+Rust 路径已经建立 `native/contracts`、`native/engine`、真实
+`native/smoldot/provider` 和产品级唯一 `native/ffi`。根 `include/citizensdk.h` 只公开
+`citizensdk_*`。ABI v1 保持 legacy `citizensdk_create` 路径原有 36 个符号及其数值、布局和
+单请求功能语义不变，再追加 34 个类型化
+符号，总计 70 个：除生命周期、异步请求、事件、所有权、能力快照、准确区块读取、已签名
+交易提交/观察、同块执行核验及 finalized database 导入导出外，还投影账户余额、准确 best
+nonce、费用、钱包生命周期/多账户、本地载荷签名、高层钱包转账和 finalized 历史。
+`citizensdk_create` 继续是兼容的 chain-only session 构造；`citizensdk_create_with_host` 通过
+五类具名 typed stores 与 KEK/DEK `SecretVault` 组合完整平台无关 Core。Provider 直接驱动
+已收编的 smoldot 轻节点；任意 JSON-RPC 方法只存在于 crate 私有固定 allowlist，不能由
+Dart、Swift、Kotlin 或 C/C++ 传入。创建实例时 Rust 会再次核对随包资产摘要、正式链身份、
+完整 #0 header、genesis 和 state root，随后才构造轻节点。
 
-这是已落地的核心边界，不是运行路径已经切换的声明。当前 Flutter 产品仍由现有 Dart
-`CitizenSdk`、钱包服务和内嵌 smoldot 绑定执行；产品级唯一 C ABI、provider 适配及 Dart
-改接安排在第 3 步。因此本步骤没有宣称助记词、mini-secret 或私钥已经不经过 Dart，也没有
-改变当前 Android/iOS API 或平台安全金库行为。
+Engine 固定 `VerifiedChainClient`、`ChainSigner`、`SecretVault`、五类状态仓储、十项能力状态、
+准确区块 runtime context、启动前状态导入门禁和同一 extrinsic index 的
+`System.ExtrinsicSuccess/Failed` 执行结论。它仅使用官方 `subxt-core = 0.43.0` 解码 metadata
+与 `System.Events`。提交时 Provider 还会独立计算完整 signed extrinsic（含 Compact 长度前缀）
+的 Blake2-256，节点返回不一致即失败关闭。链身份、生命周期和 capability revision 均由
+Engine 持有；`CHAIN_READ`、提交和核验只有在 Engine 为 `Running` 且 smoldot 自身报告
+`is_usable` 时才 ready，不能用 peer 数、高度或等待时间猜测。
+
+状态导入触及 Provider 后若失败，同一 Engine/Provider 组合保持不可复用的 `StartFailed`；
+导入前还会读取 revisioned `ChainDatabaseStore` 的 finalized 锚，拒绝高度回退和同高度哈希
+冲突，并以 CAS/写后回读保存 exact 状态。产品 ABI 当前要求绑定销毁该 handle、创建新实例并
+跳过坏导入后，才能从随包 #0 checkpoint 重启；归档 legacy Dart 差分基线的自动清坏缓存回退
+没有迁入产品 ABI。跨 Engine 或进程防回退仍要求 store provider 提供共享、耐久、强原子 CAS。
+
+只有 `citizensdk_create_with_host` 启用自动链数据库生命周期：`citizensdk_start` 在任何 provider
+启动副作用前从 typed store 恢复并复核状态，`citizensdk_export_state` 在返回前 CAS 持久化同一
+稳定快照，`citizensdk_stop` 则在退订、停止产品服务和停止 provider 前先完成同一 checkpoint；
+持久化失败会保留 Running 状态和全部停止依赖，供宿主重试。直接 `citizensdk_destroy` 不是优雅
+checkpoint API，宿主必须先成功 stop；旧 `citizensdk_create` 的显式 import/export 与原 stop
+语义保持不变。host 构造的 start/stop/import 还是独占生命周期请求：只有此前异步请求已全部
+完成才会受理；受理后，新请求、回调/订阅控制和 destroy 在完成前返回 `BUSY`，因此 checkpoint、
+provider stop 与 Engine 状态提交之间不能插入另一项链或钱包工作。
+
+Rust 钱包公开合同同步固定现有热钱包事实：wallet index 为 `0`，账户 index `0` 必须等于
+`masterAccountId`，账户范围为 `//0..//1989`，SS58 prefix 为 `2027`。创建/导入 provisioning
+的 previous profile 必须为空且拥有目标 profile 全部 exact secret refs；追加账户的 previous
+profile 必须是目标账户列表的严格前缀、既有字段逐项不变，且计划只拥有新增 suffix。
+active cleanup 与最多 64 项 queue 均不得命中当前 profile 的 exact secrets 或当前 generation
+的 wallet key；各计划的 operation ID 与物理目标也不得重叠。
+
+第 4.1/4.2 步已经在 Rust Core 源码内实现并组合账户、钱包、构造和历史行为：finalized
+`System.Account` 单读/批读；同一准确 best metadata 的链上费率、最低费与存在性存款；绑定
+请求账户和 best 块的 `AccountNonceApi_account_nonce` 准确 Runtime nonce；English BIP-39
+12/24 词、可选 NFKD password、
+`//0..//1989`；钱包创建、导入、追加、可用性核验、改名、切换、删除与清理重放；以及准确
+CitizenChain signed extrinsic V4 的 `transfer_with_remark` 构造。创建采用
+`prepare_wallet_creation -> 用户确认备份 -> commit_wallet_creation_after_backup` 两阶段合同：
+准备阶段对 profile、密文和硬件 KEK 零写入，因而用户看到唯一恢复词前崩溃不会留下不可恢复
+钱包。构造固定 pallet `4` / call
+`0`、正分金额、最多 99 UTF-8 字节备注、immortal era、tip `0`、正式 genesis 与同块
+runtime/transaction version，并采用 Subxt 的长载荷签名规则。source AccountId 必须等于从
+金库秘密取得的 sr25519 公钥，生成的签名还会用同一公钥立即复核。
+
+钱包公开事实、产品无关 sr25519 密钥/金库与业务账户协议是三层不同边界。公民链账户及交易
+属于 SDK；`SecretVault -> SecretBuffer -> ChainSigner` 只在 Rust 内短暂解锁、签名并清零；
+TUYU challenge、TuyuBooking 员工身份及其它业务授权不进入 SDK。业务协议可以请求钱包用
+同一用户公钥签一段明确载荷，但不能因此把三套账户、权限或审计记录合并。
+
+产品 C ABI 与 Dart/Android/Apple 官方投影已经落地。根 Dart 入口只公开类型化
+`CitizenSdkClient`；Android Flutter 插件与原生 AAR 都调用同一个 Kotlin facade、JNI 和
+Rust Core。iOS 与 macOS 共用 `darwin/` 的 Swift、Flutter adapter、typed SQLite stores 与
+`SecretVault`，并通过同一个 `CitizenSDK.xcframework` 消费产品 Core；三端正式绑定均不运行
+legacy Dart 钱包或 legacy `libsmoldot`。完整 `citizensdk_create_with_host` 组合固定 smoldot provider、准确
+Runtime nonce 与唯一 `Sr25519SoftwareSigner`，并要求宿主提供 chain database、runtime
+cache、wallet profile、transaction history、encrypted secret blob 五类职责隔离的 store；
+secure store 与 `SecretVault` 必须全有或全无。原 `citizensdk_create` 则继续准确保持
+chain-only，不能把一个构造的能力快照冒充整个 ABI 的能力边界。
+
+产品 ABI 不导出 private key、child mini-secret、裸 signer 或钱包 signed extrinsic。创建钱包
+唯一允许输出助记词的边界是 SDK 拥有、绑定 owner instance handle 的 prepared-wallet 会话：
+宿主只可为明确备份 UI 查询/复制一次并 commit 或 release，另一实例不能读取、释放或消费。
+import/add 只接收用户明确输入的恢复词；它们不是秘密导出接口。
+
+finalized 历史每次最多处理 120 个连续高度。provider 从同步状态机的准确 verified finalized
+锚按 parent hash 逐头回溯，逐项核对响应 hash、SCALE header hash、高度和父链；它不把 best、
+recent cache 或按高度返回的 peer 值提升为 finalized 证明。独立有界 proof-derived cache 只减少
+重复回溯，不能改变结论。Engine 在完整 provider/store await 与最后一次 CAS 期间持有代际租约，
+stop/dispose 不能跨过提交窗口；同账户处于 Pending/InBlock 时只允许同一交易幂等重放，避免
+准确 Runtime nonce 在本地并发交易中被复用。
 
 `assets/README.md` 固定随包资产与设备运行状态的边界，正式链信任资产统一位于
 `assets/citizenchain`。SDK 在创建或初始化 smoldot 原生客户端前先验证固定 manifest、
@@ -32,64 +105,165 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
 
 ## 当前交付边界
 
-- 正式 CI/Release 候选只声明 Android `arm64-v8a` 与 iOS `arm64`。
-- macOS arm64+x86_64 宿主动态库和同 Runner 架构的 iOS Simulator 静态库只用于自动化
-  测试，不是正式分发平台或正式 SDK 资产。
-- 原生核心和 Dart 分层可继续适配 macOS、Linux、Windows，但这些桌面平台目前没有完成
-  插件、安全金库、打包与发布验收，不能宣称已经交付。
+- Android `arm64-v8a` 使用产品 ABI；正式候选同时交付原生 AAR 和供 Flutter 插件使用的
+  同字节 `libcitizensdk.so`、`libcitizensdk_jni.so`。
+- iOS 同时支持设备 ARM64 与 `iOS-Simulator` ARM64。Swift 原生 API 与 Flutter adapter 共用
+  `darwin/` 生产源码，并从同一个 `CitizenSDK.xcframework` 调用产品 ABI；`iOS-Simulator` 无 Secure
+  Enclave，硬件金库与钱包能力必须如实报告不可用。
+- macOS（仅支持 ARM64 架构）与 iOS 共用上述 Darwin 源码、Swift API、Flutter adapter 和
+  XCFramework 产品边界；产品名始终只写作 macOS。
+- Linux、Windows 仍没有完成语言绑定、平台金库、打包与发布闭环，不能宣称已经交付。
 - 聊天、广场、OpenMLS、TUYU 账户签名协议、旅行/生活/商家业务均不属于 CitizenSDK。
 - CitizenWallet 冷钱包是独立产品，不属于本 SDK 的能力收编范围。
 
 ## 安全边界
 
-- sr25519 context 固定为 `substrate`，密码学实现只使用 SDK 内部 `native/signer`。
+- sr25519 context 固定为 `substrate`。`native/signer/src/sr25519.rs` 是 SDK 内唯一算法
+  实现；legacy 四个 FFI 原语和类型化 `ChainSigner` 都调用它，不维护第二份密码学逻辑。
 - 助记词和母种子不持久化；账户 child mini-secret 只保存为用户设备硬件金库密文并在
   本地解锁、签名。
-- 私钥导出只返回用户明确选择账户的 child mini-secret；不可擦除的 Dart `String` 必须由
-  宿主在风险确认和防截屏界面即时处理，禁止记录、持久化或上传。
+- Rust 为每个 child 生成随机 32 字节 DEK 和随机 nonce，以 AES-256-GCM 加密并把完整
+  `SecretRef` 作为 AAD；宿主金库只 wrap/unwrap DEK。unwrap 直接写入 Rust-owned 的精确
+  32 字节缓冲区。Apple Security framework 解封时返回的不可变 `CFData` 只在对应
+  `autoreleasepool` 内短暂存活；桥接层避免生成 Swift `Data`/COW 副本，在不能可靠原地清零的
+  边界下立即把精确 32 字节复制到 Rust 输出，并由 pool 排空释放。该值不进入 public API 或
+  Flutter；Rust-owned DEK 与 child 明文仍在使用后清零。
+- Rust Core 不提供私钥导出。Android 的恢复词输入/备份只存在于 SDK-owned、非导出且
+  `FLAG_SECURE` 的 Activity；Apple 通过共享 Darwin 的 SDK-owned native flow 处理同一明确
+  输入/备份边界。Apple SDK-owned wallet UI 会在流程终态前由文本控件和短期 Swift `String`
+  持有恢复词/password；终态会 best-effort 清空控件与 Rust 敏感 buffer，但 Swift `String` 不可
+  可靠擦除。它们不得返回 public Swift API、记录、持久化或进入 Flutter。助记词、password、
+  DEK、child secret、private key 与 native/result/prepared handle 都
+  没有 Flutter tuple 位置。旧 Dart `getAccountPrivateKey` 仅保留为归档差分基线，
+  不在任何正式绑定或根公开 API。
+- Apple 把可重建的链数据库、runtime cache 和交易公开事实放入 typed public SQLite，把钱包
+  profile、加密秘密信封及 Vault 引用放入权限更严的 typed secure SQLite。Secure Enclave
+  仅保护 generation-scoped KEK，用来 wrap/unwrap 随机 DEK；sr25519 始终由 Rust signer 完成。
 - 新硬件金库产品标识固定为 `citizensdk`，宿主不能用产品名创建另一套 SDK 密钥空间。
 - 每只钱包使用 CSPRNG 生成的独占 generation，每个账户秘密使用独占 owner；硬件 KEK、
   密文键与 AAD 都绑定这些身份，迟到清理不能命中随后成功的钱包或同 AccountId 的另一代秘密。
+- 每个已删除 SecretRef 必须留下不可逆密文墓碑，整钱包删除还必须在系统金库持久退休该
+  generation。进程内操作门只是减少冲突；跨进程迟到写入由这两道持久 fence 拒绝，不能把
+  “物理删除成空槽”当作删除成功。
 - 公开钱包状态在 secret 写入前保存 provisioning，并保存 active cleanup 与 exact
-  cleanup queue。默认 Preferences 装配只承诺同 Dart isolate 内的跨实例单写；跨执行引擎
-  必须由宿主同时提供强原子仓储和覆盖整个钱包操作的单写协调。
+  cleanup queue。保留的 legacy Dart Preferences 基线只承诺同 Dart isolate 内的跨实例单写；
+  Android 与 Apple 正式 typed store 使用独立持久合同。任何 Rust store provider 都必须实现共享、耐久
+  CAS、永久墓碑和 generation retirement，不能只依赖进程锁。
 - SDK 不包含远程签名或通用远程 RPC；公民链交易由设备内 smoldot 轻节点通过 P2P 广播。
-- 宿主如果注入 `WalletRepository`、`SecureSeedStore` 等底层接口，就进入受信任宿主边界；
-  SDK 无法防止恶意宿主实现复制传入的秘密，产品集成必须审查这些注入点。
+- 归档 legacy Dart 差分基线仍含 `WalletRepository`、`SecureSeedStore` 等高级注入点；它们不是根
+  `CitizenSdkClient` 或任何正式平台 API。使用这些内部注入点的测试进入受信任边界，SDK 无法
+  防止恶意实现复制传入的秘密。
+
+Rust 钱包交易只公开一个 `transfer_with_remark` 高级入口：内部构造对象不可从 Engine 取出，必须先
+以本地完整 extrinsic hash 持久化 source/destination/amount/remark/nonce，再向 provider
+广播。纯链客户端保留的预签名 raw submit 是无钱包组合的高级迁移入口；一旦注入任一钱包交易
+组件，它也必须命中内部 pending，否则广播前失败关闭。底层 watch 实际执行 submit-and-watch；
+组合钱包组件后该 raw 入口同样在 provider 前关闭。`inBlock`、`finalized` 或返回 txHash
+均不是执行成功；历史只接受由完整 hash/body/event 核验器产生的内部终态令牌，令牌把 txHash
+与同一 extrinsic index 的 `System.ExtrinsicSuccess/Failed` 绑定，不能由绑定层伪造或误配。
+宿主给出的 finality 位同样不是证明；Engine 先让轻节点把 hash/height 解析到 verified finalized
+canonical 链，再直接从 provider 取得该块 runtime context；持久 runtime cache 不是执行证据。
+finalized 流水拒绝自转并对业务/Balances 双事件严格一对一配对，本地 pending 认领发送方
+outgoing、保留接收方 incoming，同一原始块重放不能恢复已消费 pending。
+高层转账的完整 terminal future 使用独立四线程长观察池，不占用短操作 worker；只有经
+canonical finalized body、该块准确 metadata 与同 index `System.Events` 核验后才返回终态。
+取消、dropped/retracted、timeout、provider 错误或流中断会结束本次观察，但不会清除 durable
+Pending/InBlock single-flight 门，后续只能经历史协调继续收敛。
+
+`sign_wallet_payload` 仍是受信任宿主可调用的产品无关账户签名能力，可承载 TUYU 等明确协议。
+因为它返回通用 sr25519 签名，宿主技术上可以在 SDK 高层交易路径之外使用该结果；上述 pending
+保证只覆盖 SDK 自己的高层钱包交易入口。产品 C ABI 已通过
+`citizensdk_sign_wallet_payload` 投影该方法；后续语言绑定必须保留这条信任边界，不能宣称
+SDK 在密码学上限制了宿主的所有签名用途。
 
 ## 构建与分发
 
-根 Rust workspace 现在统一包含 `native/contracts`、`native/engine` 与 `native/signer`。
-contracts/engine 是 CitizenSDK 自有源码闭包，独立进入 Release 来源和测试闭集；既有
-`native/smoldot/SOURCE_SHA256.json` 仍只描述 CitizenApp 收编的 smoldot 来源，不被改写成
-Rust Core 清单。第 2 步没有新增平台原生产物；第 3 步完成唯一 C ABI 后才改变运行时链接面。
+根 Rust workspace 现在统一包含 `native/contracts`、`native/engine`、`native/ffi`、
+`native/signer` 与 `native/smoldot/provider`；收编的 PoW/light-base 继续使用已验证的嵌套
+workspace 语义。`native/smoldot/SOURCE_SHA256.json` 同时分类逐字节来源、适配文件与
+SDK-only Provider，canonical Release 对 Core、Provider、产品 ABI、根公共头文件和测试分别
+做反向闭集校验。`scripts/build-native.sh abi-host` 只在源码树外构建测试用
+`libcitizensdk`，逐项比对公共头文件符号并拒绝泄露 `smoldot_*`、`citizen_sr25519_*` 或
+`account_crypto_*`。Android 正式构建使用一个 Core 与一个薄 JNI bridge，并以 AAR/Flutter
+双投影字节一致、AAR 不含 Flutter class/reference、无嵌套 AAR、无 `libsmoldot` 验收。
+Core 与 JNI 的 ELF SONAME 分别固定为 `libcitizensdk.so` 和 `libcitizensdk_jni.so`；JNI 只能按
+Core SONAME 依赖一次，任何包含 `/` 的 `DT_NEEDED` 都会失败关闭，禁止构建机路径进入设备。
+Android Gradle/Kotlin 的 persistent project state 只能位于 TataConsole 中央 work directory；
+源码 `android/.kotlin` 明确禁止，候选与反向验证也必须拒绝它。
+Apple 候选使用一个 `CitizenSDK.xcframework` 封装同一产品 Core 与 Swift API，Flutter adapter
+只消费该框架而不重建 Core；
+iOS 设备 ARM64、`iOS-Simulator` ARM64 和 macOS（仅支持 ARM64 架构）三个 slice 必须来自同一 Core commit、
+ABI version 与 SDK version。legacy `libsmoldot.dylib` 仅保留为 ARM64 差分测试宿主库；它的
+`LC_ID_DYLIB` 是 build-local 路径，不具分发身份，发布器必须排除并随测试工作目录清理。
+三个 slice 的公开名称精确为 `iOS`、`iOS-Simulator`、`macOS`；`aarch64-apple-ios`、
+`aarch64-apple-ios-sim`、`aarch64-apple-darwin` 只是 Rust 编译 target，不得变成额外产品名或
+macOS 架构后缀。
 
-GMB 的唯一顶层 Workflow 路由 `公民SDK · CI · SDK` 与
+iOS 与 `iOS-Simulator` 使用浅层 `CitizenSDK.framework`，install ID 均固定为
+`@rpath/CitizenSDK.framework/CitizenSDK`。macOS 使用 Apple 标准的
+`Versions/A` framework 布局，install ID 固定为
+`@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`。候选只允许 macOS framework 内部
+`Versions/Current -> A`，以及根 `CitizenSDK`、`Headers`、`Modules`、`Resources` 指向
+`Versions/Current/...` 的精确五个相对符号链接；iOS、`iOS-Simulator` 和候选其他位置不得
+出现任何符号链接。
+
+Apple 本机验证已编译 iOS 设备与 `iOS-Simulator` 两组测试 bundle；本机没有
+Simulator runtime，因此没有把 iOS XCTest 记为已运行。macOS 实际运行 Core 50 项、
+Flutter adapter 22 项 XCTest，0 失败，其中 1 项需要真机硬件的用例跳过；最终
+normal/supervisor 消费者 smoke 均通过。本机没有真实 Apple 移动设备，这些结果不代表
+Secure Enclave、生物认证或 device-only Keychain 已完成真机验收。
+
+同一真实 Flutter consumer 已完成 Android release ARM64 APK、iOS device Release
+no-codesign、`iOS-Simulator` generic ARM64 编译和 macOS Release 构建。这里仅声明产物已从
+公开 Dart API、Flutter adapter 和对应原生投影成功链接构建；本机没有移动真机或 Simulator
+runtime，因此不声称 Android/iOS 真机运行或 `iOS-Simulator` 运行通过。Flutter 对插件 Swift
+Package Manager 目录识别的未来兼容警告，以及 Android built-in Kotlin 的未来迁移提示，统一
+留到第 9 步 Hosted/Flutter 集成处理，不在第 6 步建立第二套投影或扩展工具链范围。
+
+同一本机闭集还完成 Android AAR 构建；Hosted 精确 17 个 Dart 文件分析为 0 问题，完整
+Dart 套件使用 `--timeout=2m` 执行 316/316；根 Rust workspace 执行 285/285、
+compile-fail 文档测试 1/1、Clippy 与格式检查；Android 原生 Kotlin/Java 单元测试 Gradle
+共 17 个 task 成功。这些是本地源码闭集结果，不是远程 CI、正式 Release 或发布记录。
+
+CitizenSDK 最终统一流程合同使用 `公民SDK · CI · SDK` 与
 `公民SDK · Release · SDK`。Release 会复核指定成功 CI 的 workflow、显示标题、产品目标、
 成功状态和准确 `source_sha`，不读取、下载或比较 CI 资产；随后从同一源码提交重新执行依赖
 检查、测试、原生构建和候选生成。这是独立重建与重新验证，不把不同 Runner 的归档字节
 天然相同作为前提。
+当前 TataConsole Flow 尚未接入本 Apple 闭集，也没有运行远程 CI 或正式 Release；
+这些流程名和门禁是后续统一集成的目标合同，不是本步运行记录。
 
 根包已消除本地 `path`/`git` 依赖，目标 Hosted 依赖形式固定为
-`citizen_sdk: ^1.0.0`。CI 与 Release 都在移动原生库注入唯一正式候选之后执行官方
+`citizen_sdk: ^1.0.0`。CI 与 Release 都在 Android/Apple 原生投影注入唯一正式候选之后执行官方
 `dart pub publish --dry-run`；`.pubignore` 只从该候选过滤 Rust 源码、测试、脚本、锁文件和
 审计资料，不建立第二份候选或第二条发布流程。因为 Dart 工具会生成 `.dart_tool`，dry-run 在
-唯一候选的逐字节临时副本中执行，正式候选保持不可变。Dart、Android 与 iOS 源码版本现已
+唯一候选的逐字节临时副本中执行，正式候选保持不可变。Dart、Android 与
+`darwin/citizen_sdk.podspec` 源码版本现已
 统一冻结为 `1.0.0`；发布器要求请求版本、候选 manifest 和三个包版本逐项一致，禁止从旧源码
 临时改号发布。本步骤只冻结首个稳定版源码，不上传 Hosted Package；首次发布完成前仍不得
 宣称 `citizen_sdk: ^1.0.0` 已可从 Hosted Registry 获取。
 
 GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，其中
-tgz 保留完整源码、测试、锁文件、文档与 Android/iOS 原生库，用于来源审计、校验和离线留档；
-Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、移动原生库、README 和完整法律声明。
-两种分发读取同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
+tgz 保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，用于来源审计、校验和离线留档；
+Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/Apple 原生投影、README 和完整法律声明。
+其 Dart 运行闭包精确为 17 个文件：根入口 1 个、`lib/src/api` 6 个、
+`lib/src/crypto/account_codec.dart` 1 个、`lib/src/models` 5 个和 `lib/src/platform` 4 个；
+归档的旧 Dart 链、钱包、交易、smoldot 与 Preferences 实现均由 `.pubignore` 排除。
+Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 AAR、native 测试/C++/构建
+输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 ARM64 SO。两种分发读取
+同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
 公民网下载。
 
 本机 TataConsole 只允许把 CitizenSDK 生成记录写入
-`/Users/rhett/Only/tataconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
+`/Users/rhett/TATA/tataconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
 工作区中的未提交修改不会被冒充成该提交。中央目录现有三件套属于其生成时的历史提交，
 除非重新完成当前提交的统一构建与核验，否则不得称为当前源码候选。
+本轮第 6 步最终安全工作根仅使用
+`/Users/rhett/TATA/tataconsole/target/citizensdk/step6-verification`；结束时必须清理该
+一次性工作根，不占用运行中 TataConsole 会自行管理和清理的 `.work`，也不改动中央 `.cache`
+或历史三件套。本步没有执行 Hosted 上传、
+远程 CI、正式 Release 或 Git 写操作。
 
-详细说明见 `docs/ARCHITECTURE.md`、`docs/DART_API.md`、`docs/WALLET_MODEL.md`、
+详细说明见 `docs/ARCHITECTURE.md`、`docs/C_ABI.md`、`docs/DART_API.md`、`docs/WALLET_MODEL.md`、
 `docs/SECURITY.md`、`docs/SOURCE_PROVENANCE.md`、`docs/MOBILE_PLATFORM.md` 与
 `docs/NATIVE_PACKAGING.md`。

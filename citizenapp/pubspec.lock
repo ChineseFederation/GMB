@@ -201,13 +201,6 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.4.0"
-  gmb_chat_sdk:
-    dependency: "direct main"
-    description:
-      path: "../chatsdk"
-      relative: true
-    source: path
-    version: "1.0.0"
   checked_yaml:
     dependency: transitive
     description:
@@ -1821,6 +1814,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.4.0+1"
+  tatachat_sdk:
+    dependency: "direct main"
+    description:
+      path: "../../TATA/tatachatsdk"
+      relative: true
+    source: path
+    version: "1.0.0"
   term_glyph:
     dependency: transitive
     description:

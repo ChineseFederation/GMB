@@ -1,0 +1,74 @@
+#ifndef CITIZENSDK_HOST_BRIDGE_HPP
+#define CITIZENSDK_HOST_BRIDGE_HPP
+
+#include <jni.h>
+
+#include <atomic>
+#include <cstdint>
+#include <mutex>
+#include <unordered_map>
+#include <vector>
+
+#include "citizensdk.h"
+
+namespace citizen::sdk::jni {
+
+class CitizenSdkHostBridge final {
+ public:
+  CitizenSdkHostBridge(JavaVM *vm, JNIEnv *env, jobject host_services);
+  ~CitizenSdkHostBridge();
+  CitizenSdkHostBridge(const CitizenSdkHostBridge &) = delete;
+  CitizenSdkHostBridge &operator=(const CitizenSdkHostBridge &) = delete;
+
+  bool create(JNIEnv *env, const std::vector<uint8_t> &manifest,
+              const std::vector<uint8_t> &chain_spec,
+              const std::vector<uint8_t> &sync_state);
+  bool bind(JNIEnv *env, jobject native_owner);
+  bool destroy(JNIEnv *env);
+
+  citizensdk_handle_t handle() const { return handle_; }
+  jobject host_services() const { return host_services_; }
+  JavaVM *vm() const { return vm_; }
+
+  uint64_t allocate_prepared_token();
+  void remember_prepared(uint64_t token,
+                         citizensdk_prepared_wallet_handle_t handle);
+  bool prepared(uint64_t token,
+                citizensdk_prepared_wallet_handle_t *out) const;
+  bool forget_prepared(uint64_t token,
+                       citizensdk_prepared_wallet_handle_t *out);
+
+  void remember_unwrap(uint64_t operation_id, void *sdk_context,
+                       citizensdk_host_status_completion_v1_t completion);
+  bool reject_unwrap(uint64_t operation_id);
+  void complete_unwrap(uint64_t operation_id, int32_t error_code);
+
+  void dispatch_event(const citizensdk_event_t &event);
+
+ private:
+  struct PendingUnwrap {
+    void *sdk_context;
+    citizensdk_host_status_completion_v1_t completion;
+  };
+
+  JavaVM *vm_;
+  jobject host_services_;
+  jobject native_owner_ = nullptr;
+  citizensdk_handle_t handle_ = 0;
+  bool callback_bound_ = false;
+  bool capability_subscribed_ = false;
+  citizensdk_host_public_store_v1_t public_store_{};
+  citizensdk_host_secure_store_v1_t secure_store_{};
+  citizensdk_host_secret_vault_v1_t vault_{};
+  citizensdk_host_services_v1_t services_{};
+
+  mutable std::mutex prepared_mutex_;
+  std::unordered_map<uint64_t, citizensdk_prepared_wallet_handle_t> prepared_;
+  std::atomic<uint64_t> next_prepared_{1};
+  std::mutex unwrap_mutex_;
+  std::unordered_map<uint64_t, PendingUnwrap> unwraps_;
+};
+
+}  // namespace citizen::sdk::jni
+
+#endif  // CITIZENSDK_HOST_BRIDGE_HPP

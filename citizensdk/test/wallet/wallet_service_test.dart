@@ -1,7 +1,13 @@
 import 'dart:async';
 import 'dart:typed_data';
 
-import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/crypto/account_codec.dart';
+import 'package:citizen_sdk/src/crypto/citizen_signer.dart';
+import 'package:citizen_sdk/src/wallet/models.dart';
+import 'package:citizen_sdk/src/wallet/secure_seed_store.dart';
+import 'package:citizen_sdk/src/wallet/wallet_error.dart';
+import 'package:citizen_sdk/src/wallet/wallet_repository.dart';
+import 'package:citizen_sdk/src/wallet/wallet_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

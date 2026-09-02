@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:isar_community/isar.dart';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 
 import '../support/isar_test_env.dart';

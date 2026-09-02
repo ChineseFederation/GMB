@@ -6,4 +6,11 @@ pluginManagement {
     }
 }
 
+// The Flutter library compiles the shared native facade through sourceSets and
+// never depends on the AAR. The sibling project exists only so the one root
+// Gradle invocation can also address :native:assembleRelease explicitly.
 rootProject.name = 'citizen_sdk'
+if (file('native/build.gradle').isFile()) {
+    include ':native'
+    project(':native').projectDir = file('native')
+}

@@ -10,10 +10,48 @@ use crate::{
 /// CitizenSDK 唯一正式链身份；不得由绑定层另造网络别名。
 pub const CITIZENCHAIN_CHAIN_ID: &str = "citizenchain";
 pub const CITIZENCHAIN_PROTOCOL_ID: &str = "citizenchain";
+/// 单次 finalized ancestry/history 请求允许的最大连续块数；Engine 与 provider 共用本常量。
+pub const MAX_FINALIZED_BLOCKS_PER_BATCH: u64 = 120;
 pub const CITIZENCHAIN_GENESIS_HASH: Hash32 = Hash32::from_bytes([
     0x18, 0x84, 0x7a, 0x5d, 0xfd, 0x26, 0x32, 0x72, 0xf2, 0xe7, 0x72, 0x78, 0x36, 0xfe, 0x65, 0x82,
     0xf8, 0xc4, 0x46, 0x3f, 0xf4, 0x86, 0x09, 0xdf, 0x7b, 0x96, 0xd5, 0xe4, 0xd9, 0xdd, 0x24, 0xdd,
 ]);
+
+/// 验证 finalized 闭区间并返回安全的本机元素数量。
+///
+/// 本函数必须在网络访问和结果集合分配前调用；121 块、反向区间及长度算术溢出均失败。
+pub fn validated_finalized_block_range_len(
+    start_number: u64,
+    end_number: u64,
+) -> ContractResult<usize> {
+    if start_number > end_number {
+        return Err(ContractError::new(
+            ContractErrorCode::InvalidArgument,
+            "finalized 块闭区间起点不能高于终点",
+        ));
+    }
+    let length = end_number
+        .checked_sub(start_number)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| {
+            ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "finalized 块闭区间长度溢出",
+            )
+        })?;
+    if length > MAX_FINALIZED_BLOCKS_PER_BATCH {
+        return Err(ContractError::new(
+            ContractErrorCode::InvalidArgument,
+            "finalized 块闭区间不能超过 120 块",
+        ));
+    }
+    usize::try_from(length).map_err(|_| {
+        ContractError::new(
+            ContractErrorCode::InvalidArgument,
+            "finalized 块闭区间超过平台容量",
+        )
+    })
+}
 
 /// 32 字节链哈希。区块哈希、genesis hash 和 extrinsic hash 共享字节宽度，调用处仍须
 /// 通过字段名保持业务语义，不允许从可变长度文本猜测。
@@ -343,6 +381,85 @@ pub trait VerifiedChainClient: Send + Sync {
 
     fn get_finalized_head(&self) -> ContractFuture<'_, FinalizedBlockRef>;
 
+    /// 解析一个高度在当前 verified finalized 上界内的 canonical finalized 块。
+    ///
+    /// 生产 provider 必须先读取 verified finalized 上界，再解析目标高度的 canonical hash；
+    /// 不得先读 hash、再用稍后的头部采样补写 finality。默认实现只返回它能直接证明的当前
+    /// finalized head：历史高度和未来高度均失败关闭，绝不为未知高度伪造 hash。
+    fn get_finalized_block_at(&self, number: u64) -> ContractFuture<'_, FinalizedBlockRef> {
+        Box::pin(async move {
+            let upper = self.get_finalized_head().await?;
+            if upper.number() == number {
+                Ok(upper)
+            } else {
+                Err(ContractError::new(
+                    ContractErrorCode::NotFound,
+                    "默认 provider 不能证明目标高度的 finalized canonical hash",
+                ))
+            }
+        })
+    }
+
+    /// 按高度升序解析一个闭区间内的 canonical finalized 块。
+    ///
+    /// 生产 provider 应从一次准确 verified finalized 锚完成整段 ancestry 验证，避免每个
+    /// 高度分别从链头回溯形成 O(n²)。默认实现仅逐项委托强类型单块入口，安全但不承诺
+    /// 历史解析能力；空区间以参数错误失败，绝不返回部分结果。
+    fn get_finalized_blocks_at(
+        &self,
+        start_number: u64,
+        end_number: u64,
+    ) -> ContractFuture<'_, Vec<FinalizedBlockRef>> {
+        Box::pin(async move {
+            let expected_len = validated_finalized_block_range_len(start_number, end_number)?;
+
+            let mut blocks = Vec::with_capacity(expected_len);
+            let mut number = start_number;
+            loop {
+                let block = self.get_finalized_block_at(number).await?;
+                if block.number() != number {
+                    return Err(ContractError::new(
+                        ContractErrorCode::Integrity,
+                        "provider 返回的 finalized 块高度偏离请求顺序",
+                    ));
+                }
+                blocks.push(block);
+                if number == end_number {
+                    break;
+                }
+                number = number.checked_add(1).ok_or_else(|| {
+                    ContractError::new(
+                        ContractErrorCode::InvalidArgument,
+                        "finalized 块闭区间高度溢出",
+                    )
+                })?;
+            }
+            Ok(blocks)
+        })
+    }
+
+    /// 把不受信任的 hash/height 解析为 provider 已证明位于 finalized canonical 链上的块。
+    ///
+    /// 生产 provider 必须支持历史 finalized 块；默认实现只安全接受当前 finalized head，供
+    /// 最小只读 provider 使用。Engine 不得把宿主传入的 `finality` 位当成证明。
+    fn resolve_finalized_block(
+        &self,
+        hash: Hash32,
+        number: u64,
+    ) -> ContractFuture<'_, FinalizedBlockRef> {
+        Box::pin(async move {
+            let canonical = self.get_finalized_block_at(number).await?;
+            if canonical.hash() == hash {
+                Ok(canonical)
+            } else {
+                Err(ContractError::new(
+                    ContractErrorCode::Conflict,
+                    "目标 hash 不是该高度的 finalized canonical hash",
+                ))
+            }
+        })
+    }
+
     fn get_storage_at(
         &self,
         block: VerifiedBlockRef,
@@ -409,4 +526,17 @@ pub trait VerifiedChainClient: Send + Sync {
 
     /// 只允许在 provider 启动前调用。Engine 仍须先核对身份、格式、finalized 与非倒退。
     fn import_state(&self, state: ExportedChainState) -> ContractFuture<'_, StateImportReceipt>;
+}
+
+#[cfg(test)]
+mod finalized_block_range_tests {
+    use super::*;
+
+    #[test]
+    fn range_limit_accepts_120_and_rejects_121_reverse_and_overflow() {
+        assert_eq!(validated_finalized_block_range_len(1, 120).ok(), Some(120));
+        assert!(validated_finalized_block_range_len(1, 121).is_err());
+        assert!(validated_finalized_block_range_len(2, 1).is_err());
+        assert!(validated_finalized_block_range_len(0, u64::MAX).is_err());
+    }
 }

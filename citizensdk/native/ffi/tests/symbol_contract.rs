@@ -1,0 +1,280 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+const EXPECTED_EXPORTS: [&str; 70] = [
+    "citizensdk_abi_version",
+    "citizensdk_add_wallet_accounts",
+    "citizensdk_cancel_request",
+    "citizensdk_commit_wallet_creation",
+    "citizensdk_create",
+    "citizensdk_create_options_size",
+    "citizensdk_create_with_host",
+    "citizensdk_delete_wallet",
+    "citizensdk_delete_wallet_account",
+    "citizensdk_destroy",
+    "citizensdk_export_state",
+    "citizensdk_get_account_nonce",
+    "citizensdk_get_best_fee_snapshot",
+    "citizensdk_get_best_head",
+    "citizensdk_get_capabilities",
+    "citizensdk_get_finalized_account_balance",
+    "citizensdk_get_finalized_head",
+    "citizensdk_get_lifecycle",
+    "citizensdk_get_runtime_context_at",
+    "citizensdk_get_storage_at",
+    "citizensdk_get_storage_batch_at",
+    "citizensdk_get_wallet_profile",
+    "citizensdk_import_state",
+    "citizensdk_import_wallet",
+    "citizensdk_initialize_finalized_history",
+    "citizensdk_last_error_copy",
+    "citizensdk_prepare_wallet_creation",
+    "citizensdk_prepared_wallet_copy_mnemonic",
+    "citizensdk_prepared_wallet_release",
+    "citizensdk_reconcile_wallet_cleanup",
+    "citizensdk_refresh_capabilities",
+    "citizensdk_rename_wallet_account",
+    "citizensdk_result_copy_error_message",
+    "citizensdk_result_copy_storage",
+    "citizensdk_result_copy_storage_batch_item",
+    "citizensdk_result_estimate_fee",
+    "citizensdk_result_get_account_balance",
+    "citizensdk_result_get_account_nonce",
+    "citizensdk_result_get_block_ref",
+    "citizensdk_result_get_execution",
+    "citizensdk_result_get_exported_state",
+    "citizensdk_result_get_fee_snapshot",
+    "citizensdk_result_get_finalized_transfer",
+    "citizensdk_result_get_hash",
+    "citizensdk_result_get_history_cursor",
+    "citizensdk_result_get_history_info",
+    "citizensdk_result_get_history_record",
+    "citizensdk_result_get_info",
+    "citizensdk_result_get_prepared_wallet",
+    "citizensdk_result_get_runtime_context",
+    "citizensdk_result_get_signature",
+    "citizensdk_result_get_storage_batch_count",
+    "citizensdk_result_get_wallet_account",
+    "citizensdk_result_get_wallet_account_count",
+    "citizensdk_result_get_wallet_profile",
+    "citizensdk_result_get_wallet_transfer",
+    "citizensdk_result_get_watch_event",
+    "citizensdk_result_release",
+    "citizensdk_set_active_wallet_account",
+    "citizensdk_set_event_callback",
+    "citizensdk_sign_wallet_payload",
+    "citizensdk_start",
+    "citizensdk_stop",
+    "citizensdk_submit_extrinsic",
+    "citizensdk_subscribe_capability_changes",
+    "citizensdk_sync_finalized_history_batch",
+    "citizensdk_transfer_with_remark",
+    "citizensdk_unsubscribe_capability_changes",
+    "citizensdk_verify_transaction_at",
+    "citizensdk_watch_extrinsic",
+];
+
+fn rust_exports(source: &str) -> BTreeSet<String> {
+    let lines: Vec<_> = source.lines().collect();
+    let mut exports = BTreeSet::new();
+    for (index, line) in lines.iter().enumerate() {
+        if line.trim() != "#[no_mangle]" {
+            continue;
+        }
+        let declaration = lines
+            .iter()
+            .skip(index + 1)
+            .find(|candidate| candidate.contains("fn "))
+            .unwrap_or_else(|| panic!("no_mangle without a function declaration"));
+        let function = declaration
+            .split("fn ")
+            .nth(1)
+            .and_then(|value| value.split(['(', '<']).next())
+            .unwrap_or_else(|| panic!("cannot parse exported declaration: {declaration}"));
+        assert!(
+            function.starts_with("citizensdk_"),
+            "unexpected export {function}"
+        );
+        assert!(
+            exports.insert(function.to_owned()),
+            "duplicate export {function}"
+        );
+    }
+    exports
+}
+
+fn without_block_comments(source: &str) -> String {
+    let mut output = String::with_capacity(source.len());
+    let mut rest = source;
+    while let Some(start) = rest.find("/*") {
+        output.push_str(&rest[..start]);
+        let after_start = &rest[start + 2..];
+        let end = after_start
+            .find("*/")
+            .unwrap_or_else(|| panic!("unterminated C block comment"));
+        output.push(' ');
+        rest = &after_start[end + 2..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn header_declarations(header: &str) -> BTreeMap<String, String> {
+    let uncommented = without_block_comments(header);
+    let declarations = uncommented
+        .lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut exports = BTreeMap::new();
+    for raw in declarations.split(';') {
+        if !raw.contains("CITIZENSDK_API") {
+            continue;
+        }
+        let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+        let mut search = normalized.as_str();
+        let mut parsed = None;
+        while let Some(start) = search.find("citizensdk_") {
+            let candidate = &search[start..];
+            let name_len = candidate
+                .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .unwrap_or(candidate.len());
+            let name = &candidate[..name_len];
+            if candidate[name_len..].trim_start().starts_with('(') {
+                parsed = Some(name.to_owned());
+                break;
+            }
+            search = &candidate[name_len..];
+        }
+        let name =
+            parsed.unwrap_or_else(|| panic!("cannot parse public declaration: {normalized}"));
+        assert!(
+            exports.insert(name.clone(), normalized).is_none(),
+            "duplicate header declaration {name}"
+        );
+    }
+    exports
+}
+
+#[test]
+fn rust_and_c_publish_exactly_the_frozen_seventy_product_symbols() {
+    let expected: BTreeSet<_> = EXPECTED_EXPORTS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    let mut rust = rust_exports(include_str!("../src/lib.rs"));
+    let wallet = rust_exports(include_str!("../src/wallet_abi.rs"));
+    assert_eq!(rust.len(), 36, "base Rust export count changed");
+    assert_eq!(wallet.len(), 34, "wallet Rust export count changed");
+    for export in wallet {
+        assert!(
+            rust.insert(export.clone()),
+            "duplicate Rust export {export}"
+        );
+    }
+    let header: BTreeSet<_> = header_declarations(include_str!("../../../include/citizensdk.h"))
+        .into_keys()
+        .collect();
+
+    assert_eq!(rust.len(), 70, "Rust export count changed");
+    assert_eq!(header.len(), 70, "C declaration count changed");
+    assert_eq!(rust, expected, "Rust export set changed");
+    assert_eq!(header, expected, "C declaration set changed");
+}
+
+#[test]
+fn product_header_has_only_the_three_reviewed_mnemonic_crossings() {
+    let declarations = header_declarations(include_str!("../../../include/citizensdk.h"));
+    let mnemonic_crossings: BTreeSet<_> = declarations
+        .iter()
+        .filter(|(_, declaration)| declaration.contains("mnemonic"))
+        .map(|(name, _)| name.as_str())
+        .collect();
+    assert_eq!(
+        mnemonic_crossings,
+        BTreeSet::from([
+            "citizensdk_add_wallet_accounts",
+            "citizensdk_import_wallet",
+            "citizensdk_prepared_wallet_copy_mnemonic",
+        ])
+    );
+
+    for name in ["citizensdk_add_wallet_accounts", "citizensdk_import_wallet"] {
+        let declaration = &declarations[name];
+        assert!(declaration.contains("citizensdk_bytes_view_t mnemonic"));
+        assert!(!declaration.contains("uint8_t *buffer"));
+    }
+
+    let copy = &declarations["citizensdk_prepared_wallet_copy_mnemonic"];
+    assert!(copy.contains("citizensdk_handle_t handle"));
+    assert!(copy.contains("citizensdk_prepared_wallet_handle_t prepared_wallet"));
+    assert!(copy.contains("uint8_t *buffer"));
+    assert!(copy.contains("uint64_t *out_required"));
+
+    let release = &declarations["citizensdk_prepared_wallet_release"];
+    assert!(release.contains("citizensdk_handle_t handle"));
+    assert!(release.contains("citizensdk_prepared_wallet_handle_t prepared_wallet"));
+
+    // Freeze the Rust side too: the owner handle is part of both prepared
+    // operations, while mnemonic input remains confined to the two audited
+    // zeroizing import/derivation entry points.
+    let wallet_source = include_str!("../src/wallet_abi.rs")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(wallet_source.contains(
+        "fn citizensdk_prepared_wallet_copy_mnemonic( handle: CitizenSdkHandle, \
+         prepared_wallet: CitizenSdkPreparedWalletHandle,"
+    ));
+    assert!(wallet_source.contains(
+        "fn citizensdk_prepared_wallet_release( handle: CitizenSdkHandle, \
+         prepared_wallet: CitizenSdkPreparedWalletHandle,"
+    ));
+    assert!(wallet_source.contains(
+        "fn citizensdk_import_wallet( handle: CitizenSdkHandle, mnemonic: CitizenSdkBytesView,"
+    ));
+    assert!(wallet_source.contains(
+        "fn citizensdk_add_wallet_accounts( handle: CitizenSdkHandle, \
+         mnemonic: CitizenSdkBytesView,"
+    ));
+}
+
+#[test]
+fn product_exports_have_no_provider_rpc_or_secret_escape_hatch() {
+    let header = include_str!("../../../include/citizensdk.h");
+    let declarations = header_declarations(header);
+    let exported_surface = declarations
+        .iter()
+        .map(|(name, declaration)| format!("{name} {declaration}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_ascii_lowercase();
+
+    for forbidden in [
+        "private_key",
+        "mini_secret",
+        "rpc_method",
+        "json_rpc",
+        "raw_rpc",
+        "smoldot_",
+        "citizen_sr25519_",
+        "account_crypto_",
+        "export_secret",
+        "get_secret",
+    ] {
+        assert!(
+            !exported_surface.contains(forbidden),
+            "forbidden public escape hatch {forbidden}"
+        );
+    }
+    assert!(!header.contains("smoldot.h"));
+    assert!(
+        !declarations
+            .keys()
+            .any(|name| name.contains("signed_extrinsic") && name.contains("result")),
+        "signed extrinsic result export is forbidden"
+    );
+
+    let types = include_str!("../../../include/citizensdk_types.h");
+    assert!(types.contains("CITIZENSDK_CAPABILITY_COUNT UINT32_C(10)"));
+    assert!(types.contains("CITIZENSDK_HOST_SECRET_ACCOUNT_MINI_SECRET UINT32_C(1)"));
+}

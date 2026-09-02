@@ -1,91 +1,161 @@
-# CitizenSDK 移动平台实现
+# CitizenSDK Android 与 Apple 平台实现
 
 ## 当前支持边界
 
-当前正式源码与 Release 平台集合只有：
-
-| 平台 | 正式 ABI | 能力 |
+| 平台 | 当前状态 | 正式候选运行件 |
 |---|---|---|
-| Android | `arm64-v8a` | smoldot 轻节点、无根热钱包、硬件金库、sr25519、链上交易 |
-| iOS | `arm64` | smoldot 轻节点、无根热钱包、硬件金库、sr25519、链上交易 |
+| Android `arm64-v8a` | 产品 ABI | `citizensdk.aar`、`libcitizensdk.so`、`libcitizensdk_jni.so` |
+| iOS 设备 ARM64 | 产品 ABI、Swift/Flutter | `CitizenSDK.xcframework` |
+| `iOS-Simulator` ARM64 | 产品 ABI 测试 slice；无 Secure Enclave 钱包能力 | `CitizenSDK.xcframework` |
+| macOS（仅支持 ARM64 架构） | 产品 ABI、Swift/Flutter | `CitizenSDK.xcframework` |
 
-macOS arm64+x86_64 测试动态库只供原生或 Rosetta `flutter_tester` 加载；与 Runner 同架构
-的 iOS Simulator 静态库只供 Swift XCTest，二者均不进入 Release。macOS、Linux、Windows
-的原生核心可以按同一分层继续
-移植，但当前没有正式插件、硬件金库和 Release 资产，不属于已交付平台。
+Linux、Windows 没有正式绑定、硬件金库和 Release 资产，不属于当前交付平台。legacy
+`libsmoldot.dylib` 仅为外部 ARM64 差分测试宿主库，不进入任何 Release 候选。
 
-宿主默认使用 `CitizenSdk.mobile()`；它装配同一个 CitizenSDK，不是额外的钱包 SDK。
+## Dart 与 Flutter 公共边界
 
-## 固定产品与通道
-
-所有新硬件信封产品标识固定为 `citizensdk`。Flutter 通道固定为
-`citizen/sdk/hardware_secretvault`。宿主不能传入另一个产品名，避免相同 SDK 在不同 App
-形成无法审计的密钥分叉。
-
-AAD 结构保持：
+根 Dart 入口只公开 `CitizenSdkClient` 及类型化 chain、wallet、transaction、history API。
+Android 与 Apple Flutter adapter 均使用固定：
 
 ```text
-GMB
-citizensdk
-<wallet-index>
-<wallet-generation>
-<secret-owner>
-<account-id>
-account_mini_secret
+MethodChannel  citizen/sdk/core/v1
+EventChannel   citizen/sdk/events/v1
 ```
 
-硬件 KEK scope 固定为 `citizensdk:<wallet-index>:<wallet-generation>`。`wallet-generation`
-与 `secret-owner` 都是 32 位小写十六进制 CSPRNG 身份。通道只接收字节数组；禁止把助记词、
-mini-secret 或私钥转成平台字符串。
+协议只有 22 个方法。请求、响应、事件、错误和嵌套公开值都是固定长度、固定位置的 `List`
+tuple；没有 `Map` 兼容旁路。request sequence 在接纳时严格连续，但并发响应可乱序并精确回显
+自己的序号；event sequence 独立递增。cancel/relisten 使用订阅代际和 sink identity，旧队列事件
+不得进入新订阅。
 
-## Android
+每个 Flutter engine 只建立一个 EventChannel router，并在 native open 前订阅。早到事件按
+session 隔离进入有界缓冲；open 返回该 session 的 event baseline 后才按序交付，不能为每个
+session 在 open 后另建订阅，也不能让一个 session 的事件填满或越过另一个 session 的队列。
 
-- 2048 位 RSA-OAEP KEK 只接受 StrongBox 或 TEE。
-- KEK 每次使用必须由硬件强制 `BIOMETRIC_STRONG` 认证。
-- 随机 32 字节 AES 密钥以 AES-256-GCM + AAD 加密 child mini-secret，再由 RSA-OAEP 包装。
-- 密文信封版本为 v1；硬件别名前缀和命名空间固定为 `citizensdk`。
-- 插件只声明 `arm64-v8a`。
-- 生产 Kotlin 源码放在 Flutter 插件声明要求的
-  `android/src/main/kotlin/org/citizen/sdk/`，JUnit 源码放在镜像路径
-  `android/src/test/kotlin/org/citizen/sdk/`。这不是额外实现层，而是
-  `pubspec.yaml` 中 `org.citizen.sdk` package 与 `CitizenSdkPlugin` 的官方发现合同；路径各层的
-  README 同时记录命名、测试可见性和源码/产物边界，不存在空包装目录。
+Dart 永远看不到 C request/result/prepared handle、signed extrinsic、助记词、password、DEK、
+mini-secret 或私钥。u64/u128、时间戳和区块高度使用规范十进制字符串；平台 adapter 无损
+投影 u32 后再由 Dart 验证范围。
+finalized history 的 `accountIds` 必须为 1..1990 个且不得重复；Dart 在 session 请求前、Kotlin
+与 Swift 在产品 ABI 前分别失败关闭空列表、超限和重复项。
 
-`BiometricPrompt` 要求 `FragmentActivity`。承载 Flutter 页面的 Activity 必须继承
-`FlutterFragmentActivity` 或提供等价能力；普通 `FlutterActivity` 无法完成硬件认证，钱包
-操作应失败关闭。
+## Android 单一实现
 
-## iOS
+`android/native` 是原生 Android facade、宿主服务、安全 Activity 与 JNI bridge 的唯一生产
+实现。根 Flutter 插件通过 Gradle source set 直接编译其 `src/main/kotlin`，只增加 channel
+投影，不复制 facade，也不嵌套 AAR。原生宿主使用同一源码生成 `android/citizensdk.aar`。
 
-- 最低支持版本固定为 iOS 16.0：设备与 Simulator 的 Rust/C 原生对象由
-  `ios_deployment_target=16.0` 和显式 `IPHONEOS_DEPLOYMENT_TARGET` 约束，插件 podspec 与宿主也固定
-  为 iOS 16.0，不能继承当前 Xcode SDK 的部署版本。
-- 私钥生成在 Secure Enclave。
-- Keychain 可访问性为 `WhenUnlockedThisDeviceOnly`。
-- 访问控制为 `privateKeyUsage + biometryCurrentSet`。
-- ECIES `X963SHA256AESGCM` 信封包含 AAD 摘要和明文长度。
-- 生物识别集合变化后先前密钥失败关闭。
+外部 staging 的 `arm64-v8a` 目录必须且只能包含：
 
-## 本地数据隔离
+```text
+libcitizensdk.so
+libcitizensdk_jni.so
+```
 
-| 数据 | 命名空间 | 是否含私钥材料 |
-|---|---|---|
-| profile/revision/provisioning/cleanup/cleanup queue | `citizensdk.wallet.state.v1` | 否 |
-| smoldot finalized database | `citizensdk.smoldot.database.v1` | 否 |
-| finalized 流水/pending/cursor | `citizensdk.transactions.state.v1` | 否 |
-| 账户硬件密文 | `citizensdk.wallet.secret.<generation>.<owner>.<AccountId>.account_mini_secret` | 不可独立解密的密文 |
+两种投影使用逐字节相同的双库；候选拒绝额外 ABI、`libsmoldot.so`、`libc++_shared.so`、嵌套
+AAR，以及原生 AAR 中的 Flutter class/reference。AAR 还必须携带与候选逐字节一致的完整
+CitizenChain 信任资产和必需 facade/JNI/金库/安全界面 class。
+Core 与 JNI 的 `DT_SONAME` 分别固定为 `libcitizensdk.so`、`libcitizensdk_jni.so`；JNI 必须只按
+Core SONAME 依赖一次，任何包含 `/` 的 `DT_NEEDED` 都失败关闭，避免构建机路径进入设备。
 
-SDK 从不读取、导入或删除其它产品的密文和硬件密钥。其它产品采用 CitizenSDK 时必须设计
-并单独批准自己的数据切换步骤，不能把其它产品数据读取变成普通钱包读取、导入或删除的隐式
-分支。
+Android 构建变量固定为：
 
-Preferences 钱包状态的 `cleanup_queue` 是公开的精确补偿计划列表，单项复用
-`operation_id/wallet_index/wallet_generation/secret_refs/delete_wallet_key` 字段。标准装配只在
-同一 Dart isolate 内串行变更；跨 Flutter engine 使用必须由宿主另外提供强原子仓储与
-覆盖整个钱包操作的单写协调。
+```text
+CITIZENSDK_ANDROID_BUILD_DIR
+CITIZENSDK_ANDROID_CORE_DIR
+```
 
-## 验证记录原则
+本机路径必须位于 `/Users/rhett/TATA/tataconsole/target/citizensdk`，GitHub Actions 路径必须位于 checkout
+之外。源码树不得产生 Gradle、CMake、SO、AAR 或测试报告。
 
-正式 CI/Release 会在临时 Flutter 宿主中编译 Android/iOS 插件，运行 Android JUnit 与 iOS
-Simulator XCTest，并运行 Dart/Flutter、Rust 合同测试。任何历史结果仍不能替代当前准确提交
-的流水线；真机硬件门禁结果应在对应发布验收记录中单独留档，不能由模拟器或宿主测试代替。
+## Android 钱包安全界面
+
+创建、导入和追加账户只启动 SDK-owned `CitizenSdkWalletFlowActivity`。Activity
+`exported=false`、`FLAG_SECURE`，恢复词和 password 只在该界面与 Rust-owned secret buffer
+间流动。Flutter 只传 word count 或公开 derivation indices，并只接收公开 wallet profile。
+
+平台金库使用 Android Keystore/StrongBox 或 TEE 保护 KEK，每次解封要求
+`BIOMETRIC_STRONG`。KEK 只 wrap/unwrap 随机 DEK；child mini-secret 的 AES-256-GCM 加解密
+和 sr25519 签名在 Rust 受控缓冲区完成，结束后清零。产品与密钥命名空间固定为 `citizensdk`。
+恢复词与密码输入在比例分配或 JNI 复制前执行严格 UTF-8 与 1024-byte 上限校验；Kotlin/JNI
+临时敏感缓冲区采用单一所有权并在成功、错误和异常路径上清零。
+
+钱包流程先原子登记 owner，再启动 Activity；同步早回调、并发完成、取消先于 coordinator
+返回都不能遗留或复活流程。配置变化只替换 UI host，不关闭 Core session。
+
+## Android 生命周期
+
+普通请求可以并发；start/stop 是独占生命周期操作。close 或 Flutter engine detach 会封闭新
+接纳、取消 SDK-owned UI 和可取消的 transfer watch，并在每次尝试中最多等待 30 秒：
+
+- `Running` 必须先成功 `stop` 并持久化 checkpoint，之后才允许 close/destroy；
+- `Created`、`Stopped`、`StartFailed` 直接 close，`StartFailed` 没有可持久化稳定快照；
+- `Starting`、`ImportingState` 若在已接纳工作收口后仍出现，失败关闭；
+- stop/close/settlement 失败由进程级强引用 orphan registry 以 250ms 到 30s 的有界退避重试，
+  绝不转成直接 destroy。
+
+EventChannel `onCancel` 只解除 Dart sink，不停止 session。只有 engine detach 或显式 close 进入
+上述监管流程。
+
+## Apple 单一实现
+
+`darwin/` 是 iOS 与 macOS 唯一共享生产源码。它提供 `CitizenSDK` Swift API、
+`CitizenSDKFlutter` 薄 adapter、typed host services 与平台安全设施，并通过单一
+`CitizenSDK.xcframework` 调用同一 Rust 产品 Core。`pubspec.yaml` 对 iOS 和 macOS 均使用
+`sharedDarwinSource: true`；iOS 最低版本为 16.0，macOS 最低版本为 13.0。产品名称始终只写
+macOS，ARM64 仅表示其支持架构。
+
+Apple host 把可重建链数据库、runtime cache 与交易公开事实放入 typed public SQLite，把钱包
+profile、加密秘密信封和 Vault 引用放入 typed secure SQLite；两者都使用具名 record contract、
+持久 revision CAS 与写后回读，不提供任意键值逃生口。iOS 文件保护等级按数据域区分；macOS
+使用相同 schema 与原子语义。
+
+`CitizenSDKNative` 为 Core 借用的 HostBridge/callback/store/vault 上下文保留一个显式
+ABI +1。关闭只能沿 `live -> monitorStopped -> destroyOnly -> closed` 前进；callback clear
+在首次 destroy 前已经成为持久阶段，所以之后不再重新安装 callback 或调用其它
+lifecycle 操作。destroy 成功时先释放 HostBridge 及 SQLite 连接，再且只释放一次
+ABI +1。显式 close、deinit 或 Flutter detach 中断时，进程级 supervisor 持有整个
+facade 并按有界退避继续重试，避免孤立 Core 或提前释放借用上下文。
+
+capability/lifecycle C 回调只快速入队，真正的 Core 查询和交付在专用串行队列执行。
+Flutter detach 先撤销 method/event handler，再永久废弃当前 event epoch 并清空 sink，
+然后对所有 session 先取消未完工作、后逐一等待关闭。iOS 使用 Flutter 对 published
+plugin 的正式 detach callback；当前 FlutterMacOS registrar 没有对应 callback，macOS 宿主调用
+同一幂等入口，`deinit` 仅作最终 fallback。
+
+Secure Enclave 只保存 generation-scoped EC KEK，用于 wrap/unwrap Rust 随机生成的 DEK，绝不
+执行 sr25519。Security framework 解封结果是不可变 `CFData`，只在对应 `autoreleasepool` 内
+短暂存活；桥接层避免生成 Swift `Data`/COW 副本，在不能可靠原地清零的边界下立即把精确
+32 字节复制到 Rust-owned buffer，并由 pool 排空释放。Apple SDK-owned wallet UI 会在流程终态前由文本
+控件和短期 Swift `String` 持有恢复词/password；终态会 best-effort 清空控件与 Rust 敏感
+buffer，但 Swift `String` 不可可靠擦除。它们不得返回 public Swift API、记录、持久化或进入
+Flutter。child mini-secret 与 sr25519 private key 仍只在 Rust；任何秘密或 native handle 都不跨 Flutter。`iOS-Simulator` 没有 Secure Enclave，
+必须如实报告硬件金库/钱包能力不可用；其 ARM64 slice 用于产品 ABI 与 Flutter/Swift 集成测试，
+不能冒充真机硬件钱包。
+macOS 也必须在 Secure Enclave 与生物认证实际可用时才开放对应钱包能力；能力缺失不影响公开
+链读取，但禁止软件 KEK 降级。
+
+iOS 没有与 Android `FLAG_SECURE` 完全等价的系统能力：SDK-owned 界面在录屏与进入后台时使用
+保护覆盖层；macOS 的 SDK-owned window 禁止系统共享。文档不能把这些 best-available 防护写成
+对恶意宿主进程或所有截屏路径的硬隔离。
+
+legacy `libsmoldot.dylib` 只允许构建 ARM64 外部差分测试宿主库；其 `LC_ID_DYLIB` 是 build-local
+路径，不是可分发 install name，不能进入 XCFramework、Hosted 或 GitHub 候选。
+
+## 验证原则
+
+Release 源码门禁反向枚举并固定 Dart、Android 与 Darwin 生产源码、各平台测试、文档、链资产、
+AAR 与 XCFramework 投影。本轮本机 Android AAR 构建通过，Apple 单一 XCFramework 的 `iOS`、
+`iOS-Simulator`、`macOS` 三个 ARM64 slice 构建通过，并已编译 iOS 设备和
+`iOS-Simulator` 两组测试 bundle；
+由于没有 Simulator runtime，没有把 iOS XCTest 记为已运行。macOS 已运行 Core 50 项与
+Flutter adapter 22 项 XCTest，0 失败，1 项真机硬件用例跳过；最终 normal/supervisor
+smoke 均通过。本机无真实 Apple 移动设备，不声称 Secure Enclave、生物认证或
+device-only Keychain 已完成真机验收。当前 TataConsole Flow 尚未接入本闭集，本步
+未运行远程 CI、正式 Release、Hosted 上传或 Git。
+
+iOS 与 `iOS-Simulator` 使用浅层 framework 和
+`@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A`
+framework 和 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK` install ID。候选只允许
+macOS framework 的精确五个标准内部相对符号链接，其他符号链接全部拒绝。真实 Flutter
+consumer 已完成 Android release ARM64 APK、iOS device Release no-codesign、
+`iOS-Simulator` generic ARM64 编译和 macOS Release 构建，但没有移动真机或 Simulator
+runtime 声明。Flutter SPM 与 Android built-in Kotlin 的未来迁移提示延后到第 9 步。

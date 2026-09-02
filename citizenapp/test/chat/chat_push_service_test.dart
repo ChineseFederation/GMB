@@ -137,7 +137,7 @@ void main() {
     expect(androidManifest, contains('android:allowBackup="false"'));
     expect(iosDelegate, contains('isExcludedFromBackup = true'));
     expect(iosDelegate, contains('appendingPathComponent("chat"'));
-    expect(iosDelegate, contains('hasPrefix("chat_sdk_chat")'));
+    expect(iosDelegate, contains('hasPrefix("tatachat_sdk_chat")'));
     expect(iosDelegate, contains('case "excludeChatDataFromBackup"'));
   });
 

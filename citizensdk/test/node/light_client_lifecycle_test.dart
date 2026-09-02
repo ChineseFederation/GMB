@@ -3,7 +3,13 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/node/bootstrap_client.dart';
+import 'package:citizen_sdk/src/node/chain_assets.dart';
+import 'package:citizen_sdk/src/node/chain_database_store.dart';
+import 'package:citizen_sdk/src/node/chain_event_subscription.dart';
+import 'package:citizen_sdk/src/node/chain_health.dart';
+import 'package:citizen_sdk/src/node/light_client.dart';
+import 'package:citizen_sdk/src/smoldot/types.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;

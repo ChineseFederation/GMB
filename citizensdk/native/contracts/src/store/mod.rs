@@ -9,10 +9,13 @@ mod transaction_history;
 mod wallet_profile;
 
 pub use chain_database::{ChainDatabaseSnapshot, ChainDatabaseStore};
-pub use encrypted_secret_blob::{EncryptedSecretBlobSnapshot, EncryptedSecretBlobStore};
+pub use encrypted_secret_blob::{
+    EncryptedSecretBlobSnapshot, EncryptedSecretBlobState, EncryptedSecretBlobStore,
+};
 pub use runtime_cache::RuntimeCacheStore;
 pub use transaction_history::{
     FinalizedTransferRecord, HistoryTransactionStatus, TransactionHistoryCursor,
     TransactionHistoryRecord, TransactionHistoryState, TransactionHistoryStore,
+    MAX_FINALIZED_REMARK_DISPLAY_BYTES,
 };
 pub use wallet_profile::WalletProfileStore;

@@ -1,10 +1,10 @@
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
 
@@ -236,7 +236,7 @@ void main() {
   group('Chat 用户错误文案', () {
     test('未知 StateError 不泄漏 Bad state 或底层乱码', () {
       final message = chatUserErrorMessage(
-        StateError('native /tmp/libchat_sdk \uFFFD\u0000 debug'),
+        StateError('native /tmp/libtatachat_sdk \uFFFD\u0000 debug'),
       );
 
       expect(message, '聊天暂时无法使用，请稍后重试');
@@ -284,7 +284,7 @@ void main() {
       expect(message, isNot(contains('安全组件')));
     });
 
-    test('ChatServer 会员拒绝使用统一错误码并映射为权益提示', () {
+    test('TataChatServer 会员拒绝使用统一错误码并映射为权益提示', () {
       const error = SquareApiException(
         'chat membership required',
         statusCode: 403,

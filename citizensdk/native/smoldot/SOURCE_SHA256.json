@@ -22,7 +22,7 @@
       "adapted": [
         {
           "path": "Cargo.lock",
-          "sha256": "05190e2ed21987a8ca61c023c47eadc29f9cb415a065308843af5c4ad37537e7"
+          "sha256": "117c9ca6ad5cb034c8fc5792028d9085dbc6483194e1aae25123b536c8c0cddb"
         },
         {
           "path": "Cargo.toml",
@@ -34,26 +34,76 @@
         },
         {
           "path": "src/lib.rs",
-          "sha256": "c8b078c6f082eb1882ed21be5715b5e5e5ff91d17491d4339cc9785639ff546a"
+          "sha256": "573bb5626d29d217870b577e71cf8007fa99098b4271123f67e47e2dba1ad8f2"
         }
       ],
       "sdk_only": [
         {
           "path": "README.md",
-          "sha256": "86368f746f71e85bbb8842e75776bdbf51337db222000877090f0576d98f1075"
+          "sha256": "b01745b1947b3aa3c33ee8c48df324285c5b077f213d1127d68a2aba0eb51867"
         },
         {
-          "path": "tests/public_header_contract.rs",
-          "sha256": "dc4902306f0e4bd89fc11d0388047f0275db8f2695358146857540225ef21b54"
+          "path": "tests/legacy_header_contract.rs",
+          "sha256": "7a81e166a80ff2c5f7edee7acba13c4e430eee6ce4cc492af5b50dd57da69f82"
         },
         {
           "path": "tests/scope_guard.rs",
-          "sha256": "57458a8be43cae8ce6a90e69afcbfd01eff70bbd614d5c2dd10b04d9868fe20d"
+          "sha256": "289dcd26131e90762f5c577507c8eac287d0e496fc81ee29a7af73fb9fe28301"
         }
       ],
       "excluded": [
         "src/chat_mls.rs"
       ],
+      "recursive": true
+    },
+    "provider": {
+      "root": "native/smoldot/provider",
+      "source": "citizensdk",
+      "byte_identical": [],
+      "adapted": [],
+      "sdk_only": [
+        {
+          "path": "Cargo.toml",
+          "sha256": "efe12f7350e34dc99c4c20766275e57569e9ed6989441b055ce7f157a9a2ae38"
+        },
+        {
+          "path": "README.md",
+          "sha256": "21b7c50735f9bd3d7b115603280b1fe2c430b36f4d3e2cc6ec50561250339656"
+        },
+        {
+          "path": "src/account_nonce.rs",
+          "sha256": "5fcf4d7d87b85761b3a3f3c6c0fff85c95b98acb09007231135b3e12c8e19425"
+        },
+        {
+          "path": "src/client.rs",
+          "sha256": "c34885fdcde3c5e64b63288493eb2f499bebd483190d71eeb8b1e130c3e0e596"
+        },
+        {
+          "path": "src/legacy.rs",
+          "sha256": "aed81cb9f7e940afe59d18a4dcfb0bd3ec47d532452669c9b04d8d802b4fb5f0"
+        },
+        {
+          "path": "src/lib.rs",
+          "sha256": "b9f54167bcefe64d688931061da2e63438982dde23b3ae616ad44947d3536308"
+        },
+        {
+          "path": "src/verified_chain_client.rs",
+          "sha256": "ab34fadd895429bb0a2576307e192d0b43dd032b879860e917cdce7a61ae9b78"
+        },
+        {
+          "path": "tests/account_nonce_contract.rs",
+          "sha256": "13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754"
+        },
+        {
+          "path": "tests/legacy_parity.rs",
+          "sha256": "7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc"
+        },
+        {
+          "path": "tests/verified_chain_client_contract.rs",
+          "sha256": "62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4"
+        }
+      ],
+      "excluded": [],
       "recursive": true
     },
     "pow_workspace": {
@@ -108,10 +158,6 @@
           "sha256": "6946597eefac05103b07c51162966d639920854e4410ebb67a453ce41adfce4d"
         },
         {
-          "path": "src/lib.rs",
-          "sha256": "a5a26745ce68aed8cfc92c34663f89bf70ef518be4cbef80f6ff57c6dc10e82b"
-        },
-        {
           "path": "src/network_service.rs",
           "sha256": "6d64d98034486dd381ae646523c9ce80fefcd6b34f7962727c8ebb1eb4643652"
         },
@@ -129,7 +175,7 @@
         },
         {
           "path": "src/platform/default.rs",
-          "sha256": "4a939115b8500ccd1ad219950143301acdca7683db4acfbaec7b524b9d06a2fd"
+          "sha256": "e529306ba8713b1f9afae25f60c87365037ad9073a7b1c9deb9c8de147b04aa9"
         },
         {
           "path": "src/platform/with_prefix.rs",
@@ -160,11 +206,16 @@
           "sha256": "567ad0d158c686c74c5fb29ee90a3b4f09ea9e573ae7293b61c17e3a4f773b5a"
         }
       ],
-      "adapted": [],
+      "adapted": [
+        {
+          "path": "src/lib.rs",
+          "sha256": "209e2cd56c23047a6b52d0721dd6f37e68949920c3109cbf9a73cc5d709682ce"
+        }
+      ],
       "sdk_only": [
         {
           "path": "README.md",
-          "sha256": "ecd2b33d156e33dd55ecd28573d569449f35b58b563fb790d3b22f5a97832c41"
+          "sha256": "046e3fa2ccc6e4262ee1432c9bd9b24db8bda76cf427eaf0d4ccd67e618bb5c0"
         },
         {
           "path": "examples/README.md",
@@ -180,7 +231,7 @@
         },
         {
           "path": "tests/capability_boundary.rs",
-          "sha256": "1fa3dc85f231ca10afb5d9c18a4ce75683dfd93e824295df96a2cd9ad1bcb2a1"
+          "sha256": "53a207034fdde1ce3a30a4ee801c1b0b5dc014668784b3a20484d4c781d80462"
         },
         {
           "path": "tests/source_manifest_contract.rs",
@@ -268,7 +319,7 @@
         },
         {
           "path": "src/chain_spec/tests.rs",
-          "sha256": "ddf724df4365695304bb81f0275c7229354742702ed42f5226a47494e7bc7de0"
+          "sha256": "56e14104dc995106f89ab779e8cfc616e763a69326ac1cbe814acd51dfcc4ae7"
         },
         {
           "path": "src/chain_spec/tests/example.json",
@@ -676,7 +727,7 @@
         },
         {
           "path": "src/sync/warp_sync.rs",
-          "sha256": "948cb43b4b943288a603e432221ca18611d916ceece00e38ced2c2b8d0fe871d"
+          "sha256": "61a9c6d4c594dad918fb6c13b7661e10664ebce9353a2682e0822dc3b038178e"
         },
         {
           "path": "src/transactions.rs",
@@ -880,15 +931,15 @@
         },
         {
           "path": "tests/consensus_source_manifest.rs",
-          "sha256": "7eb17bdb2af048dcc16e93cacc8574f9161e66f150023012497a87e6f54bad68"
+          "sha256": "d772fb3bd5a8974a583abc774954accbc999e33150c5694f4149761499d0fb27"
         },
         {
           "path": "tests/light_client_boundary.rs",
-          "sha256": "2fcc48428a28011bd20daf1c0a9d296612330d65b6de5819b0fc95b767a20996"
+          "sha256": "ab572e656f70dfb815dc967231a01401e9aaafdb702b041a0057a89c96c04070"
         },
         {
           "path": "tests/network_sync_boundary.rs",
-          "sha256": "e24291a6a6a0fc28078c8a849deb3f6b6c3fce79cc25775b2585aba15246e23b"
+          "sha256": "2bb132d2bd3d6ebd7765efa556afc9cfbb841659b6e8661c9bdf774c4bfcacc3"
         },
         {
           "path": "tests/network_sync_source_manifest.rs",
@@ -896,11 +947,11 @@
         },
         {
           "path": "tests/state_runtime_boundary.rs",
-          "sha256": "73a735530e72a8cc63fee474a21f77dd433cff9b6f46a6813c978cf46fafdab5"
+          "sha256": "8c1880daa93ca8184f99b228fc0bc3e5928a631e94c536fcfec563fc50c797be"
         },
         {
           "path": "tests/state_runtime_source_manifest.rs",
-          "sha256": "09b824a47bdb45ad1f343843b3556ff874bef1e9cdb7998b210ee819bb08ae68"
+          "sha256": "dc1cf118473785fa95efba38178ecb2bb746a5473e40e63f886ba7416db46cdd"
         }
       ],
       "excluded": [

@@ -21,11 +21,13 @@ const VECTORS: [(&str, &str); 3] = [
 ];
 
 #[test]
+#[allow(unsafe_code)] // 冻结向量同时约束 legacy C ABI，原始指针调用不可避免。
 fn frozen_child_keys_produce_expected_account_ids() {
     for (child_hex, expected_public_hex) in VECTORS {
         let child = decode_32(child_hex);
         let expected_public = decode_32(expected_public_hex);
         let mut actual_public = [0u8; 32];
+        // SAFETY: 两个指针分别指向本次循环内存活的 32 字节输入和输出数组。
         let status =
             unsafe { citizen_sr25519_public_key(child.as_ptr(), actual_public.as_mut_ptr()) };
         assert_eq!(status, CITIZEN_SIGNER_OK);

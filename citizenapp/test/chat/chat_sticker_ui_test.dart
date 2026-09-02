@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/chat/chat_product_policy.dart';
 import 'package:citizenapp/chat/chat_entry.dart';
 

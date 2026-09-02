@@ -1,12 +1,12 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:polkadart_keyring/polkadart_keyring.dart' show Keyring;
 import 'package:citizenapp/citizen/cid/cid_generator.dart';
 import 'package:citizenapp/citizen/public/data/admin_division_store.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/my/myid/citizen_identity_chain_reader.dart';
 import 'package:citizenapp/my/myid/current_user_context.dart';
 import 'package:citizenapp/my/myid/finalized_identity_resolver.dart';

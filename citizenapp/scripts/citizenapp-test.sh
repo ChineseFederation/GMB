@@ -1,3 +1,4 @@
+TATACHATSDK_ROOT="/Users/rhett/TATA/tatachatsdk"
 #!/usr/bin/env bash
 # CitizenApp 本机与 CI 唯一 Flutter 测试入口。
 #
@@ -23,7 +24,7 @@ if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
   # shellcheck disable=SC1090
   source "$helper"
   snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
-  # CitizenApp 只保留必须与链运行时一致的 SCALE 金标；ChatSDK 与 ChatServer
+  # CitizenApp 只保留必须与链运行时一致的 SCALE 金标；TataChatSDK 与 TataChatServer
   # 各自在产品目录验证自己的实现，应用测试不得再复制或读取聊天服务源码。
   snapshot_truth_sources=(
     citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json
@@ -51,11 +52,11 @@ fi
 if [[ "${CI:-}" != true ]]; then
   [[ "$CITIZENAPP_DIR" == "$TATA_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
     || { echo "CitizenApp本机测试源码不在TataConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
-  # 中央快照中的本机测试直接消费同一快照内 ChatSDK；覆盖文件随快照统一清理。
+  # 中央快照中的本机测试直接消费同一快照内 TataChatSDK；覆盖文件随快照统一清理。
   cat > "$CITIZENAPP_DIR/pubspec_overrides.yaml" <<'YAML'
 dependency_overrides:
-  gmb_chat_sdk:
-    path: ../chatsdk
+  tatachat_sdk:
+    path: ../../TATA/tatachatsdk
 YAML
 fi
 
@@ -128,11 +129,11 @@ release_native_build_lock() {
 cd "$CITIZENAPP_DIR"
 acquire_native_build_lock
 trap release_native_build_lock EXIT
-if rg -n --hidden --glob '!target/**' 'chat_sdk' "$CITIZENAPP_DIR/smoldot"; then
-  echo '错误: CitizenApp Smoldot 目录仍包含 ChatSDK 编译或链接依赖' >&2
+if rg -n --hidden --glob '!target/**' 'tatachat_sdk' "$CITIZENAPP_DIR/smoldot"; then
+  echo '错误: CitizenApp Smoldot 目录仍包含 TataChatSDK 编译或链接依赖' >&2
   exit 1
 fi
 "$SCRIPT_DIR/build-smoldot-native.sh" host
-"$SCRIPT_DIR/../../chatsdk/scripts/build-native.sh" host
+"$SCRIPT_DIR/../../../TATA/tatachatsdk/scripts/build-native.sh" host
 "$FLUTTER_BIN" analyze --no-pub
 "$FLUTTER_BIN" test --no-pub --concurrency=1 "$@"

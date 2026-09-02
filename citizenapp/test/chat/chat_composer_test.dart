@@ -7,7 +7,7 @@ import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/chat/chat_product_policy.dart';
 import 'package:citizenapp/ui/app_layout.dart';
 import 'package:citizenapp/ui/app_theme.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 
 const _iphone16ProLogicalSize = Size(402, 874);
 

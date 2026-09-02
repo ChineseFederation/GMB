@@ -7,7 +7,8 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
 
 - 白皮书唯一真源：[`citizenweb/src/whitepaper.md`](citizenweb/src/whitepaper.md)
 - 公民宪法唯一真源：链上立法院模块 [`citizenchain/runtime/public/legislation-yuan/`](citizenchain/runtime/public/legislation-yuan/)（`law_id=0`、`tier=宪法`，创世注入 + 立法投票修订；展示端从链上结构化法律重建）
-- 统一数据字典：[`shared/data-dictionary.json`](shared/data-dictionary.json)
+- 统一数据字典：TATA 私有仓库中的 [`dictionary/gmb`](https://github.com/VoyagerRhett/TATA/tree/main/dictionary/gmb)；
+  GMB 门禁通过中央流程只读索引、共享分片和准确产品分片，本仓不保留副本。
 - 统一二维码协议：[`shared/qr-protocol/`](shared/qr-protocol/)
 - 产品与发布边界：[本文件“产品与发布边界”](#产品与发布边界)
 - GitHub Actions：[`gmb-repository.yml`](.github/workflows/gmb-repository.yml) 是 GitHub 唯一注册入口；

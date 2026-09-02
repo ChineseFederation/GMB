@@ -92,4 +92,8 @@ fn ready_and_not_ready_states_cannot_be_ambiguous() {
         unavailable.reason().map(CapabilityReason::as_str),
         Some("device_unavailable")
     );
+    assert_eq!(
+        CapabilityReason::EngineNotRunning.as_str(),
+        "engine_not_running"
+    );
 }

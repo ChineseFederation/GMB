@@ -4,7 +4,7 @@ import { membershipPlan } from '../membership/plans';
 import { HttpError, jsonResponse, readJson, requireSession } from '../shared/http';
 import { nowMs } from '../shared/time';
 
-const CHAT_SERVER_AUDIENCE = 'chatserver';
+const CITIZENCHATSERVER_AUDIENCE = 'citizenchatserver';
 const CHAT_SERVER_ACCESS_TTL_MILLIS = 15 * 60 * 1000;
 
 interface ChatServerAccessRequest {
@@ -17,14 +17,14 @@ interface ChatServerClaims {
   chat_enabled: true;
   max_attachment_bytes: number;
   iss: string;
-  aud: typeof CHAT_SERVER_AUDIENCE;
+  aud: typeof CITIZENCHATSERVER_AUDIENCE;
   nbf: number;
   exp: number;
 }
 
 /**
- * CitizenServe 只把已经验证的公民身份和会员权益签成短期通用授权。
- * ChatServer 不读取公民产品表，也不会收到会员名称、账户或会话令牌。
+ * CitizenServe 只把已经验证的公民身份、设备会话和会员权益签成 CitizenChatServer 短期授权。
+ * 该控制面不承载聊天数据；CitizenChatServer 只验签，不读取公民产品表或 CitizenServe 会话。
  */
 export async function issueChatServerAccess(request: Request, env: Env): Promise<Response> {
   const session = await requireSession(request, env);
@@ -45,7 +45,7 @@ export async function issueChatServerAccess(request: Request, env: Env): Promise
     chat_enabled: true,
     max_attachment_bytes: membershipPlan(membership.membership_level).chat_file_max_bytes,
     iss: issuer,
-    aud: CHAT_SERVER_AUDIENCE,
+    aud: CITIZENCHATSERVER_AUDIENCE,
     nbf: Math.floor(issuedAtMillis / 1000),
     exp: Math.floor(expiresAtMillis / 1000),
   };

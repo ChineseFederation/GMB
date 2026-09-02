@@ -5,7 +5,10 @@ import 'package:path/path.dart' as path;
 
 import 'types.dart';
 
-/// Platform-specific library loading and path resolution
+/// CitizenApp 差分测试保留的 legacy smoldot 库装载器。
+///
+/// 此整个目录由 `.pubignore` 排除在 CitizenSDK Hosted 运行闭包外；正式
+/// Flutter/Swift/Kotlin 产品只经过 `citizensdk_*` ABI，不调用本装载器。
 class SmoldotPlatform {
   /// Library name without extension
   static const String _libraryName = 'smoldot';
@@ -47,9 +50,9 @@ class SmoldotPlatform {
   /// Load library on macOS/iOS
   static DynamicLibrary _loadDarwin() {
     if (Platform.isIOS) {
-      // iOS 上静态库 libsmoldot.a 经本地 pod(ios/smoldot)-force_load 链进
-      // Runner 主二进制,符号直接从当前进程取;沙盒里也不存在独立 .dylib
-      // 可 open,所以不做任何文件路径尝试(那只会白抛两层异常)。
+      // 归档基线保留 CitizenApp 原有的进程符号查找行为，仅用于差分
+      // 夹具。CitizenSDK iOS 正式运行件是 iOS XCFramework slice 内的
+      // 产品 Core，不再存在 pod/ios/smoldot 或 libsmoldot.a 产品路径。
       return DynamicLibrary.process();
     }
 
@@ -75,7 +78,8 @@ class SmoldotPlatform {
             'Library path: $libraryPath\n'
             'Package error: ${packageError ?? 'library not found'}\n'
             'System error: $systemError\n'
-            'Run ./scripts/build-smoldot-native.sh host before flutter test.',
+            'Run ./scripts/build-native.sh host with central work/output paths '
+            'before flutter test.',
       );
     }
   }
@@ -101,8 +105,8 @@ class SmoldotPlatform {
   /// Get the package library path for the given library name
   static String? _getPackageLibraryPath(String libraryName) {
     // 中文注释：源码树禁止出现任何编译产物。宿主测试只允许把中央工作目录
-    // 生成的动态库注入隔离构建根目录，因此这里只检查当前工作目录；移动正式版
-    // 仍分别走 Android 系统库搜索与 iOS 当前进程符号。
+    // 生成的动态库注入隔离测试根目录，因此这里只检查当前工作目录；
+    // 正式 Android/Apple 产品不进入这条 legacy 路径。
     final libraryPath = path.join(Directory.current.path, libraryName);
     return File(libraryPath).existsSync() ? libraryPath : null;
   }

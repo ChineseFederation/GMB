@@ -1,11 +1,8 @@
 # GitHub要求的仓库固定入口；不得承载产品流程实现。
-name: GMB · 全仓统一
-run-name: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
+name: GMB · 全仓门禁
+run-name: ${{ inputs.run_title }}
 
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch:
     inputs:
       pipeline:
@@ -16,8 +13,16 @@ on:
         description: 塔塔控制台展示标题
         required: true
         type: string
+      lease_id:
+        description: TATA 私有流程租约标识
+        required: true
+        type: string
+      proof:
+        description: TATA 私有流程租约公开证明
+        required: true
+        type: string
       source_sha:
-        description: 成功 CI 准确提交（仅 Release）
+        description: Release 的成功 CI 提交或全仓门禁的准确推送提交
         required: false
         type: string
       ci_run_id:
@@ -66,14 +71,16 @@ jobs:
       contents: write
       id-token: write
     with:
-      pipeline: ${{ github.event_name == 'push' && 'repository' || inputs.pipeline }}
-      run_title: ${{ github.event_name == 'push' && 'GMB · 全仓统一' || inputs.run_title }}
-      source_sha: ${{ inputs.source_sha || '' }}
-      ci_run_id: ${{ inputs.ci_run_id || '' }}
-      version_tag: ${{ inputs.version_tag || '' }}
-      software_version: ${{ inputs.software_version || '' }}
-      spec_version: ${{ inputs.spec_version || '' }}
-      chain_spec_version: ${{ inputs.chain_spec_version || '' }}
-      genesis_hash: ${{ inputs.genesis_hash || '' }}
-      finalized_head: ${{ inputs.finalized_head || '' }}
+      pipeline: ${{ inputs.pipeline }}
+      run_title: ${{ inputs.run_title }}
+      lease_id: ${{ inputs.lease_id }}
+      proof: ${{ inputs.proof }}
+      source_sha: ${{ inputs.source_sha }}
+      ci_run_id: ${{ inputs.ci_run_id }}
+      version_tag: ${{ inputs.version_tag }}
+      software_version: ${{ inputs.software_version }}
+      spec_version: ${{ inputs.spec_version }}
+      chain_spec_version: ${{ inputs.chain_spec_version }}
+      genesis_hash: ${{ inputs.genesis_hash }}
+      finalized_head: ${{ inputs.finalized_head }}
     secrets: inherit

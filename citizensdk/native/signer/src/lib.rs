@@ -1,16 +1,19 @@
-//! sr25519 原生签名 FFI（schnorrkel）—— **GMB 全端唯一实现**。
+//! CitizenSDK sr25519 唯一实现与 legacy 原生签名 FFI。
 //!
-//! 单一真源：CitizenApp（热端，编入 `libsmoldot`）与 CitizenWallet（冷端，独立
-//! 小库）都 `path` 依赖本 crate，**物理上共用这一份源码**；任何一端另抄一份都
-//! 属违规——派生/签名口径一旦分叉，同一助记词会在两端算出不同账户。
+//! CitizenSDK 内单一真源：新 `ChainSigner` 与 SDK 收编的 legacy `libsmoldot` 投影
+//! 物理共用这一份密码学源码。尚未切换 SDK 的 CitizenApp/CitizenWallet 继续使用
+//! `shared/citizen-signer`；本 crate 通过冻结向量和双向差分保持逐字节兼容，不反向
+//! 依赖另一个目录。
 //!
-//! 取代两端原有的纯 Dart `sr25519`：纯 Dart 走 BigInt 软算标量乘，真机上一次
+//! 已验证实现取代过纯 Dart `sr25519`：纯 Dart 走 BigInt 软算标量乘，真机上一次
 //! 「派生 + 签名」实测 **8.2 秒**，会把主线程/用户直接晾在那里；schnorrkel 是
 //! Substrate 全家的官方实现，同样的活是毫秒级（实测 14~18 ms）。
 //!
-//! 两端**存储模型不同、密码学相同**，这是有意为之：热端「无根」只存 child
-//! mini-secret（手机失守也拿不到主根）；冷端是持根方，只存母种子 + 助记词、
-//! 签名时现场硬派生。本 crate 只提供密码学原语，不介入任何一端的存储决策。
+//! 热钱包与独立冷钱包的**存储模型不同、密码学相同**：热端「无根」只存 child
+//! mini-secret；冷端是持根方，签名时现场硬派生。本 crate 只提供 SDK 密码学原语，
+//! 不介入任何产品的存储决策，也不把冷钱包并入 CitizenSDK。
+//! 密码学运算集中在 `sr25519` 私有模块；legacy 四个裸指针入口与
+//! [`Sr25519SoftwareSigner`] 都只做边界适配，不能形成第二套算法实现。
 //!
 //! ## 口径必须逐字节对齐（错一处钱包就变成另一个账户）
 //! - 扩展模式恒 `ExpansionMode::Ed25519`（对齐 Dart 侧 `MiniSecretKey.expandEd25519()`
@@ -26,20 +29,18 @@
 //!   更不会像原生 panic 那样 abort 掉整个 App；
 //! - 入参长度逐一校验，空指针即拒；出参只在成功时写入。
 
-// 本 crate 是纯 FFI 原语库，`unsafe` 是其存在形态（裸指针出入参）。workspace 级
-// `unsafe_code = "warn"` 对它属于噪声，在此源码级豁免；每个入口的安全契约见各自
-// 的 `# Safety` 文档与实现内的判空校验。
+// 本 crate 为兼容已验证调用方保留四个 legacy FFI 原语，`unsafe` 仅存在于这些裸指针
+// 边界。workspace 级 `unsafe_code = "warn"` 对本文件属于噪声，在此源码级豁免；真实
+// 密码学模块和 ChainSigner 适配器仍是安全 Rust。各入口契约见 `# Safety` 与判空校验。
 #![allow(unsafe_code)]
 
-use schnorrkel::{
-    derive::ChainCode, signing_context, ExpansionMode, MiniSecretKey, PublicKey, SecretKey,
-    Signature,
-};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use zeroize::Zeroizing;
 
-/// 与 Dart 侧 `Sr25519.sign` 一致的签名上下文。
-const SIGNING_CONTEXT: &[u8] = b"substrate";
+mod chain_signer;
+mod sr25519;
+
+pub use chain_signer::Sr25519SoftwareSigner;
 
 pub const CITIZEN_SIGNER_OK: i32 = 0;
 pub const CITIZEN_SIGNER_ERR_NULL_ARG: i32 = -1;
@@ -66,17 +67,11 @@ pub unsafe fn citizen_sr25519_derive_hard(
     }
     catch_unwind(AssertUnwindSafe(|| {
         let seed_bytes = Zeroizing::new(std::slice::from_raw_parts(seed, 32).to_vec());
-        let cc_bytes = std::slice::from_raw_parts(chain_code, 32);
-
-        let Ok(mini) = MiniSecretKey::from_bytes(&seed_bytes) else {
+        let mut cc = [0u8; 32];
+        cc.copy_from_slice(std::slice::from_raw_parts(chain_code, 32));
+        let Ok(child_bytes) = sr25519::derive_hard(&seed_bytes, &cc) else {
             return CITIZEN_SIGNER_ERR_BAD_KEY;
         };
-        let secret: Zeroizing<SecretKey> = Zeroizing::new(mini.expand(ExpansionMode::Ed25519));
-
-        let mut cc = [0u8; 32];
-        cc.copy_from_slice(cc_bytes);
-        let (child, _) = secret.hard_derive_mini_secret_key(Some(ChainCode(cc)), b"");
-        let child_bytes = Zeroizing::new(child.to_bytes());
 
         std::ptr::copy_nonoverlapping(child_bytes.as_ptr(), out_child, 32);
         CITIZEN_SIGNER_OK
@@ -96,11 +91,9 @@ pub unsafe fn citizen_sr25519_public_key(child: *const u8, out_public: *mut u8) 
     }
     catch_unwind(AssertUnwindSafe(|| {
         let child_bytes = Zeroizing::new(std::slice::from_raw_parts(child, 32).to_vec());
-        let Ok(mini) = MiniSecretKey::from_bytes(&child_bytes) else {
+        let Ok(public) = sr25519::public_key(&child_bytes) else {
             return CITIZEN_SIGNER_ERR_BAD_KEY;
         };
-        let keypair = Zeroizing::new(mini.expand_to_keypair(ExpansionMode::Ed25519));
-        let public = keypair.public.to_bytes();
         std::ptr::copy_nonoverlapping(public.as_ptr(), out_public, 32);
         CITIZEN_SIGNER_OK
     }))
@@ -132,13 +125,9 @@ pub unsafe fn citizen_sr25519_sign(
             std::slice::from_raw_parts(message, message_len)
         };
 
-        let Ok(mini) = MiniSecretKey::from_bytes(&child_bytes) else {
+        let Ok(sig_bytes) = sr25519::sign(&child_bytes, msg) else {
             return CITIZEN_SIGNER_ERR_BAD_KEY;
         };
-        let keypair = Zeroizing::new(mini.expand_to_keypair(ExpansionMode::Ed25519));
-        let signature = keypair.sign(signing_context(SIGNING_CONTEXT).bytes(msg));
-
-        let sig_bytes = signature.to_bytes();
         std::ptr::copy_nonoverlapping(sig_bytes.as_ptr(), out_signature, 64);
         CITIZEN_SIGNER_OK
     }))
@@ -168,19 +157,12 @@ pub unsafe fn citizen_sr25519_verify(
             std::slice::from_raw_parts(message, message_len)
         };
 
-        let Ok(public_key) = PublicKey::from_bytes(public_bytes) else {
-            return CITIZEN_SIGNER_ERR_BAD_KEY;
-        };
-        let Ok(sig) = Signature::from_bytes(sig_bytes) else {
-            return CITIZEN_SIGNER_ERR_BAD_SIGNATURE;
-        };
-        if public_key
-            .verify(signing_context(SIGNING_CONTEXT).bytes(msg), &sig)
-            .is_ok()
-        {
-            CITIZEN_SIGNER_OK
-        } else {
-            CITIZEN_SIGNER_ERR_VERIFY_FAILED
+        match sr25519::verify(public_bytes, msg, sig_bytes) {
+            Ok(true) => CITIZEN_SIGNER_OK,
+            Ok(false) => CITIZEN_SIGNER_ERR_VERIFY_FAILED,
+            Err(sr25519::Sr25519Error::PublicKey) => CITIZEN_SIGNER_ERR_BAD_KEY,
+            Err(sr25519::Sr25519Error::Signature) => CITIZEN_SIGNER_ERR_BAD_SIGNATURE,
+            Err(sr25519::Sr25519Error::Secret) => CITIZEN_SIGNER_ERR_BAD_KEY,
         }
     }))
     .unwrap_or(CITIZEN_SIGNER_ERR_PANIC)

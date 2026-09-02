@@ -1,4 +1,4 @@
-# GitHub要求的仓库固定入口；全部产品流程由 tataconsole/flows 直接实现。
+# GitHub要求的仓库固定入口；全部产品流程由 TATA/tataconsole/flows 直接实现。
 name: GMB · Flow
 
 on:
@@ -12,8 +12,16 @@ on:
         description: 塔塔控制台展示标题
         required: true
         type: string
+      lease_id:
+        description: TATA 私有流程租约标识
+        required: false
+        type: string
+      proof:
+        description: TATA 私有流程租约公开证明
+        required: false
+        type: string
       source_sha:
-        description: 成功 CI 准确提交（仅 Release）
+        description: Release 的成功 CI 提交或全仓门禁的准确推送提交
         required: false
         type: string
       ci_run_id:
@@ -50,9 +58,9 @@ permissions:
   contents: read
 
 concurrency:
-  # 中文注释：每条逻辑流水线独立串行；仓库门禁仍可取消自己的旧运行，不互相取消产品。
-  group: ${{ github.event_name == 'push' && 'gmb-flow' || inputs.pipeline }}
-  cancel-in-progress: ${{ github.event_name == 'push' || inputs.pipeline == 'repository' }}
+  # 中文注释：每条逻辑流水线独立串行；仓库门禁只取消自己的旧运行，不互相取消产品。
+  group: ${{ inputs.pipeline }}
+  cancel-in-progress: ${{ inputs.pipeline == 'repository' }}
 
 env:
   CI: true
@@ -60,9 +68,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
-  # CI 始终使用 workflow_dispatch 创建时由 GitHub 锁定的 main 提交；只有 Release
-  # 使用对应成功 CI 的 source_sha。禁止塔塔控制台给 CI 注入预读或历史提交。
-  GMB_SOURCE_SHA: ${{ github.event_name == 'workflow_dispatch' && endsWith(inputs.pipeline, '.release') && inputs.source_sha || github.sha }}
+  # CI 使用 workflow_dispatch 创建时由 GitHub 锁定的 main；Release 与全仓门禁
+  # 使用控制台显式锁定的 source_sha，禁止任何远程 @main 漂移。
+  GMB_SOURCE_SHA: ${{ (inputs.pipeline == 'repository' || endsWith(inputs.pipeline, '.release')) && inputs.source_sha || github.sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
   GMB_SOFTWARE_VERSION: ${{ inputs.software_version }}
@@ -72,7 +80,8 @@ env:
   GMB_CHAIN_FINALIZED_HEAD: ${{ inputs.finalized_head }}
 
 jobs:
-  validate_dispatch:
+  validate_repository:
+    if: ${{ inputs.pipeline == 'repository' }}
     name: 校验统一流程并生成产品作业矩阵
     runs-on: ubuntu-24.04
     permissions:
@@ -91,9 +100,68 @@ jobs:
       has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
       repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
     steps:
+      - name: 校验全仓门禁租约、产品提交与固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_LEASE_ID: ${{ inputs.lease_id }}
+          FLOW_LEASE_PROOF: ${{ inputs.proof }}
+          FLOW_SECRET_LEASE_ID: ${{ secrets[format('TATA_FLOW_LEASE_ID_{0}', inputs.lease_id)] }}
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          FLOW_BUNDLE_KEY: ${{ secrets[format('TATA_FLOW_BUNDLE_KEY_{0}', inputs.lease_id)] }}
+          FLOW_PIPELINE: ${{ inputs.pipeline }}
+          FLOW_HEAD_SHA: ${{ inputs.source_sha }}
+          GITHUB_LOCKED_SHA: ${{ github.sha }}
+        run: |
+          node <<'NODE'
+          const { createHmac, timingSafeEqual } = require('node:crypto');
+          const lease = process.env.FLOW_LEASE_ID || '';
+          const secretLease = process.env.FLOW_SECRET_LEASE_ID || '';
+          const source = process.env.FLOW_COMMIT_SHA || '';
+          const pipeline = process.env.FLOW_PIPELINE || '';
+          const head = process.env.FLOW_HEAD_SHA || '';
+          const lockedHead = process.env.GITHUB_LOCKED_SHA || '';
+          const key = process.env.FLOW_BUNDLE_KEY || '';
+          const proof = process.env.FLOW_LEASE_PROOF || '';
+          if (!/^[0-9A-F]{24}$/.test(lease) || secretLease !== lease
+            || !/^[0-9a-f]{40}$/.test(source) || pipeline !== 'repository'
+            || !/^[0-9a-f]{40}$/.test(head) || head !== lockedHead
+            || !/^[A-Za-z0-9_-]{43}$/.test(key) || !/^[0-9a-f]{64}$/.test(proof)) {
+            throw new Error('GMB 全仓门禁租约字段或准确提交无效');
+          }
+          const payload = [
+            'tata-flow-lease-v1', lease, 'VoyagerRhett/GMB', source, pipeline, head, '',
+          ].join('\n');
+          const expected = createHmac('sha256', key).update(payload, 'utf8').digest();
+          const actual = Buffer.from(proof, 'hex');
+          if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+            throw new Error('GMB 全仓门禁租约证明无效');
+          }
+          NODE
+      - name: 检出当前仓库准确源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读产品与 TATA 固定提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          FLOW_HEAD_SHA: ${{ inputs.source_sha }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$FLOW_HEAD_SHA"
+          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - name: 执行中央共享校验
         id: central_job
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: validate_dispatch
           pipeline: ${{ inputs.pipeline }}
@@ -106,18 +174,148 @@ jobs:
           chain_spec_version: ${{ inputs.chain_spec_version }}
           genesis_hash: ${{ inputs.genesis_hash }}
           finalized_head: ${{ inputs.finalized_head }}
+  validate_product:
+    if: ${{ inputs.pipeline != 'repository' }}
+    name: 校验产品流程读取租约
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      has_ci_phase_0: ${{ steps.central_job.outputs.has_ci_phase_0 }}
+      ci_phase_0_matrix: ${{ steps.central_job.outputs.ci_phase_0_matrix }}
+      has_ci_phase_1: ${{ steps.central_job.outputs.has_ci_phase_1 }}
+      ci_phase_1_matrix: ${{ steps.central_job.outputs.ci_phase_1_matrix }}
+      has_ci_phase_2: ${{ steps.central_job.outputs.has_ci_phase_2 }}
+      ci_phase_2_matrix: ${{ steps.central_job.outputs.ci_phase_2_matrix }}
+      has_release_standard: ${{ steps.central_job.outputs.has_release_standard }}
+      release_standard_matrix: ${{ steps.central_job.outputs.release_standard_matrix }}
+      has_release_attested: ${{ steps.central_job.outputs.has_release_attested }}
+      release_attested_matrix: ${{ steps.central_job.outputs.release_attested_matrix }}
+      has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
+      repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
+    steps:
+      - name: 校验租约、仓库、流水线与固定提交
+        shell: bash
+        env:
+          FLOW_LEASE_ID: ${{ inputs.lease_id }}
+          FLOW_LEASE_PROOF: ${{ inputs.proof }}
+          FLOW_SECRET_LEASE_ID: ${{ secrets[format('TATA_FLOW_LEASE_ID_{0}', inputs.lease_id)] }}
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          FLOW_BUNDLE_KEY: ${{ secrets[format('TATA_FLOW_BUNDLE_KEY_{0}', inputs.lease_id)] }}
+          FLOW_PIPELINE: ${{ inputs.pipeline }}
+        run: |
+          node <<'NODE'
+          const { createHmac, timingSafeEqual } = require('node:crypto');
+          const lease = process.env.FLOW_LEASE_ID || '';
+          const secretLease = process.env.FLOW_SECRET_LEASE_ID || '';
+          const source = process.env.FLOW_COMMIT_SHA || '';
+          const pipeline = process.env.FLOW_PIPELINE || '';
+          const key = process.env.FLOW_BUNDLE_KEY || '';
+          const proof = process.env.FLOW_LEASE_PROOF || '';
+          if (!/^[0-9A-F]{24}$/.test(lease) || secretLease !== lease
+            || !/^[0-9a-f]{40}$/.test(source)
+            || !/^gmb\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.(ci|release)$/.test(pipeline)
+            || !/^[A-Za-z0-9_-]{43}$/.test(key) || !/^[0-9a-f]{64}$/.test(proof)) {
+            throw new Error('GMB 产品流程租约字段无效');
+          }
+          const payload = ['tata-flow-lease-v1', lease, 'VoyagerRhett/GMB', source, pipeline, '', ''].join('\n');
+          const expected = createHmac('sha256', key).update(payload, 'utf8').digest();
+          const actual = Buffer.from(proof, 'hex');
+          if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+            throw new Error('GMB 产品流程租约证明无效');
+          }
+          NODE
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 登记固定中央流程目录
+        uses: ./.tata-flow/tataconsole/flows/github
+      - name: 校验请求并生成产品作业矩阵
+        id: central_job
+        shell: bash
+        env:
+          PIPELINE: ${{ inputs.pipeline }}
+          RUN_TITLE: ${{ inputs.run_title }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          CI_RUN_ID: ${{ inputs.ci_run_id }}
+          SOFTWARE_VERSION: ${{ inputs.software_version }}
+        run: node "${{ env.TATA_CONSOLE_FLOW_ROOT }}/github/dispatch.mjs" emit gmb
+  validate_dispatch:
+    if: ${{ always() }}
+    needs: [validate_repository, validate_product]
+    name: 确认统一流程校验结果
+    runs-on: ubuntu-24.04
+    outputs:
+      has_ci_phase_0: ${{ needs.validate_product.outputs.has_ci_phase_0 || needs.validate_repository.outputs.has_ci_phase_0 }}
+      ci_phase_0_matrix: ${{ needs.validate_product.outputs.ci_phase_0_matrix || needs.validate_repository.outputs.ci_phase_0_matrix }}
+      has_ci_phase_1: ${{ needs.validate_product.outputs.has_ci_phase_1 || needs.validate_repository.outputs.has_ci_phase_1 }}
+      ci_phase_1_matrix: ${{ needs.validate_product.outputs.ci_phase_1_matrix || needs.validate_repository.outputs.ci_phase_1_matrix }}
+      has_ci_phase_2: ${{ needs.validate_product.outputs.has_ci_phase_2 || needs.validate_repository.outputs.has_ci_phase_2 }}
+      ci_phase_2_matrix: ${{ needs.validate_product.outputs.ci_phase_2_matrix || needs.validate_repository.outputs.ci_phase_2_matrix }}
+      has_release_standard: ${{ needs.validate_product.outputs.has_release_standard || needs.validate_repository.outputs.has_release_standard }}
+      release_standard_matrix: ${{ needs.validate_product.outputs.release_standard_matrix || needs.validate_repository.outputs.release_standard_matrix }}
+      has_release_attested: ${{ needs.validate_product.outputs.has_release_attested || needs.validate_repository.outputs.has_release_attested }}
+      release_attested_matrix: ${{ needs.validate_product.outputs.release_attested_matrix || needs.validate_repository.outputs.release_attested_matrix }}
+      has_repository_contracts: ${{ needs.validate_repository.outputs.has_repository_contracts || 'false' }}
+      repository_contracts_matrix: ${{ needs.validate_repository.outputs.repository_contracts_matrix || '{"include":[]}' }}
+    steps:
+      - name: 拒绝失败或缺失的校验分支
+        shell: bash
+        env:
+          PIPELINE: ${{ inputs.pipeline }}
+          REPOSITORY_RESULT: ${{ needs.validate_repository.result }}
+          PRODUCT_RESULT: ${{ needs.validate_product.result }}
+        run: |
+          if [[ "$PIPELINE" == repository ]]; then
+            test "$REPOSITORY_RESULT" = success
+            test "$PRODUCT_RESULT" = skipped
+          else
+            test "$REPOSITORY_RESULT" = skipped
+            test "$PRODUCT_RESULT" = success
+          fi
   retain-current-run:
     permissions:
       actions: write
       contents: read
-    if: ${{ github.event_name == 'push' || inputs.pipeline == 'repository' }}
+    if: ${{ inputs.pipeline == 'repository' }}
     name: 预收口门禁历史
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
+      - name: 检出当前仓库准确源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读产品与 TATA 固定提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - name: 执行 shared 中央产品作业
         id: central_job
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: retain-current-run
           pipeline: ${{ inputs.pipeline }}
@@ -142,8 +340,29 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.validate_dispatch.outputs.repository_contracts_matrix) }}
     steps:
+      - name: 检出当前仓库准确源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读产品与 TATA 固定提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - name: 执行统一仓库门禁
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: ${{ matrix.contract }}
           pipeline: ${{ inputs.pipeline }}
@@ -178,8 +397,26 @@ jobs:
       TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
       TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
-      - name: 执行中央产品调度
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+      - name: 检出 GMB 准确产品源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 执行固定中央产品调度
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -223,8 +460,26 @@ jobs:
       TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
       TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
-      - name: 执行中央产品调度
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+      - name: 检出 GMB 准确产品源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 执行固定中央产品调度
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -268,8 +523,26 @@ jobs:
       TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
       TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
-      - name: 执行中央产品调度
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+      - name: 检出 GMB 准确产品源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 执行固定中央产品调度
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -322,8 +595,26 @@ jobs:
       TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
       TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
-      - name: 执行中央产品调度
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+      - name: 检出 GMB 准确产品源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 执行固定中央产品调度
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -378,8 +669,26 @@ jobs:
       TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
       TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
     steps:
-      - name: 执行中央产品调度
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+      - name: 检出 GMB 准确产品源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ env.GMB_SOURCE_SHA }}
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读固定 TATA 提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - name: 执行固定中央产品调度
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with:
           job: dispatch-product
           pipeline: ${{ inputs.pipeline }}
@@ -404,8 +713,29 @@ jobs:
       actions: write
       contents: read
     steps:
+      - name: 检出当前仓库准确源码
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 按租约固定提交检出 TATA 私有流程
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          repository: VoyagerRhett/TATA
+          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
+          path: .tata-flow
+          persist-credentials: false
+      - name: 回读产品与 TATA 固定提交
+        shell: bash
+        env:
+          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
+          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - name: 成功和失败各保留最近一条
-        uses: ChineseFederation/Only/tataconsole/flows/gmb/shared@main
+        uses: ./.tata-flow/tataconsole/flows/gmb/shared
         env:
           TATA_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: ${{ needs.repository-contracts.result }}
         with:

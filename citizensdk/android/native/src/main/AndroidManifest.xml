@@ -1,0 +1,15 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <application>
+        <!-- Secrets are entered and shown only in this SDK-owned surface. -->
+        <activity
+            android:name="org.citizen.sdk.ui.CitizenSdkWalletFlowActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
+</manifest>
+

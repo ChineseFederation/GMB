@@ -207,6 +207,11 @@ fn decode_module_error(values: &Composite<u32>) -> (Option<u8>, Option<u8>) {
             (module_index, error_index)
         }
         Composite::Unnamed(fields) => {
+            if let [value] = fields.as_slice() {
+                if let ValueDef::Composite(values) = &value.value {
+                    return decode_module_error(values);
+                }
+            }
             let module_index = fields
                 .first()
                 .and_then(Value::as_u128)

@@ -1,5 +1,7 @@
 use core::fmt;
 
+use citizen_sdk_contracts::{ContractError, ContractErrorCode};
+
 /// Stable Rust-side failure categories used before the C ABI maps them to
 /// numeric public error codes.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -12,8 +14,9 @@ pub enum EngineError {
     BlockContextMismatch(String),
     /// A capability dependency is unavailable for the requested operation.
     CapabilityUnavailable(String),
-    /// A provider or typed store rejected an operation.
-    Contract(String),
+    /// A provider, typed store, or validated contract rejected an operation.
+    /// The stable typed code is retained all the way to language bindings.
+    Contract(ContractError),
     /// Internal synchronized state was poisoned and is no longer trustworthy.
     StatePoisoned,
 }
@@ -31,10 +34,29 @@ impl fmt::Display for EngineError {
             Self::CapabilityUnavailable(reason) => {
                 write!(formatter, "capability unavailable: {reason}")
             }
-            Self::Contract(reason) => write!(formatter, "provider contract failed: {reason}"),
+            Self::Contract(error) => write!(formatter, "typed contract failed: {error}"),
             Self::StatePoisoned => formatter.write_str("engine synchronized state is poisoned"),
         }
     }
 }
 
-impl std::error::Error for EngineError {}
+impl EngineError {
+    pub fn contract(code: ContractErrorCode, message: impl Into<String>) -> Self {
+        Self::Contract(ContractError::new(code, message))
+    }
+}
+
+impl From<ContractError> for EngineError {
+    fn from(error: ContractError) -> Self {
+        Self::Contract(error)
+    }
+}
+
+impl std::error::Error for EngineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Contract(error) => Some(error),
+            _ => None,
+        }
+    }
+}

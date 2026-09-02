@@ -57,7 +57,10 @@ fn validated_dependency_closure_is_retained_without_secret_sources() {
         "\npbkdf2 =",
         "schnorrkel/getrandom",
     ] {
-        assert!(LIB_MANIFEST.contains(dependency), "已验证依赖闭包缺失: {dependency}");
+        assert!(
+            LIB_MANIFEST.contains(dependency),
+            "已验证依赖闭包缺失: {dependency}"
+        );
     }
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -67,7 +70,10 @@ fn validated_dependency_closure_is_retained_without_secret_sources() {
         "src/identity/keystore.rs",
         "src/identity/seed_phrase.rs",
     ] {
-        assert!(!root.join(relative).exists(), "出现全节点私钥源码: {relative}");
+        assert!(
+            !root.join(relative).exists(),
+            "出现全节点私钥源码: {relative}"
+        );
     }
 }
 
@@ -82,7 +88,13 @@ fn noise_keys_are_connection_scoped_and_zeroized() {
 #[test]
 fn product_features_and_cross_product_paths_are_absent() {
     let sources = [LIB, LIBP2P, NETWORK, SYNC, TRANSACTIONS];
-    for forbidden in ["chat_mls", "openmls", "account_crypto", "account-crypto", "tuyu"] {
+    for forbidden in [
+        "chat_mls",
+        "openmls",
+        "account_crypto",
+        "account-crypto",
+        "tuyu",
+    ] {
         assert!(
             sources
                 .iter()

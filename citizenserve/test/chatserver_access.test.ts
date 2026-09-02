@@ -54,7 +54,10 @@ function bufferSource(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
-async function setup(membership: MembershipRow | null) {
+async function setup(
+  membership: MembershipRow | null,
+  deviceId = 'chat-device-a',
+) {
   const session: SessionState = {
     cid_number: CID_NUMBER,
     binding_revision: 1,
@@ -79,7 +82,7 @@ async function setup(membership: MembershipRow | null) {
     CHAT_SERVER_URL: 'https://chat.example.test',
     WEB_ORIGIN: 'https://www.crcfrcn.com',
   } as unknown as Env;
-  const body = JSON.stringify({ device_id: 'chat-device-a' });
+  const body = JSON.stringify({ device_id: deviceId });
   const request = new Request('https://worker.test/api/auth/chatserver/access', {
     method: 'POST',
     headers: {
@@ -99,6 +102,12 @@ describe('ChatServer short-lived access', () => {
     const payload = await response.json() as Record<string, unknown>;
     expect(payload.ok).toBe(true);
     expect(payload.chat_server_url).toBe('https://chat.example.test');
+    expect(Object.keys(payload).sort()).toEqual([
+      'chat_server_token',
+      'chat_server_url',
+      'expires_at_millis',
+      'ok',
+    ]);
 
     const token = payload.chat_server_token as string;
     const [headerPart, claimsPart, signaturePart] = token.split('.');
@@ -115,10 +124,13 @@ describe('ChatServer short-lived access', () => {
       chat_enabled: true,
       max_attachment_bytes: 10 * 1024 * 1024,
       iss: 'https://www.crcfrcn.com',
-      aud: 'chatserver',
+      aud: 'citizenchatserver',
     });
     expect(claims).not.toHaveProperty('account_id');
+    expect(claims).not.toHaveProperty('membership_level');
     expect(claims).not.toHaveProperty('session_token');
+    expect(claims.exp).toBe((claims.nbf as number) + 15 * 60);
+    expect(Math.floor((payload.expires_at_millis as number) / 1000)).toBe(claims.exp);
     expect(
       await crypto.subtle.verify(
         { name: 'Ed25519' },
@@ -136,6 +148,40 @@ describe('ChatServer short-lived access', () => {
     await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({
       status: 403,
       code: 'chat_membership_required',
+    });
+  });
+
+  it('rejects a user without a membership projection', async () => {
+    const { env, request } = await setup(null);
+    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({
+      status: 403,
+      code: 'chat_membership_required',
+    });
+  });
+
+  it('rejects an invalid device identifier', async () => {
+    const { env, request } = await setup(activeMembership(), 'device:forged');
+    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({
+      status: 400,
+      code: 'invalid_device_id',
+    });
+  });
+
+  it('rejects a missing authorization signing key', async () => {
+    const { env, request } = await setup(activeMembership());
+    env.CHAT_AUTH_ED25519_PRIVATE_KEY = '';
+    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({
+      status: 503,
+      code: 'chat_signing_key_not_configured',
+    });
+  });
+
+  it('rejects an invalid authorization issuer origin', async () => {
+    const { env, request } = await setup(activeMembership());
+    env.WEB_ORIGIN = 'http://www.crcfrcn.com';
+    await expect(issueChatServerAccess(request, env)).rejects.toMatchObject({
+      status: 503,
+      code: 'chat_issuer_not_configured',
     });
   });
 

@@ -13,12 +13,22 @@ publish = false
 workspace = true
 
 [dependencies]
+# `Mnemonic` 内部同样等价持有助记词索引；必须启用上游析构清零，不能只清理外围 String。
+bip39 = { version = "=2.2.2", default-features = false, features = ["std", "zeroize"] }
 citizen-sdk-contracts = { path = "../contracts" }
+getrandom = "=0.2.17"
+hmac = "=0.12.1"
+pbkdf2 = "=0.12.2"
+futures = "=0.3.34"
+sha2 = "=0.10.9"
 # Keep the same official crates.io Subxt core used by CitizenChain's verified
 # client tooling. This crate decodes metadata and System.Events only; it does
 # not add an online RPC client or a second light-node implementation.
 subxt-core = { version = "=0.43.0", default-features = true }
+unicode-normalization = "=0.1.25"
+unicode-segmentation = "=1.13.3"
+zeroize = "=1.9.0"
 
 [dev-dependencies]
-futures = "=0.3.31"
-
+citizen-signer = { path = "../signer" }
+serde_json = "=1.0.151"

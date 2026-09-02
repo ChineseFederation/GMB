@@ -30,7 +30,10 @@ const REQUIRED_FILES: [(&str, &[u8]); 64] = [
         "src/executor/allocator.rs",
         include_bytes!("../src/executor/allocator.rs"),
     ),
-    ("src/executor/host.rs", include_bytes!("../src/executor/host.rs")),
+    (
+        "src/executor/host.rs",
+        include_bytes!("../src/executor/host.rs"),
+    ),
     (
         "src/executor/host/functions.rs",
         include_bytes!("../src/executor/host/functions.rs"),
@@ -115,7 +118,10 @@ const REQUIRED_FILES: [(&str, &[u8]); 64] = [
         "src/executor/trie_root_calculator/tests.rs",
         include_bytes!("../src/executor/trie_root_calculator/tests.rs"),
     ),
-    ("src/executor/vm.rs", include_bytes!("../src/executor/vm.rs")),
+    (
+        "src/executor/vm.rs",
+        include_bytes!("../src/executor/vm.rs"),
+    ),
     (
         "src/executor/vm/interpreter.rs",
         include_bytes!("../src/executor/vm/interpreter.rs"),
@@ -178,7 +184,10 @@ const REQUIRED_FILES: [(&str, &[u8]); 64] = [
         "src/trie/minimize_proof.rs",
         include_bytes!("../src/trie/minimize_proof.rs"),
     ),
-    ("src/trie/nibble.rs", include_bytes!("../src/trie/nibble.rs")),
+    (
+        "src/trie/nibble.rs",
+        include_bytes!("../src/trie/nibble.rs"),
+    ),
     (
         "src/trie/prefix_proof.rs",
         include_bytes!("../src/trie/prefix_proof.rs"),
@@ -228,7 +237,10 @@ const REQUIRED_FILES: [(&str, &[u8]); 64] = [
         include_bytes!("../src/trie/trie_structure/tests.rs"),
     ),
     ("src/util.rs", include_bytes!("../src/util.rs")),
-    ("src/util/leb128.rs", include_bytes!("../src/util/leb128.rs")),
+    (
+        "src/util/leb128.rs",
+        include_bytes!("../src/util/leb128.rs"),
+    ),
     (
         "src/util/protobuf.rs",
         include_bytes!("../src/util/protobuf.rs"),

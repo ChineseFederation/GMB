@@ -6,12 +6,15 @@ import '../transaction/finalized_transaction_repository.dart';
 import '../transaction/transaction_status.dart';
 import 'preferences_data_store.dart';
 
-/// Android/iOS 标准装配使用的 finalized 交易仓储。
+/// 仅供旧 Dart 交易实现差分验证的 finalized 交易仓储。
 ///
 /// 三类公开事实放在同一个严格 JSON 信封中，因而 finalized 流水、pending 终态和
 /// 游标不会发生半提交。所有实例在同一 Dart isolate 共用 mutation 队列；底层写入
 /// 后即使抛错，也以完整回读结果收敛。需要跨 isolate/进程 CAS 或大容量索引的宿主
 /// 可以注入自己的 [FinalizedTransactionRepository]。
+///
+/// Android、iOS 与 macOS 正式 Flutter 投影均通过产品 C ABI 使用原生 typed
+/// transaction-history store；根公开 client 不装配本仓储。
 final class PreferencesFinalizedTransactionRepository
     implements FinalizedTransactionRepository {
   PreferencesFinalizedTransactionRepository({PreferencesDataStore? preferences})

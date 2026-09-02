@@ -5,7 +5,7 @@ import 'package:flutter_chat_ui/flutter_chat_ui.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'chat_product_policy.dart';
 import 'package:citizenapp/8964/profile/models/citizen_profile.dart';
 import 'package:citizenapp/8964/profile/models/profile_presentation.dart';
@@ -15,7 +15,7 @@ import 'package:citizenapp/8964/profile/services/square_session_provider.dart';
 import 'package:citizenapp/8964/profile/user_profile_page.dart';
 import 'package:citizenapp/8964/profile/widgets/profile_avatar.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/citizen/shared/account_derivation.dart';
 import 'package:citizenapp/my/membership/membership_revision.dart';
 import 'package:citizenapp/my/membership/subscription_service.dart';
@@ -33,35 +33,20 @@ import 'package:citizenapp/wallet/core/wallet_manager.dart';
 import 'package:citizenapp/wallet/widgets/wallet_qr_dialog.dart';
 import 'package:file_picker/file_picker.dart';
 
-typedef ChatSendTextCallback = Future<void> Function(String text);
-typedef ChatSendMediaCallback =
-    Future<void> Function(
-      ChatMediaDraft media, {
-      ChatMediaLocalCommitNotifier? onLocalCommitted,
-    });
-typedef ChatSendStickerCallback =
-    Future<void> Function(String packId, String stickerId);
-typedef ChatSyncCallback = Future<int> Function();
-typedef ChatStartRealtimeCallback =
-    Future<Future<void> Function()?> Function({
-      required Future<void> Function() onNotice,
-      Future<void> Function()? onDisconnected,
-    });
-typedef ChatDownloadAttachmentCallback =
-    Future<ChatDownloadedAttachment> Function(
-      String conversationId,
-      String controlPlaintext,
-    );
 typedef ChatPickMediaCallback = Future<ChatMediaDraft?> Function();
-typedef ChatResolveMediaPathsCallback =
-    Future<Map<String, String>> Function(
-      String conversationId,
-      List<ChatContent> contents,
-    );
+typedef CitizenChatDownloadAttachmentCallback = Future<ChatDownloadedAttachment>
+    Function(
+  String conversationId,
+  String controlPlaintext,
+);
+typedef CitizenChatResolveMediaPathsCallback = Future<Map<String, String>>
+    Function(
+  String conversationId,
+  List<ChatContent> contents,
+);
 typedef ChatDeleteConversationCallback = Future<void> Function();
-typedef ChatMarkReadCallback = Future<void> Function(int readThroughMillis);
-typedef ChatResolvePeerAddressCallback =
-    Future<String> Function(String peerUserId);
+typedef ChatResolvePeerAddressCallback = Future<String> Function(
+    String peerUserId);
 
 /// 公民 Chat 聊天详情页。
 ///
@@ -108,8 +93,8 @@ class ChatPage extends StatefulWidget {
   final ChatSendTextCallback? onSendText;
   final ChatSendMediaCallback? onSendMedia;
   final ChatSendStickerCallback? onSendSticker;
-  final ChatDownloadAttachmentCallback? onDownloadAttachment;
-  final ChatResolveMediaPathsCallback? onResolveMediaPaths;
+  final CitizenChatDownloadAttachmentCallback? onDownloadAttachment;
+  final CitizenChatResolveMediaPathsCallback? onResolveMediaPaths;
   final ChatPickMediaCallback? pickMedia;
   final ChatSyncCallback? onSync;
   final ChatStartRealtimeCallback? onStartRealtime;
@@ -128,14 +113,7 @@ class ChatPage extends StatefulWidget {
 }
 
 class _ChatPageState extends State<ChatPage> {
-  // 实时连接不可用时只重试发送设备本机队列；失败后退避，避免弱网持续请求。
-  static const _normalPollInterval = Duration(seconds: 8);
-  static const _backoffPollInterval = Duration(seconds: 30);
-  // 实时已连时仍保留的低频心跳兜底：即使 WS 推送静默丢失，也能在此间隔内收到。
-  static const _heartbeatPollInterval = Duration(seconds: 20);
-
-  late final InMemoryChatController _chatController;
-  late final _ChatLifecycleObserver _lifecycleObserver;
+  late final ChatConversationController _conversationController;
   late final CitizenProfileApi _profileApi;
   late final CitizenProfileCache _profileCache;
   late final CitizenProfileMediaCache _profileMediaCache;
@@ -149,27 +127,15 @@ class _ChatPageState extends State<ChatPage> {
   // 自绘输入栏的文本控制器：键盘态、表情插入和语音态切回共同持有同一草稿。
   final TextEditingController _composerController = TextEditingController();
   final FocusNode _composerFocusNode = FocusNode();
-  bool _loading = true;
-  bool _attachmentBusy = false;
   bool _deleting = false;
-  bool _polling = false;
-  bool _realtimeConnecting = false;
-  bool _appResumed = false;
+  bool _productActionBusy = false;
   ChatComposerPanel _openPanel = ChatComposerPanel.none;
   ChatExpressionTab _expressionTab = ChatExpressionTab.emoji;
   ChatInputMode _inputMode = ChatInputMode.keyboard;
   late final VoiceRecorder _voiceRecorder;
   VoiceRecordingState _voiceState = VoiceRecordingState.idle;
   Future<void>? _voiceStartInFlight;
-  String? _error;
-  Timer? _pollTimer;
-  Future<void> Function()? _stopRealtime;
-  Future<void>? _openCoordinatorInFlight;
-  int _messageReloadGeneration = 0;
-  int? _renderedMessageFingerprint;
-  final Map<String, String> _resolvedMediaPaths = <String, String>{};
-  final Map<String, Message> _optimisticMessages = <String, Message>{};
-  int _optimisticMessageSequence = 0;
+  String? _productError;
 
   final MediaPicker _mediaPicker = MediaPicker();
   final MediaCompressor _mediaCompressor = MediaCompressor(
@@ -192,48 +158,56 @@ class _ChatPageState extends State<ChatPage> {
     _peerProfileResolved = widget.initialProfile != null;
     CitizenProfileCache.revision.addListener(_onPeerProfileRevision);
     unawaited(_loadPeerProfile());
-    _chatController = InMemoryChatController();
-    final lifecycleState = WidgetsBinding.instance.lifecycleState;
-    _appResumed =
-        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
-    _lifecycleObserver = _ChatLifecycleObserver(
-      onResume: () {
-        _appResumed = true;
-        _requestOpenCoordinate();
+    _conversationController = ChatConversationController(
+      conversationId: widget.conversationId,
+      currentUserId: widget.ownerUserId,
+      loadSnapshot: () async {
+        final batch = await widget.store.readMessagesForDisplay(
+          ownerUserId: widget.ownerUserId,
+          currentAccountId: widget.accountId,
+          conversationId: widget.conversationId,
+        );
+        return (
+          messages: batch.messages,
+          integrityFailureCount: batch.integrityFailureCount,
+        );
       },
-      onPause: () {
-        _appResumed = false;
-        unawaited(_cancelVoiceRecording());
-        _pauseSync();
-      },
+      onSendText: widget.onSendText,
+      onSendMedia: widget.onSendMedia,
+      onSendSticker: widget.onSendSticker,
+      onSync: widget.onSync,
+      onStartRealtime: widget.onStartRealtime,
+      onDownloadAttachment: widget.onDownloadAttachment == null
+          ? null
+          : (controlPlaintext) => widget.onDownloadAttachment!(
+                widget.conversationId,
+                controlPlaintext,
+              ),
+      onResolveMediaPaths: widget.onResolveMediaPaths == null
+          ? null
+          : (contents) =>
+              widget.onResolveMediaPaths!(widget.conversationId, contents),
+      onMarkRead: widget.onMarkRead,
+      isVisible: () => mounted && (ModalRoute.of(context)?.isCurrent ?? false),
+      onPause: _cancelVoiceRecording,
+      mediaLimits: const CitizenChatMediaLimitPolicy(),
+      errorMessage: chatUserErrorMessage,
     );
-    WidgetsBinding.instance.addObserver(_lifecycleObserver);
-    // 本地密文读取与首帧 Widget 构建可以并行启动；不再人为多等一个 post-frame。
-    _requestOpenCoordinate();
+    _conversationController.addListener(_onConversationControllerChanged);
+    _conversationController.start();
   }
 
   /// 首次打开和 resume 共享同一个同步 future，系统生命周期抖动不得重复建立
   /// WebSocket 或重复重试本机发送队列。
-  void _requestOpenCoordinate() {
-    if (!mounted || !_appResumed || _openCoordinatorInFlight != null) {
-      return;
-    }
-    late final Future<void> created;
-    created = _syncOnOpen().whenComplete(() {
-      if (identical(_openCoordinatorInFlight, created)) {
-        _openCoordinatorInFlight = null;
-      }
-    });
-    _openCoordinatorInFlight = created;
+  void _onConversationControllerChanged() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
-    _messageReloadGeneration += 1;
     CitizenProfileCache.revision.removeListener(_onPeerProfileRevision);
-    _pauseSync();
-    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
-    _chatController.dispose();
+    _conversationController.removeListener(_onConversationControllerChanged);
+    _conversationController.dispose();
     _composerController.dispose();
     _composerFocusNode.dispose();
     _voiceRecorder.state.removeListener(_onVoiceStateChanged);
@@ -311,432 +285,21 @@ class _ChatPageState extends State<ChatPage> {
     }
   }
 
-  Future<void> _reloadMessages() async {
-    final generation = ++_messageReloadGeneration;
-    try {
-      final batch = await widget.store.readMessagesForDisplay(
-        ownerUserId: widget.ownerUserId,
-        currentAccountId: widget.accountId,
-        conversationId: widget.conversationId,
-      );
-      if (!mounted || generation != _messageReloadGeneration) return;
-      final messages = batch.messages;
-      final fingerprint = Object.hashAll(
-        messages.map(
-          (message) => Object.hash(
-            message.messageId,
-            message.direction,
-            message.messageKind,
-            message.deliveryState,
-            message.createdAtMillis,
-            message.plaintext,
-          ),
-        ),
-      );
-      // 心跳轮询只在真实快照变化时替换控制器，禁止每 8/20/30 秒把相同消息
-      // 清空后重建，造成聊天内容短暂消失或滚动位置抖动。
-      if (_renderedMessageFingerprint != fingerprint) {
-        await _chatController.setMessages(
-          _visibleMessages(messages),
-          animated: false,
-        );
-        if (!mounted || generation != _messageReloadGeneration) return;
-        _renderedMessageFingerprint = fingerprint;
-      }
-      // 正文解密完成就提交首屏；媒体缓存路径随后批量解析并原位更新，不能反向
-      // 阻塞文字记录、输入栏或本地加载状态。
-      unawaited(_resolveAndApplyMediaPaths(messages, generation));
-      _commitReloadState(
-        generation,
-        batch.integrityFailureCount == 0
-            ? null
-            : batch.messages.isEmpty
-            ? '本机历史消息无法验证'
-            : '部分本机历史消息无法验证，其他记录已正常显示',
-      );
-      // 已读归零不能阻塞聊天记录显示、输入和后续页面操作。
-      unawaited(_markRead(messages, generation));
-    } catch (error) {
-      _commitReloadState(generation, chatUserErrorMessage(error));
-    }
-  }
-
-  Future<void> _markRead(
-    List<ChatStoredMessage> messages,
-    int generation,
-  ) async {
-    final markRead = widget.onMarkRead;
-    if (markRead == null ||
-        messages.isEmpty ||
-        !_appResumed ||
-        !(ModalRoute.of(context)?.isCurrent ?? false)) {
-      return;
-    }
-    final readThroughMillis = messages
-        .map((message) => message.createdAtMillis)
-        .reduce((left, right) => left > right ? left : right);
-    try {
-      await markRead(readThroughMillis);
-    } catch (_) {
-      // 未读写入失败时保留原计数；下一次当前页面重载会按最新快照重试。
-    }
-    if (!mounted || generation != _messageReloadGeneration) return;
-  }
-
-  void _commitReloadState(int generation, String? nextError) {
-    if (!mounted || generation != _messageReloadGeneration) return;
-    if (!_loading && _error == nextError) return;
-    setState(() {
-      _loading = false;
-      _error = nextError;
-    });
-  }
-
-  /// 预解析媒体消息在本机缓存中的绝对路径,按 attachment_id 建表。字节未到达
-  /// (对方离线/仍在传输)的媒体不入表,由渲染层显示占位。
-  Future<void> _resolveAndApplyMediaPaths(
-    List<ChatStoredMessage> messages,
-    int generation,
-  ) async {
-    final resolver = widget.onResolveMediaPaths;
-    if (resolver == null) return;
-    try {
-      final contents = <ChatContent>[];
-      for (final message in messages) {
-        final content = ChatPayloadCodec.decode(message.plaintext ?? '');
-        final attachmentId = content.attachmentId ?? '';
-        if (!content.isMedia || attachmentId.isEmpty) {
-          continue;
-        }
-        // 门④对应:声明超限的媒体已在字节层拒收、UI 显"已拒收",不解析路径。
-        if (ChatMediaLimits.exceedsForKind(
-          content.kind,
-          content.byteSize ?? 0,
-        )) {
-          continue;
-        }
-        if (!_resolvedMediaPaths.containsKey(attachmentId)) {
-          contents.add(content);
-        }
-      }
-      if (contents.isEmpty) return;
-      final paths = await resolver(widget.conversationId, contents);
-      if (!mounted || generation != _messageReloadGeneration || paths.isEmpty) {
-        return;
-      }
-      _resolvedMediaPaths.addAll(paths);
-      await _chatController.setMessages(
-        _visibleMessages(messages),
-        animated: false,
-      );
-    } catch (_) {
-      // 媒体缓存仍未到达或本机短命明文已清理时继续显示占位；它不属于正文首读失败。
-    }
-  }
-
-  Future<void> _syncOnOpen() async {
-    // 会话首帧先读取本地消息；网络重试随后进行，离线或慢网不得挡住聊天页面。
-    await _reloadMessages();
-    if (!mounted || widget.onSync == null) return;
-
-    // 当前会话队列重试与 Realtime 建连都在本地首屏之后静默并行；重试只改变
-    // 可靠投递内部状态，UI 不展示该状态，因此禁止再次完整解密全部消息。
-    final realtimeFuture = _startRealtime();
-    await _syncOnly(silent: true);
-    final realtimeReady = await realtimeFuture;
-    if (!realtimeReady && mounted && widget.onSync != null) {
-      _schedulePoll(_normalPollInterval);
-    }
-  }
-
-  Future<bool> _startRealtime() async {
-    final starter = widget.onStartRealtime;
-    if (!_appResumed || starter == null) {
-      return false;
-    }
-    if (_stopRealtime != null || _realtimeConnecting) {
-      return _stopRealtime != null;
-    }
-    _realtimeConnecting = true;
-    try {
-      final stop = await starter(
-        // Runtime 已经把入站 message 或确认写入本地；通知只刷新当前会话，
-        // 不在显示新消息之前再次发起网络队列重试。
-        onNotice: _reloadMessages,
-        onDisconnected: () async {
-          // Runtime 的账户级通道会自行退避重连；本页面继续持有同一订阅 disposer，
-          // 不把物理断线误当成订阅已经失效。轮询只作为重连期间的本地补发兜底。
-          if (_appResumed && mounted && widget.onSync != null) {
-            _schedulePoll(_backoffPollInterval);
-          }
-        },
-      );
-      if (!mounted || !_appResumed) {
-        await stop?.call();
-        return false;
-      }
-      _stopRealtime = stop;
-      if (stop != null) {
-        // 实时已连也保留低频心跳兜底，防止推送静默丢失导致收不到新消息。
-        _schedulePoll(_heartbeatPollInterval);
-      }
-      return stop != null;
-    } catch (_) {
-      return false;
-    } finally {
-      _realtimeConnecting = false;
-    }
-  }
-
-  Future<bool> _syncAndReload({required bool silent}) async {
-    final ok = await _syncOnly(silent: silent);
-    if (!ok) return false;
-    await _reloadMessages();
-    return true;
-  }
-
-  Future<bool> _syncOnly({required bool silent}) async {
-    final sync = widget.onSync;
-    if (sync == null) {
-      if (!silent && mounted) {
-        setState(() {
-          _error = '当前会话尚未绑定同步链路';
-        });
-      }
-      return false;
-    }
-    try {
-      await sync();
-      return true;
-    } catch (error) {
-      if (!silent && mounted) {
-        setState(() {
-          _error = chatUserErrorMessage(error);
-        });
-      }
-      return false;
-    }
-  }
-
-  void _schedulePoll(Duration delay) {
-    if (!_appResumed) {
-      return;
-    }
-    _pollTimer?.cancel();
-    _pollTimer = Timer(delay, _runPoll);
-  }
-
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
-  }
-
-  void _pauseSync() {
-    _stopPolling();
-    final stop = _stopRealtime;
-    _stopRealtime = null;
-    if (stop != null) {
-      unawaited(stop());
-    }
-  }
-
-  Future<void> _runPoll() async {
-    if (!mounted || !_appResumed || widget.onSync == null) {
-      return;
-    }
-    if (_polling) {
-      _schedulePoll(_backoffPollInterval);
-      return;
-    }
-    _polling = true;
-    final ok = await _syncAndReload(silent: true);
-    _polling = false;
-    if (!mounted || !_appResumed || widget.onSync == null) {
-      return;
-    }
-    // 实时在线：保留低频心跳兜底，按心跳间隔继续复查。
-    if (_stopRealtime != null) {
-      _schedulePoll(_heartbeatPollInterval);
-      return;
-    }
-    // 实时离线：尝试重连；重连成功由 _startRealtime 起心跳，否则常规/退避轮询。
-    if (ok && await _startRealtime()) {
-      return;
-    }
-    _schedulePoll(ok ? _normalPollInterval : _backoffPollInterval);
-  }
-
-  /// 本地 ChatIsar 真值与尚未完成可靠落盘的短命气泡合并后一次提交。任何后台
-  /// 重载都必须保留仍在发送中的气泡，不能让并发发送出现闪退或暂时消失。
-  List<Message> _visibleMessages(List<ChatStoredMessage> storedMessages) {
-    final messages = <Message>[
-      ...storedMessagesToChatMessages(
-        storedMessages,
-        currentUserId: widget.ownerUserId,
-        mediaLimits: const CitizenChatMediaLimitPolicy(),
-        resolveLocalMediaPath: (content) =>
-            _resolvedMediaPaths[content.attachmentId],
-      ),
-      ..._optimisticMessages.values,
-    ];
-    messages.sort((left, right) {
-      final leftAt = left.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      final rightAt = right.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
-      return leftAt.compareTo(rightAt);
-    });
-    return messages;
-  }
-
-  String _nextOptimisticMessageId() {
-    _optimisticMessageSequence += 1;
-    return 'local:${widget.conversationId}:'
-        '${DateTime.now().microsecondsSinceEpoch}:$_optimisticMessageSequence';
-  }
-
-  Map<String, dynamic> _optimisticMetadata(ChatMessageKind kind) =>
-      <String, dynamic>{
-        'conversation_id': widget.conversationId,
-        'direction': 'outgoing',
-        'is_mine': true,
-        'message_kind': kind.name,
-        'optimistic': true,
-      };
-
-  Message _optimisticTextMessage(String text) => Message.text(
-    id: _nextOptimisticMessageId(),
-    authorId: widget.ownerUserId,
-    createdAt: DateTime.now().toUtc(),
-    text: text,
-    metadata: _optimisticMetadata(ChatMessageKind.text),
-  );
-
-  Message _optimisticStickerMessage(String packId, String stickerId) =>
-      Message.custom(
-        id: _nextOptimisticMessageId(),
-        authorId: widget.ownerUserId,
-        createdAt: DateTime.now().toUtc(),
-        metadata: <String, dynamic>{
-          ..._optimisticMetadata(ChatMessageKind.sticker),
-          'pack_id': packId,
-          'sticker_id': stickerId,
-        },
-      );
-
-  Message _optimisticMediaMessage(ChatMediaDraft draft) {
-    final id = _nextOptimisticMessageId();
-    final createdAt = DateTime.now().toUtc();
-    final metadata = <String, dynamic>{
-      ..._optimisticMetadata(draft.kind),
-      'attachment_id': id,
-      'file_name': draft.fileName,
-    };
-    return switch (draft.kind) {
-      ChatMessageKind.image => Message.image(
-        id: id,
-        authorId: widget.ownerUserId,
-        createdAt: createdAt,
-        source: draft.sourcePath,
-        width: draft.width?.toDouble(),
-        height: draft.height?.toDouble(),
-        size: draft.byteSize,
-        metadata: metadata,
-      ),
-      ChatMessageKind.video => Message.video(
-        id: id,
-        authorId: widget.ownerUserId,
-        createdAt: createdAt,
-        source: draft.sourcePath,
-        name: draft.fileName,
-        width: draft.width?.toDouble(),
-        height: draft.height?.toDouble(),
-        size: draft.byteSize,
-        metadata: metadata,
-      ),
-      ChatMessageKind.audio => Message.audio(
-        id: id,
-        authorId: widget.ownerUserId,
-        createdAt: createdAt,
-        source: draft.sourcePath,
-        duration: Duration(milliseconds: draft.durationMs ?? 0),
-        size: draft.byteSize,
-        metadata: metadata,
-      ),
-      ChatMessageKind.file => Message.file(
-        id: id,
-        authorId: widget.ownerUserId,
-        createdAt: createdAt,
-        source: draft.sourcePath,
-        name: draft.fileName,
-        size: draft.byteSize,
-        mimeType: draft.contentType,
-        metadata: metadata,
-      ),
-      ChatMessageKind.text ||
-      ChatMessageKind.sticker => throw StateError('文字和贴纸不能进入媒体乐观气泡'),
-    };
-  }
-
-  Future<void> _insertOptimisticMessage(Message message) async {
-    _optimisticMessages[message.id] = message;
-    if (!mounted) return;
-    // InMemoryChatController 在 Future 首次挂起前完成插入，因此点击发送的同一帧
-    // 就能看到气泡；这里只保存短命 UI 对象，不写磁盘、不伪造投递状态。
-    await _chatController.insertMessage(message, animated: false);
-  }
-
-  Future<void> _reconcileOptimisticMessage(String messageId) async {
-    if (_optimisticMessages.remove(messageId) == null || !mounted) return;
-    await _reloadMessages();
-  }
-
-  Future<void> _discardOptimisticMessage(String messageId) async {
-    if (_optimisticMessages.remove(messageId) == null || !mounted) return;
-    await _reloadMessages();
-  }
-
-  Future<void> _discardOptimisticMessages(Iterable<String> messageIds) async {
-    var removed = false;
-    for (final messageId in messageIds) {
-      removed = _optimisticMessages.remove(messageId) != null || removed;
-    }
-    if (removed && mounted) await _reloadMessages();
-  }
-
   Future<void> _handleSend(String text) async {
     if (!_requireChatEntitlement()) return;
-    final normalized = text.trim();
-    if (normalized.isEmpty) {
-      return;
-    }
-    final sender = widget.onSendText;
-    if (sender == null) {
-      setState(() {
-        _error = '当前会话尚未绑定发送链路';
-      });
-      return;
-    }
-    final optimistic = _optimisticTextMessage(normalized);
-    await _insertOptimisticMessage(optimistic);
-    try {
-      await sender(normalized);
-      await _reconcileOptimisticMessage(optimistic.id);
-    } catch (error) {
-      await _discardOptimisticMessage(optimistic.id);
-      if (mounted) {
-        setState(() {
-          _error = chatUserErrorMessage(error);
-        });
-      }
-    }
+    await _conversationController.sendText(text);
   }
 
   Future<void> _sendMediaDrafts(Iterable<ChatMediaDraft> drafts) async {
-    if (_attachmentBusy || !_requireChatEntitlement()) return;
+    if (_conversationController.attachmentBusy || !_requireChatEntitlement()) {
+      return;
+    }
     final prepared = drafts.toList(growable: false);
     for (final draft in prepared) {
       if (ChatMediaLimits.exceedsForKind(draft.kind, draft.byteSize)) {
         setState(() {
-          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
+          _productError =
+              '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
         });
         return;
       }
@@ -744,65 +307,11 @@ class _ChatPageState extends State<ChatPage> {
         draft.kind,
         draft.durationMs,
       )) {
-        setState(() => _error = '语音、视频消息每条最长 3 分钟');
+        setState(() => _productError = '语音、视频消息每条最长 3 分钟');
         return;
       }
     }
-    final sender = widget.onSendMedia;
-    if (sender == null) {
-      setState(() {
-        _error = '当前会话尚未绑定媒体发送链路';
-      });
-      return;
-    }
-    setState(() {
-      _attachmentBusy = true;
-      _error = null;
-    });
-    final pending = <({ChatMediaDraft draft, Message message})>[];
-    for (final draft in prepared) {
-      final message = _optimisticMediaMessage(draft);
-      pending.add((draft: draft, message: message));
-      await _insertOptimisticMessage(message);
-    }
-    try {
-      for (final item in pending) {
-        var reconciled = false;
-        await sender(
-          item.draft,
-          // 媒体消息和发送方本地附件一旦安全落盘就立即刷新；不再等待云端
-          // 控制消息和 HTTPS 密文字节确认后才让语音气泡出现。
-          onLocalCommitted: () async {
-            if (reconciled) return;
-            reconciled = true;
-            await _reconcileOptimisticMessage(item.message.id);
-          },
-        );
-        if (!reconciled) {
-          await _reconcileOptimisticMessage(item.message.id);
-        }
-      }
-    } on ChatMediaTooLargeException {
-      await _discardOptimisticMessages(pending.map((item) => item.message.id));
-      if (mounted) {
-        setState(() {
-          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
-        });
-      }
-    } catch (error) {
-      await _discardOptimisticMessages(pending.map((item) => item.message.id));
-      if (mounted) {
-        setState(() {
-          _error = chatUserErrorMessage(error);
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _attachmentBusy = false;
-        });
-      }
-    }
+    await _conversationController.sendMediaDrafts(prepared);
   }
 
   Future<void> _handleGallery() async {
@@ -846,26 +355,7 @@ class _ChatPageState extends State<ChatPage> {
   /// 零字节、零 WebRTC)。面板保持打开以便连发,不自动关闭。
   Future<void> _handleSendSticker(String packId, String stickerId) async {
     if (!_requireChatEntitlement()) return;
-    final sender = widget.onSendSticker;
-    if (sender == null) {
-      setState(() {
-        _error = '当前会话尚未绑定发送链路';
-      });
-      return;
-    }
-    final optimistic = _optimisticStickerMessage(packId, stickerId);
-    await _insertOptimisticMessage(optimistic);
-    try {
-      await sender(packId, stickerId);
-      await _reconcileOptimisticMessage(optimistic.id);
-    } catch (error) {
-      await _discardOptimisticMessage(optimistic.id);
-      if (mounted) {
-        setState(() {
-          _error = chatUserErrorMessage(error);
-        });
-      }
-    }
+    await _conversationController.sendSticker(packId, stickerId);
   }
 
   /// 键盘、表情/贴纸、加号面板互斥；打开辅助面板时收起系统键盘。
@@ -970,21 +460,22 @@ class _ChatPageState extends State<ChatPage> {
     } on ChatMediaTooLargeException {
       if (mounted) {
         setState(() {
-          _error = '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
+          _productError =
+              '文件超出当前会员单个附件上限（${ChatMediaLimits.currentLimitLabel}）';
         });
       }
     } on ChatMediaTooLongException {
-      if (mounted) setState(() => _error = '语音、视频消息每条最长 3 分钟');
+      if (mounted) setState(() => _productError = '语音、视频消息每条最长 3 分钟');
     } catch (error) {
-      if (mounted) setState(() => _error = chatUserErrorMessage(error));
+      if (mounted) setState(() => _productError = chatUserErrorMessage(error));
     }
   }
 
   Future<void> _openTransfer() async {
-    if (widget.isGroup || _attachmentBusy) return;
+    if (widget.isGroup || _productActionBusy) return;
     setState(() {
-      _attachmentBusy = true;
-      _error = null;
+      _productActionBusy = true;
+      _productError = null;
     });
     try {
       final String ss58Address;
@@ -1005,9 +496,11 @@ class _ChatPageState extends State<ChatPage> {
         ),
       );
     } catch (error) {
-      if (mounted) setState(() => _error = chatUserErrorMessage(error));
+      if (mounted) setState(() => _productError = chatUserErrorMessage(error));
     } finally {
-      if (mounted) setState(() => _attachmentBusy = false);
+      if (mounted) {
+        setState(() => _productActionBusy = false);
+      }
     }
   }
 
@@ -1023,7 +516,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       await created;
     } catch (error) {
-      if (mounted) setState(() => _error = chatUserErrorMessage(error));
+      if (mounted) setState(() => _productError = chatUserErrorMessage(error));
     } finally {
       if (identical(_voiceStartInFlight, created)) {
         _voiceStartInFlight = null;
@@ -1048,7 +541,7 @@ class _ChatPageState extends State<ChatPage> {
       }
       await _sendVoiceResult(result);
     } catch (error) {
-      if (mounted) setState(() => _error = chatUserErrorMessage(error));
+      if (mounted) setState(() => _productError = chatUserErrorMessage(error));
     }
   }
 
@@ -1109,47 +602,13 @@ class _ChatPageState extends State<ChatPage> {
 
   /// 把已收到的媒体从本机缓存另存并提示。控制载荷来自消息 metadata。
   Future<void> _downloadMedia(String controlPlaintext) async {
-    if (_attachmentBusy) return;
-    if (controlPlaintext.isEmpty) {
-      setState(() {
-        _error = '媒体控制消息为空，无法保存';
-      });
-      return;
-    }
-    final downloader = widget.onDownloadAttachment;
-    if (downloader == null) {
-      setState(() {
-        _error = '当前会话尚未绑定媒体下载链路';
-      });
-      return;
-    }
-    setState(() {
-      _attachmentBusy = true;
-      _error = null;
-    });
-    try {
-      final downloaded = await downloader(
-        widget.conversationId,
-        controlPlaintext,
-      );
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('已保存：${downloaded.fileName}')));
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _error = chatUserErrorMessage(error);
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _attachmentBusy = false;
-        });
-      }
-    }
+    final downloaded = await _conversationController.downloadAttachment(
+      controlPlaintext,
+    );
+    if (!mounted || downloaded == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('已保存：${downloaded.fileName}')),
+    );
   }
 
   Future<void> _handleDeleteConversation() async {
@@ -1159,10 +618,10 @@ class _ChatPageState extends State<ChatPage> {
     }
     setState(() {
       _deleting = true;
-      _error = null;
+      _productError = null;
     });
     try {
-      _pauseSync();
+      _conversationController.pause();
       final deleter = widget.onDeleteConversation;
       if (deleter == null) {
         throw StateError('聊天会话删除必须由 ChatRuntime 协调执行');
@@ -1175,7 +634,10 @@ class _ChatPageState extends State<ChatPage> {
         // `bool` 不能作为 `void` 路由结果而拒绝出栈。
         Navigator.of(context).pop();
       } else {
-        await _chatController.setMessages(const [], animated: false);
+        await _conversationController.chatController.setMessages(
+          const [],
+          animated: false,
+        );
         setState(() {
           _deleting = false;
         });
@@ -1187,7 +649,7 @@ class _ChatPageState extends State<ChatPage> {
       if (mounted) {
         setState(() {
           _deleting = false;
-          _error = chatUserErrorMessage(error);
+          _productError = chatUserErrorMessage(error);
         });
       }
     }
@@ -1216,7 +678,7 @@ class _ChatPageState extends State<ChatPage> {
     if (!ChatMediaLimits.chatAuthorizedFor(widget.ownerUserId)) {
       final resolved =
           ChatMediaLimits.authorizationResolvedFor(widget.ownerUserId) &&
-          ChatMediaLimits.resolvedFor(widget.ownerUserId);
+              ChatMediaLimits.resolvedFor(widget.ownerUserId);
       return Container(
         key: const ValueKey('chat-membership-required'),
         width: double.infinity,
@@ -1239,22 +701,22 @@ class _ChatPageState extends State<ChatPage> {
       ChatComposerPanel.none => null,
       ChatComposerPanel.expression => _buildExpressionPanel(context),
       ChatComposerPanel.actions => ComposerActionPanel(
-        isGroup: widget.isGroup,
-        callsEnabled: false,
-        onAction: (action) => unawaited(_handleComposerAction(action)),
-        iconBuilder: (context, action, color, size) {
-          if (action != ChatComposerAction.transfer) return null;
-          return Image.asset(
-            'assets/icons/gmb-mark.png',
-            key: const ValueKey('chat-action-transfer-gmb-mark'),
-            width: size,
-            height: size,
-            color: color,
-            colorBlendMode: BlendMode.srcIn,
-            filterQuality: FilterQuality.high,
-          );
-        },
-      ),
+          isGroup: widget.isGroup,
+          callsEnabled: false,
+          onAction: (action) => unawaited(_handleComposerAction(action)),
+          iconBuilder: (context, action, color, size) {
+            if (action != ChatComposerAction.transfer) return null;
+            return Image.asset(
+              'assets/icons/gmb-mark.png',
+              key: const ValueKey('chat-action-transfer-gmb-mark'),
+              width: size,
+              height: size,
+              color: color,
+              colorBlendMode: BlendMode.srcIn,
+              filterQuality: FilterQuality.high,
+            );
+          },
+        ),
     };
     return ComposerBar(
       controller: _composerController,
@@ -1279,11 +741,11 @@ class _ChatPageState extends State<ChatPage> {
     if (ChatMediaLimits.chatAuthorizedFor(widget.ownerUserId)) return true;
     if (mounted) {
       setState(() {
-        _error =
+        _productError =
             ChatMediaLimits.authorizationResolvedFor(widget.ownerUserId) &&
-                ChatMediaLimits.resolvedFor(widget.ownerUserId)
-            ? '尚未开通会员，订阅任一会员后即可使用聊天'
-            : '暂时无法验证会员状态，请稍后重试';
+                    ChatMediaLimits.resolvedFor(widget.ownerUserId)
+                ? '尚未开通会员，订阅任一会员后即可使用聊天'
+                : '暂时无法验证会员状态，请稍后重试';
       });
     }
     return false;
@@ -1342,11 +804,11 @@ class _ChatPageState extends State<ChatPage> {
                 imagePath: _peerProfileMedia.avatarPath,
                 imageUrl:
                     _peerProfile?.avatarObjectKey?.trim().isNotEmpty == true
-                    ? _profileApi.mediaUrl(
-                        _peerProfile!.avatarObjectKey!,
-                        updatedAt: _peerProfile!.updatedAt,
-                      )
-                    : null,
+                        ? _profileApi.mediaUrl(
+                            _peerProfile!.avatarObjectKey!,
+                            updatedAt: _peerProfile!.updatedAt,
+                          )
+                        : null,
                 imageHeaders: _profileSession == null
                     ? null
                     : <String, String>{
@@ -1419,7 +881,7 @@ class _ChatPageState extends State<ChatPage> {
       ),
       body: ChatMessageListView(
         currentUserId: widget.ownerUserId,
-        chatController: _chatController,
+        chatController: _conversationController.chatController,
         onMessageSend: _handleSend,
         resolveUser: (id) async {
           final isMe = id == widget.ownerUserId;
@@ -1428,24 +890,24 @@ class _ChatPageState extends State<ChatPage> {
             name: isMe
                 ? '我'
                 : widget.isGroup
-                ? ProfilePresentation.forIdentityKey(id).fallbackName
-                : peerName,
+                    ? ProfilePresentation.forIdentityKey(id).fallbackName
+                    : peerName,
           );
         },
         composerBuilder: _buildComposer,
         onDownloadAttachment: _downloadMedia,
-        onMessagesChanged: _reloadMessages,
+        onMessagesChanged: _conversationController.reloadMessages,
         isGroup: widget.isGroup,
-        loading: _loading,
-        error: _error,
+        loading: _conversationController.loading,
+        error: _productError ?? _conversationController.error,
         groupSenderBuilder: widget.isGroup
             ? (context, userId) => Username(
-                userId: userId,
-                style: TextStyle(
-                  fontSize: AppLayout.scaled(context, 11),
-                  color: AppTheme.textSecondary,
-                ),
-              )
+                  userId: userId,
+                  style: TextStyle(
+                    fontSize: AppLayout.scaled(context, 11),
+                    color: AppTheme.textSecondary,
+                  ),
+                )
             : null,
         style: style,
       ),
@@ -1476,22 +938,6 @@ Future<bool> _confirmDeleteConversationPage(BuildContext context) async {
   return confirmed ?? false;
 }
 
-class _ChatLifecycleObserver extends WidgetsBindingObserver {
-  _ChatLifecycleObserver({required this.onResume, required this.onPause});
-
-  final VoidCallback onResume;
-  final VoidCallback onPause;
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      onResume();
-    } else {
-      onPause();
-    }
-  }
-}
-
 String _shortAccount(String value) {
   if (value.length <= 16) {
     return value;
@@ -1499,13 +945,13 @@ String _shortAccount(String value) {
   return '${value.substring(0, 8)}...${value.substring(value.length - 6)}';
 }
 
-typedef ChatSendTextFactory =
-    ChatSendTextCallback? Function(String peerUserId, String conversationId);
+typedef ChatSendTextFactory = ChatSendTextCallback? Function(
+    String peerUserId, String conversationId);
 typedef ChatSyncFactory = ChatSyncCallback? Function(String peerUserId);
-typedef ChatSendMediaFactory =
-    ChatSendMediaCallback? Function(String peerUserId, String conversationId);
-typedef ChatDownloadAttachmentFactory =
-    ChatDownloadAttachmentCallback? Function(String peerUserId);
+typedef ChatSendMediaFactory = ChatSendMediaCallback? Function(
+    String peerUserId, String conversationId);
+typedef ChatDownloadAttachmentFactory = CitizenChatDownloadAttachmentCallback?
+    Function(String peerUserId);
 
 /// 聊天页加号菜单 5 个动作的可注入入口。
 ///
@@ -1565,8 +1011,8 @@ class ChatTab extends StatefulWidget {
     this.sessionProvider,
     this.contactService,
     this.subscriptionService,
-  }) : store = store ?? ChatStore(),
-       walletManager = walletManager ?? WalletManager();
+  })  : store = store ?? ChatStore(),
+        walletManager = walletManager ?? WalletManager();
 
   final ChatStore store;
   final WalletManager walletManager;
@@ -1594,10 +1040,6 @@ class ChatTab extends StatefulWidget {
 }
 
 class _ChatTabState extends State<ChatTab> {
-  // 聊天页只做前台轻量轮询；离开页面或 App 退后台即停止，不做后台常驻扫描。
-  static const _normalPollInterval = Duration(seconds: 15);
-  static const _backoffPollInterval = Duration(seconds: 30);
-
   List<ChatConversationPreview> _conversations = const [];
   // 用户确认删除后先从所有页面读取结果中屏蔽该会话；物理清理即使仍在
   // 等待文件 lease，轮询、Realtime 或路由返回重载也不得把卡片重新插回。
@@ -1612,8 +1054,7 @@ class _ChatTabState extends State<ChatTab> {
       widget.sessionProvider ?? SquareSessionProvider.instance;
   late final SubscriptionService _subscriptionService =
       widget.subscriptionService ?? SubscriptionService();
-  late final UserContactService _contactService =
-      widget.contactService ??
+  late final UserContactService _contactService = widget.contactService ??
       UserContactService(walletManager: widget.walletManager);
   final Map<String, CitizenProfile> _peerProfiles = <String, CitizenProfile>{};
   final Map<String, CitizenProfileMediaSnapshot> _peerProfileMedia =
@@ -1624,47 +1065,27 @@ class _ChatTabState extends State<ChatTab> {
   String _cidNumber = '';
   String _accountId = '';
   bool _loading = true;
-  bool _polling = false;
-  bool _realtimeConnecting = false;
   String? _error;
-  Timer? _pollTimer;
-  String? _realtimeWallet;
-  Future<void> Function()? _stopRealtime;
-  late final _ChatTabLifecycleObserver _lifecycleObserver;
-  Future<void>? _coordinatorInFlight;
-  bool _appResumed = false;
 
-  /// 后台服务世代与本地加载世代分离。补发、Realtime 或 MLS 初始化即使耗时，
-  /// 也不得延长“正在读取本地会话”，更不得用旧身份的晚到结果覆盖当前列表。
-  int _backgroundSyncGeneration = 0;
+  late final ChatConversationListController _listController;
 
-  bool get _isActive =>
-      (widget.selectedTab == null ||
-          widget.selectedTab!.value == widget.tabIndex) &&
-      _appResumed;
+  bool get _isTabSelected =>
+      widget.selectedTab == null ||
+      widget.selectedTab!.value == widget.tabIndex;
+
+  bool get _isActive => _listController.isActive;
 
   @override
   void initState() {
     super.initState();
-    MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
-    final lifecycleState = WidgetsBinding.instance.lifecycleState;
-    _appResumed =
-        lifecycleState == null || lifecycleState == AppLifecycleState.resumed;
-    _lifecycleObserver = _ChatTabLifecycleObserver(
-      onResume: () {
-        _appResumed = true;
-        _requestCoordinate();
-      },
-      onPause: () {
-        _appResumed = false;
-        _pauseSync();
-      },
+    _listController = ChatConversationListController(
+      onCoordinate: () => _reload(syncFirst: true),
+      onRefresh: _syncAndRefresh,
+      onStartRealtime: _startRealtime,
     );
-    WidgetsBinding.instance.addObserver(_lifecycleObserver);
+    _listController.start(visible: _isTabSelected);
+    MembershipRevision.instance.listenable.addListener(_onMembershipChanged);
     widget.selectedTab?.addListener(_onSelectedTabChanged);
-    // 本页常驻 IndexedStack；切换身份账户（CID 换绑 / 切钱包）后经
-    // walletsRevision 广播重载，会话列表 accountId 立即切到新身份账户，
-    // 不再等 App 退后台回前台。
     WalletManager.walletsRevision.addListener(_onWalletsChanged);
     CitizenProfileCache.revision.addListener(_onProfileRevision);
     WidgetsBinding.instance.addPostFrameCallback((_) => _requestCoordinate());
@@ -1686,8 +1107,7 @@ class _ChatTabState extends State<ChatTab> {
     CitizenProfileCache.revision.removeListener(_onProfileRevision);
     WalletManager.walletsRevision.removeListener(_onWalletsChanged);
     widget.selectedTab?.removeListener(_onSelectedTabChanged);
-    _pauseSync();
-    WidgetsBinding.instance.removeObserver(_lifecycleObserver);
+    _listController.dispose();
     super.dispose();
   }
 
@@ -1709,6 +1129,7 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   void _onSelectedTabChanged() {
+    _listController.setVisible(_isTabSelected);
     if (_isActive) {
       _requestCoordinate();
     } else {
@@ -1718,18 +1139,7 @@ class _ChatTabState extends State<ChatTab> {
 
   /// init、进入 Tab、App resume 全部汇入同一个 coordinator；同一时刻只允许
   /// 一个 reload/sync 链，避免系统 UI 导致 lifecycle 抖动时重复初始化。
-  void _requestCoordinate() {
-    if (!mounted || !_isActive || _coordinatorInFlight != null) {
-      return;
-    }
-    late final Future<void> created;
-    created = _reload(syncFirst: true).whenComplete(() {
-      if (identical(_coordinatorInFlight, created)) {
-        _coordinatorInFlight = null;
-      }
-    });
-    _coordinatorInFlight = created;
-  }
+  void _requestCoordinate() => _listController.requestCoordinate();
 
   Future<void> _onWalletsChanged() async {
     // 先廉价比对(纯 Isar 读):默认聊天身份没变的钱包操作(重命名/导入
@@ -1749,17 +1159,18 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   /// 本地加载世代号。切默认钱包后并发 reload 乱序完成时，旧身份不得覆写
-  /// 新身份；网络与 MLS 等后台服务使用独立的 [_backgroundSyncGeneration]。
+  /// 新身份；网络与 MLS 后台任务由 SDK 列表控制器的内部世代隔离。
   int _reloadGeneration = 0;
 
   List<ChatConversationPreview> _withoutDeletingConversations(
     Iterable<ChatConversationPreview> conversations,
-  ) => conversations
-      .where(
-        (preview) =>
-            !_conversationDeletesInFlight.contains(preview.conversationId),
-      )
-      .toList(growable: false);
+  ) =>
+      conversations
+          .where(
+            (preview) =>
+                !_conversationDeletesInFlight.contains(preview.conversationId),
+          )
+          .toList(growable: false);
 
   Future<void> _reload({bool syncFirst = false}) async {
     if (!_isActive) {
@@ -1832,11 +1243,7 @@ class _ChatTabState extends State<ChatTab> {
     }
     if (serviceAccountId != null && serviceCidNumber != null) {
       if (syncFirst) {
-        _startBackgroundSync(
-          accountId: serviceAccountId,
-          cidNumber: serviceCidNumber,
-          reloadGeneration: generation,
-        );
+        _listController.synchronizeScope(serviceAccountId);
       } else if (mounted && _isActive && generation == _reloadGeneration) {
         // 二级页返回只需恢复既有轮询/Realtime，不重复执行首次补发链。
         _configurePolling(serviceAccountId);
@@ -1877,39 +1284,6 @@ class _ChatTabState extends State<ChatTab> {
 
   /// 本地首屏完成后静默收敛聊天服务。该 Future 不进入页面 loading/error，
   /// 服务失败时保留已经显示的本地列表，由后续轮询或下一次进入页面重试。
-  void _startBackgroundSync({
-    required String accountId,
-    required String cidNumber,
-    required int reloadGeneration,
-  }) {
-    if (!_isActive || widget.runtime == null) {
-      return;
-    }
-    final generation = ++_backgroundSyncGeneration;
-    unawaited(
-      _runBackgroundSync(
-        accountId: accountId,
-        cidNumber: cidNumber,
-        reloadGeneration: reloadGeneration,
-        backgroundGeneration: generation,
-      ),
-    );
-  }
-
-  bool _isCurrentBackgroundSync({
-    required String accountId,
-    required String cidNumber,
-    required int reloadGeneration,
-    required int backgroundGeneration,
-  }) {
-    return mounted &&
-        _isActive &&
-        reloadGeneration == _reloadGeneration &&
-        backgroundGeneration == _backgroundSyncGeneration &&
-        accountId == _accountId &&
-        cidNumber == _cidNumber;
-  }
-
   Iterable<String> _directPeerCidNumbers(
     List<ChatConversationPreview> conversations,
   ) sync* {
@@ -1995,9 +1369,8 @@ class _ChatTabState extends State<ChatTab> {
       return;
     }
     for (var offset = 0; offset < cidNumbers.length; offset += 4) {
-      final end = offset + 4 < cidNumbers.length
-          ? offset + 4
-          : cidNumbers.length;
+      final end =
+          offset + 4 < cidNumbers.length ? offset + 4 : cidNumbers.length;
       final batch = cidNumbers.sublist(offset, end);
       await Future.wait(
         batch.map((cidNumber) async {
@@ -2041,50 +1414,6 @@ class _ChatTabState extends State<ChatTab> {
     }
   }
 
-  Future<void> _runBackgroundSync({
-    required String accountId,
-    required String cidNumber,
-    required int reloadGeneration,
-    required int backgroundGeneration,
-  }) async {
-    try {
-      await _retryOutgoingSilently();
-      if (!_isCurrentBackgroundSync(
-        accountId: accountId,
-        cidNumber: cidNumber,
-        reloadGeneration: reloadGeneration,
-        backgroundGeneration: backgroundGeneration,
-      )) {
-        return;
-      }
-      final conversations = await widget.store.readConversationPreviews(
-        ownerUserId: cidNumber,
-        currentAccountId: accountId,
-      );
-      if (!_isCurrentBackgroundSync(
-        accountId: accountId,
-        cidNumber: cidNumber,
-        reloadGeneration: reloadGeneration,
-        backgroundGeneration: backgroundGeneration,
-      )) {
-        return;
-      }
-      final visible = _withoutDeletingConversations(conversations);
-      setState(() => _conversations = visible);
-      unawaited(_hydratePeerProfiles(visible));
-    } catch (_) {
-      // 后台服务错误不得抹掉本地首屏；下一次进入或轮询会继续重试。
-    }
-    if (_isCurrentBackgroundSync(
-      accountId: accountId,
-      cidNumber: cidNumber,
-      reloadGeneration: reloadGeneration,
-      backgroundGeneration: backgroundGeneration,
-    )) {
-      _configurePolling(accountId);
-    }
-  }
-
   Future<bool> _retryOutgoingSilently() async {
     if (!_isActive) {
       return false;
@@ -2106,141 +1435,42 @@ class _ChatTabState extends State<ChatTab> {
       _pauseSync();
       return;
     }
-    if (_realtimeWallet != null && _realtimeWallet != activeWallet) {
-      _pauseSync();
-    }
-    if (_stopRealtime != null) {
-      return;
-    }
-    _schedulePoll(_normalPollInterval);
-    unawaited(_startRealtime(activeWallet));
+    _listController.configureScope(activeWallet);
   }
 
-  Future<bool> _startRealtime(String activeWallet) async {
+  Future<Future<void> Function()?> _startRealtime(
+    String activeWallet, {
+    required Future<void> Function() onNotice,
+    Future<void> Function()? onDisconnected,
+  }) async {
     final runtime = widget.runtime;
-    if (!_isActive || runtime == null || activeWallet.isEmpty) {
-      return false;
+    if (!_isActive || runtime == null || _accountId != activeWallet) {
+      return null;
     }
-    if (_stopRealtime != null || _realtimeConnecting) {
-      return _stopRealtime != null;
-    }
-    _realtimeConnecting = true;
-    try {
-      final stop = await runtime.startRealtimeSync(
-        onNotice: () => _syncAndRefresh(activeWallet),
-        onDisconnected: () async {
-          // 账户级实时通道保留订阅并自行重连；这里只启动兜底轮询，不创建第二条
-          // WebSocket，也不清空订阅 disposer。
-          if (_isActive &&
-              mounted &&
-              widget.runtime != null &&
-              _accountId.isNotEmpty) {
-            _schedulePoll(_backoffPollInterval);
-          }
-        },
-      );
-      if (!mounted || !_isActive || _accountId != activeWallet) {
-        await stop?.call();
-        return false;
-      }
-      _stopRealtime = stop;
-      _realtimeWallet = activeWallet;
-      if (stop != null) {
-        _stopPolling();
-      }
-      return stop != null;
-    } catch (_) {
-      return false;
-    } finally {
-      _realtimeConnecting = false;
-    }
+    return runtime.startRealtimeSync(
+      onNotice: onNotice,
+      onDisconnected: onDisconnected,
+    );
   }
 
-  Future<void> _syncAndRefresh(String accountId) async {
-    if (!_isActive) {
-      return;
-    }
-    await _retryOutgoingSilently();
+  Future<bool> _syncAndRefresh(String accountId) async {
+    if (!_isActive || _accountId != accountId) return false;
+    final retried = await _retryOutgoingSilently();
     final conversations = await widget.store.readConversationPreviews(
       ownerUserId: _cidNumber,
       currentAccountId: accountId,
     );
-    if (mounted && _accountId == accountId) {
-      final visible = _withoutDeletingConversations(conversations);
-      setState(() {
-        _conversations = visible;
-      });
-      unawaited(_hydratePeerProfiles(visible));
-    }
-  }
-
-  void _schedulePoll(Duration delay) {
-    if (!_isActive) {
-      return;
-    }
-    _pollTimer?.cancel();
-    _pollTimer = Timer(delay, _runPoll);
-  }
-
-  void _stopPolling() {
-    _pollTimer?.cancel();
-    _pollTimer = null;
+    if (!mounted || !_isActive || _accountId != accountId) return false;
+    final visible = _withoutDeletingConversations(conversations);
+    setState(() {
+      _conversations = visible;
+    });
+    unawaited(_hydratePeerProfiles(visible));
+    return retried;
   }
 
   void _pauseSync() {
-    // 立即废止后台任务的 UI/轮询提交权；无法取消的底层 Future 即使晚到也静默丢弃。
-    _backgroundSyncGeneration += 1;
-    _stopPolling();
-    final stop = _stopRealtime;
-    _stopRealtime = null;
-    _realtimeWallet = null;
-    if (stop != null) {
-      unawaited(stop());
-    }
-  }
-
-  Future<void> _runPoll() async {
-    if (!mounted ||
-        !_isActive ||
-        widget.runtime == null ||
-        _accountId.isEmpty) {
-      return;
-    }
-    if (_stopRealtime != null) {
-      return;
-    }
-    if (_polling) {
-      _schedulePoll(_backoffPollInterval);
-      return;
-    }
-    _polling = true;
-    var ok = true;
-    try {
-      ok = await _retryOutgoingSilently();
-      final conversations = await widget.store.readConversationPreviews(
-        ownerUserId: _cidNumber,
-        currentAccountId: _accountId,
-      );
-      if (mounted) {
-        final visible = _withoutDeletingConversations(conversations);
-        setState(() {
-          _conversations = visible;
-        });
-        unawaited(_hydratePeerProfiles(visible));
-      }
-    } catch (_) {
-      ok = false;
-    }
-    _polling = false;
-    if (_isActive &&
-        mounted &&
-        widget.runtime != null &&
-        _accountId.isNotEmpty) {
-      if (ok && await _startRealtime(_accountId)) {
-        return;
-      }
-      _schedulePoll(ok ? _normalPollInterval : _backoffPollInterval);
-    }
+    _listController.pause();
   }
 
   Future<({String cidNumber, String accountId})> _readIdentity() async {
@@ -2371,8 +1601,7 @@ class _ChatTabState extends State<ChatTab> {
   bool _requireChatMembership() {
     if (ChatMediaLimits.chatAuthorizedFor(_cidNumber)) return true;
     setState(() {
-      _error =
-          ChatMediaLimits.authorizationResolvedFor(_cidNumber) &&
+      _error = ChatMediaLimits.authorizationResolvedFor(_cidNumber) &&
               ChatMediaLimits.resolvedFor(_cidNumber)
           ? '尚未开通会员，订阅任一会员后即可使用聊天'
           : '暂时无法验证会员状态，请稍后重试';
@@ -2502,80 +1731,77 @@ class _ChatTabState extends State<ChatTab> {
               peerUserId: preview.peerUserId,
               title: preview.title,
               store: widget.store,
-              onSendText:
-                  widget.sendTextFactory?.call(
+              onSendText: widget.sendTextFactory?.call(
                     preview.peerUserId,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (text) => widget.runtime!.sendText(
-                          peerUserId: preview.peerUserId,
-                          conversationId: preview.conversationId,
-                          text: text,
-                        )),
-              onSendMedia:
-                  widget.sendMediaFactory?.call(
+                            peerUserId: preview.peerUserId,
+                            conversationId: preview.conversationId,
+                            text: text,
+                          )),
+              onSendMedia: widget.sendMediaFactory?.call(
                     preview.peerUserId,
                     preview.conversationId,
                   ) ??
                   (widget.runtime == null
                       ? null
                       : (media, {onLocalCommitted}) =>
-                            widget.runtime!.sendMedia(
-                              peerUserId: preview.peerUserId,
-                              conversationId: preview.conversationId,
-                              media: media,
-                              onLocalCommitted: onLocalCommitted,
-                            )),
+                          widget.runtime!.sendMedia(
+                            peerUserId: preview.peerUserId,
+                            conversationId: preview.conversationId,
+                            media: media,
+                            onLocalCommitted: onLocalCommitted,
+                          )),
               onSendSticker: widget.runtime == null
                   ? null
                   : (packId, stickerId) => widget.runtime!.sendSticker(
-                      peerUserId: preview.peerUserId,
-                      conversationId: preview.conversationId,
-                      packId: packId,
-                      stickerId: stickerId,
-                    ),
+                        peerUserId: preview.peerUserId,
+                        conversationId: preview.conversationId,
+                        packId: packId,
+                        stickerId: stickerId,
+                      ),
               onResolveMediaPaths: widget.runtime == null
                   ? null
                   : (String conversationId, List<ChatContent> contents) =>
-                        widget.runtime!.resolveCachedMediaPaths(
-                          conversationId: conversationId,
-                          contents: contents,
-                        ),
+                      widget.runtime!.resolveCachedMediaPaths(
+                        conversationId: conversationId,
+                        contents: contents,
+                      ),
               onDownloadAttachment:
                   widget.downloadAttachmentFactory?.call(preview.peerUserId) ??
-                  (widget.runtime == null
-                      ? null
-                      : (String conversationId, String controlPlaintext) =>
-                            widget.runtime!.downloadAttachment(
-                              conversationId: conversationId,
-                              controlPlaintext: controlPlaintext,
-                            )),
-              onSync:
-                  widget.syncFactory?.call(preview.peerUserId) ??
+                      (widget.runtime == null
+                          ? null
+                          : (String conversationId, String controlPlaintext) =>
+                              widget.runtime!.downloadAttachment(
+                                conversationId: conversationId,
+                                controlPlaintext: controlPlaintext,
+                              )),
+              onSync: widget.syncFactory?.call(preview.peerUserId) ??
                   (widget.runtime == null
                       ? null
                       : () => widget.runtime!.retryOutgoing(
-                          conversationId: preview.conversationId,
-                          recipientUserId: preview.peerUserId,
-                        )),
+                            conversationId: preview.conversationId,
+                            recipientUserId: preview.peerUserId,
+                          )),
               onStartRealtime: widget.runtime == null
                   ? null
                   : ({required onNotice, onDisconnected}) =>
-                        widget.runtime!.startRealtimeSync(
-                          onNotice: onNotice,
-                          onDisconnected: onDisconnected,
-                          retryOutgoingOnConnect: false,
-                        ),
+                      widget.runtime!.startRealtimeSync(
+                        onNotice: onNotice,
+                        onDisconnected: onDisconnected,
+                        retryOutgoingOnConnect: false,
+                      ),
               onDeleteConversation: () =>
                   _deleteConversationInBackground(preview.conversationId),
               onMarkRead: widget.runtime == null
                   ? null
                   : (readThroughMillis) => widget.runtime!.markConversationRead(
-                      conversationId: preview.conversationId,
-                      readThroughMillis: readThroughMillis,
-                    ),
+                        conversationId: preview.conversationId,
+                        readThroughMillis: readThroughMillis,
+                      ),
               initialProfile: _peerProfiles[preview.peerUserId],
               initialProfileMedia: _peerProfileMedia[preview.peerUserId],
               profileApi: _profileApi,
@@ -2667,11 +1893,11 @@ class _ChatTabState extends State<ChatTab> {
             style: style,
           )
         : _cidNumber.isEmpty
-        ? IdentityRegisterGuide(
-            description: '注册后即可使用聊天与通讯录。',
-            onRegistered: _requestCoordinate,
-          )
-        : null;
+            ? IdentityRegisterGuide(
+                description: '注册后即可使用聊天与通讯录。',
+                onRegistered: _requestCoordinate,
+              )
+            : null;
     return ChatConversationOverview(
       header: ChatSectionHeader<_ChatEntryAction>(
         onAction: _onEntryAction,
@@ -2710,22 +1936,6 @@ class _ChatTabState extends State<ChatTab> {
       unavailable: unavailable,
       style: style,
     );
-  }
-}
-
-class _ChatTabLifecycleObserver extends WidgetsBindingObserver {
-  _ChatTabLifecycleObserver({required this.onResume, required this.onPause});
-
-  final VoidCallback onResume;
-  final VoidCallback onPause;
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      onResume();
-    } else {
-      onPause();
-    }
   }
 }
 
@@ -2796,12 +2006,11 @@ Future<bool> _confirmDeleteConversationList(BuildContext context) async {
 }
 
 /// 群聊打开器；测试可注入替身，正式运行走 [openGroupChat]。
-typedef GroupChatOpener =
-    Future<void> Function(
-      BuildContext context, {
-      required String groupId,
-      required String title,
-    });
+typedef GroupChatOpener = Future<void> Function(
+  BuildContext context, {
+  required String groupId,
+  required String title,
+});
 
 /// 聊天搜索页：一个输入框，三段结果 —— 会话 / 联系人 / 聊天记录。
 ///
@@ -3344,8 +2553,7 @@ class _GroupManagePageState extends State<GroupManagePage> {
               userId: member.cidNumber,
               displayName: _shortManageContact(member.cidNumber),
               isAdmin: member.isAdmin,
-              canRemove:
-                  _isAdmin &&
+              canRemove: _isAdmin &&
                   member.cidNumber != _myCidNumber &&
                   member.cidNumber != group.creatorCidNumber,
               onRemove: () => _run(
@@ -3419,23 +2627,22 @@ Future<void> openGroupChat(
         ),
         onResolveMediaPaths: (conversationId, contents) =>
             runtime.resolveCachedMediaPaths(
-              conversationId: conversationId,
-              contents: contents,
-            ),
+          conversationId: conversationId,
+          contents: contents,
+        ),
         onDownloadAttachment: (conversationId, controlPlaintext) =>
             runtime.downloadAttachment(
-              conversationId: conversationId,
-              controlPlaintext: controlPlaintext,
-            ),
+          conversationId: conversationId,
+          controlPlaintext: controlPlaintext,
+        ),
         onSync: () => runtime.retryOutgoing(conversationId: groupId),
         onStartRealtime: ({required onNotice, onDisconnected}) =>
             runtime.startRealtimeSync(
-              onNotice: onNotice,
-              onDisconnected: onDisconnected,
-              retryOutgoingOnConnect: false,
-            ),
-        onDeleteConversation:
-            onDeleteConversation ??
+          onNotice: onNotice,
+          onDisconnected: onDisconnected,
+          retryOutgoingOnConnect: false,
+        ),
+        onDeleteConversation: onDeleteConversation ??
             () => runtime.deleteLocalConversation(groupId),
         onMarkRead: (readThroughMillis) => runtime.markConversationRead(
           conversationId: groupId,
@@ -3446,12 +2653,11 @@ Future<void> openGroupChat(
   );
 }
 
-typedef DirectChatOpener =
-    Future<void> Function(
-      BuildContext context, {
-      required String peerUserId,
-      required String title,
-    });
+typedef DirectChatOpener = Future<void> Function(
+  BuildContext context, {
+  required String peerUserId,
+  required String title,
+});
 
 /// 打开与目标 CID 的一对一聊天。
 ///
@@ -3513,24 +2719,24 @@ Future<void> openDirectChat(
         ),
         onResolveMediaPaths: (conversationId, contents) =>
             runtime.resolveCachedMediaPaths(
-              conversationId: conversationId,
-              contents: contents,
-            ),
+          conversationId: conversationId,
+          contents: contents,
+        ),
         onDownloadAttachment: (conversationId, controlPlaintext) =>
             runtime.downloadAttachment(
-              conversationId: conversationId,
-              controlPlaintext: controlPlaintext,
-            ),
+          conversationId: conversationId,
+          controlPlaintext: controlPlaintext,
+        ),
         onSync: () => runtime.retryOutgoing(
           conversationId: conversationId,
           recipientUserId: peerUserId,
         ),
         onStartRealtime: ({required onNotice, onDisconnected}) =>
             runtime.startRealtimeSync(
-              onNotice: onNotice,
-              onDisconnected: onDisconnected,
-              retryOutgoingOnConnect: false,
-            ),
+          onNotice: onNotice,
+          onDisconnected: onDisconnected,
+          retryOutgoingOnConnect: false,
+        ),
         onDeleteConversation: () =>
             runtime.deleteLocalConversation(conversationId),
       ),

@@ -6,6 +6,12 @@
 /.flutter-plugins
 /.flutter-plugins-dependencies
 /coverage/
+/darwin/.build/
+/darwin/.swiftpm/
+/darwin/Pods/
+/darwin/DerivedData/
+*.xcresult
+*.dSYM
 *.log
 *.tmp
 *.swp

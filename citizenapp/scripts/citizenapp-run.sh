@@ -1,3 +1,4 @@
+TATACHATSDK_ROOT="/Users/rhett/TATA/tatachatsdk"
 #!/usr/bin/env bash
 # 清理目标平台缓存并生成本机优化安装包；本脚本不启动、不安装产品。
 #
@@ -34,20 +35,20 @@ if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
 
 }
 
-CHATSDK_OVERRIDE_PATH="$APP_ROOT/pubspec_overrides.yaml"
+TATACHATSDK_OVERRIDE_PATH="$APP_ROOT/pubspec_overrides.yaml"
 PUBSPEC_LOCK_BACKUP="$TATA_CONSOLE_WORK_DIR/citizenapp.pubspec.lock"
 
-prepare_local_chat_sdk_dependency() {
-  [[ ! -e "$CHATSDK_OVERRIDE_PATH" ]] || {
-    echo "CitizenApp 本机依赖覆盖文件已存在：$CHATSDK_OVERRIDE_PATH" >&2
+prepare_local_tatachat_sdk_dependency() {
+  [[ ! -e "$TATACHATSDK_OVERRIDE_PATH" ]] || {
+    echo "CitizenApp 本机依赖覆盖文件已存在：$TATACHATSDK_OVERRIDE_PATH" >&2
     exit 1
   }
   cp -p "$APP_ROOT/pubspec.lock" "$PUBSPEC_LOCK_BACKUP"
-  # 本机开发只直连当前仓库 ChatSDK；正式源码依赖仍由准确 Git Release Tag 管理。
-  cat > "$CHATSDK_OVERRIDE_PATH" <<'YAML'
+  # 本机开发只直连当前仓库 TataChatSDK；正式源码依赖仍由准确 Git Release Tag 管理。
+  cat > "$TATACHATSDK_OVERRIDE_PATH" <<'YAML'
 dependency_overrides:
-  gmb_chat_sdk:
-    path: ../chatsdk
+  tatachat_sdk:
+    path: ../../TATA/tatachatsdk
 YAML
 }
 
@@ -55,17 +56,17 @@ cleanup_direct_source_state() {
   rm -rf "$APP_ROOT/.dart_tool" "$APP_ROOT/.flutter-plugins" \
     "$APP_ROOT/.flutter-plugins-dependencies" "$APP_ROOT/ios/Pods" \
     "$APP_ROOT/ios/.symlinks" "$APP_ROOT/android/.gradle"
-  rm -f "$CHATSDK_OVERRIDE_PATH"
+  rm -f "$TATACHATSDK_OVERRIDE_PATH"
   if [[ -f "$PUBSPEC_LOCK_BACKUP" ]]; then
     cp -p "$PUBSPEC_LOCK_BACKUP" "$APP_ROOT/pubspec.lock"
     rm -f "$PUBSPEC_LOCK_BACKUP"
   fi
   if [[ "$PLATFORM" == ios ]]; then
-    rm -f "$REPO_ROOT/chatsdk/ios/ChatSDK.xcframework"
+    rm -f "$TATACHATSDK_ROOT/ios/TataChatSDK.xcframework"
   fi
 }
 trap 'status=$?; cleanup_direct_source_state; exit "$status"' EXIT
-prepare_local_chat_sdk_dependency
+prepare_local_tatachat_sdk_dependency
 fi
 
 INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少TataConsole本机增量缓存目录}"
@@ -193,13 +194,13 @@ bash "$SCRIPT_DIR/check-chainspec-frozen.sh"
 # `cargo clean` 或产品级等待；Cargo 自身负责并发依赖锁，最终平台库也复制到不同目录。
 echo "==> 编译 Rust 原生库（${PLATFORM}）..."
 "$SCRIPT_DIR/build-smoldot-native.sh" "$PLATFORM"
-# Smoldot 和 ChatSDK 分别生成自己的原生产物；iOS 由静态 Smoldot Framework 与
-# 动态 ChatSDK XCFramework 隔离 Rust runtime，Android 继续使用两个独立 .so。
+# Smoldot 和 TataChatSDK 分别生成自己的原生产物；iOS 由静态 Smoldot Framework 与
+# 动态 TataChatSDK XCFramework 隔离 Rust runtime，Android 继续使用两个独立 .so。
 if [[ "$PLATFORM" == ios ]]; then
-  CHATSDK_PACKAGE_IOS_DIR="$REPO_ROOT/chatsdk/ios" \
-    "$REPO_ROOT/chatsdk/scripts/build-native.sh" "$PLATFORM"
+  TATACHATSDK_PACKAGE_IOS_DIR="$TATACHATSDK_ROOT/ios" \
+    "$TATACHATSDK_ROOT/scripts/build-native.sh" "$PLATFORM"
 else
-  "$REPO_ROOT/chatsdk/scripts/build-native.sh" "$PLATFORM"
+  "$TATACHATSDK_ROOT/scripts/build-native.sh" "$PLATFORM"
 fi
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
@@ -214,7 +215,7 @@ if [[ "$PLATFORM" == ios ]]; then
   flutter build ios --release ${DART_DEFINES[@]+"${DART_DEFINES[@]}"}
   IOS_APP="$BUILD_DIR/ios/iphoneos/Runner.app"
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-ios-package "$IOS_APP"
-  "$REPO_ROOT/chatsdk/scripts/build-native.sh" verify-ios-package "$IOS_APP"
+  "$TATACHATSDK_ROOT/scripts/build-native.sh" verify-ios-package "$IOS_APP"
   verify_ios_release_localization "$IOS_APP"
   retain_ios_local_artifact "$IOS_APP"
   echo ""
@@ -237,7 +238,7 @@ elif [[ "$PLATFORM" == android ]]; then
     exit 1
   }
   "$SCRIPT_DIR/build-smoldot-native.sh" verify-android-package "$ANDROID_APK"
-  "$REPO_ROOT/chatsdk/scripts/build-native.sh" verify-android-package "$ANDROID_APK"
+  "$TATACHATSDK_ROOT/scripts/build-native.sh" verify-android-package "$ANDROID_APK"
   verify_android_release_localization "$ANDROID_APK"
   echo "==> Android无私钥候选完成，正在交给原生安全进程完成Build签名。"
 fi

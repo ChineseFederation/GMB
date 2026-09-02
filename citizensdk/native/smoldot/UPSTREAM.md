@@ -6,6 +6,9 @@
 - 收编基线提交：`f471baac1f0fa821569c42ebb14c4f8533ba77ad`
 - CitizenSDK 产品快照：`native/smoldot/pow/lib` 与 `native/smoldot/pow/light-base`
 
+`native/smoldot/provider` 是 CitizenSDK 自有适配层，不属于上游 smoldot 快照。它只能依赖
+上述收编源码并实现 `VerifiedChainClient`，不能把上游 JSON-RPC 任意透传成产品公共 API。
+
 本目录不保存 `.git`、构建产物或临时 patch，CI/Release 也不联网拉取上游源码。GMB
 `citizensdk` 是发布时的唯一源码输入。
 
@@ -37,6 +40,9 @@ light-base/src/sync_service/standalone.rs
 4. 在独立 fork/分支上 rebase PoW 补丁并完成冲突审查，再逐字节回灌临时候选。
 5. 同步测试夹具、内联测试、Cargo manifests、`Cargo.lock`、来源 manifest 和本文件。
 6. 在源码树外完成三个 Rust workspace、Dart/Flutter、移动原生构建与候选验证后才接受更新。
+
+同步上游后还必须执行 provider 的 exact-block、finalized、runtime context、提交/观察和
+state import/export 合同测试，并证明 legacy `libsmoldot` 的库名、回调及全部既有导出未变。
 
 临时 patch、上游 checkout 和构建目录使用后全部删除，不得进入 Release。完整产品来源分类
 见 `../../docs/SOURCE_PROVENANCE.md`。

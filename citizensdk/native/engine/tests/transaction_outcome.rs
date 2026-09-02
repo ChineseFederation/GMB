@@ -351,14 +351,16 @@ fn module_dispatch_error_preserves_raw_pallet_and_error_indices() {
             && event.pallet_name() == "System"
             && event.variant_name() == "ExtrinsicFailed"
         {
-            failed_field_offset = Some(
-                event.field_bytes().as_ptr() as usize - decoded_base,
-            );
+            failed_field_offset = Some(event.field_bytes().as_ptr() as usize - decoded_base);
         }
     }
     let pallet_index = balances_index.unwrap_or_else(|| panic!("Balances event missing"));
     let offset = failed_field_offset.unwrap_or_else(|| panic!("failed event missing"));
-    assert_eq!(events.get(offset), Some(&2), "fixture must begin with BadOrigin");
+    assert_eq!(
+        events.get(offset),
+        Some(&2),
+        "fixture must begin with BadOrigin"
+    );
 
     let error_index = 0_u8;
     let mut module_events = Vec::with_capacity(events.len() + 5);

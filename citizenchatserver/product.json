@@ -1,0 +1,8 @@
+{
+  "product_id": "citizenchatserver",
+  "source_repository": "VoyagerRhett/TATA",
+  "source_product_id": "tatachatserver",
+  "platform": "cloudflare",
+  "public_url": "https://chat.crcfrcn.com",
+  "realtime_url": "wss://chat.crcfrcn.com/realtime"
+}

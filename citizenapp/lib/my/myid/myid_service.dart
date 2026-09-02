@@ -9,7 +9,7 @@ import 'package:citizenapp/citizen/public/data/area_path_formatter.dart';
 import 'package:citizenapp/citizen/public/data/isar_admin_division_store.dart';
 import 'package:citizenapp/citizen/public/data/public_provinces.dart';
 import 'package:citizenapp/citizen/cid/cid_generator.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/my/user/contact_service.dart';
 import 'package:citizenapp/rpc/chain_rpc.dart';
 import 'package:citizenapp/rpc/citizen_identity_rpc.dart';

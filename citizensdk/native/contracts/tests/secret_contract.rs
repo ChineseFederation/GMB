@@ -92,6 +92,7 @@ impl SecretVault for FakeVault {
 
     fn seal(
         &self,
+        _provisioning_operation_id: [u8; 16],
         _secret_ref: SecretRef,
         secret: SecretBuffer,
     ) -> ContractFuture<'_, EncryptedSecretEnvelope> {
@@ -127,6 +128,7 @@ impl SecretVault for FakeVault {
 
     fn delete_wallet_key(
         &self,
+        _cleanup_operation_id: [u8; 16],
         _wallet_index: u32,
         _generation: VaultGeneration,
     ) -> ContractFuture<'_, ()> {
@@ -161,7 +163,7 @@ fn signer_and_vault_are_distinct_object_safe_contracts() {
         VaultAvailability::Available
     );
     let secret = value_or_panic(SecretBuffer::try_new(vec![7; 32]));
-    let envelope = value_or_panic(block_on(vault.seal(secret_ref, secret)));
+    let envelope = value_or_panic(block_on(vault.seal([9; 16], secret_ref, secret)));
     let unlocked = value_or_panic(block_on(vault.open(secret_ref, envelope)));
     let public_key = value_or_panic(block_on(signer.public_key(&unlocked)));
     let signature = value_or_panic(block_on(signer.sign(&unlocked, b"payload".to_vec())));

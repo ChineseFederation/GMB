@@ -1,0 +1,138 @@
+group = 'org.citizen.sdk'
+version = rootProject.version
+
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+def configuredBuildDir = System.getenv('CITIZENSDK_ANDROID_BUILD_DIR')
+def fallbackRoot = new File(System.getProperty('java.io.tmpdir'), 'citizensdk-unconfigured')
+def normalizedTarget = configuredBuildDir == null || configuredBuildDir.trim().isEmpty()
+    ? new File(fallbackRoot, 'android-native').canonicalFile
+    : file(configuredBuildDir).canonicalFile
+if (configuredBuildDir != null && !configuredBuildDir.trim().isEmpty()) {
+    def githubActions = System.getenv('GITHUB_ACTIONS') == 'true'
+    if (githubActions) {
+        def workspace = System.getenv('GITHUB_WORKSPACE')
+        if (workspace != null && !workspace.trim().isEmpty()) {
+            def sourceRoot = file(workspace).canonicalFile
+            if (normalizedTarget.path == sourceRoot.path ||
+                normalizedTarget.path.startsWith(sourceRoot.path + File.separator)) {
+                throw new GradleException('CitizenSDK Android output must be outside the GitHub source checkout')
+            }
+        }
+    } else {
+        def allowedTarget = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
+        if (!(normalizedTarget.path == allowedTarget.path ||
+              normalizedTarget.path.startsWith(allowedTarget.path + File.separator))) {
+            throw new GradleException('CitizenSDK Android output must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+        }
+    }
+}
+def nativeTarget = new File(normalizedTarget, 'native')
+buildDir = nativeTarget
+
+def coreDirValue = System.getenv('CITIZENSDK_ANDROID_CORE_DIR')
+def coreDir = coreDirValue == null || coreDirValue.trim().isEmpty()
+    ? new File(fallbackRoot, 'arm64-v8a').canonicalFile
+    : file(coreDirValue).canonicalFile
+def coreLibrary = new File(coreDir, 'libcitizensdk.so')
+
+android {
+    namespace = 'org.citizen.sdk'
+    compileSdk = 36
+    ndkVersion = '28.2.13676358'
+
+    defaultConfig {
+        minSdk = 24
+        consumerProguardFiles 'consumer-rules.pro'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17', '-Wall', '-Wextra', '-Werror', '-fvisibility=hidden'
+                arguments '-DANDROID_STL=c++_static',
+                    "-DCITIZENSDK_CORE_DIR=${coreDir.absolutePath}"
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file('src/main/cpp/CMakeLists.txt')
+            version = '3.22.1'
+            // Keep CMake state outside this module's disposable buildDir while
+            // still remaining inside the caller-controlled central root.
+            buildStagingDirectory = new File(normalizedTarget, 'native-cmake')
+        }
+    }
+
+    sourceSets {
+        main {
+            // AAR consumers receive the same verified assets as Flutter.
+            assets.srcDirs = [file('../../assets')]
+            // jniLibs expects the parent whose direct child is arm64-v8a.
+            jniLibs.srcDirs = [coreDir.parentFile]
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_17.toString()
+        freeCompilerArgs += ['-Xjvm-default=all']
+    }
+    buildFeatures {
+        buildConfig = false
+    }
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = false
+            excludes += [
+                'lib/armeabi*/**',
+                'lib/x86/**',
+                'lib/x86_64/**',
+                '**/libsmoldot.so',
+                '**/libc++_shared.so',
+            ]
+        }
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+// Unconditional `include ':native'` must not break an ordinary Flutter
+// consumer that does not build the AAR. The explicit native tasks fail before
+// work when their two production inputs were not configured.
+tasks.configureEach { task ->
+    if (task.name == 'preBuild') {
+        task.doFirst {
+            if (configuredBuildDir == null || configuredBuildDir.trim().isEmpty()) {
+                throw new GradleException('CITIZENSDK_ANDROID_BUILD_DIR is required for native AAR tasks')
+            }
+            if (coreDirValue == null || coreDirValue.trim().isEmpty() || !coreLibrary.isFile()) {
+                throw new GradleException(
+                    'CITIZENSDK_ANDROID_CORE_DIR must be an arm64-v8a leaf containing libcitizensdk.so'
+                )
+            }
+            if (coreDir.name != 'arm64-v8a') {
+                throw new GradleException('CITIZENSDK_ANDROID_CORE_DIR must end in arm64-v8a')
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.fragment:fragment-ktx:1.8.9'
+
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:core:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+}

@@ -1,0 +1,136 @@
+import Foundation
+import SQLite3
+
+/// Wallet profile, authenticated ciphertext and permanent vault tombstones.
+internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
+    static let generationActive: Int64 = 1
+    static let generationRetired: Int64 = 2
+
+    init(directory: URL) throws {
+        try super.init(
+            directory: directory,
+            fileName: "secure-state-v1.sqlite3",
+            schema: [
+                "CREATE TABLE IF NOT EXISTS wallet_profile (wallet_index INTEGER PRIMARY KEY CHECK(wallet_index = 0), revision INTEGER NOT NULL, record BLOB NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS encrypted_secret (record_key TEXT PRIMARY KEY, revision INTEGER NOT NULL, record BLOB NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS vault_generation (record_key TEXT PRIMARY KEY, wallet_index INTEGER NOT NULL, generation BLOB NOT NULL, state INTEGER NOT NULL, operation_id BLOB NOT NULL)",
+            ],
+            secure: true
+        )
+    }
+
+    func walletProfileLoad() throws -> CitizenSDKHostRecord {
+        try read { database in
+            let statement = try Self.prepare(database, "SELECT revision, record FROM wallet_profile WHERE wallet_index = 0")
+            defer { sqlite3_finalize(statement) }
+            if try Self.stepRowOrDone(statement) {
+                return .present(.walletProfile, revision: UInt64(sqlite3_column_int64(statement, 0)), record: Self.data(statement, 1))
+            }
+            return .absent(.walletProfile)
+        }
+    }
+
+    func walletProfileCAS(expected: UInt64, candidate: Data) throws -> CitizenSDKHostRecord {
+        guard expected < UInt64(Int64.max) else { return .failure(.walletProfile, .conflict) }
+        return try transaction { database in
+            let query = try Self.prepare(database, "SELECT revision FROM wallet_profile WHERE wallet_index = 0")
+            defer { sqlite3_finalize(query) }
+            let actual = try Self.stepRowOrDone(query) ? UInt64(sqlite3_column_int64(query, 0)) : 0
+            guard actual == expected else { return .failure(.walletProfile, .conflict) }
+            let next = expected + 1
+            let write = try Self.prepare(database, "INSERT OR REPLACE INTO wallet_profile(wallet_index, revision, record) VALUES(0, ?, ?)")
+            defer { sqlite3_finalize(write) }
+            try Self.bind(write, 1, Int64(next))
+            try Self.bind(write, 2, candidate)
+            guard sqlite3_step(write) == SQLITE_DONE else { throw CitizenSDKError(.storage, "wallet profile CAS failed") }
+            return .present(.walletProfile, revision: next, record: candidate)
+        }
+    }
+
+    func encryptedSecretLoad(walletIndex: UInt32, kind: UInt32, generation: Data,
+                             owner: Data, accountID: Data) throws -> CitizenSDKHostRecord {
+        let key = try CitizenSDKRecordKey.secret(walletIndex: walletIndex, kind: kind,
+                                                 generation: generation, owner: owner, accountID: accountID)
+        return try read { database in
+            let statement = try Self.prepare(database, "SELECT revision, record FROM encrypted_secret WHERE record_key = ?")
+            defer { sqlite3_finalize(statement) }
+            try Self.bind(statement, 1, key)
+            if try Self.stepRowOrDone(statement) {
+                return .present(.encryptedSecretBlob, revision: UInt64(sqlite3_column_int64(statement, 0)), record: Self.data(statement, 1))
+            }
+            return .absent(.encryptedSecretBlob)
+        }
+    }
+
+    func encryptedSecretCAS(walletIndex: UInt32, kind: UInt32, generation: Data,
+                            owner: Data, accountID: Data, expected: UInt64,
+                            candidate: Data) throws -> CitizenSDKHostRecord {
+        guard expected < UInt64(Int64.max) else { return .failure(.encryptedSecretBlob, .conflict) }
+        let key = try CitizenSDKRecordKey.secret(walletIndex: walletIndex, kind: kind,
+                                                 generation: generation, owner: owner, accountID: accountID)
+        return try transaction { database in
+            let query = try Self.prepare(database, "SELECT revision FROM encrypted_secret WHERE record_key = ?")
+            defer { sqlite3_finalize(query) }
+            try Self.bind(query, 1, key)
+            let actual = try Self.stepRowOrDone(query) ? UInt64(sqlite3_column_int64(query, 0)) : 0
+            guard actual == expected else { return .failure(.encryptedSecretBlob, .conflict) }
+            let next = expected + 1
+            let write = try Self.prepare(database, "INSERT OR REPLACE INTO encrypted_secret(record_key, revision, record) VALUES(?, ?, ?)")
+            defer { sqlite3_finalize(write) }
+            try Self.bind(write, 1, key)
+            try Self.bind(write, 2, Int64(next))
+            try Self.bind(write, 3, candidate)
+            guard sqlite3_step(write) == SQLITE_DONE else { throw CitizenSDKError(.storage, "encrypted secret CAS failed") }
+            return .present(.encryptedSecretBlob, revision: next, record: candidate)
+        }
+    }
+
+    /// A generation can be admitted by exactly one provisioning operation.
+    func ensureGeneration(walletIndex: UInt32, generation: Data, operationID: Data) throws -> Bool {
+        let key = try CitizenSDKRecordKey.generation(walletIndex: walletIndex, generation: generation)
+        return try transaction { database in
+            let query = try Self.prepare(database, "SELECT state, operation_id FROM vault_generation WHERE record_key = ?")
+            defer { sqlite3_finalize(query) }
+            try Self.bind(query, 1, key)
+            if try Self.stepRowOrDone(query) {
+                let state = sqlite3_column_int64(query, 0)
+                if state == Self.generationRetired { return false }
+                return state == Self.generationActive && Self.data(query, 1) == operationID
+            }
+            let write = try Self.prepare(database, "INSERT INTO vault_generation(record_key, wallet_index, generation, state, operation_id) VALUES(?, ?, ?, ?, ?)")
+            defer { sqlite3_finalize(write) }
+            try Self.bind(write, 1, key)
+            try Self.bind(write, 2, Int64(walletIndex))
+            try Self.bind(write, 3, generation)
+            try Self.bind(write, 4, Self.generationActive)
+            try Self.bind(write, 5, operationID)
+            guard sqlite3_step(write) == SQLITE_DONE else { throw CitizenSDKError(.storage, "vault generation insert failed") }
+            return true
+        }
+    }
+
+    func isGenerationActive(walletIndex: UInt32, generation: Data) throws -> Bool {
+        let key = try CitizenSDKRecordKey.generation(walletIndex: walletIndex, generation: generation)
+        return try read { database in
+            let query = try Self.prepare(database, "SELECT state FROM vault_generation WHERE record_key = ?")
+            defer { sqlite3_finalize(query) }
+            try Self.bind(query, 1, key)
+            return try Self.stepRowOrDone(query) && sqlite3_column_int64(query, 0) == Self.generationActive
+        }
+    }
+
+    /// Tombstone is committed before physical Keychain deletion.
+    func retireGeneration(walletIndex: UInt32, generation: Data, operationID: Data) throws {
+        let key = try CitizenSDKRecordKey.generation(walletIndex: walletIndex, generation: generation)
+        try transaction { database in
+            let write = try Self.prepare(database, "INSERT OR REPLACE INTO vault_generation(record_key, wallet_index, generation, state, operation_id) VALUES(?, ?, ?, ?, ?)")
+            defer { sqlite3_finalize(write) }
+            try Self.bind(write, 1, key)
+            try Self.bind(write, 2, Int64(walletIndex))
+            try Self.bind(write, 3, generation)
+            try Self.bind(write, 4, Self.generationRetired)
+            try Self.bind(write, 5, operationID)
+            guard sqlite3_step(write) == SQLITE_DONE else { throw CitizenSDKError(.storage, "vault generation tombstone failed") }
+        }
+    }
+}

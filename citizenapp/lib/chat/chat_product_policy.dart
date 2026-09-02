@@ -1,4 +1,4 @@
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 
 /// 聊天媒体大小上限的单一真源(收发两端共用),按会员档动态(ADR-037,会员与身份解耦)。
 ///

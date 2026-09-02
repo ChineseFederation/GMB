@@ -10,6 +10,7 @@ use std::{future::Future, pin::Pin};
 
 use futures_core::Stream;
 
+pub mod account;
 pub mod capability;
 pub mod chain;
 pub mod chain_signer;
@@ -17,13 +18,19 @@ pub mod error;
 pub mod secret_vault;
 pub mod store;
 pub mod transaction;
+pub mod transaction_build;
 pub mod wallet;
 
+pub use account::{
+    AccountNonce, AccountNonceSource, FinalizedAccountBalance, OnchainFeePolicy,
+    PERBILL_DENOMINATOR,
+};
 pub use capability::{CapabilityName, CapabilityReason, CapabilitySnapshot, CapabilityStatus};
 pub use chain::{
-    AccountId32, BlockFinality, ChainIdentity, ExportedChainState, FinalizedBlockRef, Hash32,
-    RuntimeContext, RuntimeVersion, StateImportReceipt, VerifiedBlockRef, VerifiedChainClient,
-    CITIZENCHAIN_CHAIN_ID, CITIZENCHAIN_GENESIS_HASH, CITIZENCHAIN_PROTOCOL_ID,
+    validated_finalized_block_range_len, AccountId32, BlockFinality, ChainIdentity,
+    ExportedChainState, FinalizedBlockRef, Hash32, RuntimeContext, RuntimeVersion,
+    StateImportReceipt, VerifiedBlockRef, VerifiedChainClient, CITIZENCHAIN_CHAIN_ID,
+    CITIZENCHAIN_GENESIS_HASH, CITIZENCHAIN_PROTOCOL_ID, MAX_FINALIZED_BLOCKS_PER_BATCH,
 };
 pub use chain_signer::{
     ChainSigner, DerivationJunction, Sr25519PublicKey, Sr25519Signature, SR25519_SIGNING_CONTEXT,
@@ -35,17 +42,23 @@ pub use secret_vault::{
 };
 pub use store::{
     ChainDatabaseSnapshot, ChainDatabaseStore, EncryptedSecretBlobSnapshot,
-    EncryptedSecretBlobStore, FinalizedTransferRecord, HistoryTransactionStatus, RuntimeCacheStore,
-    TransactionHistoryCursor, TransactionHistoryRecord, TransactionHistoryState,
-    TransactionHistoryStore, WalletProfileStore,
+    EncryptedSecretBlobState, EncryptedSecretBlobStore, FinalizedTransferRecord,
+    HistoryTransactionStatus, RuntimeCacheStore, TransactionHistoryCursor,
+    TransactionHistoryRecord, TransactionHistoryState, TransactionHistoryStore, WalletProfileStore,
+    MAX_FINALIZED_REMARK_DISPLAY_BYTES,
 };
 pub use transaction::{
     DispatchFailure, ExecutionConclusion, ExtrinsicWatchEvent, ModuleDispatchFailure,
     SignedExtrinsic, SubmittedExtrinsic, UnverifiedReason,
 };
+pub use transaction_build::{
+    ImmortalSigningPayload, SignedTransactionBuild, TransferWithRemarkCall, IMMORTAL_ERA,
+    MAX_TRANSFER_REMARK_BYTES, ONCHAIN_TRANSACTION_PALLET_INDEX, TRANSFER_WITH_REMARK_CALL_INDEX,
+};
 pub use wallet::{
-    WalletAccount, WalletCleanupPlan, WalletOrigin, WalletProfile, WalletProvisioningPlan,
-    WalletState, MAX_WALLET_ACCOUNT_INDEX,
+    citizen_ss58_address, WalletAccount, WalletCleanupPlan, WalletOrigin, WalletProfile,
+    WalletProvisioningPlan, WalletState, CITIZEN_SS58_PREFIX, CITIZEN_WALLET_INDEX,
+    MAX_WALLET_ACCOUNT_INDEX, MAX_WALLET_ACCOUNT_NAME_SCALARS,
 };
 
 /// 对象安全合同使用的异步返回值；具体 executor 由调用者决定。

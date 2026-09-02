@@ -1,10 +1,10 @@
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/isar/app_isar.dart';
 import 'package:citizenapp/isar/isar_core_bootstrap.dart';
 import 'package:citizenapp/isar/user_isar.dart';
@@ -140,7 +140,7 @@ void main() {
 
   setUp(() async {
     chatDocumentsRoot = await Directory.systemTemp.createTemp(
-      'chat_sdk_chat_documents_',
+      'tatachat_sdk_chat_documents_',
     );
     await ChatRuntimeCore.debugResetProcessWipeForTest(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
@@ -351,13 +351,13 @@ void main() {
   test('同名 ChatIsar 已打开但 schema 不完整时失败关闭且不重开', () async {
     final incomplete = await Isar.open(
       <CollectionSchema<dynamic>>[ChatConversationEntitySchema],
-      name: 'chat_sdk_chat',
+      name: 'tatachat_sdk_chat',
       directory: await IsarCoreBootstrap.resolveDirectory(),
     );
     try {
       await expectLater(ChatIsar.instance.db(), throwsA(isA<StateError>()));
       expect(incomplete.isOpen, isTrue, reason: '失败关闭不得静默关闭/重开别人的实例');
-      expect(Isar.getInstance('chat_sdk_chat'), same(incomplete));
+      expect(Isar.getInstance('tatachat_sdk_chat'), same(incomplete));
     } finally {
       if (incomplete.isOpen) {
         await incomplete.close(deleteFromDisk: true);
@@ -547,7 +547,7 @@ void main() {
     expect(await user.close(), isTrue);
     expect(await app.close(), isTrue);
     expect(Isar.getInstance('citizenapp_wallet'), isNull);
-    expect(Isar.getInstance('chat_sdk_chat'), isNull);
+    expect(Isar.getInstance('tatachat_sdk_chat'), isNull);
     expect(Isar.getInstance('citizenapp_social'), isNull);
     expect(Isar.getInstance('citizenapp_user'), isNull);
     expect(Isar.getInstance('citizenapp_app'), isNull);
@@ -863,7 +863,7 @@ void main() {
           (entity) => entity.path
               .split(Platform.pathSeparator)
               .last
-              .startsWith('.chat_sdk_chat_lease_${pid}_'),
+              .startsWith('.tatachat_sdk_chat_lease_${pid}_'),
         )
         .toList();
     expect(orphanLeases, hasLength(1));
@@ -943,7 +943,7 @@ void main() {
     // 模拟新进程：complete 只有在当前 PID 无孤儿 lease 时才能清理。
     await ChatRuntimeCore.debugResetProcessWipeForTest();
     final staleLease = File(
-      '${chatDocumentsRoot.path}/.chat_sdk_chat_lease_${pid}_stale.lease',
+      '${chatDocumentsRoot.path}/.tatachat_sdk_chat_lease_${pid}_stale.lease',
     );
     await staleLease.create();
     expect(
@@ -1018,7 +1018,7 @@ void main() {
   test('覆盖安装后的新进程立即退役上一 PID 的新鲜 CID lease 且保留 Chat 数据', () async {
     final digest = crypto.sha256.convert(_ownerUserId.codeUnits).toString();
     final orphanLease = File(
-      '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
+      '${chatDocumentsRoot.path}/.tatachat_sdk_chat_user_'
       '$digest.mutation_lease',
     );
     await orphanLease.writeAsString(
@@ -1076,7 +1076,7 @@ void main() {
           .toString();
       expect(
         File(
-          '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
+          '${chatDocumentsRoot.path}/.tatachat_sdk_chat_user_'
           '$digest.mutation_lease',
         ).existsSync(),
         isTrue,
@@ -1090,7 +1090,7 @@ void main() {
   test('普通启动遇到损坏的 CID lease 时放行且后台整理失败关闭', () async {
     final digest = crypto.sha256.convert(_ownerUserId.codeUnits).toString();
     final damagedLease = File(
-      '${chatDocumentsRoot.path}/.chat_sdk_chat_user_'
+      '${chatDocumentsRoot.path}/.tatachat_sdk_chat_user_'
       '$digest.mutation_lease',
     );
     await damagedLease.writeAsString('damaged-owner', flush: true);

@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:gmb_chat_sdk/chat_sdk.dart' as sdk;
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart' as sdk;
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/log/app_log.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
@@ -58,7 +58,7 @@ class ChatPushToken implements sdk.ChatPushToken {
   @override
   final String? apnsEnvironment;
 
-  /// 本地只缓存登记输入摘要，不把 Token 是否仍在 ChatServer 当作权威状态。
+  /// 本地只缓存登记输入摘要，不把 Token 是否仍在 TataChatServer 当作权威状态。
   @override
   String get registrationCacheValue =>
       '$provider|${apnsEnvironment ?? ''}|$token';

@@ -195,8 +195,13 @@ pub trait SecretVault: Send + Sync {
     fn availability(&self) -> ContractFuture<'_, VaultAvailability>;
 
     /// 以 SecretRef 的完整身份作为 AAD 保护秘密；成功后输入缓冲区立即结束生命周期。
+    ///
+    /// 平台实现必须把 `provisioning_operation_id` 与 generation 的持久状态一起检查，
+    /// 并在 generation 已被 [`Self::delete_wallet_key`] 退休后永久拒绝 late writer
+    /// 重新创建硬件密钥。仅靠进程内互斥不满足本合同。
     fn seal(
         &self,
+        provisioning_operation_id: [u8; 16],
         secret_ref: SecretRef,
         secret: SecretBuffer,
     ) -> ContractFuture<'_, EncryptedSecretEnvelope>;
@@ -214,9 +219,11 @@ pub trait SecretVault: Send + Sync {
         generation: VaultGeneration,
     ) -> ContractFuture<'_, bool>;
 
-    /// 删除必须幂等；只有整钱包删除或已取得所有权的补偿计划可以调用。
+    /// 删除必须幂等，并持久写入 generation 退休墓碑；只有整钱包删除或已取得所有权的
+    /// 补偿计划可以调用。墓碑必须先于返回成功落盘，使旧 `seal` 永远不能复活密钥。
     fn delete_wallet_key(
         &self,
+        cleanup_operation_id: [u8; 16],
         wallet_index: u32,
         generation: VaultGeneration,
     ) -> ContractFuture<'_, ()>;

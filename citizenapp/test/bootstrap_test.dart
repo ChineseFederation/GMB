@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
 import 'package:citizenapp/main.dart';
 import 'package:citizenapp/isar/user_isar.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/security/app_permission_gate.dart';
 import 'package:citizenapp/wallet/core/sign_mode.dart';
 

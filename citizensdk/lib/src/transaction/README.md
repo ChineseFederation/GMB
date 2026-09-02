@@ -1,7 +1,12 @@
 # 公民链交易
 
-本目录只通过本机 smoldot 轻节点读取 finalized 状态、获取 runtime nonce、构造并提交
-公民链 extrinsic。SDK 不提供远程 RPC 代理，也不包含 CitizenApp 的服务端签名交易中继。
+本目录保留旧 Dart 交易实现作为归档差分测试基线。它只通过本机 smoldot 轻节点读取
+finalized 状态、获取 runtime nonce、构造并提交公民链 extrinsic。SDK 不提供远程 RPC 代理，
+也不包含 CitizenApp 的服务端签名交易中继。
+
+Android、iOS 与 macOS 正式公共 API 均不再导出或调用本目录。`CitizenTransactions` 通过高层 Core ABI 完成
+构造、Rust 内 sr25519 签名、pending-before-broadcast、提交、watch 和 finalized Runtime
+执行核验；Dart 永远收不到 signed extrinsic 或 Core result handle。
 
 在线交易固定使用 immortal era；nonce 每次签名前从 runtime 实时读取，不缓存、不自增。
 金额真源为整数分 `BigInt`，宿主界面的元/小数转换不得进入交易编码层。

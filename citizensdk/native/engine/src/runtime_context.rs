@@ -1,6 +1,12 @@
-use citizen_sdk_contracts::{BlockFinality, RuntimeContext, VerifiedBlockRef};
+use citizen_sdk_contracts::{BlockFinality, ContractErrorCode, RuntimeContext, VerifiedBlockRef};
 
 use crate::error::EngineError;
+
+/// Maximum exact-block runtime contexts retained in process memory.
+///
+/// Eviction is deterministic FIFO while protecting the current best context.
+/// An evicted block is fetched and validated again if requested later.
+pub const MAX_RUNTIME_CONTEXTS: usize = 64;
 
 /// Opaque request identity used to keep late in-flight completions from
 /// replacing a newer best-head runtime context.
@@ -36,13 +42,19 @@ impl RuntimeContextCache {
         }
     }
 
-    pub fn begin(&mut self, block: VerifiedBlockRef) -> RuntimeContextRequest {
+    pub fn begin(&mut self, block: VerifiedBlockRef) -> Result<RuntimeContextRequest, EngineError> {
         let sequence = self.next_sequence;
-        self.next_sequence = self.next_sequence.saturating_add(1);
+        let next_sequence = sequence.checked_add(1).ok_or_else(|| {
+            EngineError::contract(
+                ContractErrorCode::Internal,
+                "runtime context request sequence exhausted",
+            )
+        })?;
+        self.next_sequence = next_sequence;
         if block.finality() == BlockFinality::Best {
             self.latest_best_request = Some(sequence);
         }
-        RuntimeContextRequest { block, sequence }
+        Ok(RuntimeContextRequest { block, sequence })
     }
 
     pub fn complete(
@@ -63,7 +75,7 @@ impl RuntimeContextCache {
                 context.version(),
                 context.metadata().to_vec(),
             )
-            .map_err(|error| EngineError::Contract(error.to_string()))?
+            .map_err(EngineError::from)?
         } else {
             return Err(EngineError::BlockContextMismatch(
                 "runtime context does not match its request block".to_owned(),
@@ -98,6 +110,19 @@ impl RuntimeContextCache {
                 ));
             }
         } else {
+            if self.contexts.len() == MAX_RUNTIME_CONTEXTS {
+                let eviction = self
+                    .contexts
+                    .iter()
+                    .position(|existing| Some(existing.block()) != self.current_best)
+                    .ok_or_else(|| {
+                        EngineError::contract(
+                            ContractErrorCode::Internal,
+                            "runtime context cache has no safe eviction candidate",
+                        )
+                    })?;
+                self.contexts.remove(eviction);
+            }
             self.contexts.push(context.clone());
         }
 
@@ -118,5 +143,86 @@ impl RuntimeContextCache {
     pub fn current_best(&self) -> Option<&RuntimeContext> {
         let block = self.current_best?;
         self.get(block)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use citizen_sdk_contracts::{
+        ContractErrorCode, Hash32, RuntimeContext, RuntimeVersion, VerifiedBlockRef,
+    };
+
+    use super::{RuntimeContextCache, MAX_RUNTIME_CONTEXTS};
+    use crate::EngineError;
+
+    #[test]
+    fn request_sequence_exhaustion_is_permanent_and_never_reuses_identity() {
+        let mut cache = RuntimeContextCache::new();
+        cache.next_sequence = u64::MAX - 1;
+        let block = VerifiedBlockRef::best(Hash32::from_bytes([0x7f; 32]), 7);
+        let last = cache
+            .begin(block)
+            .unwrap_or_else(|error| panic!("last request failed: {error}"));
+        assert_eq!(last.sequence, u64::MAX - 1);
+        assert_eq!(cache.latest_best_request, Some(u64::MAX - 1));
+
+        for _ in 0..2 {
+            let error = cache
+                .begin(block)
+                .err()
+                .unwrap_or_else(|| panic!("exhausted sequence must fail"));
+            match error {
+                EngineError::Contract(error) => {
+                    assert_eq!(error.code(), ContractErrorCode::Internal)
+                }
+                other => panic!("unexpected exhaustion error: {other}"),
+            }
+            assert_eq!(cache.next_sequence, u64::MAX);
+            assert_eq!(cache.latest_best_request, Some(u64::MAX - 1));
+        }
+    }
+
+    #[test]
+    fn runtime_contexts_are_bounded_and_current_best_is_not_evicted() {
+        let mut cache = RuntimeContextCache::new();
+        let protected = VerifiedBlockRef::best(Hash32::from_bytes([0xff; 32]), 1);
+        let protected_request = cache
+            .begin(protected)
+            .unwrap_or_else(|error| panic!("protected request failed: {error}"));
+        let protected_context =
+            RuntimeContext::try_new(protected, RuntimeVersion::new(1, 1), vec![0xff])
+                .unwrap_or_else(|error| panic!("protected context failed: {error}"));
+        cache
+            .complete(protected_request, protected_context)
+            .unwrap_or_else(|error| panic!("protected completion failed: {error}"));
+
+        for index in 0..(MAX_RUNTIME_CONTEXTS + 16) {
+            let number = u64::try_from(index + 2)
+                .unwrap_or_else(|error| panic!("height conversion failed: {error}"));
+            let marker = u8::try_from(index + 2)
+                .unwrap_or_else(|error| panic!("marker conversion failed: {error}"));
+            let block = VerifiedBlockRef::finalized(Hash32::from_bytes([marker; 32]), number);
+            let request = cache
+                .begin(block)
+                .unwrap_or_else(|error| panic!("request failed: {error}"));
+            let context = RuntimeContext::try_new(
+                block,
+                RuntimeVersion::new(marker.into(), marker.into()),
+                vec![marker],
+            )
+            .unwrap_or_else(|error| panic!("context failed: {error}"));
+            cache
+                .complete(request, context)
+                .unwrap_or_else(|error| panic!("completion failed: {error}"));
+        }
+
+        assert_eq!(cache.contexts.len(), MAX_RUNTIME_CONTEXTS);
+        assert!(cache.get(protected).is_some());
+        assert_eq!(
+            cache.current_best().map(RuntimeContext::block),
+            Some(protected)
+        );
+        let first_evicted = VerifiedBlockRef::finalized(Hash32::from_bytes([0x02; 32]), 2);
+        assert!(cache.get(first_evicted).is_none());
     }
 }

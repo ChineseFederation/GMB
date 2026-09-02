@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:citizenapp/isar/social_isar.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/isar/app_isar.dart';
 import 'package:citizenapp/isar/user_isar.dart';
 import 'package:citizenapp/isar/wallet_isar.dart';
@@ -29,7 +29,7 @@ void main() {
     final instances = <Isar?>[
       Isar.getInstance('citizenapp_app'),
       Isar.getInstance('citizenapp_social'),
-      Isar.getInstance('chat_sdk_chat'),
+      Isar.getInstance('tatachat_sdk_chat'),
       Isar.getInstance('citizenapp_user'),
       Isar.getInstance('citizenapp_wallet'),
     ];

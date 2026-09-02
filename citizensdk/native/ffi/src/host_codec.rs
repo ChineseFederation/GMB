@@ -1,0 +1,1207 @@
+//! Versioned, domain-separated envelopes for records persisted by a host.
+//!
+//! The host treats every encoded record as opaque.  The domain is part of the
+//! digest input and is checked again while decoding, so bytes returned through
+//! one typed store callback cannot be interpreted as another store's value.
+//!
+//! SHA-256 here detects accidental or host-storage corruption only.  It is not
+//! an authenticity boundary: encrypted account material is authenticated by
+//! the Rust-owned AES-GCM envelope and its domain-bound AAD before it reaches
+//! this codec.
+
+use sha2::{Digest, Sha256};
+
+use crate::abi::CitizenSdkErrorCode;
+use citizen_sdk_contracts::{
+    AccountId32, BlockFinality, ChainDatabaseSnapshot, ChainIdentity, DispatchFailure,
+    EncryptedSecretBlobSnapshot, EncryptedSecretBlobState, EncryptedSecretEnvelope,
+    ExecutionConclusion, ExportedChainState, FinalizedBlockRef, FinalizedTransferRecord, Hash32,
+    Hash32Bytes, HistoryTransactionStatus, ModuleDispatchFailure, RuntimeContext, RuntimeVersion,
+    SecretKind, SecretOwner, SecretRef, TransactionHistoryCursor, TransactionHistoryRecord,
+    TransactionHistoryState, VaultGeneration, VerifiedBlockRef, WalletAccount, WalletCleanupPlan,
+    WalletOrigin, WalletProfile, WalletProvisioningPlan, WalletState, MAX_WALLET_ACCOUNT_INDEX,
+};
+
+const HOST_RECORD_MAGIC: [u8; 4] = *b"CSHR";
+pub const HOST_RECORD_FORMAT_VERSION: u16 = 1;
+const HOST_RECORD_HEADER_LEN: usize = 56;
+const HOST_RECORD_FLAGS_NONE: u32 = 0;
+const HOST_RECORD_DIGEST_OFFSET: usize = 24;
+const HOST_RECORD_DIGEST_LEN: usize = 32;
+const HOST_RECORD_DIGEST_DOMAIN: &[u8] = b"CitizenSDK host record\0";
+const TYPED_PAYLOAD_VERSION: u16 = 1;
+const MAX_CHAIN_ID_BYTES: usize = 128;
+const MAX_RUNTIME_METADATA_BYTES: usize = 8 * 1024 * 1024;
+const MAX_WALLET_ACCOUNTS: usize = MAX_WALLET_ACCOUNT_INDEX as usize + 1;
+const MAX_WALLET_NAME_BYTES: usize = 120;
+const MAX_SS58_BYTES: usize = 128;
+const MAX_CLEANUP_QUEUE: usize = 64;
+const MAX_HISTORY_ITEMS: usize = 100_000;
+const MAX_POOL_REASON_BYTES: usize = 1024;
+const MAX_PALLET_NAME_BYTES: usize = 128;
+const MAX_ENCRYPTED_ENVELOPE_BYTES: usize = 64 * 1024;
+
+/// The five storage contracts have deliberately separate public callbacks.
+/// This discriminant protects their persisted representations; it is not a
+/// license to expose a generic `(domain, key, bytes)` host API.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HostRecordDomain {
+    ChainDatabase = 1,
+    RuntimeCache = 2,
+    WalletProfile = 3,
+    TransactionHistory = 4,
+    EncryptedSecretBlob = 5,
+}
+
+impl HostRecordDomain {
+    /// Maximum serialized typed payload accepted before any owned result is
+    /// allocated.  The limits are intentionally independent per contract.
+    pub const fn max_payload_bytes(self) -> usize {
+        match self {
+            // The verified light-client database is currently capped at 256
+            // KiB by Engine.  The envelope allows bounded schema overhead.
+            Self::ChainDatabase => 512 * 1024,
+            // Runtime metadata is public but may be materially larger than a
+            // single storage value.
+            Self::RuntimeCache => 8 * 1024 * 1024,
+            // 1,990 public account descriptors plus lifecycle plans remain
+            // bounded independently of history growth.
+            Self::WalletProfile => 1024 * 1024,
+            // History is the largest durable record and still has a hard
+            // allocation ceiling for hostile/corrupt host responses.
+            Self::TransactionHistory => 32 * 1024 * 1024,
+            // This contains only an authenticated encrypted envelope and
+            // tombstone metadata, never plaintext secret material.
+            Self::EncryptedSecretBlob => 64 * 1024,
+        }
+    }
+
+    pub const fn max_encoded_record_bytes(self) -> usize {
+        HOST_RECORD_HEADER_LEN + self.max_payload_bytes()
+    }
+
+    const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::ChainDatabase),
+            2 => Some(Self::RuntimeCache),
+            3 => Some(Self::WalletProfile),
+            4 => Some(Self::TransactionHistory),
+            5 => Some(Self::EncryptedSecretBlob),
+            _ => None,
+        }
+    }
+}
+
+/// Stable failure categories used while validating an opaque host record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HostCodecErrorKind {
+    Malformed,
+    UnsupportedVersion,
+    UnknownDomain,
+    DomainMismatch,
+    PayloadTooLarge,
+    LengthMismatch,
+    IntegrityMismatch,
+}
+
+/// An error contains no persisted bytes and is therefore safe to propagate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HostCodecError {
+    kind: HostCodecErrorKind,
+    message: &'static str,
+}
+
+impl HostCodecError {
+    const fn new(kind: HostCodecErrorKind, message: &'static str) -> Self {
+        Self { kind, message }
+    }
+
+    #[cfg(test)]
+    pub const fn kind(&self) -> HostCodecErrorKind {
+        self.kind
+    }
+
+    pub const fn message(&self) -> &'static str {
+        self.message
+    }
+
+    /// Maps codec failures to the already frozen public error vocabulary.
+    pub const fn ffi_code(&self) -> CitizenSdkErrorCode {
+        match self.kind {
+            HostCodecErrorKind::IntegrityMismatch | HostCodecErrorKind::DomainMismatch => {
+                CitizenSdkErrorCode::Integrity
+            }
+            HostCodecErrorKind::PayloadTooLarge => CitizenSdkErrorCode::InvalidArgument,
+            HostCodecErrorKind::Malformed
+            | HostCodecErrorKind::UnsupportedVersion
+            | HostCodecErrorKind::UnknownDomain
+            | HostCodecErrorKind::LengthMismatch => CitizenSdkErrorCode::Decode,
+        }
+    }
+}
+
+impl std::fmt::Display for HostCodecError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.message)
+    }
+}
+
+impl std::error::Error for HostCodecError {}
+
+/// A successfully decoded record borrows the caller-owned envelope.  No
+/// additional payload buffer is created before all structural checks pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DecodedHostRecord<'a> {
+    domain: HostRecordDomain,
+    payload: &'a [u8],
+}
+
+impl<'a> DecodedHostRecord<'a> {
+    #[cfg(test)]
+    pub const fn domain(self) -> HostRecordDomain {
+        self.domain
+    }
+
+    pub const fn payload(self) -> &'a [u8] {
+        self.payload
+    }
+}
+
+/// Encodes one already-serialized typed value for its dedicated store.
+pub fn encode_host_record(
+    domain: HostRecordDomain,
+    payload: &[u8],
+) -> Result<Vec<u8>, HostCodecError> {
+    validate_payload_len(domain, payload.len())?;
+    let encoded_len = HOST_RECORD_HEADER_LEN
+        .checked_add(payload.len())
+        .ok_or_else(|| {
+            HostCodecError::new(
+                HostCodecErrorKind::PayloadTooLarge,
+                "host record encoded length overflowed",
+            )
+        })?;
+    let payload_len = u64::try_from(payload.len()).map_err(|_| {
+        HostCodecError::new(
+            HostCodecErrorKind::PayloadTooLarge,
+            "host record payload length cannot be represented",
+        )
+    })?;
+
+    let mut encoded = Vec::with_capacity(encoded_len);
+    encoded.extend_from_slice(&HOST_RECORD_MAGIC);
+    encoded.extend_from_slice(&HOST_RECORD_FORMAT_VERSION.to_le_bytes());
+    encoded.extend_from_slice(&(HOST_RECORD_HEADER_LEN as u16).to_le_bytes());
+    encoded.extend_from_slice(&(domain as u32).to_le_bytes());
+    encoded.extend_from_slice(&HOST_RECORD_FLAGS_NONE.to_le_bytes());
+    encoded.extend_from_slice(&payload_len.to_le_bytes());
+    let digest = record_digest(domain, payload_len, payload);
+    encoded.extend_from_slice(&digest);
+    encoded.extend_from_slice(payload);
+    debug_assert_eq!(encoded.len(), encoded_len);
+    Ok(encoded)
+}
+
+/// Decodes an opaque record only when it belongs to the exact typed callback
+/// that requested it.
+pub fn decode_host_record<'a>(
+    expected_domain: HostRecordDomain,
+    encoded: &'a [u8],
+) -> Result<DecodedHostRecord<'a>, HostCodecError> {
+    if encoded.len() < HOST_RECORD_HEADER_LEN {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::Malformed,
+            "host record is shorter than its fixed header",
+        ));
+    }
+    if encoded[..4] != HOST_RECORD_MAGIC {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::Malformed,
+            "host record magic is invalid",
+        ));
+    }
+
+    let version = read_u16(encoded, 4);
+    if version != HOST_RECORD_FORMAT_VERSION {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::UnsupportedVersion,
+            "host record format version is unsupported",
+        ));
+    }
+    if usize::from(read_u16(encoded, 6)) != HOST_RECORD_HEADER_LEN {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::Malformed,
+            "host record header length is invalid",
+        ));
+    }
+
+    let stored_domain = HostRecordDomain::from_u32(read_u32(encoded, 8)).ok_or_else(|| {
+        HostCodecError::new(
+            HostCodecErrorKind::UnknownDomain,
+            "host record domain is unknown",
+        )
+    })?;
+    if stored_domain != expected_domain {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::DomainMismatch,
+            "host record belongs to a different typed store",
+        ));
+    }
+    if read_u32(encoded, 12) != HOST_RECORD_FLAGS_NONE {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::Malformed,
+            "host record reserved flags are nonzero",
+        ));
+    }
+
+    let declared_len_u64 = read_u64(encoded, 16);
+    let declared_len = usize::try_from(declared_len_u64).map_err(|_| {
+        HostCodecError::new(
+            HostCodecErrorKind::PayloadTooLarge,
+            "host record payload length exceeds this platform",
+        )
+    })?;
+    validate_payload_len(stored_domain, declared_len)?;
+    let expected_len = HOST_RECORD_HEADER_LEN
+        .checked_add(declared_len)
+        .ok_or_else(|| {
+            HostCodecError::new(
+                HostCodecErrorKind::PayloadTooLarge,
+                "host record encoded length overflowed",
+            )
+        })?;
+    if encoded.len() != expected_len {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::LengthMismatch,
+            "host record payload length does not match its envelope",
+        ));
+    }
+
+    let payload = &encoded[HOST_RECORD_HEADER_LEN..];
+    let expected_digest = record_digest(stored_domain, declared_len_u64, payload);
+    let stored_digest =
+        &encoded[HOST_RECORD_DIGEST_OFFSET..HOST_RECORD_DIGEST_OFFSET + HOST_RECORD_DIGEST_LEN];
+    if stored_digest != &expected_digest[..] {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::IntegrityMismatch,
+            "host record corruption digest does not match",
+        ));
+    }
+
+    Ok(DecodedHostRecord {
+        domain: stored_domain,
+        payload,
+    })
+}
+
+fn validate_payload_len(
+    domain: HostRecordDomain,
+    payload_len: usize,
+) -> Result<(), HostCodecError> {
+    if payload_len > domain.max_payload_bytes() {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::PayloadTooLarge,
+            "host record exceeds the typed store payload limit",
+        ));
+    }
+    Ok(())
+}
+
+fn record_digest(domain: HostRecordDomain, payload_len: u64, payload: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(HOST_RECORD_DIGEST_DOMAIN);
+    hasher.update(HOST_RECORD_FORMAT_VERSION.to_le_bytes());
+    hasher.update((domain as u32).to_le_bytes());
+    hasher.update(payload_len.to_le_bytes());
+    hasher.update(payload);
+    hasher.finalize().into()
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes([bytes[offset], bytes[offset + 1]])
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+        bytes[offset + 4],
+        bytes[offset + 5],
+        bytes[offset + 6],
+        bytes[offset + 7],
+    ])
+}
+
+// -------------------------------------------------------------------------
+// Strict typed payload codecs.  These functions are the only translation
+// between host-owned opaque records and contracts-layer value objects.
+
+pub fn encode_chain_database_snapshot(
+    snapshot: &ChainDatabaseSnapshot,
+) -> Result<Vec<u8>, HostCodecError> {
+    encode_typed(HostRecordDomain::ChainDatabase, |writer| {
+        writer.u64(snapshot.revision());
+        writer.bool(snapshot.state().is_some());
+        if let Some(state) = snapshot.state() {
+            writer.string(state.identity().chain_id(), MAX_CHAIN_ID_BYTES)?;
+            writer.string(state.identity().protocol_id(), MAX_CHAIN_ID_BYTES)?;
+            writer.fixed(state.identity().genesis_hash().as_bytes());
+            writer.u32(state.format_version());
+            encode_finalized_block(writer, state.finalized());
+            writer.bytes(state.database(), 256 * 1024)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_chain_database_snapshot(
+    encoded: &[u8],
+) -> Result<ChainDatabaseSnapshot, HostCodecError> {
+    decode_typed(HostRecordDomain::ChainDatabase, encoded, |reader| {
+        let revision = reader.u64()?;
+        let state = if reader.bool()? {
+            let identity = ChainIdentity::try_new(
+                reader.string(MAX_CHAIN_ID_BYTES)?,
+                reader.string(MAX_CHAIN_ID_BYTES)?,
+                Hash32::from_bytes(reader.fixed()?),
+            )
+            .map_err(|_| model_integrity("persisted chain identity is invalid"))?;
+            let format_version = reader.u32()?;
+            let finalized = decode_finalized_block(reader)?;
+            let database = reader.bytes(256 * 1024)?;
+            Some(
+                ExportedChainState::try_new(identity, format_version, finalized, database)
+                    .map_err(|_| model_integrity("persisted chain state is invalid"))?,
+            )
+        } else {
+            None
+        };
+        Ok(ChainDatabaseSnapshot::new(revision, state))
+    })
+}
+
+pub fn encode_runtime_context(context: &RuntimeContext) -> Result<Vec<u8>, HostCodecError> {
+    encode_typed(HostRecordDomain::RuntimeCache, |writer| {
+        encode_block(writer, context.block());
+        writer.u32(context.version().spec_version());
+        writer.u32(context.version().transaction_version());
+        writer.bytes(context.metadata(), MAX_RUNTIME_METADATA_BYTES)
+    })
+}
+
+pub fn decode_runtime_context(encoded: &[u8]) -> Result<RuntimeContext, HostCodecError> {
+    decode_typed(HostRecordDomain::RuntimeCache, encoded, |reader| {
+        let block = decode_block(reader)?;
+        let version = RuntimeVersion::new(reader.u32()?, reader.u32()?);
+        let metadata = reader.bytes(MAX_RUNTIME_METADATA_BYTES)?;
+        RuntimeContext::try_new(block, version, metadata)
+            .map_err(|_| model_integrity("persisted runtime context is invalid"))
+    })
+}
+
+pub fn encode_wallet_state(state: &WalletState) -> Result<Vec<u8>, HostCodecError> {
+    encode_typed(HostRecordDomain::WalletProfile, |writer| {
+        writer.u64(state.revision());
+        encode_optional(writer, state.profile(), encode_wallet_profile)?;
+        encode_optional(writer, state.provisioning(), encode_provisioning_plan)?;
+        encode_optional(writer, state.cleanup(), encode_cleanup_plan)?;
+        writer.count(state.cleanup_queue().len(), MAX_CLEANUP_QUEUE)?;
+        for cleanup in state.cleanup_queue() {
+            encode_cleanup_plan(writer, cleanup)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_wallet_state(encoded: &[u8]) -> Result<WalletState, HostCodecError> {
+    decode_typed(HostRecordDomain::WalletProfile, encoded, |reader| {
+        let revision = reader.u64()?;
+        let profile = decode_optional(reader, decode_wallet_profile)?;
+        let provisioning = decode_optional(reader, decode_provisioning_plan)?;
+        let cleanup = decode_optional(reader, decode_cleanup_plan)?;
+        let cleanup_count = reader.count(MAX_CLEANUP_QUEUE)?;
+        let mut cleanup_queue = Vec::with_capacity(cleanup_count);
+        for _ in 0..cleanup_count {
+            cleanup_queue.push(decode_cleanup_plan(reader)?);
+        }
+        WalletState::try_from_parts(revision, profile, provisioning, cleanup, cleanup_queue)
+            .map_err(|_| model_integrity("persisted wallet state is invalid"))
+    })
+}
+
+fn encode_wallet_profile(
+    writer: &mut TypedWriter,
+    profile: &WalletProfile,
+) -> Result<(), HostCodecError> {
+    writer.u32(profile.wallet_index());
+    writer.fixed(profile.generation().as_bytes());
+    writer.fixed(profile.master_account_id().as_bytes());
+    writer.u8(match profile.origin() {
+        WalletOrigin::Created => 1,
+        WalletOrigin::Imported => 2,
+    });
+    writer.u64(profile.created_at_millis());
+    writer.fixed(profile.active_account_id().as_bytes());
+    writer.count(profile.accounts().len(), MAX_WALLET_ACCOUNTS)?;
+    for account in profile.accounts() {
+        writer.u32(account.index());
+        writer.fixed(account.account_id().as_bytes());
+        encode_secret_ref(writer, account.secret_ref());
+        writer.string(account.ss58_address(), MAX_SS58_BYTES)?;
+        writer.string(account.name(), MAX_WALLET_NAME_BYTES)?;
+        writer.u64(account.created_at_millis());
+    }
+    Ok(())
+}
+
+fn decode_wallet_profile(reader: &mut TypedReader<'_>) -> Result<WalletProfile, HostCodecError> {
+    let wallet_index = reader.u32()?;
+    let generation = VaultGeneration::from_bytes(reader.fixed()?);
+    let master_account_id = AccountId32::from_bytes(reader.fixed()?);
+    let origin = match reader.u8()? {
+        1 => WalletOrigin::Created,
+        2 => WalletOrigin::Imported,
+        _ => return Err(model_integrity("persisted wallet origin is unknown")),
+    };
+    let created_at_millis = reader.u64()?;
+    let active_account_id = AccountId32::from_bytes(reader.fixed()?);
+    let account_count = reader.count(MAX_WALLET_ACCOUNTS)?;
+    let mut accounts = Vec::with_capacity(account_count);
+    for _ in 0..account_count {
+        let index = reader.u32()?;
+        let account_id = AccountId32::from_bytes(reader.fixed()?);
+        let secret_ref = decode_secret_ref(reader)?;
+        let ss58_address = reader.string(MAX_SS58_BYTES)?;
+        let name = reader.string(MAX_WALLET_NAME_BYTES)?;
+        let account_created_at = reader.u64()?;
+        accounts.push(
+            WalletAccount::try_new(
+                index,
+                account_id,
+                secret_ref,
+                ss58_address,
+                name,
+                account_created_at,
+            )
+            .map_err(|_| model_integrity("persisted wallet account is invalid"))?,
+        );
+    }
+    WalletProfile::try_new(
+        wallet_index,
+        generation,
+        master_account_id,
+        origin,
+        created_at_millis,
+        active_account_id,
+        accounts,
+    )
+    .map_err(|_| model_integrity("persisted wallet profile is invalid"))
+}
+
+fn encode_provisioning_plan(
+    writer: &mut TypedWriter,
+    plan: &WalletProvisioningPlan,
+) -> Result<(), HostCodecError> {
+    writer.fixed(plan.operation_id());
+    writer.u32(plan.wallet_index());
+    writer.fixed(plan.generation().as_bytes());
+    encode_optional(writer, plan.previous_profile(), encode_wallet_profile)?;
+    writer.count(plan.secret_refs().len(), MAX_WALLET_ACCOUNTS)?;
+    for secret_ref in plan.secret_refs() {
+        encode_secret_ref(writer, *secret_ref);
+    }
+    writer.bool(plan.delete_wallet_key_on_rollback());
+    Ok(())
+}
+
+fn decode_provisioning_plan(
+    reader: &mut TypedReader<'_>,
+) -> Result<WalletProvisioningPlan, HostCodecError> {
+    let operation_id = reader.fixed()?;
+    let wallet_index = reader.u32()?;
+    let generation = VaultGeneration::from_bytes(reader.fixed()?);
+    let previous_profile = decode_optional(reader, decode_wallet_profile)?;
+    let count = reader.count(MAX_WALLET_ACCOUNTS)?;
+    let mut secret_refs = Vec::with_capacity(count);
+    for _ in 0..count {
+        secret_refs.push(decode_secret_ref(reader)?);
+    }
+    let delete_wallet_key_on_rollback = reader.bool()?;
+    WalletProvisioningPlan::try_new(
+        operation_id,
+        wallet_index,
+        generation,
+        previous_profile,
+        secret_refs,
+        delete_wallet_key_on_rollback,
+    )
+    .map_err(|_| model_integrity("persisted provisioning plan is invalid"))
+}
+
+fn encode_cleanup_plan(
+    writer: &mut TypedWriter,
+    plan: &WalletCleanupPlan,
+) -> Result<(), HostCodecError> {
+    writer.fixed(plan.operation_id());
+    writer.u32(plan.wallet_index());
+    writer.fixed(plan.generation().as_bytes());
+    writer.count(plan.secret_refs().len(), MAX_WALLET_ACCOUNTS)?;
+    for secret_ref in plan.secret_refs() {
+        encode_secret_ref(writer, *secret_ref);
+    }
+    writer.bool(plan.delete_wallet_key());
+    Ok(())
+}
+
+fn decode_cleanup_plan(reader: &mut TypedReader<'_>) -> Result<WalletCleanupPlan, HostCodecError> {
+    let operation_id = reader.fixed()?;
+    let wallet_index = reader.u32()?;
+    let generation = VaultGeneration::from_bytes(reader.fixed()?);
+    let count = reader.count(MAX_WALLET_ACCOUNTS)?;
+    let mut secret_refs = Vec::with_capacity(count);
+    for _ in 0..count {
+        secret_refs.push(decode_secret_ref(reader)?);
+    }
+    let delete_wallet_key = reader.bool()?;
+    WalletCleanupPlan::try_new(
+        operation_id,
+        wallet_index,
+        generation,
+        secret_refs,
+        delete_wallet_key,
+    )
+    .map_err(|_| model_integrity("persisted cleanup plan is invalid"))
+}
+
+fn encode_secret_ref(writer: &mut TypedWriter, secret_ref: SecretRef) {
+    writer.u32(secret_ref.wallet_index());
+    writer.fixed(secret_ref.generation().as_bytes());
+    writer.fixed(secret_ref.owner().as_bytes());
+    writer.fixed(secret_ref.account_id().as_bytes());
+    writer.u8(match secret_ref.kind() {
+        SecretKind::AccountMiniSecret => 1,
+    });
+}
+
+fn decode_secret_ref(reader: &mut TypedReader<'_>) -> Result<SecretRef, HostCodecError> {
+    let wallet_index = reader.u32()?;
+    let generation = VaultGeneration::from_bytes(reader.fixed()?);
+    let owner = SecretOwner::from_bytes(reader.fixed()?);
+    let account_id = AccountId32::from_bytes(reader.fixed()?);
+    if reader.u8()? != 1 {
+        return Err(model_integrity("persisted secret kind is unknown"));
+    }
+    Ok(SecretRef::account_mini_secret(
+        wallet_index,
+        generation,
+        owner,
+        account_id,
+    ))
+}
+
+fn encode_block(writer: &mut TypedWriter, block: VerifiedBlockRef) {
+    writer.u8(match block.finality() {
+        BlockFinality::Best => 1,
+        BlockFinality::Finalized => 2,
+    });
+    writer.fixed(block.hash().as_bytes());
+    writer.u64(block.number());
+}
+
+fn decode_block(reader: &mut TypedReader<'_>) -> Result<VerifiedBlockRef, HostCodecError> {
+    let finality = reader.u8()?;
+    let hash = Hash32::from_bytes(reader.fixed()?);
+    let number = reader.u64()?;
+    match finality {
+        1 => Ok(VerifiedBlockRef::best(hash, number)),
+        2 => Ok(VerifiedBlockRef::finalized(hash, number)),
+        _ => Err(model_integrity("persisted block finality is unknown")),
+    }
+}
+
+fn encode_finalized_block(writer: &mut TypedWriter, block: FinalizedBlockRef) {
+    encode_block(writer, block.verified());
+}
+
+fn decode_finalized_block(
+    reader: &mut TypedReader<'_>,
+) -> Result<FinalizedBlockRef, HostCodecError> {
+    decode_block(reader)?
+        .require_finalized()
+        .map_err(|_| model_integrity("persisted block is not finalized"))
+}
+
+pub fn encode_transaction_history_state(
+    state: &TransactionHistoryState,
+) -> Result<Vec<u8>, HostCodecError> {
+    encode_typed(HostRecordDomain::TransactionHistory, |writer| {
+        writer.u64(state.revision());
+        writer.count(state.cursors().len(), MAX_HISTORY_ITEMS)?;
+        for cursor in state.cursors() {
+            writer.fixed(cursor.account_id().as_bytes());
+            encode_finalized_block(writer, cursor.tracking_start_block());
+            encode_finalized_block(writer, cursor.last_synced_block());
+        }
+        writer.count(state.records().len(), MAX_HISTORY_ITEMS)?;
+        for record in state.records() {
+            encode_history_record(writer, record)?;
+        }
+        writer.count(state.transfers().len(), MAX_HISTORY_ITEMS)?;
+        for transfer in state.transfers() {
+            encode_finalized_transfer(writer, transfer)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_transaction_history_state(
+    encoded: &[u8],
+) -> Result<TransactionHistoryState, HostCodecError> {
+    decode_typed(HostRecordDomain::TransactionHistory, encoded, |reader| {
+        let revision = reader.u64()?;
+        let cursor_count = reader.count(MAX_HISTORY_ITEMS)?;
+        let mut cursors = Vec::with_capacity(cursor_count);
+        for _ in 0..cursor_count {
+            cursors.push(
+                TransactionHistoryCursor::try_new(
+                    AccountId32::from_bytes(reader.fixed()?),
+                    decode_finalized_block(reader)?,
+                    decode_finalized_block(reader)?,
+                )
+                .map_err(|_| model_integrity("persisted history cursor is invalid"))?,
+            );
+        }
+        let record_count = reader.count(MAX_HISTORY_ITEMS)?;
+        let mut records = Vec::with_capacity(record_count);
+        for _ in 0..record_count {
+            records.push(decode_history_record(reader)?);
+        }
+        let transfer_count = reader.count(MAX_HISTORY_ITEMS)?;
+        let mut transfers = Vec::with_capacity(transfer_count);
+        for _ in 0..transfer_count {
+            transfers.push(decode_finalized_transfer(reader)?);
+        }
+        TransactionHistoryState::try_new(revision, cursors, records, transfers)
+            .map_err(|_| model_integrity("persisted transaction history is invalid"))
+    })
+}
+
+fn encode_history_record(
+    writer: &mut TypedWriter,
+    record: &TransactionHistoryRecord,
+) -> Result<(), HostCodecError> {
+    writer.fixed(record.account_id().as_bytes());
+    writer.fixed(record.transaction_hash().as_bytes());
+    writer.u64(record.nonce());
+    writer.fixed(record.destination_account_id().as_bytes());
+    writer.u128(record.amount_fen());
+    writer.string(
+        record.remark(),
+        citizen_sdk_contracts::MAX_TRANSFER_REMARK_BYTES,
+    )?;
+    encode_history_status(writer, record.status())?;
+    writer.u64(record.created_at_millis());
+    writer.u64(record.updated_at_millis());
+    Ok(())
+}
+
+fn decode_history_record(
+    reader: &mut TypedReader<'_>,
+) -> Result<TransactionHistoryRecord, HostCodecError> {
+    TransactionHistoryRecord::try_new(
+        AccountId32::from_bytes(reader.fixed()?),
+        Hash32::from_bytes(reader.fixed()?),
+        reader.u64()?,
+        AccountId32::from_bytes(reader.fixed()?),
+        reader.u128()?,
+        reader.string(citizen_sdk_contracts::MAX_TRANSFER_REMARK_BYTES)?,
+        decode_history_status(reader)?,
+        reader.u64()?,
+        reader.u64()?,
+    )
+    .map_err(|_| model_integrity("persisted transaction record is invalid"))
+}
+
+fn encode_history_status(
+    writer: &mut TypedWriter,
+    status: &HistoryTransactionStatus,
+) -> Result<(), HostCodecError> {
+    match status {
+        HistoryTransactionStatus::Pending => writer.u8(1),
+        HistoryTransactionStatus::InBlock { block } => {
+            writer.u8(2);
+            encode_block(writer, *block);
+        }
+        HistoryTransactionStatus::PoolRejected { reason } => {
+            writer.u8(3);
+            writer.string(reason, MAX_POOL_REASON_BYTES)?;
+        }
+        HistoryTransactionStatus::Execution(ExecutionConclusion::Success {
+            block,
+            extrinsic_index,
+        }) => {
+            writer.u8(4);
+            encode_block(writer, *block);
+            writer.u32(*extrinsic_index);
+        }
+        HistoryTransactionStatus::Execution(ExecutionConclusion::Failed {
+            block,
+            extrinsic_index,
+            failure,
+        }) => {
+            writer.u8(5);
+            encode_block(writer, *block);
+            writer.u32(*extrinsic_index);
+            encode_dispatch_failure(writer, failure)?;
+        }
+        HistoryTransactionStatus::Execution(ExecutionConclusion::Unverified { .. }) => {
+            return Err(model_integrity(
+                "unverified execution cannot be persisted in history",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn decode_history_status(
+    reader: &mut TypedReader<'_>,
+) -> Result<HistoryTransactionStatus, HostCodecError> {
+    match reader.u8()? {
+        1 => Ok(HistoryTransactionStatus::Pending),
+        2 => Ok(HistoryTransactionStatus::InBlock {
+            block: decode_block(reader)?,
+        }),
+        3 => HistoryTransactionStatus::try_pool_rejected(reader.string(MAX_POOL_REASON_BYTES)?)
+            .map_err(|_| model_integrity("persisted pool rejection is invalid")),
+        4 => Ok(HistoryTransactionStatus::Execution(
+            ExecutionConclusion::Success {
+                block: decode_block(reader)?,
+                extrinsic_index: reader.u32()?,
+            },
+        )),
+        5 => Ok(HistoryTransactionStatus::Execution(
+            ExecutionConclusion::Failed {
+                block: decode_block(reader)?,
+                extrinsic_index: reader.u32()?,
+                failure: decode_dispatch_failure(reader)?,
+            },
+        )),
+        _ => Err(model_integrity(
+            "persisted transaction status is unknown or unverified",
+        )),
+    }
+}
+
+fn encode_dispatch_failure(
+    writer: &mut TypedWriter,
+    failure: &DispatchFailure,
+) -> Result<(), HostCodecError> {
+    writer.u8(failure.variant());
+    writer.bool(failure.module().is_some());
+    if let Some(module) = failure.module() {
+        writer.u8(module.pallet_index());
+        writer.u8(module.error_index());
+        encode_optional_string(writer, module.pallet_name(), MAX_PALLET_NAME_BYTES)?;
+        encode_optional_string(writer, module.error_name(), MAX_PALLET_NAME_BYTES)?;
+    }
+    Ok(())
+}
+
+fn decode_dispatch_failure(
+    reader: &mut TypedReader<'_>,
+) -> Result<DispatchFailure, HostCodecError> {
+    let variant = reader.u8()?;
+    let module = if reader.bool()? {
+        Some(ModuleDispatchFailure::new(
+            reader.u8()?,
+            reader.u8()?,
+            decode_optional_string(reader, MAX_PALLET_NAME_BYTES)?,
+            decode_optional_string(reader, MAX_PALLET_NAME_BYTES)?,
+        ))
+    } else {
+        None
+    };
+    Ok(DispatchFailure::new(variant, module))
+}
+
+fn encode_finalized_transfer(
+    writer: &mut TypedWriter,
+    transfer: &FinalizedTransferRecord,
+) -> Result<(), HostCodecError> {
+    writer.fixed(transfer.tracked_account_id().as_bytes());
+    writer.fixed(transfer.from_account_id().as_bytes());
+    writer.fixed(transfer.to_account_id().as_bytes());
+    writer.u128(transfer.amount_fen());
+    encode_finalized_block(writer, transfer.block());
+    writer.u32(transfer.event_record_index());
+    writer.bool(transfer.extrinsic_index().is_some());
+    if let Some(index) = transfer.extrinsic_index() {
+        writer.u32(index);
+    }
+    writer.string(transfer.source_pallet(), MAX_PALLET_NAME_BYTES)?;
+    writer.bool(transfer.remark_bytes().is_some());
+    if let Some(remark_bytes) = transfer.remark_bytes() {
+        writer.bytes(
+            remark_bytes,
+            citizen_sdk_contracts::MAX_TRANSFER_REMARK_BYTES,
+        )?;
+    }
+    Ok(())
+}
+
+fn decode_finalized_transfer(
+    reader: &mut TypedReader<'_>,
+) -> Result<FinalizedTransferRecord, HostCodecError> {
+    let tracked_account_id = AccountId32::from_bytes(reader.fixed()?);
+    let from_account_id = AccountId32::from_bytes(reader.fixed()?);
+    let to_account_id = AccountId32::from_bytes(reader.fixed()?);
+    let amount_fen = reader.u128()?;
+    let block = decode_finalized_block(reader)?;
+    let event_record_index = reader.u32()?;
+    let extrinsic_index = if reader.bool()? {
+        Some(reader.u32()?)
+    } else {
+        None
+    };
+    let source_pallet = reader.string(MAX_PALLET_NAME_BYTES)?;
+    let remark_bytes = if reader.bool()? {
+        Some(reader.bytes(citizen_sdk_contracts::MAX_TRANSFER_REMARK_BYTES)?)
+    } else {
+        None
+    };
+    FinalizedTransferRecord::try_for_tracked_account_from_runtime_event(
+        tracked_account_id,
+        from_account_id,
+        to_account_id,
+        amount_fen,
+        block,
+        event_record_index,
+        extrinsic_index,
+        source_pallet,
+        remark_bytes.as_deref(),
+    )
+    .map_err(|_| model_integrity("persisted finalized transfer is invalid"))
+}
+
+pub fn encode_encrypted_secret_blob_snapshot(
+    secret_ref: SecretRef,
+    snapshot: &EncryptedSecretBlobSnapshot,
+) -> Result<Vec<u8>, HostCodecError> {
+    encode_typed(HostRecordDomain::EncryptedSecretBlob, |writer| {
+        // The host callback is keyed by SecretRef, but the opaque value binds
+        // that identity again.  This prevents a host from crossing sealed or
+        // tombstone records between slots while preserving a valid envelope.
+        encode_secret_ref(writer, secret_ref);
+        writer.u64(snapshot.revision());
+        match snapshot.state() {
+            EncryptedSecretBlobState::Vacant => writer.u8(1),
+            EncryptedSecretBlobState::Sealed {
+                provisioning_operation_id,
+                envelope,
+            } => {
+                writer.u8(2);
+                writer.fixed(provisioning_operation_id);
+                writer.u32(envelope.format_version());
+                writer.fixed(envelope.associated_data_digest().as_bytes());
+                writer.bytes(envelope.ciphertext(), MAX_ENCRYPTED_ENVELOPE_BYTES)?;
+            }
+            EncryptedSecretBlobState::Tombstone {
+                cleanup_operation_id,
+            } => {
+                writer.u8(3);
+                writer.fixed(cleanup_operation_id);
+            }
+        }
+        Ok(())
+    })
+}
+
+pub fn decode_encrypted_secret_blob_snapshot(
+    expected_secret_ref: SecretRef,
+    encoded: &[u8],
+) -> Result<EncryptedSecretBlobSnapshot, HostCodecError> {
+    decode_typed(HostRecordDomain::EncryptedSecretBlob, encoded, |reader| {
+        let persisted_secret_ref = decode_secret_ref(reader)?;
+        if persisted_secret_ref != expected_secret_ref {
+            return Err(model_integrity(
+                "persisted secret blob is bound to another SecretRef",
+            ));
+        }
+        let revision = reader.u64()?;
+        let state = match reader.u8()? {
+            1 => EncryptedSecretBlobState::Vacant,
+            2 => EncryptedSecretBlobState::Sealed {
+                provisioning_operation_id: reader.fixed()?,
+                envelope: EncryptedSecretEnvelope::try_new(
+                    reader.u32()?,
+                    Hash32Bytes::from_bytes(reader.fixed()?),
+                    reader.bytes(MAX_ENCRYPTED_ENVELOPE_BYTES)?,
+                )
+                .map_err(|_| model_integrity("persisted secret envelope is invalid"))?,
+            },
+            3 => EncryptedSecretBlobState::Tombstone {
+                cleanup_operation_id: reader.fixed()?,
+            },
+            _ => return Err(model_integrity("persisted secret blob state is unknown")),
+        };
+        EncryptedSecretBlobSnapshot::try_from_persisted_parts(revision, state)
+            .map_err(|_| model_integrity("persisted secret blob revision is unreachable"))
+    })
+}
+
+fn encode_typed(
+    domain: HostRecordDomain,
+    encode: impl FnOnce(&mut TypedWriter) -> Result<(), HostCodecError>,
+) -> Result<Vec<u8>, HostCodecError> {
+    let mut writer = TypedWriter::new();
+    writer.u16(TYPED_PAYLOAD_VERSION);
+    encode(&mut writer)?;
+    encode_host_record(domain, &writer.bytes)
+}
+
+fn decode_typed<T>(
+    domain: HostRecordDomain,
+    encoded: &[u8],
+    decode: impl FnOnce(&mut TypedReader<'_>) -> Result<T, HostCodecError>,
+) -> Result<T, HostCodecError> {
+    let record = decode_host_record(domain, encoded)?;
+    let mut reader = TypedReader::new(record.payload());
+    if reader.u16()? != TYPED_PAYLOAD_VERSION {
+        return Err(HostCodecError::new(
+            HostCodecErrorKind::UnsupportedVersion,
+            "typed host payload version is unsupported",
+        ));
+    }
+    let value = decode(&mut reader)?;
+    reader.finish()?;
+    Ok(value)
+}
+
+fn encode_optional<T>(
+    writer: &mut TypedWriter,
+    value: Option<&T>,
+    encode: impl FnOnce(&mut TypedWriter, &T) -> Result<(), HostCodecError>,
+) -> Result<(), HostCodecError> {
+    writer.bool(value.is_some());
+    if let Some(value) = value {
+        encode(writer, value)?;
+    }
+    Ok(())
+}
+
+fn decode_optional<T>(
+    reader: &mut TypedReader<'_>,
+    decode: impl FnOnce(&mut TypedReader<'_>) -> Result<T, HostCodecError>,
+) -> Result<Option<T>, HostCodecError> {
+    if reader.bool()? {
+        decode(reader).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn encode_optional_string(
+    writer: &mut TypedWriter,
+    value: Option<&str>,
+    max_len: usize,
+) -> Result<(), HostCodecError> {
+    writer.bool(value.is_some());
+    if let Some(value) = value {
+        writer.string(value, max_len)?;
+    }
+    Ok(())
+}
+
+fn decode_optional_string(
+    reader: &mut TypedReader<'_>,
+    max_len: usize,
+) -> Result<Option<String>, HostCodecError> {
+    if reader.bool()? {
+        reader.string(max_len).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+fn model_integrity(message: &'static str) -> HostCodecError {
+    HostCodecError::new(HostCodecErrorKind::IntegrityMismatch, message)
+}
+
+struct TypedWriter {
+    bytes: Vec<u8>,
+}
+
+impl TypedWriter {
+    fn new() -> Self {
+        Self { bytes: Vec::new() }
+    }
+
+    fn u8(&mut self, value: u8) {
+        self.bytes.push(value);
+    }
+
+    fn u16(&mut self, value: u16) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u32(&mut self, value: u32) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u64(&mut self, value: u64) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn u128(&mut self, value: u128) {
+        self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn bool(&mut self, value: bool) {
+        self.u8(u8::from(value));
+    }
+
+    fn fixed(&mut self, value: &[u8]) {
+        self.bytes.extend_from_slice(value);
+    }
+
+    fn count(&mut self, value: usize, max: usize) -> Result<(), HostCodecError> {
+        if value > max {
+            return Err(model_integrity("typed host collection exceeds its limit"));
+        }
+        self.u32(u32::try_from(value).map_err(|_| {
+            HostCodecError::new(
+                HostCodecErrorKind::PayloadTooLarge,
+                "typed host collection count cannot be represented",
+            )
+        })?);
+        Ok(())
+    }
+
+    fn bytes(&mut self, value: &[u8], max: usize) -> Result<(), HostCodecError> {
+        self.count(value.len(), max)?;
+        self.fixed(value);
+        Ok(())
+    }
+
+    fn string(&mut self, value: &str, max: usize) -> Result<(), HostCodecError> {
+        self.bytes(value.as_bytes(), max)
+    }
+}
+
+struct TypedReader<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> TypedReader<'a> {
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take(&mut self, len: usize) -> Result<&'a [u8], HostCodecError> {
+        let end = self.offset.checked_add(len).ok_or_else(|| {
+            HostCodecError::new(
+                HostCodecErrorKind::LengthMismatch,
+                "typed host payload offset overflowed",
+            )
+        })?;
+        if end > self.bytes.len() {
+            return Err(HostCodecError::new(
+                HostCodecErrorKind::LengthMismatch,
+                "typed host payload ended unexpectedly",
+            ));
+        }
+        let value = &self.bytes[self.offset..end];
+        self.offset = end;
+        Ok(value)
+    }
+
+    fn fixed<const N: usize>(&mut self) -> Result<[u8; N], HostCodecError> {
+        self.take(N)?.try_into().map_err(|_| {
+            HostCodecError::new(
+                HostCodecErrorKind::LengthMismatch,
+                "typed host fixed field has the wrong length",
+            )
+        })
+    }
+
+    fn u8(&mut self) -> Result<u8, HostCodecError> {
+        Ok(self.fixed::<1>()?[0])
+    }
+
+    fn u16(&mut self) -> Result<u16, HostCodecError> {
+        Ok(u16::from_le_bytes(self.fixed()?))
+    }
+
+    fn u32(&mut self) -> Result<u32, HostCodecError> {
+        Ok(u32::from_le_bytes(self.fixed()?))
+    }
+
+    fn u64(&mut self) -> Result<u64, HostCodecError> {
+        Ok(u64::from_le_bytes(self.fixed()?))
+    }
+
+    fn u128(&mut self) -> Result<u128, HostCodecError> {
+        Ok(u128::from_le_bytes(self.fixed()?))
+    }
+
+    fn bool(&mut self) -> Result<bool, HostCodecError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(model_integrity("typed host boolean is not canonical")),
+        }
+    }
+
+    fn count(&mut self, max: usize) -> Result<usize, HostCodecError> {
+        let value = usize::try_from(self.u32()?).map_err(|_| {
+            HostCodecError::new(
+                HostCodecErrorKind::PayloadTooLarge,
+                "typed host collection count exceeds this platform",
+            )
+        })?;
+        if value > max {
+            return Err(HostCodecError::new(
+                HostCodecErrorKind::PayloadTooLarge,
+                "typed host collection exceeds its limit",
+            ));
+        }
+        Ok(value)
+    }
+
+    fn bytes(&mut self, max: usize) -> Result<Vec<u8>, HostCodecError> {
+        let len = self.count(max)?;
+        Ok(self.take(len)?.to_vec())
+    }
+
+    fn string(&mut self, max: usize) -> Result<String, HostCodecError> {
+        String::from_utf8(self.bytes(max)?).map_err(|_| {
+            HostCodecError::new(
+                HostCodecErrorKind::Malformed,
+                "typed host string is not valid UTF-8",
+            )
+        })
+    }
+
+    fn finish(self) -> Result<(), HostCodecError> {
+        if self.offset != self.bytes.len() {
+            return Err(HostCodecError::new(
+                HostCodecErrorKind::LengthMismatch,
+                "typed host payload contains trailing bytes",
+            ));
+        }
+        Ok(())
+    }
+}

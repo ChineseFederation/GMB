@@ -66,7 +66,13 @@ fn full_node_authoring_and_keystore_sources_are_absent() {
 #[test]
 fn product_features_are_absent_from_consensus_roots() {
     let sources = [CHAIN, CHAIN_INFORMATION, FINALITY, HEADER, VERIFY];
-    for forbidden in ["chat_mls", "openmls", "account_crypto", "account-crypto", "tuyu"] {
+    for forbidden in [
+        "chat_mls",
+        "openmls",
+        "account_crypto",
+        "account-crypto",
+        "tuyu",
+    ] {
         assert!(
             sources
                 .iter()

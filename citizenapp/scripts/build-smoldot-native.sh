@@ -112,7 +112,7 @@ build_ios() {
   cd "$RUST_DIR"
   cargo build --release --target aarch64-apple-ios
 
-  # Smoldot 继续作为独立静态库进入 Runner；ChatSDK 由自己的动态 XCFramework
+  # Smoldot 继续作为独立静态库进入 Runner；TataChatSDK 由自己的动态 XCFramework
   # 承载，禁止再把聊天 Rust crate 合并到本归档。
   local dest="${TATA_CONSOLE_NATIVE_IOS_DIR:?缺少中央iOS原生库目录}"
   mkdir -p "$dest"
@@ -132,21 +132,21 @@ build_ios() {
     | awk '$2 == "T" && $3 ~ /^_(smoldot_|citizen_sr25519_|account_crypto_)/ { print $3 }' \
     | sort -u > "$dest/exported_symbols.txt"
 
-  local n_smoldot n_signer n_account_crypto n_chat_sdk
+  local n_smoldot n_signer n_account_crypto n_tatachat_sdk
   n_smoldot=$(grep -c '^_smoldot_' "$dest/exported_symbols.txt" || true)
   n_signer=$(grep -c '^_citizen_sr25519_' "$dest/exported_symbols.txt" || true)
   n_account_crypto=$(grep -c '^_account_crypto_' "$dest/exported_symbols.txt" || true)
-  n_chat_sdk=$(
+  n_tatachat_sdk=$(
     ("$nm" -g --defined-only "$dest/libsmoldot.a" 2>/dev/null || true) \
-      | awk '$2 == "T" && $3 ~ /^_chat_sdk_/ { count += 1 } END { print count + 0 }'
+      | awk '$2 == "T" && $3 ~ /^_tatachat_sdk_/ { count += 1 } END { print count + 0 }'
   )
   local n_total
   n_total=$(wc -l < "$dest/exported_symbols.txt" | tr -d ' ')
   echo "iOS arm64: $dest/libsmoldot.a ($(wc -c < "$dest/libsmoldot.a" | tr -d ' ') bytes)"
   if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_account_crypto" -ne 4 ] \
-    || [ "$n_chat_sdk" -ne 0 ] \
+    || [ "$n_tatachat_sdk" -ne 0 ] \
     || [ "$n_total" -ne "$((n_smoldot + n_signer + n_account_crypto))" ]; then
-    echo "错误: iOS Smoldot 符号边界不完整或混入 ChatSDK。"
+    echo "错误: iOS Smoldot 符号边界不完整或混入 TataChatSDK。"
     return 1
   fi
 }
@@ -217,10 +217,10 @@ build_host() {
   n_smoldot="$(grep -c '^smoldot_' <<<"$host_symbols" || true)"
   n_signer="$(grep -c '^citizen_sr25519_' <<<"$host_symbols" || true)"
   n_account_crypto="$(grep -c '^account_crypto_' <<<"$host_symbols" || true)"
-  local n_chat_sdk
-  n_chat_sdk="$(grep -c '^chat_sdk_' <<<"$host_symbols" || true)"
+  local n_tatachat_sdk
+  n_tatachat_sdk="$(grep -c '^tatachat_sdk_' <<<"$host_symbols" || true)"
   if [ "$n_smoldot" -eq 0 ] || [ "$n_signer" -eq 0 ] || [ "$n_account_crypto" -ne 4 ] \
-    || [ "$n_chat_sdk" -ne 0 ]; then
+    || [ "$n_tatachat_sdk" -ne 0 ]; then
     echo "错误: 宿主符号清单不完整（account_crypto_* 必须精确，其余族必须非空）。" >&2
     return 1
   fi
@@ -285,8 +285,8 @@ verify_ios_package() {
   [[ "$(printf '%s\n' "$symbols" | grep -c '^account_crypto_' || true)" = "4" ]] || {
     echo "错误: iOS Runner 的 account_crypto_* 符号必须正好 4 个。"; return 1;
   }
-  [[ "$(printf '%s\n' "$symbols" | grep -c '^chat_sdk_' || true)" = "0" ]] || {
-    echo "错误: iOS Runner 静态符号中混入 ChatSDK。"; return 1;
+  [[ "$(printf '%s\n' "$symbols" | grep -c '^tatachat_sdk_' || true)" = "0" ]] || {
+    echo "错误: iOS Runner 静态符号中混入 TataChatSDK。"; return 1;
   }
   echo "iOS Smoldot 包门禁通过：arm64 与独立 FFI 符号边界完整"
 }

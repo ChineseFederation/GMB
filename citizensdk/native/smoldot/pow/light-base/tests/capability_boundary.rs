@@ -32,10 +32,26 @@ fn required_light_node_services_remain_present() {
 
 #[test]
 fn product_features_and_cross_product_paths_are_absent() {
-    let sources = [MANIFEST, LIB_SOURCE, JSON_RPC, NETWORK, RUNTIME, SYNC, TRANSACTIONS];
-    for forbidden in ["chat_mls", "openmls", "account_crypto", "account-crypto", "tuyu"] {
+    let sources = [
+        MANIFEST,
+        LIB_SOURCE,
+        JSON_RPC,
+        NETWORK,
+        RUNTIME,
+        SYNC,
+        TRANSACTIONS,
+    ];
+    for forbidden in [
+        "chat_mls",
+        "openmls",
+        "account_crypto",
+        "account-crypto",
+        "tuyu",
+    ] {
         assert!(
-            sources.iter().all(|source| !source.to_lowercase().contains(forbidden)),
+            sources
+                .iter()
+                .all(|source| !source.to_lowercase().contains(forbidden)),
             "light-base 重新引入了禁止能力: {forbidden}"
         );
     }

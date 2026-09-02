@@ -1,10 +1,10 @@
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:gmb_chat_sdk/chat_sdk.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
 import 'package:citizenapp/security/local_data_key.dart';
 import 'package:citizenapp/wallet/core/wallet_manager.dart';
 import 'package:crypto/crypto.dart' as crypto;
@@ -1462,7 +1462,7 @@ void main() {
           return crypto.Hmac(crypto.sha256, key)
               .convert(
                 utf8.encode(
-                  'chat_sdk.local/chat-handover-manifest|$payloadJson',
+                  'tatachat_sdk.local/chat-handover-manifest|$payloadJson',
                 ),
               )
               .toString();

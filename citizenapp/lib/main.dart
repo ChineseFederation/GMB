@@ -9,7 +9,7 @@ import 'package:local_auth/local_auth.dart';
 import 'package:citizenapp/8964/square_tab_page.dart';
 import 'package:citizenapp/citizen/citizen_tab_page.dart';
 import 'package:citizenapp/chat/chat_product_configuration.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/rpc/smoldot_client.dart';
 import 'package:citizenapp/security/app_lock_service.dart';

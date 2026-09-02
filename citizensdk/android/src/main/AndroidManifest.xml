@@ -1,4 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- BiometricPrompt is the only supported unlock path for wallet secrets. -->
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <application>
+        <!-- SDK-owned recovery input and backup UI. It is never externally
+             addressable and marks its own window FLAG_SECURE before rendering. -->
+        <activity
+            android:name="org.citizen.sdk.ui.CitizenSdkWalletFlowActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:noHistory="true"
+            android:screenOrientation="portrait"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+    </application>
 </manifest>

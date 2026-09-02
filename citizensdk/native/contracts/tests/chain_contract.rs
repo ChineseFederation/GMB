@@ -10,7 +10,8 @@ use citizen_sdk_contracts::{
     BlockFinality, ChainIdentity, ContractFuture, ContractResult, ContractStream,
     ExportedChainState, ExtrinsicWatchEvent, FinalizedBlockRef, Hash32, RuntimeContext,
     RuntimeVersion, SignedExtrinsic, StateImportReceipt, SubmittedExtrinsic, VerifiedBlockRef,
-    VerifiedChainClient,
+    VerifiedChainClient, CITIZENCHAIN_CHAIN_ID, CITIZENCHAIN_GENESIS_HASH,
+    CITIZENCHAIN_PROTOCOL_ID,
 };
 use futures_core::Stream;
 
@@ -148,6 +149,22 @@ fn finalized_only_type_rejects_best_blocks() {
 }
 
 #[test]
+fn citizenchain_identity_is_the_single_fixed_engine_policy() {
+    let identity = ChainIdentity::citizenchain();
+    assert_eq!(identity.chain_id(), CITIZENCHAIN_CHAIN_ID);
+    assert_eq!(identity.protocol_id(), CITIZENCHAIN_PROTOCOL_ID);
+    assert_eq!(identity.genesis_hash(), CITIZENCHAIN_GENESIS_HASH);
+    assert_eq!(
+        identity.genesis_hash().into_bytes(),
+        [
+            0x18, 0x84, 0x7a, 0x5d, 0xfd, 0x26, 0x32, 0x72, 0xf2, 0xe7, 0x72, 0x78, 0x36, 0xfe,
+            0x65, 0x82, 0xf8, 0xc4, 0x46, 0x3f, 0xf4, 0x86, 0x09, 0xdf, 0x7b, 0x96, 0xd5, 0xe4,
+            0xd9, 0xdd, 0x24, 0xdd,
+        ]
+    );
+}
+
+#[test]
 fn runtime_context_keeps_version_metadata_and_exact_block_together() {
     let block = VerifiedBlockRef::best(Hash32::from_bytes([6; 32]), 31);
     let context = value_or_panic(RuntimeContext::try_new(
@@ -169,6 +186,19 @@ fn verified_client_is_object_safe_and_never_implies_submit_success() {
     let finalized = value_or_panic(block_on(client.get_finalized_head()));
     assert_eq!(best.number(), 8);
     assert_eq!(finalized.number(), 7);
+    let by_number = value_or_panic(block_on(client.get_finalized_block_at(7)));
+    assert_eq!(by_number, finalized);
+    assert!(block_on(client.get_finalized_block_at(6)).is_err());
+    assert!(block_on(client.get_finalized_block_at(8)).is_err());
+    let singleton = value_or_panic(block_on(client.get_finalized_blocks_at(7, 7)));
+    assert_eq!(singleton, vec![finalized]);
+    assert!(block_on(client.get_finalized_blocks_at(8, 7)).is_err());
+    assert!(block_on(client.get_finalized_blocks_at(0, 120)).is_err());
+    let resolved = value_or_panic(block_on(
+        client.resolve_finalized_block(finalized.hash(), finalized.number()),
+    ));
+    assert_eq!(resolved, finalized);
+    assert!(block_on(client.resolve_finalized_block(Hash32::from_bytes([9; 32]), 7)).is_err());
 
     let context = value_or_panic(block_on(client.get_runtime_context_at(best)));
     assert_eq!(context.block(), best);

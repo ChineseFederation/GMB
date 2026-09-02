@@ -14,8 +14,8 @@ import 'package:citizenapp/8964/profile/widgets/profile_avatar.dart';
 import 'package:citizenapp/8964/services/square_api_client.dart';
 import 'package:citizenapp/chat/chat_entry.dart';
 import 'package:citizenapp/chat/chat_product_policy.dart';
-import 'package:gmb_chat_sdk/chat_sdk.dart';
-import 'package:citizenapp/chat/chat_sdk_adapter.dart';
+import 'package:tatachat_sdk/tatachat_sdk.dart';
+import 'package:citizenapp/chat/tatachat_sdk_adapter.dart';
 import 'package:citizenapp/my/user/contact_service.dart';
 import 'package:citizenapp/ui/app_theme.dart';
 

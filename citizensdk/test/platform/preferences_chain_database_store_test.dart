@@ -1,4 +1,5 @@
-import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/platform/preferences_chain_database_store.dart';
+import 'package:citizen_sdk/src/platform/preferences_wallet_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

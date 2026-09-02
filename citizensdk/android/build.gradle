@@ -1,6 +1,33 @@
 group = 'org.citizen.sdk'
 version = '1.0.0'
 
+def sdkProductRoot = project.projectDir.parentFile.canonicalFile
+def androidBuildValue = System.getenv('CITIZENSDK_ANDROID_BUILD_DIR')
+if (androidBuildValue != null && !androidBuildValue.trim().isEmpty()) {
+    def androidBuildInput = file(androidBuildValue)
+    if (!androidBuildInput.isAbsolute()) {
+        throw new GradleException('CITIZENSDK_ANDROID_BUILD_DIR must be absolute')
+    }
+    def androidBuildRoot = androidBuildInput.canonicalFile
+    def localBuildRoot = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
+    if (System.getenv('GITHUB_ACTIONS') == 'true') {
+        def githubWorkspaceValue = System.getenv('GITHUB_WORKSPACE')
+        if (githubWorkspaceValue != null && !githubWorkspaceValue.trim().isEmpty()) {
+            def githubWorkspace = file(githubWorkspaceValue).canonicalFile
+            if (androidBuildRoot.toPath().startsWith(githubWorkspace.toPath())) {
+                throw new GradleException('CitizenSDK Android output must remain outside the GitHub source checkout')
+            }
+        }
+    } else if (!(androidBuildRoot.path == localBuildRoot.path ||
+        androidBuildRoot.path.startsWith(localBuildRoot.path + File.separator))) {
+        throw new GradleException('Local CitizenSDK Android output must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+    }
+    if (androidBuildRoot.toPath().startsWith(sdkProductRoot.toPath())) {
+        throw new GradleException('CitizenSDK Android output must remain outside the source tree')
+    }
+    buildDir = new File(androidBuildRoot, 'flutter')
+}
+
 buildscript {
     ext.kotlin_version = '2.2.20'
     repositories {
@@ -23,16 +50,51 @@ allprojects {
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
+def sharedFacadeSource = file('native/src/main/kotlin').canonicalFile
+def packagedArm64Directory = file('src/main/jniLibs/arm64-v8a').canonicalFile
+def stagedArm64Value = System.getenv('CITIZENSDK_ANDROID_CORE_DIR')
+def stagedArm64File = stagedArm64Value == null || stagedArm64Value.trim().isEmpty()
+    ? null
+    : file(stagedArm64Value)
+def selectedArm64Directory = stagedArm64Value == null || stagedArm64Value.trim().isEmpty()
+    ? packagedArm64Directory
+    : stagedArm64File.canonicalFile
+
+if (stagedArm64Value != null && !stagedArm64Value.trim().isEmpty()) {
+    if (!stagedArm64File.isAbsolute()) {
+        throw new GradleException('CITIZENSDK_ANDROID_CORE_DIR must be absolute')
+    }
+    if (System.getenv('GITHUB_ACTIONS') == 'true') {
+        def githubWorkspaceValue = System.getenv('GITHUB_WORKSPACE')
+        if (githubWorkspaceValue != null && !githubWorkspaceValue.trim().isEmpty() &&
+            selectedArm64Directory.toPath().startsWith(file(githubWorkspaceValue).canonicalFile.toPath())) {
+            throw new GradleException('CitizenSDK Android native staging must remain outside the GitHub source checkout')
+        }
+    } else {
+        def localBuildRoot = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
+        if (!(selectedArm64Directory.path == localBuildRoot.path ||
+            selectedArm64Directory.path.startsWith(localBuildRoot.path + File.separator))) {
+            throw new GradleException('Local CitizenSDK Android staging must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+        }
+    }
+    if (selectedArm64Directory.toPath().startsWith(sdkProductRoot.toPath())) {
+        throw new GradleException('CitizenSDK Android native staging must remain outside the source tree')
+    }
+}
+
 android {
     namespace = 'org.citizen.sdk'
     compileSdk = 36
+    ndkVersion = '28.2.13676358'
 
-    def consoleNativeAndroidDir = System.getenv('TATA_CONSOLE_NATIVE_ANDROID_DIR')
-    if (consoleNativeAndroidDir != null && !consoleNativeAndroidDir.trim().isEmpty()) {
-        sourceSets {
-            main {
-                jniLibs.srcDirs = [consoleNativeAndroidDir]
-            }
+    sourceSets {
+        main {
+            // The Flutter plugin compiles the exact same public Android facade
+            // as the native/AAR surface. There is no nested AAR or second adapter.
+            java.srcDirs += [sharedFacadeSource]
+            assets.srcDirs = [file('../assets')]
+            // Android's jniLibs root is the parent of the fixed arm64-v8a leaf.
+            jniLibs.srcDirs = [selectedArm64Directory.parentFile]
         }
     }
 
@@ -42,6 +104,7 @@ android {
     }
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_17.toString()
+        freeCompilerArgs += ['-Xjvm-default=all']
     }
     defaultConfig {
         minSdk = 24
@@ -51,13 +114,56 @@ android {
     }
     packagingOptions {
         jniLibs {
+            useLegacyPackaging = false
             excludes += ['lib/armeabi*/**', 'lib/x86/**', 'lib/x86_64/**']
         }
+    }
+    buildFeatures {
+        buildConfig = false
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+def verifyCitizenSdkAndroidNativeInputs = tasks.register('verifyCitizenSdkAndroidNativeInputs') {
+    doLast {
+        if (!sharedFacadeSource.isDirectory()) {
+            throw new GradleException("Missing shared CitizenSDK Android facade: ${sharedFacadeSource}")
+        }
+        if (!selectedArm64Directory.isDirectory()) {
+            throw new GradleException(
+                'Missing CitizenSDK Android ARM64 staging; set '
+                    + 'CITIZENSDK_ANDROID_CORE_DIR to the directory containing the two release libraries',
+            )
+        }
+        if (selectedArm64Directory.name != 'arm64-v8a') {
+            throw new GradleException('CitizenSDK Android staging leaf must be named arm64-v8a')
+        }
+        def actualLibraries = selectedArm64Directory.listFiles()
+            .collect { it.name }
+            .sort()
+        def expectedLibraries = ['libcitizensdk.so', 'libcitizensdk_jni.so']
+        if (actualLibraries != expectedLibraries) {
+            throw new GradleException(
+                "CitizenSDK Android ARM64 libraries must be exactly ${expectedLibraries}; actual=${actualLibraries}",
+            )
+        }
+        if (new File(selectedArm64Directory, 'libsmoldot.so').exists()) {
+            throw new GradleException('CitizenSDK product plugin must not package legacy libsmoldot.so')
+        }
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name == 'preBuild') {
+        task.dependsOn(verifyCitizenSdkAndroidNativeInputs)
     }
 }
 
 dependencies {
     implementation 'androidx.biometric:biometric:1.1.0'
-    implementation 'androidx.core:core:1.13.1'
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.fragment:fragment-ktx:1.8.9'
     testImplementation 'junit:junit:4.13.2'
 }
