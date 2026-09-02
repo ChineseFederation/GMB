@@ -16,6 +16,8 @@ test('CitizenChatServer 是 TataChatServer 的独立 Cloudflare 实例', () => {
     realtime_url: 'wss://chat.crcfrcn.com/realtime',
   });
   assert.equal(wrangler.name, 'citizenchatserver');
+  assert.equal(wrangler.main, 'worker/shim.mjs');
+  assert.equal(wrangler.build, undefined);
   assert.deepEqual(wrangler.routes, [
     { pattern: 'chat.crcfrcn.com', custom_domain: true },
   ]);
@@ -24,7 +26,7 @@ test('CitizenChatServer 是 TataChatServer 的独立 Cloudflare 实例', () => {
 });
 
 test('宿主目录不复制通用服务源码或构建产物', () => {
-  for (const name of ['Cargo.toml', 'src', 'worker.mjs', 'build', 'target']) {
+  for (const name of ['Cargo.toml', 'src', 'worker', 'worker.mjs', 'build', 'target']) {
     assert.equal(existsSync(new URL(name, root)), false, `${name} 不得进入宿主源码根`);
   }
 });

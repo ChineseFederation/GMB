@@ -748,7 +748,12 @@ function assertAppleDeploymentTargetContract(source) {
   assert.doesNotMatch(consumerSmoke, /\.start\(|hardwareVault|SecretVault/);
   assert.doesNotMatch(apple, /x86_64|universal|libsmoldot\.a|lipo -create/);
   assert.match(host, /--target aarch64-apple-darwin/);
-  assert.doesNotMatch(host, /x86_64|universal|lipo -create/);
+  // “禁止 x86/universal”可以出现在安全注释中；门禁只拒绝真正建立第二条
+  // macOS 构建路径的命令或架构设置，避免把说明文字误当成实现。
+  assert.doesNotMatch(
+    host,
+    /--target\s+x86_64-apple-darwin|(?:^|[;&|]\s*)lipo\s+-create|ARCHS\s*=\s*['"]?x86_64/m,
+  );
   return {
     apple,
     appleTestHarness,
@@ -1534,7 +1539,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     rmSync(join(suffixedXcframework, 'macOS'), { recursive: true });
     assert.throws(
       () => assertAppleReleaseProjection(suffixedSlice),
-      /三 slice 闭集漂移/,
+      /SDK 候选禁止未声明符号链接：macOS-arm64\/CitizenSDK\.framework\/CitizenSDK/,
     );
 
     const extraSlice = join(root, 'extra-slice');
@@ -2723,12 +2728,16 @@ test('原生构建入口固定 Apple ARM64/最低版本且在 mkdir 前拒绝穿
         'kotlin_persistent_dir="$android_gradle_project/.kotlin"',
       ),
     ));
-    assert.throws(() => assertAppleDeploymentTargetContract(
-      nativeBuildScript.replace(
-        'cargo build --manifest-path "$product_ffi_manifest"',
-        'cargo build --manifest-path "$ffi_manifest"',
-      ),
-    ));
+    const appleSliceStart = nativeBuildScript.indexOf('build_apple_framework_slice() {');
+    const appleProductManifest = 'cargo build --manifest-path "$product_ffi_manifest"';
+    const appleProductManifestIndex = nativeBuildScript.indexOf(
+      appleProductManifest,
+      appleSliceStart,
+    );
+    assert.notEqual(appleSliceStart, -1);
+    assert.notEqual(appleProductManifestIndex, -1);
+    const legacyAppleManifestMutation = `${nativeBuildScript.slice(0, appleProductManifestIndex)}cargo build --manifest-path "$ffi_manifest"${nativeBuildScript.slice(appleProductManifestIndex + appleProductManifest.length)}`;
+    assert.throws(() => assertAppleDeploymentTargetContract(legacyAppleManifestMutation));
     assert.throws(() => assertAppleDeploymentTargetContract(
       nativeBuildScript.replace(
         'aarch64-apple-ios-sim iphonesimulator',

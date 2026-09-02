@@ -33,3 +33,10 @@ test('生产资源编号与授权密钥不得写入产品声明', () => {
   assert.equal(source.includes('PRIVATE_KEY'), false);
   assert.equal(source.includes('SERVICE_ACCOUNT'), false);
 });
+
+test('源码配置只声明候选入口且不自行编译 TataChatServer', () => {
+  assert.equal(wrangler.main, 'worker/shim.mjs');
+  assert.equal(wrangler.build, undefined);
+  assert.equal(source.includes('../../TATA'), false);
+  assert.equal(source.includes('/Users/'), false);
+});

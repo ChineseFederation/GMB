@@ -4,72 +4,31 @@ name: GMB · Flow
 on:
   workflow_call:
     inputs:
-      pipeline:
-        description: 分组流水线文件路径
-        required: true
-        type: string
-      run_title:
-        description: 塔塔控制台展示标题
-        required: true
-        type: string
-      lease_id:
-        description: TATA 私有流程租约标识
-        required: false
-        type: string
-      proof:
-        description: TATA 私有流程租约公开证明
-        required: false
-        type: string
-      source_sha:
-        description: Release 的成功 CI 提交或全仓门禁的准确推送提交
-        required: false
-        type: string
-      ci_run_id:
-        description: 对应成功 CI run id（仅 Release）
-        required: false
-        type: string
-      version_tag:
-        description: 正式版本 Tag（仅 Release）
-        required: false
-        type: string
-      software_version:
-        description: 候选软件版本
-        required: false
-        type: string
-      spec_version:
-        description: Runtime spec_version
-        required: false
-        type: string
-      chain_spec_version:
-        description: 当前链上 spec_version
-        required: false
-        type: string
-      genesis_hash:
-        description: 当前链 genesis hash
-        required: false
-        type: string
-      finalized_head:
-        description: 当前链 finalized head
-        required: false
-        type: string
+      pipeline: { description: 分组流水线文件路径, required: true, type: string }
+      run_title: { description: 塔塔控制台展示标题, required: true, type: string }
+      lease_id: { description: TATA 私有流程租约标识, required: false, type: string }
+      proof: { description: TATA 私有流程租约公开证明, required: false, type: string }
+      source_sha: { description: Release 的成功 CI 提交或全仓门禁的准确推送提交, required: false, type: string }
+      ci_run_id: { description: 对应成功 CI run id（仅 Release）, required: false, type: string }
+      version_tag: { description: 正式版本 Tag（仅 Release）, required: false, type: string }
+      software_version: { description: 候选软件版本, required: false, type: string }
+      spec_version: { description: Runtime spec_version, required: false, type: string }
+      chain_spec_version: { description: 当前链上 spec_version, required: false, type: string }
+      genesis_hash: { description: 当前链 genesis hash, required: false, type: string }
+      finalized_head: { description: 当前链 finalized head, required: false, type: string }
 
-
-permissions:
-  contents: read
-
+permissions: { contents: read }
 concurrency:
-  # 中文注释：每条逻辑流水线独立串行；仓库门禁只取消自己的旧运行，不互相取消产品。
+  # 中文注释：每条规范流水线独立串行；全仓门禁只取消自己的旧运行。
   group: ${{ inputs.pipeline }}
   cancel-in-progress: ${{ inputs.pipeline == 'repository' }}
-
 env:
   CI: true
   WRANGLER_SEND_METRICS: false
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: 0
-  # CI 使用 workflow_dispatch 创建时由 GitHub 锁定的 main；Release 与全仓门禁
-  # 使用控制台显式锁定的 source_sha，禁止任何远程 @main 漂移。
+  # CI 使用 GitHub 锁定的 main；Release 与全仓门禁使用塔塔控制台锁定的 source_sha。
   GMB_SOURCE_SHA: ${{ (inputs.pipeline == 'repository' || endsWith(inputs.pipeline, '.release')) && inputs.source_sha || github.sha }}
   GMB_CI_RUN_ID: ${{ inputs.ci_run_id }}
   GMB_VERSION_TAG: ${{ inputs.version_tag }}
@@ -80,12 +39,10 @@ env:
   GMB_CHAIN_FINALIZED_HEAD: ${{ inputs.finalized_head }}
 
 jobs:
-  validate_repository:
-    if: ${{ inputs.pipeline == 'repository' }}
-    name: 校验统一流程并生成产品作业矩阵
+  validate_dispatch:
+    name: 校验租约并生成中央作业矩阵
     runs-on: ubuntu-24.04
-    permissions:
-      contents: read
+    permissions: { contents: read }
     outputs:
       has_ci_phase_0: ${{ steps.central_job.outputs.has_ci_phase_0 }}
       ci_phase_0_matrix: ${{ steps.central_job.outputs.ci_phase_0_matrix }}
@@ -100,7 +57,7 @@ jobs:
       has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
       repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
     steps:
-      - name: 校验全仓门禁租约、产品提交与固定 TATA 提交
+      - name: 校验仓库、流水线、租约证明与冻结提交
         shell: bash
         env:
           FLOW_LEASE_ID: ${{ inputs.lease_id }}
@@ -118,47 +75,31 @@ jobs:
           const secretLease = process.env.FLOW_SECRET_LEASE_ID || '';
           const source = process.env.FLOW_COMMIT_SHA || '';
           const pipeline = process.env.FLOW_PIPELINE || '';
-          const head = process.env.FLOW_HEAD_SHA || '';
-          const lockedHead = process.env.GITHUB_LOCKED_SHA || '';
+          const repositoryGate = pipeline === 'repository';
+          const head = repositoryGate ? process.env.FLOW_HEAD_SHA || '' : '';
           const key = process.env.FLOW_BUNDLE_KEY || '';
           const proof = process.env.FLOW_LEASE_PROOF || '';
+          const productPipeline = /^gmb\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.(ci|release)$/.test(pipeline);
           if (!/^[0-9A-F]{24}$/.test(lease) || secretLease !== lease
-            || !/^[0-9a-f]{40}$/.test(source) || pipeline !== 'repository'
-            || !/^[0-9a-f]{40}$/.test(head) || head !== lockedHead
+            || !/^[0-9a-f]{40}$/.test(source) || (!repositoryGate && !productPipeline)
+            || (repositoryGate && (!/^[0-9a-f]{40}$/.test(head) || head !== process.env.GITHUB_LOCKED_SHA))
             || !/^[A-Za-z0-9_-]{43}$/.test(key) || !/^[0-9a-f]{64}$/.test(proof)) {
-            throw new Error('GMB 全仓门禁租约字段或准确提交无效');
+            throw new Error('GMB 流程租约字段或冻结提交无效');
           }
-          const payload = [
-            'tata-flow-lease-v1', lease, 'VoyagerRhett/GMB', source, pipeline, head, '',
-          ].join('\n');
+          const payload = ['tata-flow-lease-v1', lease, 'VoyagerRhett/GMB', source, pipeline, head, ''].join('\n');
           const expected = createHmac('sha256', key).update(payload, 'utf8').digest();
           const actual = Buffer.from(proof, 'hex');
           if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-            throw new Error('GMB 全仓门禁租约证明无效');
+            throw new Error('GMB 流程租约证明无效');
           }
           NODE
-      - name: 检出当前仓库准确源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
       - name: 按租约固定提交检出 TATA 私有流程
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读产品与 TATA 固定提交
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - name: 回读固定 TATA 提交
         shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          FLOW_HEAD_SHA: ${{ inputs.source_sha }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$FLOW_HEAD_SHA"
-          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - name: 执行中央共享校验
         id: central_job
         uses: ./.tata-flow/tataconsole/flows/gmb/shared
@@ -174,573 +115,135 @@ jobs:
           chain_spec_version: ${{ inputs.chain_spec_version }}
           genesis_hash: ${{ inputs.genesis_hash }}
           finalized_head: ${{ inputs.finalized_head }}
-  validate_product:
-    if: ${{ inputs.pipeline != 'repository' }}
-    name: 校验产品流程读取租约
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    outputs:
-      has_ci_phase_0: ${{ steps.central_job.outputs.has_ci_phase_0 }}
-      ci_phase_0_matrix: ${{ steps.central_job.outputs.ci_phase_0_matrix }}
-      has_ci_phase_1: ${{ steps.central_job.outputs.has_ci_phase_1 }}
-      ci_phase_1_matrix: ${{ steps.central_job.outputs.ci_phase_1_matrix }}
-      has_ci_phase_2: ${{ steps.central_job.outputs.has_ci_phase_2 }}
-      ci_phase_2_matrix: ${{ steps.central_job.outputs.ci_phase_2_matrix }}
-      has_release_standard: ${{ steps.central_job.outputs.has_release_standard }}
-      release_standard_matrix: ${{ steps.central_job.outputs.release_standard_matrix }}
-      has_release_attested: ${{ steps.central_job.outputs.has_release_attested }}
-      release_attested_matrix: ${{ steps.central_job.outputs.release_attested_matrix }}
-      has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
-      repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
-    steps:
-      - name: 校验租约、仓库、流水线与固定提交
-        shell: bash
-        env:
-          FLOW_LEASE_ID: ${{ inputs.lease_id }}
-          FLOW_LEASE_PROOF: ${{ inputs.proof }}
-          FLOW_SECRET_LEASE_ID: ${{ secrets[format('TATA_FLOW_LEASE_ID_{0}', inputs.lease_id)] }}
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          FLOW_BUNDLE_KEY: ${{ secrets[format('TATA_FLOW_BUNDLE_KEY_{0}', inputs.lease_id)] }}
-          FLOW_PIPELINE: ${{ inputs.pipeline }}
-        run: |
-          node <<'NODE'
-          const { createHmac, timingSafeEqual } = require('node:crypto');
-          const lease = process.env.FLOW_LEASE_ID || '';
-          const secretLease = process.env.FLOW_SECRET_LEASE_ID || '';
-          const source = process.env.FLOW_COMMIT_SHA || '';
-          const pipeline = process.env.FLOW_PIPELINE || '';
-          const key = process.env.FLOW_BUNDLE_KEY || '';
-          const proof = process.env.FLOW_LEASE_PROOF || '';
-          if (!/^[0-9A-F]{24}$/.test(lease) || secretLease !== lease
-            || !/^[0-9a-f]{40}$/.test(source)
-            || !/^gmb\.[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*\.(ci|release)$/.test(pipeline)
-            || !/^[A-Za-z0-9_-]{43}$/.test(key) || !/^[0-9a-f]{64}$/.test(proof)) {
-            throw new Error('GMB 产品流程租约字段无效');
-          }
-          const payload = ['tata-flow-lease-v1', lease, 'VoyagerRhett/GMB', source, pipeline, '', ''].join('\n');
-          const expected = createHmac('sha256', key).update(payload, 'utf8').digest();
-          const actual = Buffer.from(proof, 'hex');
-          if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
-            throw new Error('GMB 产品流程租约证明无效');
-          }
-          NODE
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 登记固定中央流程目录
-        uses: ./.tata-flow/tataconsole/flows/github
-      - name: 校验请求并生成产品作业矩阵
-        id: central_job
-        shell: bash
-        env:
-          PIPELINE: ${{ inputs.pipeline }}
-          RUN_TITLE: ${{ inputs.run_title }}
-          SOURCE_SHA: ${{ inputs.source_sha }}
-          CI_RUN_ID: ${{ inputs.ci_run_id }}
-          SOFTWARE_VERSION: ${{ inputs.software_version }}
-        run: node "${{ env.TATA_CONSOLE_FLOW_ROOT }}/github/dispatch.mjs" emit gmb
-  validate_dispatch:
-    if: ${{ always() }}
-    needs: [validate_repository, validate_product]
-    name: 确认统一流程校验结果
-    runs-on: ubuntu-24.04
-    outputs:
-      has_ci_phase_0: ${{ needs.validate_product.outputs.has_ci_phase_0 || needs.validate_repository.outputs.has_ci_phase_0 }}
-      ci_phase_0_matrix: ${{ needs.validate_product.outputs.ci_phase_0_matrix || needs.validate_repository.outputs.ci_phase_0_matrix }}
-      has_ci_phase_1: ${{ needs.validate_product.outputs.has_ci_phase_1 || needs.validate_repository.outputs.has_ci_phase_1 }}
-      ci_phase_1_matrix: ${{ needs.validate_product.outputs.ci_phase_1_matrix || needs.validate_repository.outputs.ci_phase_1_matrix }}
-      has_ci_phase_2: ${{ needs.validate_product.outputs.has_ci_phase_2 || needs.validate_repository.outputs.has_ci_phase_2 }}
-      ci_phase_2_matrix: ${{ needs.validate_product.outputs.ci_phase_2_matrix || needs.validate_repository.outputs.ci_phase_2_matrix }}
-      has_release_standard: ${{ needs.validate_product.outputs.has_release_standard || needs.validate_repository.outputs.has_release_standard }}
-      release_standard_matrix: ${{ needs.validate_product.outputs.release_standard_matrix || needs.validate_repository.outputs.release_standard_matrix }}
-      has_release_attested: ${{ needs.validate_product.outputs.has_release_attested || needs.validate_repository.outputs.has_release_attested }}
-      release_attested_matrix: ${{ needs.validate_product.outputs.release_attested_matrix || needs.validate_repository.outputs.release_attested_matrix }}
-      has_repository_contracts: ${{ needs.validate_repository.outputs.has_repository_contracts || 'false' }}
-      repository_contracts_matrix: ${{ needs.validate_repository.outputs.repository_contracts_matrix || '{"include":[]}' }}
-    steps:
-      - name: 拒绝失败或缺失的校验分支
-        shell: bash
-        env:
-          PIPELINE: ${{ inputs.pipeline }}
-          REPOSITORY_RESULT: ${{ needs.validate_repository.result }}
-          PRODUCT_RESULT: ${{ needs.validate_product.result }}
-        run: |
-          if [[ "$PIPELINE" == repository ]]; then
-            test "$REPOSITORY_RESULT" = success
-            test "$PRODUCT_RESULT" = skipped
-          else
-            test "$REPOSITORY_RESULT" = skipped
-            test "$PRODUCT_RESULT" = success
-          fi
+
   retain-current-run:
-    permissions:
-      actions: write
-      contents: read
     if: ${{ inputs.pipeline == 'repository' }}
     name: 预收口门禁历史
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions: { actions: write, contents: read }
     steps:
-      - name: 检出当前仓库准确源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读产品与 TATA 固定提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-        run: |
-          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
-          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行 shared 中央产品作业
-        id: central_job
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: retain-current-run
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: retain-current-run, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   repository-contracts:
     if: inputs.pipeline == 'repository' && needs.validate_dispatch.outputs.has_repository_contracts == 'true'
     needs: [validate_dispatch, retain-current-run]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: read
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.repository_contracts_matrix) }}
+    permissions: { actions: read, contents: read }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.repository_contracts_matrix) }}" }
     steps:
-      - name: 检出当前仓库准确源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读产品与 TATA 固定提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-        run: |
-          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
-          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行统一仓库门禁
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: ${{ matrix.contract }}
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: "${{ matrix.contract }}", pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}" }
+
   ci_phase_0:
     if: ${{ needs.validate_dispatch.outputs.has_ci_phase_0 == 'true' }}
     needs: validate_dispatch
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_0_matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    permissions: { actions: write, contents: read }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_0_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
-      - name: 检出 GMB 准确产品源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ env.GMB_SOURCE_SHA }}
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行固定中央产品调度
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: dispatch-product
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          route_product: ${{ matrix.product }}
-          route_job: ${{ matrix.route_job }}
-          route_prepare_job: ${{ matrix.route_prepare_job }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   ci_phase_1:
     if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_1 == 'true' && (needs.ci_phase_0.result == 'success' || needs.ci_phase_0.result == 'skipped') }}
     needs: [validate_dispatch, ci_phase_0]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_1_matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    permissions: { actions: write, contents: read }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_1_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
-      - name: 检出 GMB 准确产品源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ env.GMB_SOURCE_SHA }}
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行固定中央产品调度
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: dispatch-product
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          route_product: ${{ matrix.product }}
-          route_job: ${{ matrix.route_job }}
-          route_prepare_job: ${{ matrix.route_prepare_job }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   ci_phase_2:
     if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_2 == 'true' && (needs.ci_phase_1.result == 'success' || needs.ci_phase_1.result == 'skipped') }}
     needs: [validate_dispatch, ci_phase_1]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: write
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_2_matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    permissions: { actions: write, contents: read }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.ci_phase_2_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
-      - name: 检出 GMB 准确产品源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ env.GMB_SOURCE_SHA }}
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行固定中央产品调度
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: dispatch-product
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          route_product: ${{ matrix.product }}
-          route_job: ${{ matrix.route_job }}
-          route_prepare_job: ${{ matrix.route_prepare_job }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   release_standard:
     if: ${{ needs.validate_dispatch.outputs.has_release_standard == 'true' }}
     needs: validate_dispatch
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: read
-      contents: write
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.release_standard_matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      CARGO_INCREMENTAL: "0"
-      CI: "true"
-      WRANGLER_SEND_METRICS: "false"
-      SOURCE_SHA: ${{ inputs.source_sha }}
-      CI_RUN_ID: ${{ inputs.ci_run_id }}
-      TOOL_SHA: ${{ github.sha }}
-      RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
-      CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
-      ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
-      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    permissions: { actions: read, contents: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_standard_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
-      - name: 检出 GMB 准确产品源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ env.GMB_SOURCE_SHA }}
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行固定中央产品调度
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: dispatch-product
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          route_product: ${{ matrix.product }}
-          route_job: ${{ matrix.route_job }}
-          route_prepare_job: ${{ matrix.route_prepare_job }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   release_attested:
     if: ${{ needs.validate_dispatch.outputs.has_release_attested == 'true' }}
     needs: validate_dispatch
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
-    permissions:
-      actions: read
-      contents: write
-      id-token: write
-      attestations: write
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.validate_dispatch.outputs.release_attested_matrix) }}
-    env:
-      GH_TOKEN: ${{ github.token }}
-      CARGO_INCREMENTAL: "0"
-      CI: "true"
-      WRANGLER_SEND_METRICS: "false"
-      SOURCE_SHA: ${{ inputs.source_sha }}
-      CI_RUN_ID: ${{ inputs.ci_run_id }}
-      TOOL_SHA: ${{ github.sha }}
-      RELEASE_DIR: ${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}
-      CANDIDATE_DIR: ${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}
-      ARCHIVE_PATH: ${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}
-      TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: ${{ matrix.context_expected_runner_arch }}
-      TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: ${{ matrix.context_ci_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: ${{ matrix.context_manual_bundle_targets }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: ${{ matrix.context_updater_manifest_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: ${{ matrix.context_platform }}
-      TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: ${{ matrix.context_installer_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: ${{ matrix.context_updater_asset_name }}
-      TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: ${{ matrix.context_deb_arch }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: ${{ secrets[matrix.secret_app_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: ${{ secrets[matrix.secret_app_profile] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: ${{ secrets[matrix.secret_ios_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: ${{ secrets[matrix.secret_update_key] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: ${{ secrets[matrix.secret_update_pass] }}
-      TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: ${{ secrets[matrix.secret_wallet_profile] }}
+    permissions: { actions: read, contents: write, id-token: write, attestations: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_attested_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
-      - name: 检出 GMB 准确产品源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ env.GMB_SOURCE_SHA }}
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读固定 TATA 提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 执行固定中央产品调度
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with:
-          job: dispatch-product
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
-          route_product: ${{ matrix.product }}
-          route_job: ${{ matrix.route_job }}
-          route_prepare_job: ${{ matrix.route_prepare_job }}
-          version_tag: ${{ inputs.version_tag }}
-          software_version: ${{ inputs.software_version }}
-          spec_version: ${{ inputs.spec_version }}
-          chain_spec_version: ${{ inputs.chain_spec_version }}
-          genesis_hash: ${{ inputs.genesis_hash }}
-          finalized_head: ${{ inputs.finalized_head }}
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
   retain-terminal-run:
     if: always() && inputs.pipeline == 'repository'
     needs: [retain-current-run, repository-contracts]
     name: 清理仓库门禁历史终态
     runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-      contents: read
+    permissions: { actions: write, contents: read }
     steps:
-      - name: 检出当前仓库准确源码
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          ref: ${{ inputs.source_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: 按租约固定提交检出 TATA 私有流程
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          repository: VoyagerRhett/TATA
-          ref: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-          token: ${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}
-          path: .tata-flow
-          persist-credentials: false
-      - name: 回读产品与 TATA 固定提交
-        shell: bash
-        env:
-          FLOW_COMMIT_SHA: ${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}
-        run: |
-          test "$(git rev-parse HEAD)" = "${{ inputs.source_sha }}"
-          test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
-      - name: 成功和失败各保留最近一条
-        uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        env:
-          TATA_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: ${{ needs.repository-contracts.result }}
-        with:
-          job: retain-terminal-run
-          pipeline: ${{ inputs.pipeline }}
-          run_title: ${{ inputs.run_title }}
-          source_sha: ${{ inputs.source_sha }}
-          ci_run_id: ${{ inputs.ci_run_id }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        env: { TATA_CONSOLE_CONTEXT_NEEDS_REPOSITORY_CONTRACTS_RESULT: "${{ toJSON(needs) }}" }
+        with: { job: retain-terminal-run, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}" }

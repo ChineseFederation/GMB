@@ -46,8 +46,8 @@ The current local execution built the one `CitizenSDK.xcframework` with exactly
 the iOS, iOS-Simulator and macOS slices, all for ARM64, and compiled both the
 iOS device and `iOS-Simulator` test bundles. This Mac has no installed Simulator
 runtime, so no iOS XCTest execution is claimed. On macOS, 50 CitizenSDK Core
-and 21 Flutter-adapter XCTest cases ran
-with zero failures; one real-hardware-only case was skipped. The final normal
+and 22 Flutter-adapter XCTest cases ran with zero failures; one
+real-hardware-only case was skipped. The final normal
 and supervisor consumer smoke processes both passed. No physical Apple mobile
 device was available, so Secure Enclave, biometric and device-only Keychain
 behavior remains a separate device-validation requirement. No remote CI,
