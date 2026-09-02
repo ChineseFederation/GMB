@@ -23,7 +23,7 @@
   占位图或设备外框。
 - Flutter 测试渲染器不包含 Android/iOS 的中文与 Material Icons 系统回退字体,
   因此截图中的方框只属于测试截图环境;页面文字、图标与边界数量由 Widget 测试逐项
-  校验，Android ARM64 未签名 Release APK 构建同时验证平台字体与图标资源会被打包/解析。
+  校验，Android 的 `arm64-v8a` ABI 未签名 Release APK 构建同时验证平台字体与图标资源会被打包/解析。
 
 ## 聚焦区域对比
 

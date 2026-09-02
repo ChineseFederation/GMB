@@ -6,9 +6,27 @@ import type { Env } from '../src/types';
 import { routeRequest } from '../src/routes';
 import { citizenchainDownloadRoute } from '../src/downloads/citizenchain';
 
+interface CitizenChainPublicationInteropFixture {
+  contract_version: number;
+  github_repository: string;
+  action_tag_field: string;
+  publication_tag_field: string;
+  platform: string;
+  download_path: string;
+  put_body_json: string;
+  snapshot_json: string;
+  snapshot_anchor: string;
+  location: string;
+}
+
 const secret = 'citizenchain-download-test-secret-32-bytes';
 const basePath = '/operations/citizenchain/download-publications/';
 const downloadSchema = readFileSync(resolve(process.cwd(), 'schema/download.sql'), 'utf8');
+const tataFlowRoot = process.env.TATA_CONSOLE_FLOW_ROOT;
+if (!tataFlowRoot) throw new Error('缺少 TATA_CONSOLE_FLOW_ROOT，无法读取下载发布互操作合同');
+const interopFixture = JSON.parse(readFileSync(resolve(
+  tataFlowRoot, '..', 'test', 'citizenchain-download-publication-interop-v1.json',
+), 'utf8')) as CitizenChainPublicationInteropFixture;
 let miniflare: Miniflare;
 let env: Env;
 
@@ -56,9 +74,62 @@ describe('公民链官网显式发布指针', () => {
   it('未显式发布时官网入口返回未发布且不查询 GitHub', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch');
     await expect(citizenchainDownloadRoute(
-      env, '/download/citizenchain/linux-arm64',
+      env, '/download/citizenchain/LinuxARM',
     )).rejects.toMatchObject({ code: 'release_asset_not_found', status: 404 });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('与 TataConsole 共用唯一 publication wire golden 并拒绝动作域字段', async () => {
+    expect(Object.keys(interopFixture).sort()).toEqual([
+      'action_tag_field', 'contract_version', 'download_path', 'github_repository',
+      'location', 'platform', 'publication_tag_field', 'put_body_json',
+      'snapshot_anchor', 'snapshot_json',
+    ]);
+    expect(interopFixture).toMatchObject({
+      contract_version: 1,
+      github_repository: 'VoyagerRhett/GMB',
+      action_tag_field: 'release_tag',
+      publication_tag_field: 'version_tag',
+      platform: 'macos',
+      download_path: '/download/citizenchain/macOS',
+    });
+    const putBody = JSON.parse(interopFixture.put_body_json) as {
+      expected_revision: number;
+      publication: Record<string, unknown>;
+    };
+    const snapshot = JSON.parse(interopFixture.snapshot_json) as Record<string, unknown>;
+    expect(Object.keys(putBody.publication).sort()).toEqual([
+      'asset_name', 'asset_sha256', 'source_sha', 'version_tag',
+    ]);
+    expect(Object.keys(snapshot).sort()).toEqual([
+      'asset_name', 'asset_sha256', 'platform', 'published_at',
+      'revision', 'source_sha', 'version_tag',
+    ]);
+    expect(snapshot).not.toHaveProperty('release_tag');
+
+    vi.spyOn(Date, 'now').mockReturnValue(Number(snapshot.published_at));
+    const path = `${basePath}${interopFixture.platform}`;
+    const putResponse = await routeRequest(await signedRequest(
+      'PUT', path, interopFixture.put_body_json,
+    ), env);
+    expect(await putResponse.json()).toEqual({ ok: true, publication: snapshot });
+
+    const getResponse = await routeRequest(await signedRequest('GET', path, ''), env);
+    expect(await getResponse.json()).toEqual({ ok: true, publication: snapshot });
+    const download = await citizenchainDownloadRoute(env, interopFixture.download_path);
+    expect(download.headers.get('location')).toBe(interopFixture.location);
+
+    const legacyPublication: Record<string, unknown> = {
+      ...putBody.publication,
+      release_tag: putBody.publication.version_tag,
+    };
+    delete legacyPublication.version_tag;
+    const legacyBody = JSON.stringify({
+      expected_revision: snapshot.revision,
+      publication: legacyPublication,
+    });
+    await expect(routeRequest(await signedRequest('PUT', path, legacyBody), env))
+      .rejects.toMatchObject({ code: 'publication_payload_invalid', status: 400 });
   });
 
   it('只切换签名请求指定的平台并生成固定 GitHub 资产地址', async () => {
@@ -70,17 +141,68 @@ describe('公民链官网显式发布指针', () => {
     expect((await response.json() as { publication: { revision: number } }).publication.revision).toBe(1);
 
     const download = await citizenchainDownloadRoute(
-      env, '/download/citizenchain/linux-arm64',
+      env, '/download/citizenchain/LinuxARM',
     );
     expect(download.status).toBe(302);
     expect(download.headers.get('cache-control')).toBe('no-store');
     expect(download.headers.get('location')).toBe(
-      'https://github.com/ChineseFederation/GMB/releases/download/'
+      'https://github.com/VoyagerRhett/GMB/releases/download/'
       + 'citizenchain-node-linux-arm-v1.0.1/citizenchain-node-linux-arm64-v1.0.1.deb',
     );
     await expect(citizenchainDownloadRoute(
-      env, '/download/citizenchain/linux-amd64',
+      env, '/download/citizenchain/LinuxAMD',
     )).rejects.toMatchObject({ code: 'release_asset_not_found' });
+  });
+
+  it('四端标准公开路径精确映射到既有发布指针并拒绝全部旧入口', async () => {
+    const cases = [
+      {
+        platform: 'macos', path: '/download/citizenchain/macOS',
+        tag: 'citizenchain-node-macos-v1.2.3',
+        asset: 'citizenchain-node-macos-arm64-v1.2.3.dmg',
+      },
+      {
+        platform: 'windows', path: '/download/citizenchain/Windows',
+        tag: 'citizenchain-node-windows-v1.2.3',
+        asset: 'citizenchain-node-windows-x86_64-v1.2.3.exe',
+      },
+      {
+        platform: 'linux-arm', path: '/download/citizenchain/LinuxARM',
+        tag: 'citizenchain-node-linux-arm-v1.2.3',
+        asset: 'citizenchain-node-linux-arm64-v1.2.3.deb',
+      },
+      {
+        platform: 'linux-amd', path: '/download/citizenchain/LinuxAMD',
+        tag: 'citizenchain-node-linux-amd-v1.2.3',
+        asset: 'citizenchain-node-linux-amd64-v1.2.3.deb',
+      },
+    ] as const;
+    for (const item of cases) {
+      const publication = {
+        version_tag: item.tag,
+        source_sha: 'a'.repeat(40),
+        asset_name: item.asset,
+        asset_sha256: 'b'.repeat(64),
+      };
+      await routeRequest(await signedPut(
+        item.platform, { expected_revision: 0, publication },
+      ), env);
+      const response = await citizenchainDownloadRoute(env, item.path);
+      expect(response.headers.get('location')).toBe(
+        `https://github.com/VoyagerRhett/GMB/releases/download/${item.tag}/${item.asset}`,
+      );
+    }
+    for (const oldPath of [
+      '/download/citizenchain/macos-arm64',
+      '/download/citizenchain/windows-x86_64',
+      '/download/citizenchain/linux-arm64',
+      '/download/citizenchain/linux-amd64',
+      '/download/citizenchain/linux-arm',
+      '/download/citizenchain/linux-amd',
+    ]) {
+      await expect(citizenchainDownloadRoute(env, oldPath))
+        .rejects.toMatchObject({ code: 'download_not_found', status: 404 });
+    }
   });
 
   it('同一内容重试幂等，旧 revision 不得覆盖新指针', async () => {
@@ -117,7 +239,7 @@ describe('公民链官网显式发布指针', () => {
     );
     expect((await rollback.json() as { publication: { revision: number } }).publication.revision).toBe(2);
     await expect(citizenchainDownloadRoute(
-      env, '/download/citizenchain/linux-arm64',
+      env, '/download/citizenchain/LinuxARM',
     )).rejects.toMatchObject({ code: 'release_asset_not_found' });
     await expect(routeRequest(
       await signedPut('linux-arm', { expected_revision: 0, publication }), env,
@@ -151,12 +273,15 @@ describe('公民链官网显式发布指针', () => {
     };
     await routeRequest(await signedPut('macos', { expected_revision: 0, publication }), env);
     const updater = await citizenchainDownloadRoute(
-      env, '/download/citizenchain/macos-arm64-updater',
+      env, '/download/citizenchain/macOS/updater',
     );
     expect(updater.headers.get('location')).toBe(
-      'https://github.com/ChineseFederation/GMB/releases/download/'
+      'https://github.com/VoyagerRhett/GMB/releases/download/'
       + 'citizenchain-node-macos-v1.2.3/citizenchain-node-latest-macos-arm64.json',
     );
+    await expect(citizenchainDownloadRoute(
+      env, '/download/citizenchain/macos-arm64-updater',
+    )).rejects.toMatchObject({ code: 'download_not_found', status: 404 });
   });
 });
 

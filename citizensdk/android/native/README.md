@@ -5,7 +5,7 @@ CitizenSDK Rust Core. It produces the Java/Kotlin AAR and the private JNI
 bridge. The Flutter plugin compiles the same Kotlin facade sources and stages
 the same two native-library bytes; it must not embed this AAR.
 
-The module accepts one external ARM64 Core leaf through
+The module accepts one external Android ABI `arm64-v8a` Core leaf through
 `CITIZENSDK_ANDROID_CORE_DIR`. That `arm64-v8a` directory must contain
 `libcitizensdk.so`. CMake builds `libcitizensdk_jni.so` and links that one Core;
 neither layer exports a second `citizensdk_*` implementation.

@@ -1,5 +1,5 @@
 {
-  "name": "citizenchatserver",
+  "name": "citizenchatserver-workers",
   "main": "worker/shim.mjs",
   "compatibility_date": "2026-08-30",
   "workers_dev": false,
@@ -10,13 +10,13 @@
   "d1_databases": [
     {
       "binding": "TATACHATSERVER_DB",
-      "database_name": "citizenchatserver-db"
+      "database_name": "citizenchatserver-d1"
     }
   ],
   "r2_buckets": [
     {
       "binding": "TATACHATSERVER_ATTACHMENTS",
-      "bucket_name": "citizenchatserver-attachments"
+      "bucket_name": "citizenchatserver-r2"
     }
   ],
   "durable_objects": {
@@ -27,12 +27,12 @@
       }
     ]
   },
-  "migrations": [
-    {
-      "tag": "initial",
-      "new_sqlite_classes": ["TataChatRealtime"]
+  "exports": {
+    "TataChatRealtime": {
+      "type": "durable-object",
+      "storage": "sqlite"
     }
-  ],
+  },
   "triggers": {
     "crons": ["* * * * *"]
   },

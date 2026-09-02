@@ -19,7 +19,7 @@ CitizenWallet。SDK 不反向依赖 shared 源码；shared 只说明最初行为
 Android 产品候选只带 `libcitizensdk.so` 与薄 JNI bridge，不打包 legacy `libsmoldot` 或四个
 `citizen_sr25519_*` 外部符号。Apple `CitizenSDK.xcframework` 同样只允许根
 `include/citizensdk.h` 的 70 个产品符号，并显式拒绝这四个低层入口。它们只可存在于源码树外
-的 ARM64 legacy 差分测试宿主库；虽调用本 crate 的同一算法实现，但不属于任何正式候选。
+的 macOS `arm64` legacy 差分测试宿主库；虽调用本 crate 的同一算法实现，但不属于任何正式候选。
 
 Release 必须把本 crate 的 `Cargo.toml`、两份 README、三个 `src/*.rs` 和四份
 `tests/*.rs` 固定为完整 10 文件闭集并逐文件校验 SHA-256。新增 `build.rs`、`src/bin`

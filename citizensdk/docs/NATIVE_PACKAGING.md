@@ -27,12 +27,12 @@ CITIZENSDK_NATIVE_OUTPUT_DIR=<原生产物目录>
 `libcitizensdk.so` 与薄 `libcitizensdk_jni.so`，拒绝 `libsmoldot`、共享 C++ 运行库、额外 ABI
 或第二份 Core。Apple 产品从 `native/ffi` 构建同一 `citizensdk_*` Core，再将
 `darwin/Sources/CitizenSDK` Swift 源码、根产品头、Privacy Manifest 与完整 CitizenChain 资产组合为一个
-`CitizenSDK.xcframework`。其闭集只有 iOS 设备 ARM64、`iOS-Simulator` ARM64 与 macOS
-（仅支持 ARM64 架构）；
+`CitizenSDK.xcframework`。其闭集只有 iOS 设备变体、iOS 模拟器变体与 macOS；三个
+Apple machine slice 的架构元数据均为 `arm64`；
 每个 slice 精确导出产品头声明的 70 个符号，并拒绝 `smoldot_*`、`citizen_sr25519_*`、
 `account_crypto_*` 和其它架构。
 
-legacy `libsmoldot.dylib` 只允许作为源码树外的 ARM64 差分测试宿主库生成；它绝不进入
+legacy `libsmoldot.dylib` 只允许作为源码树外的 macOS `arm64` 差分测试宿主库生成；它绝不进入
 XCFramework、Hosted 或 GitHub 候选。其 `LC_ID_DYLIB` 是编译工作区的 build-local 路径，只适合
 按准确文件路径直接加载测试，不是可分发 install name，并须随 `.work` 清理。
 
@@ -71,14 +71,14 @@ Android/Apple 包装不得自行解析私有 store 信封或另造缓存协议�
 Android NDK 版本在 SDK 原生入口中固定为 `28.2.13676358`，与 GMB 官方依赖合同一致。
 调用方提供 `ANDROID_NDK_HOME` 时必须精确指向该版本；同时提供 `ANDROID_HOME` 与
 `ANDROID_SDK_ROOT` 时两者必须一致。若三个 Android 环境变量均缺失，本机入口只从宿主标准
-SDK 目录（macOS 为 `$HOME/Library/Android/sdk`，Linux 为 `$HOME/Android/Sdk`）解析该固定
+SDK 目录（macOS 为 `$HOME/Library/Android/sdk`，LinuxARM 或 LinuxAMD 为 `$HOME/Android/Sdk`）解析该固定
 版本，不扫描或选择“最新”NDK。这样 SDK 本机构建不依赖塔塔控制台版本，同时仍拒绝版本漂移。
 
-Apple 产品构建固定 `ios_deployment_target=16.0` 与 `macos_deployment_target=13.0`。iOS 设备、
-`iOS-Simulator` 与 macOS 三次 `cargo build` 分别使用 `aarch64-apple-ios`、
+Apple 产品构建固定 `ios_deployment_target=16.0` 与 `macos_deployment_target=13.0`。iOS 设备变体、
+iOS 模拟器变体与 macOS 三次 `cargo build` 分别使用 `aarch64-apple-ios`、
 `aarch64-apple-ios-sim` 与 `aarch64-apple-darwin`，并显式设置对应最低系统版本，避免 Rust/C
 对象继承构建机当前系统。`darwin/citizen_sdk.podspec` 与 `darwin/Package.swift` 使用相同最低
-版本合同；所有 Swift module、framework binary 与 XCFramework metadata 都必须精确为 ARM64。
+版本合同；所有 Swift module、framework binary 与 XCFramework 的机器架构元数据都必须精确为 `arm64`。
 
 ## Android 与 Apple 注入
 
@@ -99,11 +99,11 @@ directory；源码树不得生成或保存 `android/.kotlin`，候选构造与�
 Apple 构建不读取 legacy iOS 静态库目录。统一原生入口在外部工作目录生成
 `apple/CitizenSDK.xcframework`，随后由候选构造器原子注入到 `darwin/CitizenSDK.xcframework`。
 podspec、Swift Package 与 `Sources/CitizenSDKFlutter` 均引用这一名字固定的 XCFramework，不重新链接一份
-Core。反向验证精确核对 `iOS`、`iOS-Simulator`、`macOS` 三个 slice、单一 ARM64 架构、
+Core。反向验证精确核对 iOS 设备与模拟器变体、macOS 三个 slice、单一 Apple `arm64` machine 架构、
 每个平台的准确 install ID、产品 70 符号、Swift interface、根头文件、
 Privacy Manifest 与完整链资产；缺失或额外项均失败关闭。
 
-iOS 和 `iOS-Simulator` 的 framework 是浅层布局，二进制位于
+iOS 设备和模拟器变体的 framework 是浅层布局，二进制位于
 `CitizenSDK.framework/CitizenSDK`，install ID 均为
 `@rpath/CitizenSDK.framework/CitizenSDK`。macOS framework 使用标准版本化布局，真实二进制
 位于 `CitizenSDK.framework/Versions/A/CitizenSDK`，install ID 为
@@ -120,7 +120,7 @@ Modules -> Versions/Current/Modules
 Resources -> Versions/Current/Resources
 ```
 
-iOS、`iOS-Simulator`、XCFramework 其他位置和候选其他目录不允许任何符号链接。上述五个链接
+iOS 两种变体、XCFramework 其他位置和候选其他目录不允许任何符号链接。上述五个链接
 若目标、相对路径、节点类型或数量漂移，或出现绝对路径、`..`、dangling、环路、逃逸，同样
 失败关闭。
 
@@ -171,20 +171,20 @@ CI 与 Release 都使用确定性候选算法，但 Release 的成立条件是�
 不把历史的 230 项与 51 项固定成两套数量门禁，并以 `flutter test --timeout=2m` 统一执行；
 第 2 步隔离副本实际执行结果为 288/288。外层两分钟超时必须长于来源测试内部的 30 秒活链
 订阅窗口。Android 在临时 Flutter 宿主中执行 Gradle
-`:citizen_sdk:testDebugUnitTest`；Apple 必须启动 ARM64 Simulator runtime 对
-`iOS-Simulator` 执行 XCTest，并验证 iOS 设备 ARM64、`iOS-Simulator` ARM64 与
-macOS（支持架构 ARM64）的 XCFramework/Swift/Flutter 闭集。
+`:citizen_sdk:testDebugUnitTest`；Apple 必须启动 iOS 模拟器变体 runtime 执行 XCTest，并验证
+iOS 设备变体、iOS 模拟器变体与 macOS 的 XCFramework/Swift/Flutter 闭集；三个 slice 的
+机器架构元数据均须为 `arm64`。
 平台测试必须实际启动测试运行器并取得成功终态，不能用 APK 构建、framework 链接、test
 discovery 或报告文件存在来代替。本轮本机 Android AAR 构建通过，Apple 单一 XCFramework
-只含 `iOS`、`iOS-Simulator`、`macOS` 三个 ARM64 slice 并构建通过；iOS 设备与
-`iOS-Simulator` 两组测试 bundle 已编译，但本机没有 Simulator runtime，所以 iOS XCTest
+只含 iOS 设备与模拟器变体及 macOS 三个 Apple `arm64` machine slice 并构建通过；iOS 的
+两组测试 bundle 已编译，但本机没有 Simulator runtime，所以 iOS XCTest
 仅记录编译门禁。macOS 已运行
 Core 50 项和 Flutter adapter 22 项 XCTest，0 失败、1 项真机硬件用例跳过；最终
 normal/supervisor smoke 通过。正式 CI 仍必须在安装了 Simulator runtime 的 runner 上实际
 执行 iOS XCTest。
 
-同一真实 Flutter consumer 已完成 Android release ARM64 APK、iOS device Release
-no-codesign、`iOS-Simulator` generic ARM64 编译和 macOS Release 构建。它们证明当前
+同一真实 Flutter consumer 已完成 Android release APK（ABI `arm64-v8a`）、iOS device Release
+no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建。它们证明当前
 Flutter/Dart、插件与原生投影能够链接成正式配置产物，不代表移动真机或 Simulator runtime
 已执行。Flutter 对插件 Swift Package Manager 目录的未来识别警告，以及 Android built-in
 Kotlin 迁移提示，留到第 9 步 Hosted/Flutter 集成统一处理，不扩展第 6 步。
@@ -207,8 +207,8 @@ citizensdk-release.json
 SHA256SUMS
 ```
 
-`citizensdk-release.json` 固定产品、包名、版本、40 位提交 SHA，并分别登记 Android、iOS
-设备、`iOS-Simulator` 与 macOS 四项平台投影及
+`citizensdk-release.json` 固定产品、包名、版本、40 位提交 SHA，并只登记 Android、iOS 与
+macOS 三个平台；iOS 设备与模拟器只是同一平台内的技术变体。manifest 同时登记
 归档载荷逐文件 SHA-256。`SHA256SUMS` 精确覆盖外层 manifest 与 tgz。反向验证会重建规范
 tar/gzip 字节并逐字节比较归档，拒绝符号链接、路径穿越、未登记文件和常见私钥材料。
 其中“拒绝符号链接”唯一例外是上文标准 macOS framework 的精确五个内部相对链接；归档必须
@@ -217,7 +217,7 @@ tar/gzip 字节并逐字节比较归档，拒绝符号链接、路径穿越、�
 ## Hosted Package 与分发边界
 
 GitHub Release 三件套继续作为来源审计、校验和离线留档。Hosted Package 不重新装配 SDK：
-官方 Dart 发布工具读取已经注入 Android ARM64 产品双库/AAR 与 Apple ARM64 XCFramework、并通过反向校验的同一
+官方 Dart 发布工具读取已经注入 Android `arm64-v8a` 产品双库/AAR 与 Apple `arm64` machine XCFramework、并通过反向校验的同一
 候选的逐字节临时副本；副本只隔离 Dart 生成的 `.dart_tool`，不是第二份发布候选。根
 `.pubignore` 排除完整 Rust 源码、测试、脚本、审计文档、Cargo/Dart
 锁文件以及 GitHub 外层 manifest/checksums，只保留根 pubspec、运行时 Dart/Flutter、平台插件、

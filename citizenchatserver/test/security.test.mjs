@@ -40,3 +40,12 @@ test('源码配置只声明候选入口且不自行编译 TataChatServer', () =>
   assert.equal(source.includes('../../TATA'), false);
   assert.equal(source.includes('/Users/'), false);
 });
+
+test('宿主只绑定 TataChatServer，不承载 CitizenServe 旧聊天数据面', () => {
+  assert.equal(source.includes('/chat/messages'), false);
+  assert.equal(source.includes('/chat/attachments'), false);
+  assert.equal(source.includes('/chat/key-package'), false);
+  assert.equal(source.includes('/auth/chatserver/access'), false);
+  assert.equal(wrangler.vars.TATACHATSERVER_AUTH_AUDIENCE, 'citizenchatserver');
+  assert.equal(wrangler.vars.TATACHATSERVER_AUTH_ISSUER, 'https://www.crcfrcn.com');
+});

@@ -30,18 +30,19 @@ Recovery never trusts a possibly delayed Swift lifecycle event: it queries the
 authoritative C lifecycle, checkpoints a truly running Core, and then resumes
 the monotonic ABI teardown phase.
 
-Supported product slices are deliberately narrow:
+Supported SDK projection variants are deliberately narrow:
 
-- iOS device ARM64;
-- `iOS-Simulator` ARM64;
-- macOS, with ARM64 as its only supported architecture.
+- iOS device variant, Rust target `aarch64-apple-ios`;
+- iOS simulator variant, Rust target `aarch64-apple-ios-sim`;
+- macOS, Rust target `aarch64-apple-darwin`.
 
-The XCFramework slice names are exactly `iOS`, `iOS-Simulator` and `macOS`.
-Rust target triples and Swift module identities may contain architecture names,
-but they are compiler contracts and never become an architecture-suffixed
-macOS product or slice name.
+The public platform set is exactly `iOS` and `macOS`; the device and simulator
+entries are technical variants of iOS, not separate platform names. Rust target
+triples, generated XCFramework identifiers and Swift module identities may
+contain architecture or simulator markers, but they are compiler contracts and
+never become public product or platform names.
 
-The iOS and iOS-Simulator slices use a shallow `CitizenSDK.framework` with
+The iOS device and simulator variants use a shallow `CitizenSDK.framework` with
 install ID `@rpath/CitizenSDK.framework/CitizenSDK`. The macOS slice uses the
 standard `Versions/A` framework layout with install ID
 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`. Its only permitted
@@ -58,8 +59,8 @@ For local Step 6 verification that root is exactly
 `/Users/rhett/TATA/tataconsole/target/citizensdk/step6-verification`; it must not
 reuse TataConsole's independently managed and cleaned `.work` directory.
 
-The Step 6 Flutter consumer built an Android release ARM64 APK, an unsigned iOS
-device Release app, a generic ARM64 iOS-Simulator target, and a macOS Release
+The Step 6 Flutter consumer built an Android release APK for ABI `arm64-v8a`, an unsigned iOS
+device Release app, a generic iOS simulator variant target using `aarch64-apple-ios-sim`, and a macOS Release
 app. These are compile/link results only; no mobile-device or Simulator runtime
 success is claimed. Flutter's future Swift Package Manager recognition warning
 and Android's built-in Kotlin migration notice are deferred to Step 9.

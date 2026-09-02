@@ -51,6 +51,6 @@ CitizenChain 身份、格式版本和 finalized 锚一致。启动时 provider �
 provider/Engine future。`drive` 不公开 runtime handle 或 RPC，且拒绝从 Tokio context
 嵌套调用，避免 `tokio::time` 脱离 runtime 或嵌套 block-on panic。
 
-`native/smoldot/ffi` 只保留归档 Dart/smoldot ARM64 差分测试所需的 legacy
+`native/smoldot/ffi` 只保留归档 Dart/smoldot macOS `arm64` 差分测试所需的 legacy
 `smoldot_*`/`citizen_sr25519_*` 符号边界。本 crate 不改变其句柄、回调、库名或任意现有
 符号；根 Dart、Android 与 Apple 已经通过上层产品级 `citizensdk_*` C ABI 消费本 provider。

@@ -34,7 +34,22 @@ describe('Cloudflare 统一资源限制', () => {
     expect(assertKnownRoute('GET', '/square/contacts')).toBe('api_json_small');
     expect(assertKnownRoute('PUT', `/square/contacts/${'ab'.repeat(32)}`)).toBe('contact_ciphertext');
     expect(assertKnownRoute('GET', '/download/citizenapp/android')).toBe('api_json_small');
-    expect(assertKnownRoute('GET', '/download/citizenchain/macos-arm64-updater')).toBe('api_json_small');
+    for (const path of [
+      '/download/citizenchain/macOS',
+      '/download/citizenchain/macOS/updater',
+      '/download/citizenchain/Windows',
+      '/download/citizenchain/LinuxARM',
+      '/download/citizenchain/LinuxAMD',
+    ]) expect(assertKnownRoute('GET', path)).toBe('api_json_small');
+    for (const path of [
+      '/download/citizenchain/macos-arm64',
+      '/download/citizenchain/macos-arm64-updater',
+      '/download/citizenchain/windows-x86_64',
+      '/download/citizenchain/linux-arm64',
+      '/download/citizenchain/linux-amd64',
+      '/download/citizenchain/linux-arm',
+      '/download/citizenchain/linux-amd',
+    ]) expect(() => assertKnownRoute('GET', path)).toThrowError(HttpError);
     expect(assertKnownRoute('GET', '/chain/citizensdk/bootstrap')).toBe('api_json_small');
     expect(assertKnownRoute(
       'PUT', '/operations/citizenchain/download-publications/linux-arm',

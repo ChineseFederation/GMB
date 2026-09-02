@@ -34,13 +34,13 @@
         },
         {
           "path": "src/lib.rs",
-          "sha256": "573bb5626d29d217870b577e71cf8007fa99098b4271123f67e47e2dba1ad8f2"
+          "sha256": "6e403a6087771c5195bc0fc68b569a31a232ed710374edcc19eb306e0b1f507f"
         }
       ],
       "sdk_only": [
         {
           "path": "README.md",
-          "sha256": "b01745b1947b3aa3c33ee8c48df324285c5b077f213d1127d68a2aba0eb51867"
+          "sha256": "63c9d50392451707521f0524905962bbc1ec7563c019c8de5bed5e0299a79753"
         },
         {
           "path": "tests/legacy_header_contract.rs",
@@ -68,7 +68,7 @@
         },
         {
           "path": "README.md",
-          "sha256": "21b7c50735f9bd3d7b115603280b1fe2c430b36f4d3e2cc6ec50561250339656"
+          "sha256": "f42598f6bc57cb7d517c657f474a1ec577df6002d962404c2be4dff4e4816def"
         },
         {
           "path": "src/account_nonce.rs",

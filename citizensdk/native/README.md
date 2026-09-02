@@ -3,7 +3,7 @@
 本目录承载同一 CitizenSDK 产品的统一原生核心：`contracts` 固定类型化依赖语义，`engine`
 负责产品无关的能力、runtime、状态导入与交易执行协调，`ffi` 是唯一产品 C ABI，`signer`
 提供 sr25519，`smoldot/provider` 实现类型化链合同，`smoldot/ffi` 只保留归档
-Dart/smoldot ARM64 差分测试所需的 legacy 入口，`smoldot/pow` 是公民链 PoW + GRANDPA
+Dart/smoldot macOS `arm64` 差分测试所需的 legacy 入口，`smoldot/pow` 是公民链 PoW + GRANDPA
 轻节点快照。
 
 固定依赖方向为：
@@ -55,7 +55,7 @@ provider/store await 和最终 CAS，stop/dispose 不能穿越提交窗口。同
 single-flight 防止准确 Runtime nonce 在并发构造中被再次使用。
 
 `smoldot/ffi` 只继续服务归档 Dart/smoldot 差分验证；它的 `smoldot_*` 与四个
-`citizen_sr25519_*` 是 legacy ARM64 宿主测试库的真实导出，但不属于产品 `citizensdk_*` ABI，
+`citizen_sr25519_*` 是 legacy macOS `arm64` 宿主测试库的真实导出，但不属于产品 `citizensdk_*` ABI，
 也不进入任何候选。根 Dart、Android 与 Apple 钱包、交易和秘密处理已经切换到 Rust Engine，
 不能把保留源码误写成当前公开运行路径。
 
@@ -90,23 +90,23 @@ sr25519 与安全存储只负责本地秘密和签名；TUYU、员工登录等 c
 外部业务。它们可以明确复用同一公钥签名，但不能混为同一业务账户。
 
 全节点出块、全节点 identity 私钥、聊天、OpenMLS、TUYU 与产品业务被排除。候选合同打包
-Android ARM64 产品 Core/JNI 双库，以及由同一 Core 生成的 iOS 设备 ARM64、`iOS-Simulator`
-ARM64 与 macOS（仅支持 ARM64 架构）`CitizenSDK.xcframework`；根 Dart、Android 与 Apple 均使用产品 ABI。
-Linux、Windows 仍未交付。本轮 Android AAR 与 Apple 单一 XCFramework 构建通过；框架只含
-`iOS`、`iOS-Simulator`、`macOS` 三个 ARM64 slice。Apple 本机已编译 iOS 设备与
-`iOS-Simulator` 两组测试 bundle；因无
+Android `arm64-v8a` 产品 Core/JNI 双库，以及由同一 Core 生成的 iOS 设备与模拟器变体和
+macOS `CitizenSDK.xcframework`；根 Dart、Android 与 Apple 均使用产品 ABI。
+LinuxARM、LinuxAMD、Windows 仍未交付。本轮 Android AAR 与 Apple 单一 XCFramework 构建通过；
+框架只含 iOS 设备与模拟器变体及 macOS 三个 Apple `arm64` machine slice。Apple 本机已编译
+iOS 的两组测试 bundle；因无
 Simulator runtime 未执行 iOS XCTest。macOS Core 50 项和 Flutter adapter 22 项 XCTest
 0 失败，1 项真机硬件用例跳过；normal/supervisor smoke 通过。这不代表真机 Apple
 金库已验收，也不代表 TataConsole Flow、远程 CI 或正式 Release 已运行。
 
-iOS 与 `iOS-Simulator` 是浅层 framework，install ID 为
+iOS 设备与模拟器变体是浅层 framework，install ID 为
 `@rpath/CitizenSDK.framework/CitizenSDK`；macOS 使用标准 `Versions/A` framework，install
 ID 为 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`。候选只允许后者标准布局中的
 精确五个内部相对符号链接。Android Gradle/Kotlin persistent project state 必须在
 TataConsole 中央 work directory，源码 `android/.kotlin` 禁止。
 
-同一真实 Flutter consumer 已构建 Android release ARM64 APK、iOS device Release
-no-codesign、`iOS-Simulator` generic ARM64 和 macOS Release；这些是 compile/link 结果，不是
+同一真实 Flutter consumer 已构建 Android release APK（ABI `arm64-v8a`）、iOS device Release
+no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）和 macOS Release；这些是 compile/link 结果，不是
 移动真机或 Simulator runtime 结果。Flutter SPM 识别警告与 Android built-in Kotlin 迁移提示
 延后到第 9 步 Hosted/Flutter 集成处理。
 

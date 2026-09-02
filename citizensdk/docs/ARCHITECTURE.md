@@ -35,7 +35,7 @@ citizensdk/
 │   ├── signer/             唯一 sr25519 原生实现
 │   └── smoldot/
 │       ├── provider/       VerifiedChainClient 的真实 smoldot 实现
-│       ├── ffi/            仅供 ARM64 差分测试的 legacy 原生入口
+│       ├── ffi/            仅供 macOS `arm64` 差分测试的 legacy 原生入口
 │       └── pow/            PoW + GRANDPA 轻节点 Rust 快照
 ├── include/                唯一产品 C/C++ 头文件与所有权说明
 ├── android/                Android 插件与硬件金库
@@ -248,7 +248,7 @@ wallet index、generation、owner、AccountId 与 secret kind 构成的完整 `S
 
 根 Rust workspace 的 contracts、engine、ffi、signer、provider，以及 legacy FFI/PoW 嵌套
 workspace 都是 CitizenSDK 内部构建边界，不是多个 SDK。根 `include/citizensdk.h` 是唯一
-产品头文件，只声明 `citizensdk_*`；`native/smoldot/include/smoldot.h` 只描述 ARM64 差分
+产品头文件，只声明 `citizensdk_*`；`native/smoldot/include/smoldot.h` 只描述 macOS `arm64` 差分
 测试所需的 legacy 兼容库。产品 ABI 使用固定宽度、`struct_size + abi_version`、单调非零 handle、Rust-owned
 result、独立 callback thread、64 项有界事件队列和稳定错误码。异步请求接受后恰有一个完成
 事件；raw extrinsic watch 与高层 wallet transfer watch 可取消，其它原子/状态变更操作不会
@@ -295,19 +295,19 @@ CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然
 最长 30 秒的活链订阅窗口。第 2 步隔离副本实际执行结果为 288/288。交易执行确认使用带
 `System.Event`、`Phase` 与 `DispatchInfo` 类型的真实 Substrate v14 metadata 夹具，不得退回
 只能解常量的最小 metadata。Android 必须真实运行插件 JUnit；正式 CI 还必须在
-`iOS-Simulator` ARM64 上执行 XCTest，并分别验证 iOS 设备 ARM64、`iOS-Simulator` ARM64 与 macOS
-slice（macOS 只支持 ARM64 架构）。编译成功不等于平台测试执行成功。
+iOS 模拟器变体上执行 XCTest，并分别验证 iOS 设备变体、iOS 模拟器变体与 macOS
+slice；三个 slice 当前 Apple 机器架构值均为 `arm64`。编译成功不等于平台测试执行成功。
 
-本轮本机已构建 Android AAR 与 Apple 单一 XCFramework；框架只含 `iOS`、
-`iOS-Simulator`、`macOS` 三个 ARM64 slice。iOS 设备与 `iOS-Simulator` 两组测试 bundle
+本轮本机已构建 Android AAR 与 Apple 单一 XCFramework；框架只含 iOS 设备与模拟器变体及
+macOS 三个 Apple `arm64` machine slice。iOS 设备与模拟器变体两组测试 bundle
 均已编译；由于本机没有
 Simulator runtime，未记录 iOS XCTest 运行成功。macOS 已实际运行 Core 50 项与
 Flutter adapter 22 项 XCTest，0 失败，其中 1 项真机硬件用例跳过；最终
 normal/supervisor smoke 均通过。本机无真实 Apple 移动设备，不声称 Secure Enclave、
 生物认证或 device-only Keychain 已完成真机验收。
 
-真实 Flutter consumer 已完成 Android release ARM64 APK、iOS device Release no-codesign、
-`iOS-Simulator` generic ARM64 编译和 macOS Release 构建；这些只构成正式配置的 build/link
+真实 Flutter consumer 已完成 Android release APK（ABI `arm64-v8a`）、iOS device Release no-codesign、
+iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建；这些只构成正式配置的 build/link
 证据，不构成移动真机或 Simulator runtime 证据。Flutter SPM 识别警告与 Android built-in
 Kotlin 迁移提示推迟到第 9 步 Hosted/Flutter 集成处理。
 
@@ -327,17 +327,17 @@ Clippy 与格式检查通过；Android 原生 Kotlin/Java 单元测试 Gradle 17
 当前源码的候选合同包含 Android `arm64-v8a` 产品 ABI 投影，以及由共享 `darwin/` 源码生成的
 `CitizenSDK.xcframework`。Android 原生 AAR 与 Flutter 插件使用同一 Kotlin facade、JNI、Rust
 Core 和逐字节相同的双 SO；Apple 的 Swift 原生 API 与 Flutter adapter 使用同一个 XCFramework，
-支持 iOS 设备 ARM64、`iOS-Simulator` ARM64 和 macOS（仅支持 ARM64 架构）。Simulator 不提供
+支持 iOS 设备变体、iOS 模拟器变体和 macOS，当前 Apple 机器架构值均为 `arm64`。Simulator 不提供
 Secure Enclave，硬件金库与钱包能力必须报告不可用。Android Core/JNI 的 SONAME 固定为
 `libcitizensdk.so` 与
 `libcitizensdk_jni.so`，JNI 只能按 Core SONAME 依赖一次，任何含 `/` 的 `DT_NEEDED` 都失败。
 Android Gradle/Kotlin persistent project state 只允许位于 TataConsole 中央 work directory；
-源码和候选均禁止 `android/.kotlin`。iOS 与 `iOS-Simulator` 使用浅层 framework 和
+源码和候选均禁止 `android/.kotlin`。iOS 设备与模拟器变体使用浅层 framework 和
 `@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A` framework
 和 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK` install ID。候选只允许 macOS
 framework 标准布局所需的精确五个内部相对符号链接，其他任何符号链接均失败关闭。
-Linux、Windows 仍没有已交付的绑定、硬件金库和正式资产。legacy `libsmoldot.dylib` 只允许
-作为 ARM64 差分测试宿主库；其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选并须随
+LinuxARM、LinuxAMD、Windows 仍没有已交付的绑定、硬件金库和正式资产。legacy `libsmoldot.dylib` 只允许
+作为 macOS `arm64` 差分测试宿主库；其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选并须随
 本机工作目录清理。
 
 源码中的 Dart pubspec、Android Gradle 与 `darwin/citizen_sdk.podspec` 版本已统一冻结为

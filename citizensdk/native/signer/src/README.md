@@ -10,5 +10,5 @@ FFI 合同和类型化 signer 测试共同守住。任何行为修改都必须�
 契约、秘密所有权与零化路径。
 
 `lib.rs` 的四个 `citizen_sr25519_*` 包装不会进入 Android 或 Apple 产品候选；它们只会进入
-源码树外的 ARM64 legacy 差分测试宿主库。它们不是产品 `citizensdk_*` C ABI，产品符号验收
+源码树外的 macOS `arm64` legacy 差分测试宿主库。它们不是产品 `citizensdk_*` C ABI，产品符号验收
 必须在每个正式平台拒绝它们。

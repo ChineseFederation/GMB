@@ -1,5 +1,12 @@
 # CitizenChatServer
 
+Cloudflare 正式资源统一使用小写 `<product>-<resource>`：Worker 为
+`citizenchatserver-workers`，D1 为 `citizenchatserver-d1`，R2 为
+`citizenchatserver-r2`，正式域名为 `chat.crcfrcn.com`。
+
+CI 只消费 TataChatServer 的正式 Cloudflare Release 并绑定当前 GMB `main` 的实例声明；
+Release 只封装准确成功 CI 候选；发布只由 TataConsole 原生发布器消费正式 GMB Release。
+
 CitizenChatServer 是公民产品使用的 TataChatServer Cloudflare 实例。该目录只保存宿主产品声明与资源配置，不复制通用聊天源码，也不保存编译产物、密钥或生产资源编号。
 
 - HTTPS：`https://chat.crcfrcn.com`

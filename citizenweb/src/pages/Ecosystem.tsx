@@ -74,11 +74,13 @@ const systems: ProductSystem[] = [
     tech: 'Rust / polkadot-sdk / Tauri / Axum / PostgreSQL',
     color: 'blue',
     fullWidth: true,
+    // label 与 downloadPath 使用同一公开平台名；CitizenServe 仅在内部把路径映射到
+    // 现有发布指针，官网不得接触 D1 键、Release Tag 或资产机器名。
     downloads: [
-      { label: 'macOS', kind: 'file', downloadPath: '/download/citizenchain/macos-arm64' },
-      { label: 'Windows', kind: 'file', downloadPath: '/download/citizenchain/windows-x86_64' },
-      { label: 'Linux-arm', kind: 'file', downloadPath: '/download/citizenchain/linux-arm64' },
-      { label: 'Linux-amd', kind: 'file', downloadPath: '/download/citizenchain/linux-amd64' },
+      { label: 'macOS', kind: 'file', downloadPath: '/download/citizenchain/macOS' },
+      { label: 'Windows', kind: 'file', downloadPath: '/download/citizenchain/Windows' },
+      { label: 'LinuxARM', kind: 'file', downloadPath: '/download/citizenchain/LinuxARM' },
+      { label: 'LinuxAMD', kind: 'file', downloadPath: '/download/citizenchain/LinuxAMD' },
     ],
   },
 ]

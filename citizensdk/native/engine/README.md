@@ -17,7 +17,7 @@ RPC. `native/smoldot/provider` now implements `VerifiedChainClient`, and
 `native/ffi` exposes this Engine through the stable product C ABI. The typed root
 Dart API, Android Kotlin/Java and Flutter projections, and shared Darwin
 Swift/Flutter projections consume that ABI. Legacy `libsmoldot` is only an
-ARM64 differential-test host artifact and never a product runtime.
+macOS `arm64` differential-test host artifact and never a product runtime.
 
 ## Step 4.1/4.2 services and Step 5.1 wallet watch closure
 

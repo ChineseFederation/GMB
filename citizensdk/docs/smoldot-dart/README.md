@@ -37,15 +37,16 @@ a supported implementation import or a second runtime.
 
 ## Supported product projections at this task stage
 
-- Android ARM64 through the Kotlin/Java API, Flutter adapter and AAR.
-- iOS device ARM64 through the Swift API, Flutter adapter and
+- Android through the Kotlin/Java API, Flutter adapter and AAR; current ABI is
+  `arm64-v8a`.
+- iOS device variant through the Swift API, Flutter adapter and
   `CitizenSDK.xcframework`.
-- `iOS-Simulator` ARM64 as a separate Apple ABI slice for compile and simulator
+- iOS simulator variant as a separate Apple ABI slice for compile and simulator
   integration; device-only vault/biometric claims still require real hardware.
-- macOS through the same Swift source and XCFramework, with ARM64 as its only
-  supported architecture. The product and slice name is simply `macOS`.
+- macOS through the same Swift source and XCFramework. The product name is
+  simply `macOS`; the current Apple machine architecture value is `arm64`.
 
-Linux and Windows official projections are intentionally deferred to their
+LinuxARM, LinuxAMD and Windows official projections are intentionally deferred to their
 task-card steps. The presence of portable Rust or archived Dart source is not
 evidence that those product projections have already shipped.
 
@@ -62,7 +63,7 @@ See `BUILD.md` for the exact current target matrix and output boundary. Do not
 copy generated libraries into this directory or create a smoldot-only release
 flow.
 
-Differential tests may load a centrally built ARM64 legacy host library for macOS
+Differential tests may load a centrally built macOS `arm64` legacy host library
 to compare the copied baseline with the product Core. That library is a test
 fixture only: it is excluded from the Apple product framework, Hosted runtime
 closure and formal CitizenSDK release artifacts.

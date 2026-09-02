@@ -73,6 +73,11 @@ const appleSwiftModuleExtensions = Object.freeze([
   'swiftmodule',
   'swiftsourceinfo',
 ]);
+const appleFixtureSliceIdentifiers = Object.freeze({
+  iosDevice: 'xcode-library-0',
+  iosSimulator: 'xcode-library-1',
+  macOS: 'xcode-library-2',
+});
 
 const CRC32_TABLE = (() => {
   const table = new Uint32Array(256);
@@ -261,7 +266,7 @@ function citizenSdkExportSymbols() {
 
 function writeAppleXcframework(destination, options = {}) {
   const slices = {
-    iOS: {
+    iosDevice: {
       binaryPath: 'CitizenSDK.framework/CitizenSDK',
       bundlePlatform: 'iPhoneOS',
       dtPlatform: 'iphoneos',
@@ -273,7 +278,7 @@ function writeAppleXcframework(destination, options = {}) {
       supportedPlatform: 'ios',
       swiftTarget: 'arm64-apple-ios16.0',
     },
-    'iOS-Simulator': {
+    iosSimulator: {
       binaryPath: 'CitizenSDK.framework/CitizenSDK',
       bundlePlatform: 'iPhoneSimulator',
       dtPlatform: 'iphonesimulator',
@@ -300,10 +305,12 @@ function writeAppleXcframework(destination, options = {}) {
     },
   };
   const libraries = [];
-  for (const [identifier, contract] of Object.entries(slices)) {
-    const override = options[identifier] ?? {};
+  for (const [sliceKey, contract] of Object.entries(slices)) {
+    const override = options[sliceKey] ?? {};
+    const identifier = override.identifier ?? appleFixtureSliceIdentifiers[sliceKey];
+    const isMacOS = contract.supportedPlatform === 'macos';
     const framework = join(destination, identifier, 'CitizenSDK.framework');
-    const contentRoot = identifier === 'macOS'
+    const contentRoot = isMacOS
       ? join(framework, 'Versions', 'A')
       : framework;
     const headers = join(contentRoot, 'Headers');
@@ -361,7 +368,7 @@ function writeAppleXcframework(destination, options = {}) {
         symbols: override.symbols ?? citizenSdkExportSymbols(),
       }),
     );
-    writeFileSync(identifier === 'macOS'
+    writeFileSync(isMacOS
       ? join(resources, 'Info.plist')
       : join(framework, 'Info.plist'), plistXml({
       CFBundleDevelopmentRegion: 'en',
@@ -377,7 +384,7 @@ function writeAppleXcframework(destination, options = {}) {
       [contract.minimumKey]: contract.minimum.replace(/\.0$/, ''),
       ...(override.info ?? {}),
     }));
-    if (identifier === 'macOS') {
+    if (isMacOS) {
       for (const [path, target] of Object.entries(macOSFrameworkSymlinks)) {
         const link = join(framework, ...path.split('/'));
         mkdirSync(dirname(link), { recursive: true });
@@ -425,7 +432,8 @@ function writeAppleProjectionFixture(root, options = {}) {
   );
 }
 
-function appleFixtureFramework(root, identifier) {
+function appleFixtureFramework(root, sliceKey) {
+  const identifier = appleFixtureSliceIdentifiers[sliceKey] ?? sliceKey;
   return join(
     root,
     'darwin',
@@ -435,9 +443,11 @@ function appleFixtureFramework(root, identifier) {
   );
 }
 
-function appleFixtureContentRoot(root, identifier) {
-  const framework = appleFixtureFramework(root, identifier);
-  return identifier === 'macOS' ? join(framework, 'Versions', 'A') : framework;
+function appleFixtureContentRoot(root, sliceKey) {
+  const framework = appleFixtureFramework(root, sliceKey);
+  return sliceKey === 'macOS' || sliceKey === appleFixtureSliceIdentifiers.macOS
+    ? join(framework, 'Versions', 'A')
+    : framework;
 }
 
 function androidAarFixture(core, jni, {
@@ -554,8 +564,8 @@ function writeCoreRustFixture(root) {
   }
 }
 
-// 中文注释：三个正式 Apple slice 必须共用 iOS 16/macOS 13 常量，只构建
-// native/ffi 产品 Core；legacy host 可以保留，但也只能是 macOS ARM64。
+// 中文注释：三个正式 Apple 技术变体必须共用 iOS 16/macOS 13
+// 常量，只构建 native/ffi 产品 Core；legacy host 也只属于 macOS。
 function assertAppleDeploymentTargetContract(source) {
   assert.deepEqual(
     source.match(/^[ \t]*(?:ios|macos)_deployment_target=.*$/gm) ?? [],
@@ -674,6 +684,8 @@ function assertAppleDeploymentTargetContract(source) {
   }
   assert.match(apple, /output_dir\/apple\/CitizenSDK\.xcframework/);
   assert.match(apple, /restore_swift_module_artifacts/);
+  assert.doesNotMatch(apple, /canonicalize_xcframework_identifiers|LibraryIdentifier \$desired/);
+  assert.match(apple, /resolve_xcframework_framework_slice/);
   assert.match(
     restoreSwiftModules,
     /abi\.json private\.swiftinterface swiftdoc swiftinterface swiftmodule swiftsourceinfo/,
@@ -689,17 +701,15 @@ function assertAppleDeploymentTargetContract(source) {
   assert.match(restoreSwiftModules, /cmp -s "\$source" "\$destination"/);
   assert.match(restoreSwiftModules, /cp "\$source" "\$destination"/);
   assert.equal(apple.split('compile_apple_flutter_adapter').length - 1, 3);
-  for (const sliceName of ['iOS', 'iOS-Simulator', 'macOS']) {
-    assert.match(apple, new RegExp(`created_xcframework/${sliceName}`));
-  }
+  assert.equal(apple.split('resolve_xcframework_framework_slice').length - 1, 3);
   assert.match(appleTests, /uname -m.*arm64/);
   assert.equal(appleTests.split('run_apple_test_harness').length - 1, 3);
   assert.match(appleTests, /aarch64-apple-ios[^\n]*iphoneos[^\n]*arm64-apple-ios16\.0/);
   assert.match(appleTests, /aarch64-apple-ios-sim[\s\S]*arm64-apple-ios16\.0-simulator/);
   assert.match(appleTests, /aarch64-apple-darwin[^\n]*macosx[^\n]*arm64-apple-macosx13\.0/);
-  assert.match(appleTests, /iOS Flutter .* compile/);
-  assert.match(appleTests, /iOS-Simulator Flutter[\s\S]*compile/);
-  assert.match(appleTests, /macOS FlutterMacOS .* run/);
+  assert.match(appleTests, /aarch64-apple-ios Flutter .* compile/);
+  assert.match(appleTests, /aarch64-apple-ios-sim Flutter[\s\S]*compile/);
+  assert.match(appleTests, /aarch64-apple-darwin FlutterMacOS .* run/);
   assert.match(appleTests, /run_final_apple_consumer_smoke/);
   assert.match(appleTestHarness, /apple-test-harness\/\$slice_name/);
   assert.match(appleTestHarness, /apple-test-scratch\/\$slice_name/);
@@ -721,7 +731,8 @@ function assertAppleDeploymentTargetContract(source) {
   assert.match(source, /apple-tests\) build_apple_tests/);
   assert.match(source, /all\) build_android; build_apple; build_apple_tests;/);
   assert.match(smokeShell, /output_dir\/apple\/CitizenSDK\.xcframework/);
-  assert.match(smokeShell, /framework_root="\$xcframework\/macOS"/);
+  assert.match(smokeShell, /resolve_xcframework_framework_slice/);
+  assert.match(smokeShell, /CitizenSDK macos ''/);
   assert.match(smokeShell, /-framework CitizenSDK/);
   assert.match(
     smokeShell,
@@ -821,11 +832,13 @@ test('Release 原生产物只允许版本化 macOS framework 五链接并拒绝�
     assert.doesNotThrow(() => assertNativeArtifactSources(valid));
 
     const malformedMac = writeNativeFixture(join(root, 'malformed-macos'));
+    // LibraryIdentifier 是 Xcode 生成的不透明技术标识；测试只使用
+    // fixture 内部映射定位，不把产品平台名伪造成目录名。
     const malformedBinary = join(
       malformedMac,
       'apple',
       'CitizenSDK.xcframework',
-      'macOS',
+      appleFixtureSliceIdentifiers.macOS,
       'CitizenSDK.framework',
       'CitizenSDK',
     );
@@ -958,32 +971,20 @@ test('Android AAR 与 Flutter 投影固定同一双库且原生面不引用 Flut
   }
 });
 
-test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源投影', () => {
+test('Apple XCFramework 固定三个 arm64 技术变体、产品 ABI、版本与来源投影', () => {
   const root = mkdtempSync(join(workRoot, 'release-apple-projection-test-'));
   try {
     const valid = join(root, 'valid');
     writeAppleProjectionFixture(valid);
     assert.doesNotThrow(() => assertAppleReleaseProjection(valid));
-    const validMacFramework = join(
-      valid,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'macOS',
-      'CitizenSDK.framework',
-    );
+    const validMacFramework = appleFixtureFramework(valid, 'macOS');
     for (const [path, target] of Object.entries(macOSFrameworkSymlinks)) {
       assert.equal(readlinkSync(join(validMacFramework, ...path.split('/'))), target);
     }
 
     const extraSliceRootEntry = join(root, 'extra-slice-root-entry');
     writeAppleProjectionFixture(extraSliceRootEntry);
-    mkdirSync(join(
-      extraSliceRootEntry,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'iOS',
-      'unreviewed',
-    ));
+    mkdirSync(join(dirname(appleFixtureFramework(extraSliceRootEntry, 'iosDevice')), 'unreviewed'));
     assert.throws(
       () => assertAppleReleaseProjection(extraSliceRootEntry),
       /slice 根闭集漂移/,
@@ -991,7 +992,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const extraHeaderEntry = join(root, 'extra-header-entry');
     writeAppleProjectionFixture(extraHeaderEntry);
-    mkdirSync(join(appleFixtureContentRoot(extraHeaderEntry, 'iOS'), 'Headers', 'unreviewed'));
+    mkdirSync(join(appleFixtureContentRoot(extraHeaderEntry, 'iosDevice'), 'Headers', 'unreviewed'));
     assert.throws(
       () => assertAppleReleaseProjection(extraHeaderEntry),
       /Headers 目录闭集漂移/,
@@ -999,7 +1000,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const extraModulesEntry = join(root, 'extra-modules-entry');
     writeAppleProjectionFixture(extraModulesEntry);
-    mkdirSync(join(appleFixtureContentRoot(extraModulesEntry, 'iOS-Simulator'),
+    mkdirSync(join(appleFixtureContentRoot(extraModulesEntry, 'iosSimulator'),
       'Modules', 'unreviewed'));
     assert.throws(
       () => assertAppleReleaseProjection(extraModulesEntry),
@@ -1017,7 +1018,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const extraResourcesEntry = join(root, 'extra-resources-entry');
     writeAppleProjectionFixture(extraResourcesEntry);
-    mkdirSync(join(appleFixtureContentRoot(extraResourcesEntry, 'iOS'),
+    mkdirSync(join(appleFixtureContentRoot(extraResourcesEntry, 'iosDevice'),
       'Resources', 'unreviewed'));
     assert.throws(
       () => assertAppleReleaseProjection(extraResourcesEntry),
@@ -1032,16 +1033,10 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
       /版本化 framework 闭集漂移/,
     );
 
-    for (const identifier of ['iOS', 'iOS-Simulator']) {
-      const linkedIos = join(root, `linked-${identifier}`);
+    for (const sliceKey of ['iosDevice', 'iosSimulator']) {
+      const linkedIos = join(root, `linked-${sliceKey}`);
       writeAppleProjectionFixture(linkedIos);
-      const framework = join(
-        linkedIos,
-        'darwin',
-        'CitizenSDK.xcframework',
-        identifier,
-        'CitizenSDK.framework',
-      );
+      const framework = appleFixtureFramework(linkedIos, sliceKey);
       rmSync(join(framework, 'Headers'), { recursive: true });
       symlinkSync('Resources', join(framework, 'Headers'));
       assert.throws(
@@ -1052,13 +1047,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const shallowMacOS = join(root, 'shallow-macos');
     writeAppleProjectionFixture(shallowMacOS);
-    const shallowFramework = join(
-      shallowMacOS,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'macOS',
-      'CitizenSDK.framework',
-    );
+    const shallowFramework = appleFixtureFramework(shallowMacOS, 'macOS');
     const shallowContent = join(shallowFramework, 'Versions', 'A');
     for (const entry of ['CitizenSDK', 'Headers', 'Modules', 'Resources']) {
       rmSync(join(shallowFramework, entry), { recursive: true, force: true });
@@ -1085,13 +1074,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     for (const [name, path, target] of macLinkDrifts) {
       const drift = join(root, `macos-link-${name}`);
       writeAppleProjectionFixture(drift);
-      const framework = join(
-        drift,
-        'darwin',
-        'CitizenSDK.xcframework',
-        'macOS',
-        'CitizenSDK.framework',
-      );
+      const framework = appleFixtureFramework(drift, 'macOS');
       const link = join(framework, ...path.split('/'));
       rmSync(link, { recursive: true, force: true });
       symlinkSync(target, link);
@@ -1103,16 +1086,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const danglingMacOS = join(root, 'macos-link-dangling');
     writeAppleProjectionFixture(danglingMacOS);
-    rmSync(join(
-      danglingMacOS,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'macOS',
-      'CitizenSDK.framework',
-      'Versions',
-      'A',
-      'CitizenSDK',
-    ));
+    rmSync(join(appleFixtureContentRoot(danglingMacOS, 'macOS'), 'CitizenSDK'));
     assert.throws(
       () => assertAppleReleaseProjection(danglingMacOS),
       /符号链接悬空或成环/,
@@ -1123,13 +1097,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const outside = join(root, 'outside-header');
     writeFileSync(outside, 'outside');
     symlinkSync(outside, join(
-      nestedEscape,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'macOS',
-      'CitizenSDK.framework',
-      'Versions',
-      'A',
+      appleFixtureContentRoot(nestedEscape, 'macOS'),
       'Headers',
       'outside.h',
     ));
@@ -1140,7 +1108,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const missingSymbol = join(root, 'missing-symbol');
     writeAppleProjectionFixture(missingSymbol, {
-      iOS: { symbols: [...citizenSdkSymbols().slice(0, -1), '$s10CitizenSDK0A0CMa'] },
+      iosDevice: { symbols: [...citizenSdkSymbols().slice(0, -1), '$s10CitizenSDK0A0CMa'] },
     });
     assert.throws(
       () => assertAppleReleaseProjection(missingSymbol),
@@ -1158,7 +1126,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const foreignSymbol = join(root, 'foreign-symbol');
     writeAppleProjectionFixture(foreignSymbol, {
-      iOS: { symbols: [...citizenSdkExportSymbols(), 'foreign_probe'] },
+      iosDevice: { symbols: [...citizenSdkExportSymbols(), 'foreign_probe'] },
     });
     assert.throws(
       () => assertAppleReleaseProjection(foreignSymbol),
@@ -1167,7 +1135,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const missingSwiftExport = join(root, 'missing-swift-export');
     writeAppleProjectionFixture(missingSwiftExport, {
-      'iOS-Simulator': { symbols: citizenSdkSymbols() },
+      iosSimulator: { symbols: citizenSdkSymbols() },
     });
     assert.throws(
       () => assertAppleReleaseProjection(missingSwiftExport),
@@ -1176,17 +1144,17 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const wrongInstallName = join(root, 'wrong-install-name');
     writeAppleProjectionFixture(wrongInstallName, {
-      'iOS-Simulator': { installName: '/tmp/CitizenSDK.framework/CitizenSDK' },
+      iosSimulator: { installName: '/tmp/CitizenSDK.framework/CitizenSDK' },
     });
     assert.throws(
       () => assertAppleReleaseProjection(wrongInstallName),
       /install name 漂移/,
     );
 
-    for (const identifier of ['iOS', 'iOS-Simulator']) {
-      const versionedIosIdentity = join(root, `versioned-install-name-${identifier}`);
+    for (const sliceKey of ['iosDevice', 'iosSimulator']) {
+      const versionedIosIdentity = join(root, `versioned-install-name-${sliceKey}`);
       writeAppleProjectionFixture(versionedIosIdentity, {
-        [identifier]: {
+        [sliceKey]: {
           installName: '@rpath/CitizenSDK.framework/Versions/A/CitizenSDK',
         },
       });
@@ -1221,11 +1189,11 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const wrongArchitecture = join(root, 'wrong-architecture');
     writeAppleProjectionFixture(wrongArchitecture, {
-      iOS: { cpuType: 0x01000007 },
+      iosDevice: { cpuType: 0x01000007 },
     });
     assert.throws(
       () => assertAppleReleaseProjection(wrongArchitecture),
-      /单一 ARM64 动态 framework/,
+      /单一 arm64 动态 framework/,
     );
 
     const universalBinary = join(root, 'universal-binary');
@@ -1242,8 +1210,8 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const assetDrift = join(root, 'asset-drift');
     writeAppleProjectionFixture(assetDrift);
     writeFileSync(
-      join(assetDrift, 'darwin', 'CitizenSDK.xcframework', 'macOS',
-        'CitizenSDK.framework', 'Resources', 'citizenchain', 'chainspec.json'),
+      join(appleFixtureContentRoot(assetDrift, 'macOS'),
+        'Resources', 'citizenchain', 'chainspec.json'),
       'drift',
     );
     assert.throws(
@@ -1255,7 +1223,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
       const missingModule = join(root, `missing-module-${extension.replaceAll('.', '-')}`);
       writeAppleProjectionFixture(missingModule);
       rmSync(join(
-        appleFixtureContentRoot(missingModule, 'iOS'),
+        appleFixtureContentRoot(missingModule, 'iosDevice'),
         'Modules',
         'CitizenSDK.swiftmodule',
         `arm64-apple-ios.${extension}`,
@@ -1273,7 +1241,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
       const extraModule = join(root, `extra-swift-module-${name}`);
       writeAppleProjectionFixture(extraModule);
       addEntry(join(
-        appleFixtureContentRoot(extraModule, 'iOS-Simulator'),
+        appleFixtureContentRoot(extraModule, 'iosSimulator'),
         'Modules',
         'CitizenSDK.swiftmodule',
       ));
@@ -1287,11 +1255,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     writeAppleProjectionFixture(invalidInterface);
     writeFileSync(
       join(
-        invalidInterface,
-        'darwin',
-        'CitizenSDK.xcframework',
-        'macOS',
-        'CitizenSDK.framework',
+        appleFixtureContentRoot(invalidInterface, 'macOS'),
         'Modules',
         'CitizenSDK.swiftmodule',
         'arm64-apple-macos.swiftinterface',
@@ -1306,11 +1270,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const invalidPrivateInterface = join(root, 'invalid-private-interface');
     writeAppleProjectionFixture(invalidPrivateInterface);
     const invalidPrivateModules = join(
-      invalidPrivateInterface,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'macOS',
-      'CitizenSDK.framework',
+      appleFixtureContentRoot(invalidPrivateInterface, 'macOS'),
       'Modules',
       'CitizenSDK.swiftmodule',
     );
@@ -1326,11 +1286,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const extraPrivateSpi = join(root, 'extra-private-spi');
     writeAppleProjectionFixture(extraPrivateSpi);
     const extraPrivatePath = join(
-      extraPrivateSpi,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'iOS',
-      'CitizenSDK.framework',
+      appleFixtureContentRoot(extraPrivateSpi, 'iosDevice'),
       'Modules',
       'CitizenSDK.swiftmodule',
       'arm64-apple-ios.private.swiftinterface',
@@ -1351,7 +1307,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
       wrongInterfaceTarget,
       'darwin',
       'CitizenSDK.xcframework',
-      'iOS-Simulator',
+      appleFixtureSliceIdentifiers.iosSimulator,
       'CitizenSDK.framework',
       'Modules',
       'CitizenSDK.swiftmodule',
@@ -1370,11 +1326,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const leakedPublicType = join(root, 'leaked-public-type');
     writeAppleProjectionFixture(leakedPublicType);
     const leakedModules = join(
-      leakedPublicType,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'iOS',
-      'CitizenSDK.framework',
+      appleFixtureContentRoot(leakedPublicType, 'iosDevice'),
       'Modules',
       'CitizenSDK.swiftmodule',
     );
@@ -1397,7 +1349,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
       wrongModuleTriple,
       'darwin',
       'CitizenSDK.xcframework',
-      'iOS-Simulator',
+      appleFixtureSliceIdentifiers.iosSimulator,
       'CitizenSDK.framework',
       'Modules',
       'CitizenSDK.swiftmodule',
@@ -1430,7 +1382,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     ];
     for (const [name, info] of frameworkInfoDrifts) {
       const drift = join(root, `framework-info-${name}`);
-      writeAppleProjectionFixture(drift, { iOS: { info } });
+      writeAppleProjectionFixture(drift, { iosDevice: { info } });
       assert.throws(
         () => assertAppleReleaseProjection(drift),
         /framework Info\.plist 身份漂移/,
@@ -1439,7 +1391,7 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const extraArchitecture = join(root, 'extra-architecture');
     writeAppleProjectionFixture(extraArchitecture, {
-      iOS: { architectures: ['arm64', 'x86_64'] },
+      iosDevice: { architectures: ['arm64', 'x86_64'] },
     });
     assert.throws(
       () => assertAppleReleaseProjection(extraArchitecture),
@@ -1447,8 +1399,8 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     );
 
     for (const [identifier, binaryPath] of [
-      ['iOS', 'CitizenSDK.framework/Versions/A/CitizenSDK'],
-      ['iOS-Simulator', 'CitizenSDK.framework/Versions/A/CitizenSDK'],
+      ['iosDevice', 'CitizenSDK.framework/Versions/A/CitizenSDK'],
+      ['iosSimulator', 'CitizenSDK.framework/Versions/A/CitizenSDK'],
       ['macOS', 'CitizenSDK.framework/CitizenSDK'],
     ]) {
       const wrongBinaryPath = join(root, `wrong-binary-path-${identifier}`);
@@ -1490,21 +1442,17 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
 
     const unexpectedVariant = join(root, 'unexpected-variant');
     writeAppleProjectionFixture(unexpectedVariant, {
-      iOS: { variant: 'simulator' },
+      iosDevice: { variant: 'simulator' },
     });
     assert.throws(
       () => assertAppleReleaseProjection(unexpectedVariant),
-      /slice 字段闭集漂移|slice 元数据漂移/,
+      /技术变体重复|slice 字段闭集漂移|slice 元数据漂移/,
     );
 
     const wrongResourceLevel = join(root, 'wrong-resource-level');
     writeAppleProjectionFixture(wrongResourceLevel);
     const resourceRoot = join(
-      wrongResourceLevel,
-      'darwin',
-      'CitizenSDK.xcframework',
-      'iOS',
-      'CitizenSDK.framework',
+      appleFixtureContentRoot(wrongResourceLevel, 'iosDevice'),
       'Resources',
     );
     copyFileSync(
@@ -1520,7 +1468,8 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     const missingSlice = join(root, 'missing-slice');
     writeAppleProjectionFixture(missingSlice);
     rmSync(
-      join(missingSlice, 'darwin', 'CitizenSDK.xcframework', 'iOS-Simulator'),
+      join(missingSlice, 'darwin', 'CitizenSDK.xcframework',
+        appleFixtureSliceIdentifiers.iosSimulator),
       { recursive: true },
     );
     assert.throws(
@@ -1532,19 +1481,19 @@ test('Apple XCFramework 固定三个 ARM64 slice、产品 ABI、版本与来源�
     writeAppleProjectionFixture(suffixedSlice);
     const suffixedXcframework = join(suffixedSlice, 'darwin', 'CitizenSDK.xcframework');
     cpSync(
-      join(suffixedXcframework, 'macOS'),
-      join(suffixedXcframework, 'macOS-arm64'),
+      join(suffixedXcframework, appleFixtureSliceIdentifiers.macOS),
+      join(suffixedXcframework, 'unlisted-library'),
       { recursive: true },
     );
-    rmSync(join(suffixedXcframework, 'macOS'), { recursive: true });
+    rmSync(join(suffixedXcframework, appleFixtureSliceIdentifiers.macOS), { recursive: true });
     assert.throws(
       () => assertAppleReleaseProjection(suffixedSlice),
-      /SDK 候选禁止未声明符号链接：macOS-arm64\/CitizenSDK\.framework\/CitizenSDK/,
+      /SDK 候选禁止未声明符号链接：unlisted-library\/CitizenSDK\.framework\/CitizenSDK/,
     );
 
     const extraSlice = join(root, 'extra-slice');
     writeAppleProjectionFixture(extraSlice);
-    mkdirSync(join(extraSlice, 'darwin', 'CitizenSDK.xcframework', 'macOS-extra'));
+    mkdirSync(join(extraSlice, 'darwin', 'CitizenSDK.xcframework', 'unlisted-library-extra'));
     assert.throws(
       () => assertAppleReleaseProjection(extraSlice),
       /三 slice 闭集漂移/,
@@ -2662,7 +2611,7 @@ test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', 
   }
 });
 
-test('原生构建入口固定 Apple ARM64/最低版本且在 mkdir 前拒绝穿越和中间符号链接', () => {
+test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir 前拒绝穿越和中间符号链接', () => {
   const root = mkdtempSync(join(workRoot, 'native-path-guard-test-'));
   try {
     const nativeBuildScript = readFileSync(
@@ -2706,7 +2655,7 @@ test('原生构建入口固定 Apple ARM64/最低版本且在 mkdir 前拒绝穿
     ));
     assert.throws(() => assertAppleDeploymentTargetContract(
       nativeBuildScript.replace(
-        'cmp -s "$source" "$destination" \\\n          || fail "$slice XCFramework Swift module 产物字节漂移：$extension"',
+        'cmp -s "$source" "$destination" \\\n          || fail "$platform/$variant XCFramework Swift module 产物字节漂移：$extension"',
         'true',
       ),
     ));
@@ -3126,12 +3075,7 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
       gitCommitSha: '0'.repeat(40),
       softwareVersion: '1.0.0',
     });
-    assert.deepEqual(manifest.platforms, [
-      { platform: 'android', abi: 'arm64-v8a' },
-      { platform: 'iOS', abi: 'arm64' },
-      { platform: 'iOS-Simulator', abi: 'arm64' },
-      { platform: 'macOS', abi: 'arm64' },
-    ]);
+    assert.deepEqual(manifest.platforms, ['Android', 'iOS', 'macOS']);
     assert.deepEqual(
       manifest.files
         .map((entry) => entry.path)
@@ -3142,14 +3086,14 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
         'android/citizensdk.aar',
         'android/src/main/jniLibs/arm64-v8a/libcitizensdk.so',
         'android/src/main/jniLibs/arm64-v8a/libcitizensdk_jni.so',
-        'darwin/CitizenSDK.xcframework/iOS-Simulator/CitizenSDK.framework/CitizenSDK',
-        'darwin/CitizenSDK.xcframework/iOS/CitizenSDK.framework/CitizenSDK',
-        'darwin/CitizenSDK.xcframework/macOS/CitizenSDK.framework/Versions/A/CitizenSDK',
+        `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.iosDevice}/CitizenSDK.framework/CitizenSDK`,
+        `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.iosSimulator}/CitizenSDK.framework/CitizenSDK`,
+        `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.macOS}/CitizenSDK.framework/Versions/A/CitizenSDK`,
       ],
     );
     const expectedArchivedLinks = Object.fromEntries(
       Object.entries(macOSFrameworkSymlinks).map(([path, target]) => [
-        `darwin/CitizenSDK.xcframework/macOS/CitizenSDK.framework/${path}`,
+        `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.macOS}/CitizenSDK.framework/${path}`,
         target,
       ]),
     );

@@ -1,5 +1,6 @@
 {
   "product_id": "citizenchatserver",
+  "version": "1.0.0",
   "source_repository": "VoyagerRhett/TATA",
   "source_product_id": "tatachatserver",
   "platform": "cloudflare",

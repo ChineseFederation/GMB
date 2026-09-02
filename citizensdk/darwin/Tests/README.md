@@ -42,9 +42,9 @@ directory. Secure Enclave creation, biometric prompts and Keychain device-only
 semantics additionally require real supported Apple hardware and are never
 declared proven by simulator-only execution.
 
-The current local execution built the one `CitizenSDK.xcframework` with exactly
-the iOS, iOS-Simulator and macOS slices, all for ARM64, and compiled both the
-iOS device and `iOS-Simulator` test bundles. This Mac has no installed Simulator
+The current local execution built the one `CitizenSDK.xcframework` with the iOS
+device and simulator variants plus macOS, all with Apple machine architecture
+value `arm64`, and compiled both iOS test bundles. This Mac has no installed Simulator
 runtime, so no iOS XCTest execution is claimed. On macOS, 50 CitizenSDK Core
 and 22 Flutter-adapter XCTest cases ran with zero failures; one
 real-hardware-only case was skipped. The final normal

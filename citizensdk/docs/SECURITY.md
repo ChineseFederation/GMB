@@ -90,7 +90,7 @@ AccountId 和秘密类型。Android Keystore/StrongBox 或 Apple Secure Enclave 
 退休 KEK，并封装或解封 32 字节随机 DEK，绝不接收 child mini-secret 或执行 sr25519。
 解封目标必须是 Rust 拥有的固定 32 字节输出缓冲区，签名结束后立即清零。Android 仍要求
 逐次 `BIOMETRIC_STRONG`；Apple 要求 `biometryCurrentSet + privateKeyUsage` 与
-`WhenUnlockedThisDeviceOnly`。Android 与 Apple 正式投影均使用上述边界；`iOS-Simulator` 因无
+`WhenUnlockedThisDeviceOnly`。Android 与 Apple 正式投影均使用上述边界；iOS 模拟器变体因无
 Secure Enclave 必须如实报告硬件金库和钱包能力不可用，不能用软件降级冒充真机安全能力。
 Android 恢复词与密码在比例分配或 JNI 复制之前必须通过严格 UTF-8 校验和 1024-byte 上限；
 Kotlin/JNI 临时敏感缓冲区以单一所有权管理，并在全部成功、错误和异常出口清零。
@@ -258,7 +258,7 @@ checkpoint 到 provider/Engine 生命周期提交之间没有另一项链、钱�
 `citizensdk_sign_wallet_payload` 只返回签名结果。Android AAR/Flutter 双投影禁止
 `libsmoldot`，只带产品 Core 与薄 JNI bridge；Apple XCFramework 只导出根产品头的 70 个
 `citizensdk_*` 符号，并拒绝 `smoldot_*`、`citizen_sr25519_*` 与 `account_crypto_*`。legacy
-smoldot/signer 符号只允许存在于源码树外的 ARM64 差分测试宿主库，绝不进入候选。
+smoldot/signer 符号只允许存在于源码树外的 macOS `arm64` 差分测试宿主库，绝不进入候选。
 
 聊天、广场、OpenMLS、TUYU 消息协议与产品数据库均被排除。测试夹具只能使用公开向量和
 非生产数据，不得加入真实助记词、设备密钥或用户数据。
@@ -273,21 +273,23 @@ smoldot/signer 符号只允许存在于源码树外的 ARM64 差分测试宿主�
   根 `CitizenSDK`、`Headers`、`Modules`、`Resources` 指向 `Versions/Current/...`；其他任何
   符号链接、路径穿越、未登记文件、常见密钥文件及 PEM 私钥材料均拒绝。
 - `SHA256SUMS` 是 tgz 外部资产，精确覆盖 manifest 与 tgz；校验器重建规范归档字节。
-- Release 候选合同包含 Android `arm64-v8a`、iOS 设备 ARM64、`iOS-Simulator` ARM64 与
-  macOS（仅支持 ARM64 架构），四者使用同一产品 ABI、Core commit 和 SDK version。
+- Release 候选合同包含 Android、iOS 与 macOS；iOS 设备和模拟器只是同一平台的技术变体，
+  三个平台使用同一产品 ABI、Core commit 和 SDK version。当前 Android ABI 为 `arm64-v8a`，
+  Apple machine slice 架构元数据为 `arm64`。
 - GitHub Release 是正式分发终态，但不等于真机硬件金库安全验收；对应结果必须单独留档。
 
-本轮 Apple 本机已编译 iOS 设备与 `iOS-Simulator` 两组测试 bundle，但因无 Simulator
+本轮 Apple 本机已编译 iOS 设备与模拟器变体两组测试 bundle，但因无 Simulator
 runtime 没有声称 iOS XCTest 已运行。macOS Core 50 项与 Flutter adapter 22 项 XCTest
 0 失败，1 项需要真机硬件的用例跳过；normal/supervisor smoke 通过。本机无真实
 Apple 移动设备，所以 Secure Enclave、生物认证和 device-only Keychain 仍需真机验收。
 当前 TataConsole Flow 尚未接入本闭集；本步未运行远程 CI、正式 Release、Hosted 上传或 Git。
 
-iOS 与 `iOS-Simulator` 的浅层 framework install ID 为
+iOS 设备与模拟器变体的浅层 framework install ID 为
 `@rpath/CitizenSDK.framework/CitizenSDK`；macOS 标准 `Versions/A` framework install ID 为
 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`。真实 Flutter consumer 已完成 Android
-release ARM64 APK、iOS device Release no-codesign、`iOS-Simulator` generic ARM64 编译和
-macOS Release 构建，但没有移动真机或 Simulator runtime 声明。Flutter SPM 识别警告与
+release APK（ABI `arm64-v8a`）、iOS device Release no-codesign、iOS 模拟器变体（Rust target
+`aarch64-apple-ios-sim`）编译和 macOS Release 构建，但没有移动真机或 Simulator runtime
+声明。Flutter SPM 识别警告与
 Android built-in Kotlin 迁移提示延后到第 9 步处理。
 
 同一本机闭集已验证 Android AAR、Hosted 17 文件分析 0 问题、完整 Dart 316/316

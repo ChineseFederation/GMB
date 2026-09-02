@@ -51,33 +51,33 @@ apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
 def sharedFacadeSource = file('native/src/main/kotlin').canonicalFile
-def packagedArm64Directory = file('src/main/jniLibs/arm64-v8a').canonicalFile
-def stagedArm64Value = System.getenv('CITIZENSDK_ANDROID_CORE_DIR')
-def stagedArm64File = stagedArm64Value == null || stagedArm64Value.trim().isEmpty()
+def packagedAndroidAbiDirectory = file('src/main/jniLibs/arm64-v8a').canonicalFile
+def stagedAndroidAbiValue = System.getenv('CITIZENSDK_ANDROID_CORE_DIR')
+def stagedAndroidAbiFile = stagedAndroidAbiValue == null || stagedAndroidAbiValue.trim().isEmpty()
     ? null
-    : file(stagedArm64Value)
-def selectedArm64Directory = stagedArm64Value == null || stagedArm64Value.trim().isEmpty()
-    ? packagedArm64Directory
-    : stagedArm64File.canonicalFile
+    : file(stagedAndroidAbiValue)
+def selectedAndroidAbiDirectory = stagedAndroidAbiValue == null || stagedAndroidAbiValue.trim().isEmpty()
+    ? packagedAndroidAbiDirectory
+    : stagedAndroidAbiFile.canonicalFile
 
-if (stagedArm64Value != null && !stagedArm64Value.trim().isEmpty()) {
-    if (!stagedArm64File.isAbsolute()) {
+if (stagedAndroidAbiValue != null && !stagedAndroidAbiValue.trim().isEmpty()) {
+    if (!stagedAndroidAbiFile.isAbsolute()) {
         throw new GradleException('CITIZENSDK_ANDROID_CORE_DIR must be absolute')
     }
     if (System.getenv('GITHUB_ACTIONS') == 'true') {
         def githubWorkspaceValue = System.getenv('GITHUB_WORKSPACE')
         if (githubWorkspaceValue != null && !githubWorkspaceValue.trim().isEmpty() &&
-            selectedArm64Directory.toPath().startsWith(file(githubWorkspaceValue).canonicalFile.toPath())) {
+            selectedAndroidAbiDirectory.toPath().startsWith(file(githubWorkspaceValue).canonicalFile.toPath())) {
             throw new GradleException('CitizenSDK Android native staging must remain outside the GitHub source checkout')
         }
     } else {
         def localBuildRoot = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
-        if (!(selectedArm64Directory.path == localBuildRoot.path ||
-            selectedArm64Directory.path.startsWith(localBuildRoot.path + File.separator))) {
+        if (!(selectedAndroidAbiDirectory.path == localBuildRoot.path ||
+            selectedAndroidAbiDirectory.path.startsWith(localBuildRoot.path + File.separator))) {
             throw new GradleException('Local CitizenSDK Android staging must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
         }
     }
-    if (selectedArm64Directory.toPath().startsWith(sdkProductRoot.toPath())) {
+    if (selectedAndroidAbiDirectory.toPath().startsWith(sdkProductRoot.toPath())) {
         throw new GradleException('CitizenSDK Android native staging must remain outside the source tree')
     }
 }
@@ -94,7 +94,7 @@ android {
             java.srcDirs += [sharedFacadeSource]
             assets.srcDirs = [file('../assets')]
             // Android's jniLibs root is the parent of the fixed arm64-v8a leaf.
-            jniLibs.srcDirs = [selectedArm64Directory.parentFile]
+            jniLibs.srcDirs = [selectedAndroidAbiDirectory.parentFile]
         }
     }
 
@@ -131,25 +131,25 @@ def verifyCitizenSdkAndroidNativeInputs = tasks.register('verifyCitizenSdkAndroi
         if (!sharedFacadeSource.isDirectory()) {
             throw new GradleException("Missing shared CitizenSDK Android facade: ${sharedFacadeSource}")
         }
-        if (!selectedArm64Directory.isDirectory()) {
+        if (!selectedAndroidAbiDirectory.isDirectory()) {
             throw new GradleException(
-                'Missing CitizenSDK Android ARM64 staging; set '
+                'Missing CitizenSDK Android ABI arm64-v8a staging; set '
                     + 'CITIZENSDK_ANDROID_CORE_DIR to the directory containing the two release libraries',
             )
         }
-        if (selectedArm64Directory.name != 'arm64-v8a') {
+        if (selectedAndroidAbiDirectory.name != 'arm64-v8a') {
             throw new GradleException('CitizenSDK Android staging leaf must be named arm64-v8a')
         }
-        def actualLibraries = selectedArm64Directory.listFiles()
+        def actualLibraries = selectedAndroidAbiDirectory.listFiles()
             .collect { it.name }
             .sort()
         def expectedLibraries = ['libcitizensdk.so', 'libcitizensdk_jni.so']
         if (actualLibraries != expectedLibraries) {
             throw new GradleException(
-                "CitizenSDK Android ARM64 libraries must be exactly ${expectedLibraries}; actual=${actualLibraries}",
+                "CitizenSDK Android ABI arm64-v8a libraries must be exactly ${expectedLibraries}; actual=${actualLibraries}",
             )
         }
-        if (new File(selectedArm64Directory, 'libsmoldot.so').exists()) {
+        if (new File(selectedAndroidAbiDirectory, 'libsmoldot.so').exists()) {
             throw new GradleException('CitizenSDK product plugin must not package legacy libsmoldot.so')
         }
     }

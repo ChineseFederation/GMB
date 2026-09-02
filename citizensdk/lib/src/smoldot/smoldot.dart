@@ -10,7 +10,8 @@
 /// - **Async/Await**: Idiomatic Dart async APIs for all operations
 /// - **JSON-RPC**: Full JSON-RPC support with subscriptions
 /// - **Type-safe**: Comprehensive type definitions and error handling
-/// - **Mobile delivery**: CitizenSDK currently ships Android and iOS ARM64
+/// - **Mobile delivery**: CitizenSDK currently ships Android `arm64-v8a` and
+///   iOS Apple `arm64` machine binaries
 ///
 /// ## Usage
 ///

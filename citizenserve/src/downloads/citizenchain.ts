@@ -27,15 +27,17 @@ interface UpdateInput {
 }
 
 const publicationPrefix = '/operations/citizenchain/download-publications/';
-const githubDownloadPrefix = 'https://github.com/ChineseFederation/GMB/releases/download/';
+// 正式下载仓库必须与 GMB origin 和 TataConsole 冻结流程身份完全一致。
+const githubDownloadPrefix = 'https://github.com/VoyagerRhett/GMB/releases/download/';
 const maxClockSkewMs = 5 * 60 * 1000;
 
+// URL 平台段使用统一公开名称；Map 值只是在 D1 和发布事务中沿用的内部记录键。
 const downloadPlatforms = new Map<string, CitizenchainDownloadPlatform>([
-  ['/download/citizenchain/linux-arm64', 'linux-arm'],
-  ['/download/citizenchain/linux-amd64', 'linux-amd'],
-  ['/download/citizenchain/macos-arm64', 'macos'],
-  ['/download/citizenchain/macos-arm64-updater', 'macos'],
-  ['/download/citizenchain/windows-x86_64', 'windows'],
+  ['/download/citizenchain/macOS', 'macos'],
+  ['/download/citizenchain/macOS/updater', 'macos'],
+  ['/download/citizenchain/Windows', 'windows'],
+  ['/download/citizenchain/LinuxARM', 'linux-arm'],
+  ['/download/citizenchain/LinuxAMD', 'linux-amd'],
 ]);
 
 const platformContracts: Readonly<Record<CitizenchainDownloadPlatform, {
@@ -76,7 +78,7 @@ export async function citizenchainDownloadRoute(env: Env, path: string): Promise
     throw new HttpError(404, 'release_asset_not_found', '正式安装包尚未发布');
   }
   validatePublication(platform, row);
-  const assetName = path.endsWith('-updater')
+  const assetName = path.endsWith('/updater')
     ? 'citizenchain-node-latest-macos-arm64.json'
     : row.asset_name;
   const location = `${githubDownloadPrefix}${encodeURIComponent(row.version_tag)}/${encodeURIComponent(assetName)}`;

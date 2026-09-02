@@ -1,7 +1,8 @@
 # Flutter 平台投影
 
 Android、iOS 与 macOS 共用 `citizen/sdk/core/v1` MethodChannel 和
-`citizen/sdk/events/v1` EventChannel。macOS 产品只称为 macOS，当前正式投影只支持 ARM64。
+`citizen/sdk/events/v1` EventChannel。macOS 产品只称为 macOS；当前 Apple 工具链机器架构值为
+`arm64`，不得拼入平台名。
 iOS 与 macOS 在 `pubspec.yaml` 中都声明官方 `sharedDarwinSource: true`，由同一份 Apple
 binding 实现协议；Dart 不为 Apple 复制第二套 transport。
 

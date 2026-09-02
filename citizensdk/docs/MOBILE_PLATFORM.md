@@ -4,13 +4,12 @@
 
 | 平台 | 当前状态 | 正式候选运行件 |
 |---|---|---|
-| Android `arm64-v8a` | 产品 ABI | `citizensdk.aar`、`libcitizensdk.so`、`libcitizensdk_jni.so` |
-| iOS 设备 ARM64 | 产品 ABI、Swift/Flutter | `CitizenSDK.xcframework` |
-| `iOS-Simulator` ARM64 | 产品 ABI 测试 slice；无 Secure Enclave 钱包能力 | `CitizenSDK.xcframework` |
-| macOS（仅支持 ARM64 架构） | 产品 ABI、Swift/Flutter | `CitizenSDK.xcframework` |
+| Android | 产品 ABI；ABI 值 `arm64-v8a` | `citizensdk.aar`、`libcitizensdk.so`、`libcitizensdk_jni.so` |
+| iOS | 设备与模拟器变体；模拟器无 Secure Enclave 钱包能力 | `CitizenSDK.xcframework` |
+| macOS | 产品 ABI、Swift/Flutter；机器架构值 `arm64` | `CitizenSDK.xcframework` |
 
-Linux、Windows 没有正式绑定、硬件金库和 Release 资产，不属于当前交付平台。legacy
-`libsmoldot.dylib` 仅为外部 ARM64 差分测试宿主库，不进入任何 Release 候选。
+LinuxARM、LinuxAMD、Windows 没有正式绑定、硬件金库和 Release 资产，不属于当前交付平台。legacy
+`libsmoldot.dylib` 仅为外部 macOS `arm64` 差分测试宿主库，不进入任何 Release 候选。
 
 ## Dart 与 Flutter 公共边界
 
@@ -101,7 +100,7 @@ EventChannel `onCancel` 只解除 Dart sink，不停止 session。只有 engine 
 `CitizenSDKFlutter` 薄 adapter、typed host services 与平台安全设施，并通过单一
 `CitizenSDK.xcframework` 调用同一 Rust 产品 Core。`pubspec.yaml` 对 iOS 和 macOS 均使用
 `sharedDarwinSource: true`；iOS 最低版本为 16.0，macOS 最低版本为 13.0。产品名称始终只写
-macOS，ARM64 仅表示其支持架构。
+macOS，`arm64` 只作为 Apple 工具链机器架构值。
 
 Apple host 把可重建链数据库、runtime cache 与交易公开事实放入 typed public SQLite，把钱包
 profile、加密秘密信封和 Vault 引用放入 typed secure SQLite；两者都使用具名 record contract、
@@ -127,8 +126,8 @@ Secure Enclave 只保存 generation-scoped EC KEK，用于 wrap/unwrap Rust 随�
 32 字节复制到 Rust-owned buffer，并由 pool 排空释放。Apple SDK-owned wallet UI 会在流程终态前由文本
 控件和短期 Swift `String` 持有恢复词/password；终态会 best-effort 清空控件与 Rust 敏感
 buffer，但 Swift `String` 不可可靠擦除。它们不得返回 public Swift API、记录、持久化或进入
-Flutter。child mini-secret 与 sr25519 private key 仍只在 Rust；任何秘密或 native handle 都不跨 Flutter。`iOS-Simulator` 没有 Secure Enclave，
-必须如实报告硬件金库/钱包能力不可用；其 ARM64 slice 用于产品 ABI 与 Flutter/Swift 集成测试，
+Flutter。child mini-secret 与 sr25519 private key 仍只在 Rust；任何秘密或 native handle 都不跨 Flutter。iOS 模拟器变体没有 Secure Enclave，
+必须如实报告硬件金库/钱包能力不可用；其 Apple `arm64` machine slice 用于产品 ABI 与 Flutter/Swift 集成测试，
 不能冒充真机硬件钱包。
 macOS 也必须在 Secure Enclave 与生物认证实际可用时才开放对应钱包能力；能力缺失不影响公开
 链读取，但禁止软件 KEK 降级。
@@ -137,25 +136,24 @@ iOS 没有与 Android `FLAG_SECURE` 完全等价的系统能力：SDK-owned 界�
 保护覆盖层；macOS 的 SDK-owned window 禁止系统共享。文档不能把这些 best-available 防护写成
 对恶意宿主进程或所有截屏路径的硬隔离。
 
-legacy `libsmoldot.dylib` 只允许构建 ARM64 外部差分测试宿主库；其 `LC_ID_DYLIB` 是 build-local
+legacy `libsmoldot.dylib` 只允许构建 macOS `arm64` 外部差分测试宿主库；其 `LC_ID_DYLIB` 是 build-local
 路径，不是可分发 install name，不能进入 XCFramework、Hosted 或 GitHub 候选。
 
 ## 验证原则
 
 Release 源码门禁反向枚举并固定 Dart、Android 与 Darwin 生产源码、各平台测试、文档、链资产、
-AAR 与 XCFramework 投影。本轮本机 Android AAR 构建通过，Apple 单一 XCFramework 的 `iOS`、
-`iOS-Simulator`、`macOS` 三个 ARM64 slice 构建通过，并已编译 iOS 设备和
-`iOS-Simulator` 两组测试 bundle；
+AAR 与 XCFramework 投影。本轮本机 Android AAR 构建通过，Apple 单一 XCFramework 的 iOS 设备与
+模拟器变体及 macOS 三个 Apple `arm64` machine slice 构建通过，并已编译 iOS 的两组测试 bundle；
 由于没有 Simulator runtime，没有把 iOS XCTest 记为已运行。macOS 已运行 Core 50 项与
 Flutter adapter 22 项 XCTest，0 失败，1 项真机硬件用例跳过；最终 normal/supervisor
 smoke 均通过。本机无真实 Apple 移动设备，不声称 Secure Enclave、生物认证或
 device-only Keychain 已完成真机验收。当前 TataConsole Flow 尚未接入本闭集，本步
 未运行远程 CI、正式 Release、Hosted 上传或 Git。
 
-iOS 与 `iOS-Simulator` 使用浅层 framework 和
+iOS 设备与模拟器变体使用浅层 framework 和
 `@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A`
 framework 和 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK` install ID。候选只允许
 macOS framework 的精确五个标准内部相对符号链接，其他符号链接全部拒绝。真实 Flutter
-consumer 已完成 Android release ARM64 APK、iOS device Release no-codesign、
-`iOS-Simulator` generic ARM64 编译和 macOS Release 构建，但没有移动真机或 Simulator
+consumer 已完成 Android release APK（ABI `arm64-v8a`）、iOS device Release no-codesign、
+iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建，但没有移动真机或 Simulator
 runtime 声明。Flutter SPM 与 Android built-in Kotlin 的未来迁移提示延后到第 9 步。

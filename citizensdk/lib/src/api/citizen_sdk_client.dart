@@ -25,7 +25,7 @@ final class CitizenSdkClient {
 
   /// 打开当前受支持平台的 CitizenSDK session，但不隐式启动轻节点。
   ///
-  /// Flutter 产品投影当前覆盖 Android、iOS 与 macOS（仅支持 ARM64 架构）；三个投影使用
+  /// Flutter 产品投影当前覆盖 Android、iOS 与 macOS；三个投影使用
   /// 完全相同的公开 API、22 个固定 tuple 方法和事件合同。
   static Future<CitizenSdkClient> open() async {
     final codec = const CitizenSdkFlutterCodec();
@@ -50,7 +50,7 @@ final class CitizenSdkClient {
     throw const CitizenSdkException(
       code: CitizenSdkErrorCode.unsupported,
       message:
-          'CitizenSDK Flutter binding 当前仅支持 Android、iOS 与 macOS（仅支持 ARM64 架构）',
+          'CitizenSDK Flutter binding 当前仅支持 Android、iOS 与 macOS',
     );
   }
 

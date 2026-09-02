@@ -9,10 +9,10 @@ import 'package:citizen_sdk/citizen_sdk.dart';
 ```
 
 Android、iOS 与 macOS 已安装正式 binding。iOS 和 macOS 在 `pubspec.yaml` 中共同使用
-`sharedDarwinSource: true`，由 `darwin/` 的同一 Swift/Flutter adapter 投影产品 ABI；macOS
-仅支持 ARM64 架构。`CitizenSdkClient.open()` 在 Linux、Windows 和 Web 上稳定返回
+`sharedDarwinSource: true`，由 `darwin/` 的同一 Swift/Flutter adapter 投影产品 ABI。
+`CitizenSdkClient.open()` 在 LinuxARM、LinuxAMD、Windows 和 WASM 上稳定返回
 `CitizenSdkErrorCode.unsupported`，不会误走移动或 Darwin channel。
-`iOS-Simulator` ARM64 可运行产品 ABI 与公开链能力，但没有 Secure Enclave；硬件金库、钱包和
+iOS 模拟器变体可运行产品 ABI 与公开链能力，但没有 Secure Enclave；硬件金库、钱包和
 依赖它们的签名/交易能力必须通过 capability snapshot 报告不可用。
 
 共享 `citizen/sdk/core/v1` 的 22 方法 tuple 从未定义 mnemonic、password、DEK、child secret、
@@ -52,8 +52,8 @@ dev dependencies，且相应源码由 `.pubignore` 排除，不会成为宿主�
 `flutter test --timeout=2m` 执行 316/316。这里记录本地闭集验证，不代表 Hosted 已上传，
 也不代表 TataConsole 远程 CI 已运行。
 
-真实 Flutter consumer 已从本公开入口完成 Android release ARM64 APK、iOS device Release
-no-codesign、`iOS-Simulator` generic ARM64 编译和 macOS Release 构建。该结果只证明公开
+真实 Flutter consumer 已从本公开入口完成 Android release APK（ABI `arm64-v8a`）、iOS device Release
+no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建。该结果只证明公开
 Dart API、Flutter adapter 与原生投影能够链接成产物；未执行移动真机或 Simulator runtime。
 Flutter 对插件 Swift Package Manager 目录的识别警告与 Android built-in Kotlin 迁移提示
 留到第 9 步 Hosted/Flutter 集成统一处理。

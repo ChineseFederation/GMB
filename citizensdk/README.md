@@ -107,12 +107,12 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
 
 - Android `arm64-v8a` 使用产品 ABI；正式候选同时交付原生 AAR 和供 Flutter 插件使用的
   同字节 `libcitizensdk.so`、`libcitizensdk_jni.so`。
-- iOS 同时支持设备 ARM64 与 `iOS-Simulator` ARM64。Swift 原生 API 与 Flutter adapter 共用
-  `darwin/` 生产源码，并从同一个 `CitizenSDK.xcframework` 调用产品 ABI；`iOS-Simulator` 无 Secure
+- iOS 同时支持设备变体与模拟器变体，二者当前 Apple 机器架构值均为 `arm64`。Swift 原生 API 与 Flutter adapter 共用
+  `darwin/` 生产源码，并从同一个 `CitizenSDK.xcframework` 调用产品 ABI；iOS 模拟器变体无 Secure
   Enclave，硬件金库与钱包能力必须如实报告不可用。
-- macOS（仅支持 ARM64 架构）与 iOS 共用上述 Darwin 源码、Swift API、Flutter adapter 和
+- macOS 与 iOS 共用上述 Darwin 源码、Swift API、Flutter adapter 和
   XCFramework 产品边界；产品名始终只写作 macOS。
-- Linux、Windows 仍没有完成语言绑定、平台金库、打包与发布闭环，不能宣称已经交付。
+- LinuxARM、LinuxAMD、Windows 仍没有完成语言绑定、平台金库、打包与发布闭环，不能宣称已经交付。
 - 聊天、广场、OpenMLS、TUYU 账户签名协议、旅行/生活/商家业务均不属于 CitizenSDK。
 - CitizenWallet 冷钱包是独立产品，不属于本 SDK 的能力收编范围。
 
@@ -192,31 +192,32 @@ Android Gradle/Kotlin 的 persistent project state 只能位于 TataConsole 中�
 源码 `android/.kotlin` 明确禁止，候选与反向验证也必须拒绝它。
 Apple 候选使用一个 `CitizenSDK.xcframework` 封装同一产品 Core 与 Swift API，Flutter adapter
 只消费该框架而不重建 Core；
-iOS 设备 ARM64、`iOS-Simulator` ARM64 和 macOS（仅支持 ARM64 架构）三个 slice 必须来自同一 Core commit、
-ABI version 与 SDK version。legacy `libsmoldot.dylib` 仅保留为 ARM64 差分测试宿主库；它的
+iOS 设备变体、iOS 模拟器变体和 macOS 三个 slice 必须来自同一 Core commit、
+ABI version 与 SDK version；其当前 Apple 机器架构值均为 `arm64`。legacy `libsmoldot.dylib` 仅保留为
+macOS `arm64` 差分测试宿主库；它的
 `LC_ID_DYLIB` 是 build-local 路径，不具分发身份，发布器必须排除并随测试工作目录清理。
-三个 slice 的公开名称精确为 `iOS`、`iOS-Simulator`、`macOS`；`aarch64-apple-ios`、
-`aarch64-apple-ios-sim`、`aarch64-apple-darwin` 只是 Rust 编译 target，不得变成额外产品名或
-macOS 架构后缀。
+iOS 设备和模拟器只是同一 iOS 平台的技术变体，公开平台清单只记录 `iOS` 与 `macOS`；
+`aarch64-apple-ios`、`aarch64-apple-ios-sim`、`aarch64-apple-darwin` 只是 Rust 编译 target，
+不得变成额外产品名或 macOS 架构后缀。
 
-iOS 与 `iOS-Simulator` 使用浅层 `CitizenSDK.framework`，install ID 均固定为
+iOS 设备和模拟器变体使用浅层 `CitizenSDK.framework`，install ID 均固定为
 `@rpath/CitizenSDK.framework/CitizenSDK`。macOS 使用 Apple 标准的
 `Versions/A` framework 布局，install ID 固定为
 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`。候选只允许 macOS framework 内部
 `Versions/Current -> A`，以及根 `CitizenSDK`、`Headers`、`Modules`、`Resources` 指向
-`Versions/Current/...` 的精确五个相对符号链接；iOS、`iOS-Simulator` 和候选其他位置不得
+`Versions/Current/...` 的精确五个相对符号链接；iOS 两种变体和候选其他位置不得
 出现任何符号链接。
 
-Apple 本机验证已编译 iOS 设备与 `iOS-Simulator` 两组测试 bundle；本机没有
+Apple 本机验证已编译 iOS 设备与模拟器变体两组测试 bundle；本机没有
 Simulator runtime，因此没有把 iOS XCTest 记为已运行。macOS 实际运行 Core 50 项、
 Flutter adapter 22 项 XCTest，0 失败，其中 1 项需要真机硬件的用例跳过；最终
 normal/supervisor 消费者 smoke 均通过。本机没有真实 Apple 移动设备，这些结果不代表
 Secure Enclave、生物认证或 device-only Keychain 已完成真机验收。
 
-同一真实 Flutter consumer 已完成 Android release ARM64 APK、iOS device Release
-no-codesign、`iOS-Simulator` generic ARM64 编译和 macOS Release 构建。这里仅声明产物已从
+同一真实 Flutter consumer 已完成 Android release APK（ABI `arm64-v8a`）、iOS device Release
+no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建。这里仅声明产物已从
 公开 Dart API、Flutter adapter 和对应原生投影成功链接构建；本机没有移动真机或 Simulator
-runtime，因此不声称 Android/iOS 真机运行或 `iOS-Simulator` 运行通过。Flutter 对插件 Swift
+runtime，因此不声称 Android/iOS 真机或 iOS 模拟器运行通过。Flutter 对插件 Swift
 Package Manager 目录识别的未来兼容警告，以及 Android built-in Kotlin 的未来迁移提示，统一
 留到第 9 步 Hosted/Flutter 集成处理，不在第 6 步建立第二套投影或扩展工具链范围。
 
@@ -250,7 +251,7 @@ Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/
 `lib/src/crypto/account_codec.dart` 1 个、`lib/src/models` 5 个和 `lib/src/platform` 4 个；
 归档的旧 Dart 链、钱包、交易、smoldot 与 Preferences 实现均由 `.pubignore` 排除。
 Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 AAR、native 测试/C++/构建
-输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 ARM64 SO。两种分发读取
+输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 `arm64-v8a` SO。两种分发读取
 同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
 公民网下载。
 

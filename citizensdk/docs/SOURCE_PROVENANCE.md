@@ -119,9 +119,10 @@ formatter 归一外不改行为；发布器继续对迁移闭集逐文件固定�
 
 历史 `README.md`、`BUILD.md`、`UPSTREAM.md` 中的桌面平台、CitizenApp 路径及源码树内
 `target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前产品
-ABI 投影覆盖 Android ARM64、iOS 设备 ARM64、`iOS-Simulator` ARM64 与 macOS（仅支持 ARM64
-架构）。宿主测试库与全部生成记录只能写入 Runner 临时目录或 TataConsole 中央目录。legacy
-`libsmoldot.dylib` 仅允许 ARM64 差分测试；其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选。实际指引以本文件、
+ABI 投影覆盖 Android、iOS 与 macOS。当前 Android ABI 为 `arm64-v8a`；iOS 设备与模拟器变体
+及 macOS 的 Apple machine slice 架构值为 `arm64`。宿主测试库与全部生成记录只能写入 Runner
+临时目录或 TataConsole 中央目录。legacy `libsmoldot.dylib` 仅允许 macOS `arm64` 差分测试；
+其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选。实际指引以本文件、
 根 README 和 `docs/NATIVE_PACKAGING.md` 为准。
 
 ## smoldot FFI
@@ -196,7 +197,7 @@ import/add 是用户显式输入，private key 与 child secret 永不导出。
 Android 候选注入 `libcitizensdk.so` 与 `libcitizensdk_jni.so`，并生成无 Flutter 依赖的
 原生 AAR；根 Flutter 插件直接编译同一 Kotlin facade 并消费同字节双库。Apple 候选从
 `darwin/Sources/CitizenSDK` 与同一 Rust Core 生成一个 `CitizenSDK.xcframework`，只含 iOS
-设备 ARM64、`iOS-Simulator` ARM64 与 macOS（仅支持 ARM64 架构）三个产品 slice；
+设备与模拟器变体及 macOS 三个 Apple `arm64` machine slice；
 `darwin/Sources/CitizenSDKFlutter` 作为薄 Flutter adapter 消费该框架，不重建 Core。legacy
 `libsmoldot` 不进入任一正式候选。
 
@@ -382,7 +383,7 @@ CitizenSDK 当前平台适配源码位于自己的 `android/` 与共享 `darwin/
   `FLAG_SECURE` Activity。
 - Apple：Secure Enclave EC KEK、`biometryCurrentSet + privateKeyUsage`、
   `WhenUnlockedThisDeviceOnly`，以及分离的 typed public/secure SQLite。Secure Enclave 只
-  wrap/unwrap 随机 DEK，不执行 sr25519；`iOS-Simulator` 没有对应硬件钱包能力。
+  wrap/unwrap 随机 DEK，不执行 sr25519；iOS 模拟器变体没有对应硬件钱包能力。
 - Security framework 解封返回的不可变 `CFData` 只在对应 `autoreleasepool` 内短暂存活；桥接层
   避免生成 Swift `Data`/COW 副本，在不能可靠原地清零的边界下立即把精确 32 字节复制到
   Rust-owned buffer，并由 pool 排空释放；Rust-owned 输出在使用后清零。SDK-owned wallet UI
@@ -400,15 +401,15 @@ SDK-owned iOS/macOS wallet flow；`Sources/CitizenSDKFlutter` 只实现固定 22
 EventChannel router、session/事件收口和 wallet-flow bridge，不包含第二份 Engine 或秘密通道。
 
 统一原生入口把 `Sources/CitizenSDK`、根产品头、Rust Core、Privacy Manifest 与链资产编成
-`CitizenSDK.xcframework`，只允许 iOS 设备 ARM64、`iOS-Simulator` ARM64 和 macOS（仅支持 ARM64 架构）三个
+`CitizenSDK.xcframework`，只允许 iOS 设备与模拟器变体和 macOS 三个 Apple `arm64` machine
 slice。Flutter adapter 由 `darwin/citizen_sdk.podspec` 编译并消费该框架；Swift Package 同样只
 引用该二进制产品。iOS 与 macOS 在根 pubspec 共用 `sharedDarwinSource: true`，因此没有两份
-Apple 插件源码真源。legacy ARM64 `libsmoldot.dylib` 仅用于源码树外差分测试，不能进入框架或
-候选。三个公开 slice 名精确为 `iOS`、`iOS-Simulator`、`macOS`；
-`aarch64-apple-ios`、`aarch64-apple-ios-sim`、`aarch64-apple-darwin` 是编译 target，不是可变的
+Apple 插件源码真源。legacy macOS `arm64` `libsmoldot.dylib` 仅用于源码树外差分测试，不能进入框架或
+候选。公开平台名只记录 `iOS` 与 `macOS`；iOS 设备和模拟器是同一平台的技术变体。
+`aarch64-apple-ios`、`aarch64-apple-ios-sim`、`aarch64-apple-darwin` 是编译 target，不是
 产品名或 macOS 后缀。
 
-iOS 与 `iOS-Simulator` 使用浅层 framework，install ID 均为
+iOS 设备与模拟器变体使用浅层 framework，install ID 均为
 `@rpath/CitizenSDK.framework/CitizenSDK`。macOS 使用标准 `Versions/A` framework，install ID
 为 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`。Release 归档只允许并保留 macOS
 framework 的精确五个标准内部相对符号链接：`Versions/Current -> A`，以及根
@@ -423,13 +424,13 @@ destroy-only/closed 单调前进；未收口 facade 整体交给进程级 superv
 然后先取消所有 session 未完工作再等待关闭；iOS 使用 published plugin 的正式 detach
 callback，macOS 使用同一幂等显式入口和最终 deinit fallback。
 
-本轮本机已编译 iOS 设备与 `iOS-Simulator` 两组测试 bundle；因本机无 Simulator runtime，
+本轮本机已编译 iOS 设备与模拟器变体两组测试 bundle；因本机无 Simulator runtime，
 没有声称 iOS XCTest 已运行。macOS 已运行 Core 50 项和 Flutter adapter 22 项 XCTest，
 0 失败、1 项真机硬件用例跳过；最终 normal/supervisor smoke 通过。本机无真实 Apple
 移动设备，不声称 Secure Enclave、生物认证或 device-only Keychain 已验收。
 
-真实 Flutter consumer 已完成 Android release ARM64 APK、iOS device Release no-codesign、
-`iOS-Simulator` generic ARM64 编译和 macOS Release 构建；没有移动真机或 Simulator runtime
+真实 Flutter consumer 已完成 Android release APK（ABI `arm64-v8a`）、iOS device Release no-codesign、
+iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建；没有移动真机或 Simulator runtime
 运行声明。Flutter 对插件 Swift Package Manager 目录的未来识别警告和 Android built-in
 Kotlin 迁移提示延后到第 9 步 Hosted/Flutter 集成处理，不在第 6 步引入第二套投影。
 
@@ -481,7 +482,7 @@ Android Flutter host、Android native JVM/instrumentation、Darwin Swift/Flutter
 第 5.2 步 Android 根测试固定 tuple codec、session/orphan 生命周期和 SDK-owned wallet flow；
 native 测试固定 Java/Kotlin facade、JNI ABI、typed stores、硬件金库、Activity 秘密边界与取消。
 第 6 步 Darwin 闭集要求覆盖共享 Swift/Flutter adapter、typed public/secure SQLite、Apple Vault、
-SDK-owned wallet flow、`iOS-Simulator` ARM64 XCTest 与三个 Apple XCFramework slice。
+SDK-owned wallet flow、iOS 模拟器 XCTest 与三个 Apple XCFramework slice。
 旧 `HardwareSecretVaultTest.kt`/`VaultEnvelopeTest.kt` 根插件测试已经删除，不能重新作为第二套
 金库实现进入闭集。文件闭集与运行时测试数量是两项不同合同，均必须满足。
 
@@ -490,15 +491,15 @@ SDK-owned wallet flow、`iOS-Simulator` ARM64 XCTest 与三个 Apple XCFramework
 `flutter test --timeout=2m`，不能以默认外层超时截断其中的 30 秒活链订阅窗口。第 2 步隔离
 副本实际执行结果为 288/288。Android/Apple 平台合同
 还必须在临时宿主中真实运行
-Android `:citizen_sdk:testDebugUnitTest` JUnit 与 ARM64 `iOS-Simulator` XCTest；只编译
+Android `:citizen_sdk:testDebugUnitTest` JUnit 与 iOS 模拟器 XCTest；只编译
 插件、发现测试或生成测试报告都不能替代执行。上述数量和命令描述测试套件合同，不是尚未完成
-的某次最终验收结果。本轮 Apple 执行记录是：iOS 设备与 `iOS-Simulator` 两组测试 bundle
+的某次最终验收结果。本轮 Apple 执行记录是：iOS 设备与模拟器变体两组测试 bundle
 编译通过；本机无 Simulator runtime，因此未执行 iOS XCTest；macOS Core 50 项与 Flutter
 adapter 22 项 XCTest 0 失败，1 项真机硬件用例跳过；normal/supervisor smoke 通过。
 当前 TataConsole Flow 尚未集成本闭集，本步没有运行远程 CI、正式 Release、Hosted 上传或 Git。
 
-本轮完整本机闭集还包括：Android AAR 构建通过；Apple 单一 XCFramework 的 `iOS`、
-`iOS-Simulator`、`macOS` 三个 ARM64 slice 构建通过；Hosted 17 文件分析 0 问题；完整
+本轮完整本机闭集还包括：Android AAR 构建通过；Apple 单一 XCFramework 的 iOS 设备与
+模拟器变体及 macOS 三个 Apple `arm64` machine slice 构建通过；Hosted 17 文件分析 0 问题；完整
 Dart 316/316（`--timeout=2m`）；根 Rust 285/285、compile-fail 文档测试 1/1、Clippy 与
 格式检查；Android 原生 Kotlin/Java 单元测试 Gradle 17 个 task 成功。
 
@@ -508,7 +509,8 @@ FFI Rust 5/5、PoW Rust 290/290（另有 3 项上游 ignored、14 个 benchmark 
 Android JUnit 3/3、Release 合同 18/18、TataConsole 99/99 与统一数据字典定向合同 2/2；
 这些历史结果不冒充本次目录重构后的验证结论。
 当时 Android 最终冻结副本与产品真源逐字节目录比较无差异，生成的历史 CitizenSDK AAR 只包含
-`arm64-v8a/libsmoldot.so`。iOS ARM64 设备 Release App 与 ARM64 Simulator 测试包均完成
+`arm64-v8a/libsmoldot.so`。iOS 设备 Release App 与 iOS 模拟器测试包（Apple machine value
+均为 `arm64`）均完成
 编译链接并保留全部 25 个轻节点/sr25519 导出符号；设备与 Simulator 静态归档各有 397 个
 可解析 Mach-O 对象，最低系统版本全部不高于 iOS 16.0。本机没有 Simulator runtime，故
 没有把 2 项 XCTest 记为本地执行通过。以上全部是改接产品 ABI 前的历史结果，不证明第 5.2

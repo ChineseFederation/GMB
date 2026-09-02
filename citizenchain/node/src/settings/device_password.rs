@@ -274,8 +274,9 @@ mod unix_pam_auth {
             if !(*response).resp.is_null() {
                 let len = libc::strlen((*response).resp);
                 if len > 0 {
-                    // `c_char` 在 Linux ARM64 上就是 `u8`，直接按原指针元素清零可同时
-                    // 适配 ARM64 与 AMD64，避免同类型裸指针转换触发架构专属 Clippy。
+                    // `c_char` 在 Rust target `aarch64-unknown-linux-gnu` 上为 `u8`，在
+                    // `x86_64-unknown-linux-gnu` 上为 `i8`；直接按原指针元素清零可避免
+                    // 同类型裸指针转换触发特定 target 的 Clippy。
                     ptr::write_bytes((*response).resp, 0, len);
                 }
                 libc::free((*response).resp as *mut c_void);

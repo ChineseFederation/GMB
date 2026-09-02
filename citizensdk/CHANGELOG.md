@@ -3,15 +3,16 @@
 ## 1.0.0 - Unreleased
 
 - Froze the first stable CitizenSDK package contract around one product ABI for
-  Android ARM64, iOS device ARM64, `iOS-Simulator` ARM64, and macOS with ARM64 as
-  its only supported architecture. The Apple slice name remains exactly macOS.
+  Android, the iOS device and simulator variants, and macOS. The current Android
+  ABI is `arm64-v8a`; Apple machine architecture metadata is `arm64`.
 - Added the typed Dart public API and fixed tuple-only Flutter protocol. The
   Android Flutter plugin and native AAR share one Kotlin facade, JNI bridge,
   Rust Core, chain assets, version, and release candidate.
 - Added one shared Darwin source projection for the native Swift API and
   Flutter adapter. iOS and macOS consume the same product Core through
-  `CitizenSDK.xcframework`; the product is named macOS and supports ARM64 only.
-- Kept iOS and iOS-Simulator as shallow frameworks with install ID
+  `CitizenSDK.xcframework`; the product is named macOS and its current machine
+  architecture metadata is `arm64`.
+- Kept the iOS device and simulator variants as shallow frameworks with install ID
   `@rpath/CitizenSDK.framework/CitizenSDK`, and made macOS a standard
   `Versions/A` framework with install ID
   `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`. Release candidates permit
@@ -32,7 +33,7 @@
 - Added separate typed public and secure SQLite stores on Apple. Secure Enclave
   protects only a generation-scoped KEK used to wrap random DEKs; sr25519 stays
   in Rust, and no mnemonic, password, DEK, child secret, private key, or native
-  handle has a Flutter-channel representation. The `iOS-Simulator` ARM64 slice
+  handle has a Flutter-channel representation. The iOS simulator variant
   reports hardware-vault and wallet capabilities unavailable instead of using
   a software security downgrade.
 - Made the Android release projection exactly one AAR plus the same
@@ -58,15 +59,16 @@
   transport files. Archived Dart light-client, wallet, transaction, smoldot,
   and Preferences implementations remain audit/differential inputs only.
 - Built the Android AAR, compiled both iOS product test bundles, and assembled
-  the single Apple XCFramework with exactly the iOS, iOS-Simulator, and macOS
-  slices, all for ARM64. Ran the macOS native suites: 50 Core and 22 Flutter-adapter
+  the single Apple XCFramework with the iOS device and simulator variants plus
+  macOS, all with Apple machine architecture value `arm64`. Ran the macOS native suites: 50 Core and 22 Flutter-adapter
   XCTest cases passed with no failures; one
   real-hardware-only case was skipped. The final normal and supervisor consumer
   smoke processes passed. No local Simulator runtime or physical Apple mobile
   device was available, so this does not claim iOS XCTest execution or device
   Secure Enclave/biometric validation.
-- Built a real Flutter consumer as an Android release ARM64 APK, an iOS device
-  Release app without code signing, a generic ARM64 iOS-Simulator target, and a
+- Built a real Flutter consumer as an Android release APK for ABI `arm64-v8a`, an iOS device
+  Release app without code signing, a generic iOS simulator variant target using Rust
+  target `aarch64-apple-ios-sim`, and a
   macOS Release app. These are build/link results, not physical-device or
   Simulator-runtime claims. Flutter's future Swift Package Manager recognition
   warning and Android's built-in Kotlin migration notice are deferred to the
@@ -173,7 +175,7 @@
 - Kept the original `citizensdk_create` composition chain-only while exposing
   the complete host-composed surface through `citizensdk_create_with_host`.
   The typed Dart, Android and shared Darwin bindings use that ABI. Legacy
-  smoldot host artifacts remain ARM64 differential-test-only and are excluded
+  smoldot host artifacts remain macOS `arm64` differential-test-only and are excluded
   from release candidates.
 
 ## 0.1.0 - 2026-08-29
@@ -181,6 +183,6 @@
 - Established `citizen_sdk` as the single Flutter package boundary for the
   CitizenChain light client, hot wallet, sr25519 signing, and on-chain
   transactions.
-- Added Android ARM64 and iOS ARM64 native-library packaging contracts.
+- Added Android `arm64-v8a` and iOS Apple `arm64` machine-library packaging contracts.
 - Added a Hosted Package candidate contract derived from the same verified
   GitHub Release candidate. This version remains a pre-1.0 release candidate.

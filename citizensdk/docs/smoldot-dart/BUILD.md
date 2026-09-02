@@ -32,22 +32,22 @@ release path exists.
 
 ## Current mobile and Apple target contract
 
-The current product target names and architectures are exact:
+The current public platform names and compiler targets are exact:
 
-| Product slice | Rust target | Purpose |
-|---|---|---|
-| Android | `aarch64-linux-android` | Android ARM64 product Core and JNI/AAR projection |
-| iOS | `aarch64-apple-ios` | Physical iPhone/iPad device ARM64 ABI |
-| iOS-Simulator | `aarch64-apple-ios-sim` | Apple-silicon Simulator ARM64 ABI |
-| macOS | `aarch64-apple-darwin` | macOS product ABI; supported architecture is ARM64 only |
+| Platform | Technical variant | Rust target | Purpose |
+|---|---|---|---|
+| Android | ABI `arm64-v8a` | `aarch64-linux-android` | Product Core and JNI/AAR projection |
+| iOS | device | `aarch64-apple-ios` | Physical iPhone/iPad device ABI |
+| iOS | simulator | `aarch64-apple-ios-sim` | Apple-silicon Simulator ABI |
+| macOS | machine value `arm64` | `aarch64-apple-darwin` | Product ABI |
 
-The two iOS slices both execute ARM64 instructions but use different Apple
-platform ABIs and SDKs. They therefore remain separate XCFramework slices.
-macOS supports ARM64 only and its product/slice name is always `macOS`; there
-is no x86, universal, or architecture-suffixed macOS product.
+The two iOS slices both use Apple machine architecture value `arm64` but have
+different Apple platform ABIs and SDKs. They therefore remain separate
+XCFramework technical variants while sharing the single public platform name
+`iOS`. The macOS product name is always `macOS`; it has no architecture suffix.
 
-`CitizenSDK.xcframework` contains exactly `iOS`, `iOS-Simulator` and `macOS`.
-The iOS and iOS-Simulator slices use a shallow framework with install ID
+`CitizenSDK.xcframework` contains the iOS device and simulator variants plus
+macOS. The two iOS variants use a shallow framework with install ID
 `@rpath/CitizenSDK.framework/CitizenSDK`; macOS uses the standard `Versions/A`
 framework with install ID
 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK`. Only the five canonical
@@ -55,10 +55,11 @@ relative links required by that macOS framework are permitted in a candidate.
 The framework carries the public C headers, the Swift module, the one Rust
 CitizenSDK Core, the three verified `citizenchain` assets and the privacy
 manifest. A legacy `libsmoldot.dylib` may be built under the central work root
-only for Dart differential tests; it is an ARM64 test binary for macOS, is not a product ABI and
+only for Dart differential tests; it is a macOS test binary with machine value
+`arm64`, is not a product ABI and
 must never enter a CitizenSDK candidate.
 
-Linux and Windows official projections are implemented only in their later
+LinuxARM, LinuxAMD and Windows official projections are implemented only in their later
 task-card steps. This archived document does not claim that they are already
 available.
 

@@ -25,7 +25,8 @@ const gitCommitSha = '1234567890abcdef1234567890abcdef12345678';
 const temporaryRoots = [];
 const flowRoot = process.env.TATA_CONSOLE_FLOW_ROOT;
 if (!flowRoot) throw new Error('缺少 TATA_CONSOLE_FLOW_ROOT');
-const releaseAction = resolve(flowRoot, 'gmb/scripts/citizenweb-ci-web.mjs');
+// TataConsole 重构后每个产品只暴露自己的完整动作入口，测试不得恢复旧共享脚本路径。
+const releaseAction = resolve(flowRoot, 'gmb/citizenweb/release-web.mjs');
 
 function runRelease(argumentsList) {
   const result = spawnSync(process.execPath, [releaseAction, 'citizenweb-release', ...argumentsList], {
@@ -95,14 +96,26 @@ afterEach(() => {
 
 test('公民链四端下载固定走后端白名单代理，不受 Runtime Release 影响', () => {
   assert.match(downloadButtonSource, /href=\{`\/api\$\{option\.downloadPath\}`\}/);
-  for (const downloadPath of [
+  const citizenChainDownloads = /name: '公民链'[\s\S]*?downloads: \[([\s\S]*?)\n    \],/.exec(ecosystemSource);
+  assert.ok(citizenChainDownloads, '缺少公民链下载项');
+  assert.deepEqual(
+    citizenChainDownloads[1].trim().split('\n').map((line) => line.trim()),
+    [
+      "{ label: 'macOS', kind: 'file', downloadPath: '/download/citizenchain/macOS' },",
+      "{ label: 'Windows', kind: 'file', downloadPath: '/download/citizenchain/Windows' },",
+      "{ label: 'LinuxARM', kind: 'file', downloadPath: '/download/citizenchain/LinuxARM' },",
+      "{ label: 'LinuxAMD', kind: 'file', downloadPath: '/download/citizenchain/LinuxAMD' },",
+    ],
+  );
+  assert.doesNotMatch(ecosystemSource, /label: 'Linux-(?:arm|amd)'/);
+  for (const oldPath of [
     '/download/citizenchain/macos-arm64',
     '/download/citizenchain/windows-x86_64',
     '/download/citizenchain/linux-arm64',
     '/download/citizenchain/linux-amd64',
-  ]) {
-    assert.match(ecosystemSource, new RegExp(`downloadPath: '${downloadPath}'`));
-  }
+    '/download/citizenchain/linux-arm',
+    '/download/citizenchain/linux-amd',
+  ]) assert.doesNotMatch(ecosystemSource, new RegExp(oldPath));
   assert.doesNotMatch(ecosystemSource, /citizenchain-release|releaseTag:/);
 });
 

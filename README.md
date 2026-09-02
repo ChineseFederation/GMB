@@ -1,7 +1,8 @@
 # GMB
 
-GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的开源产品仓库，公开契约、测试和 CI 均可独立运行，
-不依赖私人运维工具或 AI 编程系统。
+GMB 是公民链、公民移动端、公民服务端、公民钱包、CitizenSDK 和官网的开源产品仓库。产品源码、
+公开契约和本地测试可以从本仓库独立读取与执行；GitHub CI/Release 通过冻结的 TATA 提交消费统一
+中央流程，GMB 不复制私人运维源码或第二套产品流水线。
 
 快速入口：
 
@@ -11,28 +12,45 @@ GMB 是公民链、公民移动端、公民服务端、公民钱包和官网的�
   GMB 门禁通过中央流程只读索引、共享分片和准确产品分片，本仓不保留副本。
 - 统一二维码协议：[`shared/qr-protocol/`](shared/qr-protocol/)
 - 产品与发布边界：[本文件“产品与发布边界”](#产品与发布边界)
-- GitHub Actions：[`gmb-repository.yml`](.github/workflows/gmb-repository.yml) 是 GitHub 唯一注册入口；
-  22 条产品 CI/Release 仍按产品保存在 `.github/workflows/<product>/`，由该入口按准确路径路由，
-  不移动分组文件，也不生成顶层镜像文件。统一仓库门禁同时检查文档、残留、安全边界和新增
-  代码的中文注释；单个代码文件新增不少于 12 行时，中文注释也必须出现在本次新增内容中。
+- GitHub Actions：[`repository.yml`](.github/workflows/repository.yml) 是唯一接受显式调度的入口，
+  它只调用可复用的 [`flow.yml`](.github/workflows/flow.yml)。`flow.yml` 校验短期租约、检出准确的
+  TATA 提交，再调用 `.tata-flow/tataconsole/flows/gmb/shared` 中的中央流程。GMB 一级产品根目录
+  不保存 GMB 产品级 Workflow 副本；内嵌上游依赖保留的来源仓库 `.github` 元数据不会成为本仓
+  可执行 Workflow。统一仓库门禁继续检查文档、残留、安全边界和新增代码的中文注释。
 
 ## 产品与发布边界
 
 产品目录：
 
-- `citizenchain`：公民链 Node 与 Runtime。
+- `citizenchain`：公民链 Node、Runtime 与 OnChina。
 - `citizenapp`：公民 iOS、Android 移动端，不包含服务端实现。
 - `citizenserve`：独立部署到 Cloudflare 的公民服务端。
+- `citizenchatserver`：CitizenChatServer 的公民产品声明与 Cloudflare 资源配置，不复制通用聊天源码。
 - `citizenwallet`：公民钱包 iOS、Android 离线冷钱包。
 - `citizenweb`：公民网 Web 前端，不包含公民服务端。
+- `citizensdk`：公民链跨平台 SDK 独立产品，不承载广场、聊天或其它应用业务。
 
-生产发布授权中的 `platform` 表示产品端，不表示部署供应商：公民网唯一使用
-`citizenweb/web`，公民服务端唯一使用 `citizenserve/cloudflare`。Cloudflare Pages 是
-公民网的部署实现，不得改写公民网的 `web` 产品端身份。
+公开交付身份按类型化字段表达，不得把供应商、渠道、架构或交付类型塞入 `platform`：
 
-每个产品、端和动作独立管理。CitizenServe 的 `cloudflare` 端分别使用独立的 CI、Release
-逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish 只由本机
-  TataConsole 执行，不属于 GitHub Workflow。
+- 公开平台或交付类型只允许 `iOS`、`Android`、`macOS`、`LinuxARM`、`LinuxAMD`、`Windows`、
+  `WASM`、`SDK` 八个标准名称；`platform` 只承载宿主平台，官方 ABI、target triple 和 Apple
+  技术变体另存机器字段。
+- Cloudflare 只能进入 `deployment_provider` 等供应商字段，不能冒充平台。
+- Web 只能进入 `delivery_channel` 等渠道字段，普通网页不能冒充 `WASM`。
+- `SDK` 是交付类型；同一记录还需要表达宿主平台时，必须使用独立字段，不能拼成新名称。
+
+CitizenApp 与 CitizenWallet 当前平台是 `iOS`、`Android`；CitizenChain Node 当前平台是
+`LinuxARM`、`LinuxAMD`、`macOS`、`Windows`；CitizenSDK 当前已交付平台是 `Android`、`iOS`、
+`macOS`，交付类型是 `SDK`。CitizenWeb 使用 Web 交付渠道和 Cloudflare 部署供应商，CitizenServe
+与 CitizenChatServer 使用 Cloudflare 部署供应商；后三者没有宿主操作系统平台时不得伪造
+`platform`。真实 Runtime WebAssembly 产物才可使用 `WASM` 交付身份。
+
+现有生产发布授权、下载数据库和 Release 资产中的旧字段必须与 CitizenWallet、TataConsole 及
+对应生产者原子迁移；迁移完成前不得把旧小写值或 Cloudflare/Web 的 `platform` 重载解释为新合同。
+
+每个产品、类型化交付目标和动作独立管理。CitizenServe 的 Cloudflare 部署目标分别使用独立的
+CI、Release 逻辑流水线、记录和产物，不与 CitizenApp 或 CitizenWeb 合并计算；生产 Publish
+只由本机 TataConsole 执行，不属于 GitHub Workflow。
 
 会员状态采用“手机即时确认 + 服务端唯一 finalized 投影”两条互补写入路径。CitizenApp 在
 订阅、取消、换档或档位变更交易 finalized 后，只用链上 `tx_hash + block_hash` 立即确认；

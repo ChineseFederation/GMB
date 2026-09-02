@@ -24,12 +24,12 @@ class SmoldotPlatform {
     } else {
       throw SmoldotFfiException(
         'Unsupported platform: ${Platform.operatingSystem}',
-        details: 'Only Android, iOS, macOS, Linux, and Windows are supported',
+        details: 'Only Android, iOS, macOS, LinuxARM, LinuxAMD, and Windows are supported',
       );
     }
   }
 
-  /// Load library on Linux/Android
+  /// Load library for the LinuxARM/LinuxAMD or Android ELF technical path.
   static DynamicLibrary _loadLinux() {
     try {
       // Try loading from system library path

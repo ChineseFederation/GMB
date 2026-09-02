@@ -447,7 +447,7 @@ build_android() {
   cp "$built_aar" "$aar_destination"
   verify_android_aar \
     "$aar_destination" "$core_destination" "$jni_destination" "$nm_bin"
-  echo "CitizenSDK Android ARM64 Core/JNI/AAR 完成：$aar_destination"
+  echo "CitizenSDK Android Core/JNI/AAR 完成：$aar_destination"
 }
 
 apple_product_symbols() {
@@ -564,7 +564,7 @@ resolve_flutter_macos_xcframework() {
   printf '%s\n' "${candidates[0]}"
 }
 
-resolve_flutter_framework_slice() {
+resolve_xcframework_framework_slice() {
   local xcframework="$1" module="$2" platform="$3" expected_variant="$4"
   local index=0 identifier library_path actual_platform actual_variant architectures
   local framework found='' count=0
@@ -585,7 +585,7 @@ resolve_flutter_framework_slice() {
         -c "Print :AvailableLibraries:$index:SupportedArchitectures" \
         "$xcframework/Info.plist")"
       printf '%s\n' "$architectures" | grep -Eq '(^|[[:space:]])arm64([[:space:]]|$)' \
-        || fail "$module 的 $platform/${expected_variant:-device} slice 不支持 ARM64"
+        || fail "$module 的 $platform/${expected_variant:-device} slice 不支持 arm64"
       library_path="$(/usr/libexec/PlistBuddy \
         -c "Print :AvailableLibraries:$index:LibraryPath" \
         "$xcframework/Info.plist")"
@@ -598,7 +598,7 @@ resolve_flutter_framework_slice() {
     index=$((index + 1))
   done
   [[ "$count" == 1 ]] \
-    || fail "$module 必须精确提供一个 $platform/${expected_variant:-device} ARM64 slice；实际=$count"
+    || fail "$module 必须精确提供一个 $platform/${expected_variant:-device} arm64 slice；实际=$count"
   printf '%s\n' "$found"
 }
 
@@ -621,7 +621,7 @@ compile_apple_flutter_adapter() {
     -name '*.swift' -print | LC_ALL=C sort)
   [[ "${#swift_sources[@]}" -gt 0 ]] || fail "CitizenSDKFlutter 生产源码为空"
 
-  flutter_framework="$(resolve_flutter_framework_slice \
+  flutter_framework="$(resolve_xcframework_framework_slice \
     "$flutter_xcframework" "$flutter_module" "$platform" "$variant")"
   flutter_framework_root="$(dirname "$flutter_framework")"
   sdk_path="$(xcrun --sdk "$apple_sdk" --show-sdk-path)"
@@ -800,7 +800,7 @@ run_apple_test_harness() {
     *) fail "Apple XCTest mode 未登记：$mode" ;;
   esac
   if [[ "$mode" == run ]]; then
-    runtime_framework_root="$(dirname "$(resolve_flutter_framework_slice \
+    runtime_framework_root="$(dirname "$(resolve_xcframework_framework_slice \
       "$artifact" "$flutter_module" macos '')")"
   fi
   TMPDIR="$scratch/tmp" HOME="$scratch/home" \
@@ -832,13 +832,15 @@ run_apple_test_harness() {
 
 run_final_apple_consumer_smoke() {
   local xcframework="$output_dir/apple/CitizenSDK.xcframework"
-  local framework_root="$xcframework/macOS"
-  local framework="$framework_root/CitizenSDK.framework"
+  local framework framework_root
   local smoke_root="$work_dir/apple-consumer-smoke"
   local source="$smoke_root/CitizenSDKConsumerSmoke.swift"
   local executable="$smoke_root/CitizenSDKConsumerSmoke"
   local sdk_path swiftc architectures linked citizen_links
   local expected_install_name='@rpath/CitizenSDK.framework/Versions/A/CitizenSDK'
+  framework="$(resolve_xcframework_framework_slice \
+    "$xcframework" CitizenSDK macos '')"
+  framework_root="$(dirname "$framework")"
   [[ -d "$framework" && ! -L "$framework" ]] \
     || fail "最终 XCFramework macOS slice 缺失，拒绝消费者 smoke"
   [[ ! -e "$smoke_root" && ! -L "$smoke_root" ]] \
@@ -960,7 +962,7 @@ SWIFT
     -o "$executable"
   architectures="$(xcrun lipo -archs "$executable")"
   [[ "$architectures" == arm64 ]] \
-    || fail "Apple 消费者 smoke 必须精确编译为 ARM64"
+    || fail "Apple 消费者 smoke 必须精确编译为 arm64"
   linked="$(xcrun otool -L "$executable")"
   citizen_links="$(printf '%s\n' "$linked" \
     | awk '$1 ~ /CitizenSDK\.framework\// { print $1 }' \
@@ -983,7 +985,7 @@ SWIFT
 
 build_apple_tests() {
   [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] \
-    || fail "macOS ARM64 XCTest 只允许在 Apple Silicon runner 执行"
+    || fail "macOS XCTest 只允许在 Apple Silicon runner 执行"
   local xcframework flutter_root flutter_ios_xcframework flutter_macos_xcframework
   local test_header_root
   xcframework="$output_dir/apple/CitizenSDK.xcframework"
@@ -1002,12 +1004,12 @@ build_apple_tests() {
     cp "$sdk_dir/include/$header" "$test_header_root/$header"
   done
   run_apple_test_harness aarch64-apple-ios iphoneos arm64-apple-ios16.0 \
-    iOS Flutter "$flutter_ios_xcframework" compile
+    aarch64-apple-ios Flutter "$flutter_ios_xcframework" compile
   run_apple_test_harness aarch64-apple-ios-sim iphonesimulator \
-    arm64-apple-ios16.0-simulator iOS-Simulator Flutter \
+    arm64-apple-ios16.0-simulator aarch64-apple-ios-sim Flutter \
     "$flutter_ios_xcframework" compile
   run_apple_test_harness aarch64-apple-darwin macosx arm64-apple-macosx13.0 \
-    macOS FlutterMacOS "$flutter_macos_xcframework" run
+    aarch64-apple-darwin FlutterMacOS "$flutter_macos_xcframework" run
   run_final_apple_consumer_smoke
 }
 
@@ -1060,10 +1062,10 @@ build_apple_framework_slice() {
   [[ ! -e "$slice_root" && ! -L "$slice_root" ]] \
     || fail "$slice_name Apple slice 构建目录必须全新"
   framework="$slice_root/CitizenSDK.framework"
-  if [[ "$slice_name" == macOS ]]; then
-    # macOS framework 必须采用 Apple 标准版本化目录。iOS 与
-    # iOS-Simulator 仍保持平台要求的 shallow framework；三者最终进入同一个
-    # CitizenSDK.xcframework，公共产品名始终只是 macOS，不附加架构后缀。
+  if [[ "$module_identity" == arm64-apple-macos ]]; then
+    # macOS framework 必须采用 Apple 标准版本化目录。iOS 设备与
+    # simulator 技术变体均保持 Apple 要求的 shallow framework；三者
+    # 最终进入同一个 CitizenSDK.xcframework，公开平台名只是 iOS/macOS。
     framework_content_root="$framework/Versions/A"
     framework_plist="$framework_content_root/Resources/Info.plist"
     framework_install_name='@rpath/CitizenSDK.framework/Versions/A/CitizenSDK'
@@ -1096,7 +1098,7 @@ build_apple_framework_slice() {
     "$framework_plist" "$supported_platform" "$platform_name" \
     "$minimum_key" "$minimum_version" "$software_version"
 
-  if [[ "$slice_name" == macOS ]]; then
+  if [[ "$module_identity" == arm64-apple-macos ]]; then
     # 只允许这四个已经存在目标的目录链接；最终二进制写入 Versions/A 后再建立
     # 第五个链接，构建期间不会制造悬空入口，也不会让秘密或产物越出中央 workdir。
     for link_spec in \
@@ -1158,7 +1160,7 @@ build_apple_framework_slice() {
     -Xlinker -exported_symbols_list \
     -Xlinker "$export_list" \
     -o "$framework_binary"
-  if [[ "$slice_name" == macOS ]]; then
+  if [[ "$module_identity" == arm64-apple-macos ]]; then
     prepare_safe_output_file "$work_dir" "$framework/CitizenSDK" \
       "$slice_name framework 标准二进制链接"
     ln -s 'Versions/Current/CitizenSDK' "$framework/CitizenSDK"
@@ -1188,40 +1190,15 @@ build_apple_framework_slice() {
   done
 }
 
-canonicalize_xcframework_identifiers() {
-  local xcframework="$1" index identifier platform variant desired
-  for index in 0 1 2; do
-    identifier="$(/usr/libexec/PlistBuddy \
-      -c "Print :AvailableLibraries:$index:LibraryIdentifier" \
-      "$xcframework/Info.plist")"
-    platform="$(/usr/libexec/PlistBuddy \
-      -c "Print :AvailableLibraries:$index:SupportedPlatform" \
-      "$xcframework/Info.plist")"
-    variant="$(/usr/libexec/PlistBuddy \
-      -c "Print :AvailableLibraries:$index:SupportedPlatformVariant" \
-      "$xcframework/Info.plist" 2>/dev/null || true)"
-    case "$platform/$variant" in
-      ios/) desired=iOS ;;
-      ios/simulator) desired=iOS-Simulator ;;
-      macos/) desired=macOS ;;
-      *) fail "XCFramework 含未登记 Apple slice：$platform/$variant" ;;
-    esac
-    [[ -d "$xcframework/$identifier" && ! -e "$xcframework/$desired" ]] \
-      || fail "XCFramework slice 目录无法规范化：$identifier -> $desired"
-    mv "$xcframework/$identifier" "$xcframework/$desired"
-    /usr/libexec/PlistBuddy \
-      -c "Set :AvailableLibraries:$index:LibraryIdentifier $desired" \
-      "$xcframework/Info.plist" >/dev/null
-  done
-}
-
 restore_swift_module_artifacts() {
-  local xcframework="$1" slice module_identity extension source destination
-  local source_root destination_root
-  while IFS='|' read -r slice module_identity; do
-    source_root="$work_dir/apple-build/$slice/CitizenSDK.framework"
-    destination_root="$xcframework/$slice/CitizenSDK.framework"
-    if [[ "$slice" == macOS ]]; then
+  local xcframework="$1" build_key module_identity platform variant extension
+  local source source_root destination destination_framework destination_root
+  while IFS='|' read -r build_key module_identity platform variant; do
+    source_root="$work_dir/apple-build/$build_key/CitizenSDK.framework"
+    destination_framework="$(resolve_xcframework_framework_slice \
+      "$xcframework" CitizenSDK "$platform" "$variant")"
+    destination_root="$destination_framework"
+    if [[ "$platform" == macos ]]; then
       source_root="$source_root/Versions/A"
       destination_root="$destination_root/Versions/A"
     fi
@@ -1233,22 +1210,22 @@ restore_swift_module_artifacts() {
       source="$source_root/Modules/CitizenSDK.swiftmodule/$module_identity.$extension"
       destination="$destination_root/Modules/CitizenSDK.swiftmodule/$module_identity.$extension"
       [[ -f "$source" && ! -L "$source" ]] \
-        || fail "$slice 输入 framework 缺少 Swift module 产物：$extension"
+        || fail "$platform/$variant 输入 framework 缺少 Swift module 产物：$extension"
       if [[ -e "$destination" || -L "$destination" ]]; then
         [[ -f "$destination" && ! -L "$destination" ]] \
-          || fail "$slice XCFramework Swift module 产物不是普通文件：$extension"
+          || fail "$platform/$variant XCFramework Swift module 产物不是普通文件：$extension"
         cmp -s "$source" "$destination" \
-          || fail "$slice XCFramework Swift module 产物字节漂移：$extension"
+          || fail "$platform/$variant XCFramework Swift module 产物字节漂移：$extension"
       else
         prepare_safe_output_file "$work_dir" "$destination" \
-          "$slice Swift module 产物投影：$extension"
+          "$platform/$variant Swift module 产物投影：$extension"
         cp "$source" "$destination"
       fi
     done
   done <<'MODULES'
-iOS|arm64-apple-ios
-iOS-Simulator|arm64-apple-ios-simulator
-macOS|arm64-apple-macos
+aarch64-apple-ios|arm64-apple-ios|ios|
+aarch64-apple-ios-sim|arm64-apple-ios-simulator|ios|simulator
+aarch64-apple-darwin|arm64-apple-macos|macos|
 MODULES
 }
 
@@ -1307,7 +1284,7 @@ MACOS_FRAMEWORK_LINKS
   binary="$framework_content_root/CitizenSDK"
   [[ -f "$binary" && ! -L "$binary" ]] || fail "$label framework 二进制缺失"
   architectures="$(xcrun lipo -archs "$binary")"
-  [[ "$architectures" == arm64 ]] || fail "$label 必须精确为 ARM64；实际=$architectures"
+  [[ "$architectures" == arm64 ]] || fail "$label 内部架构必须精确为 arm64；实际=$architectures"
   install_name="$(xcrun otool -D "$binary" | tail -n +2 | sed '/^[[:space:]]*$/d')"
   if [[ "$module_identity" == arm64-apple-macos ]]; then
     expected_install_name='@rpath/CitizenSDK.framework/Versions/A/CitizenSDK'
@@ -1431,6 +1408,8 @@ verify_apple_xcframework() {
   local xcframework="$1" entries expected_entries index identifier library_path
   local binary_path expected_binary_path architecture extra_architecture platform variant
   local metadata expected_metadata plist_keys library_keys expected_library_keys
+  local identifiers='' ios_device_identifier='' ios_simulator_identifier=''
+  local macos_identifier=''
   [[ -d "$xcframework" && ! -L "$xcframework" ]] \
     || fail "CitizenSDK.xcframework 缺失或不是普通目录"
   [[ -f "$xcframework/Info.plist" && ! -L "$xcframework/Info.plist" ]] \
@@ -1441,26 +1420,6 @@ verify_apple_xcframework() {
     && "$(/usr/libexec/PlistBuddy -c 'Print :XCFrameworkFormatVersion' \
       "$xcframework/Info.plist")" == 1.0 ]] \
     || fail "XCFramework Info.plist 根字段闭集或格式版本漂移"
-  # iOS 两个 shallow slice 必须完全无链接；macOS 只允许其标准版本化
-  # framework 的五个固定相对链接，具体目标由逐 slice 验证器再次闭集校验。
-  [[ -z "$(find "$xcframework/iOS" "$xcframework/iOS-Simulator" -type l \
-    -print -quit 2>/dev/null)" ]] \
-    || fail "CitizenSDK.xcframework 的 iOS slice 禁止符号链接"
-  while IFS= read -r link; do
-    case "$link" in
-      "$xcframework/macOS/CitizenSDK.framework/CitizenSDK"|\
-      "$xcframework/macOS/CitizenSDK.framework/Headers"|\
-      "$xcframework/macOS/CitizenSDK.framework/Modules"|\
-      "$xcframework/macOS/CitizenSDK.framework/Resources"|\
-      "$xcframework/macOS/CitizenSDK.framework/Versions/Current") ;;
-      *) fail "CitizenSDK.xcframework 含未登记符号链接：$link" ;;
-    esac
-  done < <(find "$xcframework" -type l -print)
-  entries="$(find "$xcframework" -mindepth 1 -maxdepth 1 -print \
-    | sed 's#^.*/##' | LC_ALL=C sort)"
-  expected_entries=$'Info.plist\niOS\niOS-Simulator\nmacOS'
-  [[ "$entries" == "$expected_entries" ]] \
-    || fail "CitizenSDK.xcframework slice 闭集漂移：${entries:-无}"
   metadata=''
   for index in 0 1 2; do
     identifier="$(/usr/libexec/PlistBuddy \
@@ -1484,6 +1443,13 @@ verify_apple_xcframework() {
     variant="$(/usr/libexec/PlistBuddy \
       -c "Print :AvailableLibraries:$index:SupportedPlatformVariant" \
       "$xcframework/Info.plist" 2>/dev/null || true)"
+    [[ "$identifier" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ \
+      && -d "$xcframework/$identifier" && ! -L "$xcframework/$identifier" ]] \
+      || fail "XCFramework LibraryIdentifier 必须是 Xcode 生成的安全不透明目录标识：$identifier"
+    if printf '%s\n' "$identifiers" | grep -Fxq "$identifier"; then
+      fail "XCFramework LibraryIdentifier 重复：$identifier"
+    fi
+    identifiers+="$identifier"$'\n'
     library_keys="$(/usr/libexec/PlistBuddy \
       -c "Print :AvailableLibraries:$index" "$xcframework/Info.plist" \
       | awk '/^    [^ ]/ && / = / { print $1 }' | LC_ALL=C sort)"
@@ -1494,20 +1460,60 @@ verify_apple_xcframework() {
     fi
     [[ "$library_keys" == "$expected_library_keys" ]] \
       || fail "XCFramework slice 字段闭集漂移：$identifier"
-    if [[ "$identifier" == macOS ]]; then
-      expected_binary_path='CitizenSDK.framework/Versions/A/CitizenSDK'
-    else
-      expected_binary_path='CitizenSDK.framework/CitizenSDK'
-    fi
+    case "$platform/$variant" in
+      ios/)
+        [[ -z "$ios_device_identifier" ]] \
+          || fail "XCFramework 重复声明 iOS 设备技术变体"
+        ios_device_identifier="$identifier"
+        expected_binary_path='CitizenSDK.framework/CitizenSDK'
+        ;;
+      ios/simulator)
+        [[ -z "$ios_simulator_identifier" ]] \
+          || fail "XCFramework 重复声明 iOS simulator 技术变体"
+        ios_simulator_identifier="$identifier"
+        expected_binary_path='CitizenSDK.framework/CitizenSDK'
+        ;;
+      macos/)
+        [[ -z "$macos_identifier" ]] \
+          || fail "XCFramework 重复声明 macOS"
+        macos_identifier="$identifier"
+        expected_binary_path='CitizenSDK.framework/Versions/A/CitizenSDK'
+        ;;
+      *) fail "XCFramework 含未登记 Apple 技术变体：$platform/$variant" ;;
+    esac
     [[ "$library_path" == CitizenSDK.framework && "$architecture" == arm64 \
       && "$binary_path" == "$expected_binary_path" && -z "$extra_architecture" ]] \
-      || fail "XCFramework slice 必须精确为单一 ARM64 framework：$identifier"
-    metadata+="$identifier|$platform|$variant"$'\n'
+      || fail "XCFramework slice 必须精确为单一 arm64 framework：$identifier"
+    metadata+="$platform|$variant"$'\n'
   done
   metadata="$(printf '%s' "$metadata" | LC_ALL=C sort)"
-  expected_metadata=$'iOS-Simulator|ios|simulator\niOS|ios|\nmacOS|macos|'
+  expected_metadata=$'ios|\nios|simulator\nmacos|'
   [[ "$metadata" == "$expected_metadata" ]] \
     || fail "XCFramework Info.plist 三 slice 元数据漂移"
+  [[ -n "$ios_device_identifier" && -n "$ios_simulator_identifier" \
+    && -n "$macos_identifier" ]] \
+    || fail "XCFramework 必须覆盖 iOS 设备、iOS simulator 技术变体和 macOS"
+  # LibraryIdentifier 是 xcodebuild 生成的不透明技术标识，不得改写为
+  # 产品平台名。目录闭集只从 Info.plist 反向发现。
+  entries="$(find "$xcframework" -mindepth 1 -maxdepth 1 -print \
+    | sed 's#^.*/##' | LC_ALL=C sort)"
+  expected_entries="$(printf '%s\n' Info.plist "$ios_device_identifier" \
+    "$ios_simulator_identifier" "$macos_identifier" | LC_ALL=C sort)"
+  [[ "$entries" == "$expected_entries" ]] \
+    || fail "CitizenSDK.xcframework slice 闭集漂移：${entries:-无}"
+  [[ -z "$(find "$xcframework/$ios_device_identifier" \
+    "$xcframework/$ios_simulator_identifier" -type l -print -quit)" ]] \
+    || fail "CitizenSDK.xcframework 的 iOS 技术变体禁止符号链接"
+  while IFS= read -r link; do
+    case "$link" in
+      "$xcframework/$macos_identifier/CitizenSDK.framework/CitizenSDK"|\
+      "$xcframework/$macos_identifier/CitizenSDK.framework/Headers"|\
+      "$xcframework/$macos_identifier/CitizenSDK.framework/Modules"|\
+      "$xcframework/$macos_identifier/CitizenSDK.framework/Resources"|\
+      "$xcframework/$macos_identifier/CitizenSDK.framework/Versions/Current") ;;
+      *) fail "CitizenSDK.xcframework 含未登记符号链接：$link" ;;
+    esac
+  done < <(find "$xcframework" -type l -print)
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' \
     "$xcframework/Info.plist")" == XFWK ]] \
     || fail "XCFramework Info.plist 产品类型必须是 XFWK"
@@ -1515,13 +1521,14 @@ verify_apple_xcframework() {
     "$xcframework/Info.plist" >/dev/null 2>&1 \
     && fail "XCFramework Info.plist 含额外 slice" || true
   verify_apple_framework_slice \
-    "$xcframework/iOS/CitizenSDK.framework" \
-    "CitizenSDK iOS" IOS 16.0 arm64-apple-ios
+    "$xcframework/$ios_device_identifier/CitizenSDK.framework" \
+    "CitizenSDK iOS（设备技术变体）" IOS 16.0 arm64-apple-ios
   verify_apple_framework_slice \
-    "$xcframework/iOS-Simulator/CitizenSDK.framework" \
-    "CitizenSDK iOS-Simulator" IOSSIMULATOR 16.0 arm64-apple-ios-simulator
+    "$xcframework/$ios_simulator_identifier/CitizenSDK.framework" \
+    "CitizenSDK iOS（simulator 技术变体）" IOSSIMULATOR 16.0 \
+    arm64-apple-ios-simulator
   verify_apple_framework_slice \
-    "$xcframework/macOS/CitizenSDK.framework" \
+    "$xcframework/$macos_identifier/CitizenSDK.framework" \
     "CitizenSDK macOS" MACOS 13.0 arm64-apple-macos
 }
 
@@ -1529,16 +1536,17 @@ build_apple() {
   [[ "$(uname -s)" == Darwin ]] || fail "Apple 产品只允许在 macOS runner 构建"
   local create_root created_xcframework destination flutter_root
   local flutter_ios_xcframework flutter_macos_xcframework
+  local citizen_ios_framework citizen_ios_simulator_framework citizen_macos_framework
   command -v xcodebuild >/dev/null 2>&1 || fail "缺少 xcodebuild"
   build_apple_framework_slice \
-    aarch64-apple-ios iphoneos arm64-apple-ios16.0 iOS \
+    aarch64-apple-ios iphoneos arm64-apple-ios16.0 aarch64-apple-ios \
     arm64-apple-ios iPhoneOS iphoneos MinimumOSVersion "$ios_deployment_target"
   build_apple_framework_slice \
     aarch64-apple-ios-sim iphonesimulator arm64-apple-ios16.0-simulator \
-    iOS-Simulator arm64-apple-ios-simulator iPhoneSimulator iphonesimulator \
+    aarch64-apple-ios-sim arm64-apple-ios-simulator iPhoneSimulator iphonesimulator \
     MinimumOSVersion "$ios_deployment_target"
   build_apple_framework_slice \
-    aarch64-apple-darwin macosx arm64-apple-macosx13.0 macOS \
+    aarch64-apple-darwin macosx arm64-apple-macosx13.0 aarch64-apple-darwin \
     arm64-apple-macos MacOSX macosx LSMinimumSystemVersion "$macos_deployment_target"
 
   create_root="$work_dir/apple-xcframework"
@@ -1547,11 +1555,10 @@ build_apple() {
   [[ ! -e "$created_xcframework" && ! -L "$created_xcframework" ]] \
     || fail "Apple XCFramework 生成目标已存在"
   xcodebuild -create-xcframework \
-    -framework "$work_dir/apple-build/iOS/CitizenSDK.framework" \
-    -framework "$work_dir/apple-build/iOS-Simulator/CitizenSDK.framework" \
-    -framework "$work_dir/apple-build/macOS/CitizenSDK.framework" \
+    -framework "$work_dir/apple-build/aarch64-apple-ios/CitizenSDK.framework" \
+    -framework "$work_dir/apple-build/aarch64-apple-ios-sim/CitizenSDK.framework" \
+    -framework "$work_dir/apple-build/aarch64-apple-darwin/CitizenSDK.framework" \
     -output "$created_xcframework"
-  canonicalize_xcframework_identifiers "$created_xcframework"
   # Xcode 27 在存在 stable interface 时会从 create-xcframework 输出中移除
   # 编译 `.swiftmodule`。从三个已经逐 slice 验证的输入 framework 原字节恢复，
   # 让同编译器快速路径与跨编译器 textual interface 同时进入唯一产品。
@@ -1561,13 +1568,20 @@ build_apple() {
   flutter_root="$(resolve_flutter_sdk_root)"
   flutter_ios_xcframework="$flutter_root/bin/cache/artifacts/engine/ios-release/Flutter.xcframework"
   flutter_macos_xcframework="$(resolve_flutter_macos_xcframework "$flutter_root")"
-  compile_apple_flutter_adapter iphoneos arm64-apple-ios16.0 iOS \
-    ios '' Flutter "$flutter_ios_xcframework" "$created_xcframework/iOS"
+  citizen_ios_framework="$(resolve_xcframework_framework_slice \
+    "$created_xcframework" CitizenSDK ios '')"
+  citizen_ios_simulator_framework="$(resolve_xcframework_framework_slice \
+    "$created_xcframework" CitizenSDK ios simulator)"
+  citizen_macos_framework="$(resolve_xcframework_framework_slice \
+    "$created_xcframework" CitizenSDK macos '')"
+  compile_apple_flutter_adapter iphoneos arm64-apple-ios16.0 aarch64-apple-ios \
+    ios '' Flutter "$flutter_ios_xcframework" "$(dirname "$citizen_ios_framework")"
   compile_apple_flutter_adapter iphonesimulator arm64-apple-ios16.0-simulator \
-    iOS-Simulator ios simulator Flutter "$flutter_ios_xcframework" \
-    "$created_xcframework/iOS-Simulator"
-  compile_apple_flutter_adapter macosx arm64-apple-macosx13.0 macOS \
-    macos '' FlutterMacOS "$flutter_macos_xcframework" "$created_xcframework/macOS"
+    aarch64-apple-ios-sim ios simulator Flutter "$flutter_ios_xcframework" \
+    "$(dirname "$citizen_ios_simulator_framework")"
+  compile_apple_flutter_adapter macosx arm64-apple-macosx13.0 \
+    aarch64-apple-darwin macos '' FlutterMacOS "$flutter_macos_xcframework" \
+    "$(dirname "$citizen_macos_framework")"
 
   destination="$output_dir/apple/CitizenSDK.xcframework"
   prepare_safe_directory "$output_dir" "$(dirname "$destination")" \
@@ -1576,7 +1590,7 @@ build_apple() {
     || fail "Apple 产品目标已存在：$destination"
   cp -R "$created_xcframework" "$destination"
   verify_apple_xcframework "$destination"
-  echo "CitizenSDK Apple ARM64 XCFramework 完成：$destination"
+  echo "CitizenSDK iOS/macOS XCFramework 完成：$destination"
 }
 
 build_host() {
@@ -1584,17 +1598,18 @@ build_host() {
   local destination arm_library nm_bin symbols architectures
   require_rust_target aarch64-apple-darwin
   destination="$output_dir/host/libsmoldot.dylib"
-  # legacy Dart/smoldot 差分测试运行件只保留当前正式 macOS ARM64；它绝不进入
+  # legacy Dart/smoldot 差分测试运行件只保留当前正式 macOS；其
+  # 内部 Mach-O 架构必须是工具链值 arm64，且它绝不进入
   # CitizenSDK 候选，也不能借 Rosetta 再建立 x86_64/universal 第二条构建路径。
   MACOSX_DEPLOYMENT_TARGET="$macos_deployment_target" \
   CARGO_PROFILE_RELEASE_STRIP=false cargo build --manifest-path "$ffi_manifest" \
     --release --locked --target aarch64-apple-darwin
   arm_library="$CARGO_TARGET_DIR/aarch64-apple-darwin/release/libsmoldot.dylib"
-  [[ -f "$arm_library" ]] || fail "macOS ARM64 宿主测试库未生成"
+  [[ -f "$arm_library" ]] || fail "macOS 宿主测试库未生成"
   prepare_safe_output_file "$output_dir" "$destination" "macOS 宿主测试库"
   cp "$arm_library" "$destination"
   architectures="$(xcrun lipo -archs "$destination")"
-  [[ "$architectures" == arm64 ]] || fail "macOS 宿主测试库必须精确为 ARM64"
+  [[ "$architectures" == arm64 ]] || fail "macOS 宿主测试库内部架构必须精确为 arm64"
   nm_bin="$(xcrun --find llvm-nm)"
   symbols="$(symbol_list_ios "$destination" "$nm_bin")"
   verify_symbol_contract "$symbols" "_" "macOS 宿主测试库"
@@ -1642,7 +1657,7 @@ verify_outputs() {
   [[ -f "$android_core" && -f "$android_jni" && -f "$android_aar" \
     && -d "$apple_xcframework" \
     && -f "$host_library" ]] \
-    || fail "Android/Apple 产品与 legacy ARM64 宿主测试运行件集合不完整"
+    || fail "Android/iOS/macOS 产品与 legacy macOS 宿主测试运行件集合不完整"
   local toolchain nm_bin
   toolchain="$(android_toolchain)"
   verify_product_abi_symbols "$android_core" "$toolchain/bin/llvm-nm" "" \
@@ -1653,10 +1668,11 @@ verify_outputs() {
   nm_bin="$(xcrun --find llvm-nm)"
   local host_architectures
   host_architectures="$(xcrun lipo -archs "$host_library")"
-  [[ "$host_architectures" == arm64 ]] || fail "macOS 宿主测试库必须精确为 ARM64"
+  [[ "$host_architectures" == arm64 ]] \
+    || fail "macOS 宿主测试库内部架构必须精确为 arm64"
   verify_symbol_contract "$(symbol_list_ios "$host_library" "$nm_bin")" "_" \
     "macOS 宿主测试库"
-  echo "CitizenSDK Android AAR、Apple XCFramework 与 legacy ARM64 宿主测试合同通过"
+  echo "CitizenSDK Android AAR、iOS/macOS XCFramework 与 legacy macOS 宿主测试合同通过"
 }
 
 case "$target_name" in
