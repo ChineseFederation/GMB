@@ -25,15 +25,17 @@ function unpackActionImplementation(wrapperPath: string): string {
   return path;
 }
 
-const ciModule = await import(unpackActionImplementation(resolve(
+const ciImplementationPath = unpackActionImplementation(resolve(
   flowRoot,
-  'gmb/scripts/citizenserve-ci-global.mjs',
-)));
+  'gmb/citizenserve/ci-cloudflare.mjs',
+));
+const ciModule = await import(ciImplementationPath);
 const { buildCitizenServeCloudflareRelease: buildCitizenServeCloudflareCI } = ciModule;
-const releaseModule = await import(unpackActionImplementation(resolve(
+const releaseImplementationPath = unpackActionImplementation(resolve(
   flowRoot,
-  'gmb/scripts/citizenserve-release-global.mjs',
-)));
+  'gmb/citizenserve/release-cloudflare.mjs',
+));
+const releaseModule = await import(releaseImplementationPath);
 const {
   buildCitizenServeCloudflareRelease,
   extractCitizenServeCloudflareArchive,
@@ -87,9 +89,14 @@ describe('CitizenServe Cloudflare Release 候选', () => {
     });
     const releaseCandidate = buildCandidate(root, 'release-candidate');
 
+    expect(readFileSync(ciImplementationPath))
+      .toEqual(readFileSync(releaseImplementationPath));
+    expect(readFileSync(releaseImplementationPath, 'utf8')).not.toMatch(/\bplatform\s*:/);
     expect(ciManifest.product_id).toBe('citizenserve');
+    expect(ciManifest.deployment_provider).toBe('cloudflare');
     expect(ciManifest).toEqual(releaseCandidate.manifest);
     expect(releaseCandidate.manifest.product_id).toBe('citizenserve');
+    expect(releaseCandidate.manifest.deployment_provider).toBe('cloudflare');
   });
 
   test('相同代码、工具和 Git SHA 重复生成完全一致的候选', () => {
@@ -103,8 +110,12 @@ describe('CitizenServe Cloudflare Release 候选', () => {
     expect(readFileSync(join(first.outputPath, 'SHA256SUMS'), 'utf8'))
       .toBe(readFileSync(join(second.outputPath, 'SHA256SUMS'), 'utf8'));
     expect(Object.keys(first.manifest).sort()).toEqual(
-      ["files", "git_commit_sha", "product_id", "resources", "software_version", "tools"].sort(),
+      [
+        "deployment_provider", "files", "git_commit_sha", "product_id", "resources",
+        "software_version", "tools",
+      ].sort(),
     );
+    expect(first.manifest.deployment_provider).toBe('cloudflare');
     expect(
       first.manifest.files.find(({ path }: { path: string }) => path === 'schema/download.sql')?.sha256,
     ).toMatch(/^[0-9a-f]{64}$/);
@@ -137,15 +148,32 @@ describe('CitizenServe Cloudflare Release 候选', () => {
       .toThrow('候选文件哈希不一致：worker.mjs');
   });
 
-  test('manifest 多出未知字段时严格拒绝', () => {
+  test('manifest 拒绝缺失、错误、旧 platform、双写和额外部署供应商字段', () => {
     const root = temporaryRoot();
-    const { outputPath } = buildCandidate(root, 'manifest-fields');
-    const manifestPath = join(outputPath, 'release-manifest.json');
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
-    manifest.unexpected = true;
-    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-    expect(() => verifyCitizenServeCloudflareRelease(outputPath, gitCommitSha))
-      .toThrow('release manifest 字段集合不正确');
+    const cases: Array<[
+      string,
+      (manifest: Record<string, unknown>) => void,
+      string,
+    ]> = [
+      ['missing', (manifest) => { delete manifest.deployment_provider; }, 'release manifest 字段集合不正确'],
+      ['wrong', (manifest) => { manifest.deployment_provider = 'other'; }, '候选部署供应商不正确'],
+      ['legacy', (manifest) => {
+        delete manifest.deployment_provider;
+        manifest.platform = 'cloudflare';
+      }, 'release manifest 字段集合不正确'],
+      ['dual', (manifest) => { manifest.platform = 'cloudflare'; }, 'release manifest 字段集合不正确'],
+      ['extra', (manifest) => { manifest.provider = 'cloudflare'; }, 'release manifest 字段集合不正确'],
+    ];
+
+    // 身份闭集先于 SHA256SUMS 校验，确保每个失败都准确落在部署供应商合同。
+    for (const [name, mutate, expected] of cases) {
+      const { outputPath } = buildCandidate(root, `manifest-${name}`);
+      const manifestPath = join(outputPath, 'release-manifest.json');
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+      mutate(manifest);
+      writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+      expect(() => verifyCitizenServeCloudflareRelease(outputPath, gitCommitSha)).toThrow(expected);
+    }
   });
 
   test('manifest 未登记文件和候选中的私钥均失败关闭', () => {
@@ -167,7 +195,4 @@ describe('CitizenServe Cloudflare Release 候选', () => {
       gitCommitSha,
     })).toThrow('候选疑似包含私密材料：worker.mjs');
   });
-
-
-
 });

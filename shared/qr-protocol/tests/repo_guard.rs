@@ -190,6 +190,896 @@ fn github_workflow_entrypoints_delegate_to_single_tata_flow() {
     );
 }
 
+/// CitizenChatServer 没有宿主 OS 平台；产品声明与正式 Release manifest 必须把
+/// Cloudflare 表达为部署供应商。这里只检查两个新合同，不能误伤 QR_V1/action 中尚未
+/// 原子迁移的签名兼容字段 `platform=cloudflare`。
+#[test]
+fn citizenchatserver_product_and_release_manifest_use_deployment_provider() {
+    let product_path = repo_root().join("citizenchatserver/product.json");
+    let product_text = fs::read_to_string(&product_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", product_path.display()));
+    let product: Value = serde_json::from_str(&product_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", product_path.display()));
+    let product = product
+        .as_object()
+        .expect("CitizenChatServer product.json 根节点必须是对象");
+    let actual_keys = product.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected_keys = [
+        "deployment_provider",
+        "product_id",
+        "public_url",
+        "realtime_url",
+        "source_product_id",
+        "source_repository",
+        "version",
+    ]
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+    assert_eq!(
+        actual_keys, expected_keys,
+        "CitizenChatServer product.json 字段闭集漂移"
+    );
+    assert_eq!(product["product_id"], "citizenchatserver");
+    assert_eq!(product["deployment_provider"], "cloudflare");
+    assert!(
+        !product.contains_key("platform"),
+        "CitizenChatServer 产品声明禁止把部署供应商写成 platform"
+    );
+
+    let flow_root = tata_flow_root();
+    let ci_path = flow_root.join("gmb/citizenchatserver/ci-cloudflare.mjs");
+    let ci = fs::read_to_string(&ci_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", ci_path.display()));
+    assert!(
+        ci.contains("JSON.stringify(Object.keys(product).sort())")
+            && ci.contains("'deployment_provider', 'product_id', 'public_url', 'realtime_url'")
+            && ci.contains("Object.hasOwn(product, 'platform')"),
+        "CitizenChatServer CI 必须锁定产品声明精确闭集并拒绝旧 platform"
+    );
+
+    let release_path = flow_root.join("gmb/citizenchatserver/release-cloudflare.mjs");
+    let release = fs::read_to_string(&release_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", release_path.display()));
+    // 限定到 manifest 对象本身，不能全局扫描 release/action 或 QR 签名协议旧边界。
+    let manifest_start = release
+        .find("const manifest = {")
+        .expect("CitizenChatServer Release 缺少 manifest 构造");
+    let manifest_end = release[manifest_start..]
+        .find("const manifestPath =")
+        .map(|offset| manifest_start + offset)
+        .expect("CitizenChatServer Release 缺少 manifest 输出边界");
+    let manifest = &release[manifest_start..manifest_end];
+    assert!(
+        manifest.contains("deployment_provider: 'cloudflare'"),
+        "CitizenChatServer Release manifest 缺少 deployment_provider: cloudflare"
+    );
+    assert!(
+        !manifest.contains("platform:"),
+        "CitizenChatServer Release manifest 禁止把 Cloudflare 写入 platform"
+    );
+    assert!(
+        release.contains("export function verifyPackagedRelease")
+            && release.contains("manifest.archive_sha256 !== archiveSHA256")
+            && release.contains("verifyPackagedRelease({ archive, manifestPath, sumsPath })")
+            && release.contains("'--no-recursion', '--null', '-T', archiveList")
+            && release.contains("detailRows.some((line) => line[0] !== '-')"),
+        "CitizenChatServer Release 必须生成并回验仅含普通文件且绑定实际归档哈希的三件套"
+    );
+
+    let console_root = flow_root
+        .parent()
+        .expect("TataConsole flows 必须位于控制台根目录下");
+    let publisher_path = console_root.join("app/Sources/CloudflarePublisher.swift");
+    let publisher = fs::read_to_string(&publisher_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_path.display()));
+    assert!(
+        publisher.contains("manifest[\"archive_sha256\"] as? String == archiveSHA256")
+            && publisher.contains("citizenChatServerExternalChecksums(")
+            && publisher.contains("expectedFiles = Set(files.keys)"),
+        "CitizenChatServer 原生发布器必须验证外部三件套、实际归档哈希与内部候选闭集"
+    );
+}
+
+/// CitizenServe 正式制品必须把 Cloudflare 表达为部署供应商；QR_V1/action/recovery 中的
+/// `platform=cloudflare` 是另一项签名与持久化 wire，不能在 Release 中局部兼容双写。
+#[test]
+fn citizenserve_release_identity_uses_deployment_provider() {
+    let flow_root = tata_flow_root();
+    let tata_console_root = flow_root
+        .parent()
+        .expect("TATA_CONSOLE_FLOW_ROOT 必须位于 tataconsole/flows")
+        .to_path_buf();
+    let implementation = |path: &Path| {
+        let text = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", path.display()));
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("const implementations = Object.freeze("))
+            .unwrap_or_else(|| panic!("{} 缺少内嵌实现登记", path.display()));
+        let json = line
+            .strip_prefix("const implementations = Object.freeze(")
+            .and_then(|value| value.strip_suffix(");"))
+            .unwrap_or_else(|| panic!("{} 的内嵌实现登记格式无效", path.display()));
+        let implementations: Value = serde_json::from_str(json)
+            .unwrap_or_else(|e| panic!("解析 {} 内嵌实现失败: {e}", path.display()));
+        implementations["action"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} 缺少 CitizenServe action 实现", path.display()))
+            .to_string()
+    };
+    let ci_path = flow_root.join("gmb/citizenserve/ci-cloudflare.mjs");
+    let release_path = flow_root.join("gmb/citizenserve/release-cloudflare.mjs");
+    let ci_implementation = implementation(&ci_path);
+    let release_implementation = implementation(&release_path);
+    assert_eq!(
+        ci_implementation, release_implementation,
+        "CitizenServe CI 与 Release 必须内嵌同一份正式制品实现"
+    );
+    for required in [
+        "const DEPLOYMENT_PROVIDER = 'cloudflare';",
+        "['product_id', 'deployment_provider', 'software_version', 'git_commit_sha', 'tools', 'files', 'resources']",
+        "manifest.deployment_provider !== DEPLOYMENT_PROVIDER",
+        "deployment_provider: DEPLOYMENT_PROVIDER",
+        "sha256File(join(candidate, 'wrangler.toml')) !== manifest.resources.wrangler_sha256",
+        "候选 SHA256SUMS 不一致",
+        "if (!deterministicTar(output).equals(tar))",
+        "assertNoSecrets(candidate);",
+    ] {
+        assert!(
+            release_implementation.contains(required),
+            "CitizenServe Release 缺少部署供应商或完整性合同 {required}"
+        );
+    }
+    assert_eq!(
+        release_implementation
+            .matches("deployment_provider: DEPLOYMENT_PROVIDER")
+            .count(),
+        1,
+        "CitizenServe manifest 必须且只能写入一次部署供应商"
+    );
+    for forbidden in [
+        "manifest.platform",
+        "platform: DEPLOYMENT_PROVIDER",
+        "platform: 'cloudflare'",
+    ] {
+        assert!(
+            !release_implementation.contains(forbidden),
+            "CitizenServe 正式制品禁止旧 platform 或双写 {forbidden}"
+        );
+    }
+
+    let release_test_path = repo_root().join("citizenserve/test/release_manifest.test.ts");
+    let release_test = fs::read_to_string(&release_test_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", release_test_path.display()));
+    for required in [
+        "gmb/citizenserve/ci-cloudflare.mjs",
+        "gmb/citizenserve/release-cloudflare.mjs",
+        "deployment_provider).toBe('cloudflare')",
+        "manifest.platform = 'cloudflare'",
+        "候选部署供应商不正确",
+    ] {
+        assert!(
+            release_test.contains(required),
+            "CitizenServe Release 测试缺少当前入口或失败关闭合同 {required}"
+        );
+    }
+    for obsolete in [
+        "gmb/scripts/citizenserve-ci-global.mjs",
+        "gmb/scripts/citizenserve-release-global.mjs",
+    ] {
+        assert!(
+            !release_test.contains(obsolete),
+            "CitizenServe Release 测试禁止恢复失效入口 {obsolete}"
+        );
+    }
+
+    let publisher_path = tata_console_root.join("app/Sources/CloudflarePublisher.swift");
+    let publisher = fs::read_to_string(&publisher_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_path.display()));
+    let prepare_start = publisher
+        .find("private func prepareCandidate(")
+        .expect("CloudflarePublisher 缺少 prepareCandidate");
+    let validator_start = publisher
+        .find("static func validateCitizenServeReleaseManifest(")
+        .expect("CloudflarePublisher 缺少 CitizenServe Release 验证器");
+    let citizen_web_validator_start = publisher[validator_start..]
+        .find("static func validateCitizenWebReleaseContract(")
+        .map(|offset| validator_start + offset)
+        .expect("CitizenServe 验证器缺少后续 CitizenWeb 边界");
+    let prepare = &publisher[prepare_start..validator_start];
+    let validator = &publisher[validator_start..citizen_web_validator_start];
+    assert!(
+        prepare.contains("if input.productID == \"citizenserve\"")
+            && prepare.contains("try Self.validateCitizenServeReleaseManifest(manifest)"),
+        "CitizenServe 原生发布器必须只在本产品候选准备阶段调用专用验证器"
+    );
+    for required in [
+        "\"product_id\", \"deployment_provider\", \"software_version\", \"git_commit_sha\"",
+        "manifest[\"product_id\"] as? String == \"citizenserve\"",
+        "manifest[\"deployment_provider\"] as? String == \"cloudflare\"",
+        "^[0-9]+\\\\.[0-9]{1,2}\\\\.[0-9]{1,2}$",
+        "^[0-9a-f]{40}$",
+    ] {
+        assert!(
+            validator.contains(required),
+            "CitizenServe 原生发布器缺少部署供应商身份复核 {required}"
+        );
+    }
+    assert!(
+        publisher
+            .contains("input.productID == \"citizenserve\" && input.platform == \"cloudflare\""),
+        "CitizenServe QR/action/recovery 的既有签名 wire 不得在本步局部改写"
+    );
+
+    let shared_path = tata_console_root.join("dictionary/gmb/shared.json");
+    let shared_text = fs::read_to_string(&shared_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", shared_path.display()));
+    let shared: Value = serde_json::from_str(&shared_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", shared_path.display()));
+    let provider_fields = shared["fields"]
+        .as_array()
+        .expect("GMB 共享字典 fields 必须是数组")
+        .iter()
+        .filter(|field| field["concept_id"] == "deployment_provider")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        provider_fields.len(),
+        1,
+        "deployment_provider 字段必须只有一个共享真源"
+    );
+    assert_eq!(provider_fields[0]["data_type"], "enum");
+    assert_eq!(provider_fields[0]["value_set_id"], "deployment_provider");
+    let provider_value_sets = shared["value_sets"]
+        .as_array()
+        .expect("GMB 共享字典 value_sets 必须是数组")
+        .iter()
+        .filter(|value_set| value_set["value_set_id"] == "deployment_provider")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        provider_value_sets.len(),
+        1,
+        "deployment_provider 值集必须只有一个共享真源"
+    );
+    assert_eq!(
+        provider_value_sets[0]["values"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(provider_value_sets[0]["values"][0]["value"], "cloudflare");
+
+    let citizenserve_path = tata_console_root.join("dictionary/gmb/citizenserve.json");
+    let citizenserve_text = fs::read_to_string(&citizenserve_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", citizenserve_path.display()));
+    let citizenserve: Value = serde_json::from_str(&citizenserve_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", citizenserve_path.display()));
+    assert!(!citizenserve["fields"]
+        .as_array()
+        .expect("CitizenServe fields 必须是数组")
+        .iter()
+        .any(|field| field["concept_id"] == "deployment_provider"));
+    assert!(!citizenserve["value_sets"]
+        .as_array()
+        .expect("CitizenServe value_sets 必须是数组")
+        .iter()
+        .any(|value_set| value_set["value_set_id"] == "deployment_provider"));
+    let contracts = citizenserve["contracts"]
+        .as_array()
+        .expect("CitizenServe contracts 必须是数组");
+    let matching_contracts = contracts
+        .iter()
+        .filter(|contract| contract["contract_id"] == "citizenserve_release_identity")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching_contracts.len(),
+        1,
+        "CitizenServe 必须且只能登记一个正式发布身份合同"
+    );
+    let contract = matching_contracts[0];
+    let string_set = |value: &Value| {
+        value
+            .as_array()
+            .expect("合同字段必须是数组")
+            .iter()
+            .map(|item| item.as_str().expect("合同字段必须是字符串").to_string())
+            .collect::<BTreeSet<String>>()
+    };
+    assert_eq!(
+        string_set(&contract["paths"]),
+        ["citizenserve/test/release_manifest.test.ts"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["fields"]),
+        ["deployment_provider", "product_id"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["value_sets"]),
+        ["deployment_provider"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+}
+
+/// CitizenWeb 正式制品必须把 Web 表达为交付渠道；QR_V1/action 中尚未原子迁移的
+/// `platform=web` 是另一项签名 wire，不能用全文件禁词误伤，也不能进入 Release 双写。
+#[test]
+fn citizenweb_release_identity_uses_delivery_channel() {
+    let flow_root = tata_flow_root();
+    let tata_console_root = flow_root
+        .parent()
+        .expect("TATA_CONSOLE_FLOW_ROOT 必须位于 tataconsole/flows")
+        .to_path_buf();
+    let implementation = |path: &Path| {
+        let text = fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", path.display()));
+        let line = text
+            .lines()
+            .find(|line| line.starts_with("const implementations = Object.freeze("))
+            .unwrap_or_else(|| panic!("{} 缺少内嵌实现登记", path.display()));
+        let json = line
+            .strip_prefix("const implementations = Object.freeze(")
+            .and_then(|value| value.strip_suffix(");"))
+            .unwrap_or_else(|| panic!("{} 的内嵌实现登记格式无效", path.display()));
+        let implementations: Value = serde_json::from_str(json)
+            .unwrap_or_else(|e| panic!("解析 {} 内嵌实现失败: {e}", path.display()));
+        implementations["citizenweb-release"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{} 缺少 citizenweb-release 实现", path.display()))
+            .to_string()
+    };
+    let ci_path = flow_root.join("gmb/citizenweb/ci-web.mjs");
+    let release_path = flow_root.join("gmb/citizenweb/release-web.mjs");
+    let ci_implementation = implementation(&ci_path);
+    let release_implementation = implementation(&release_path);
+    assert_eq!(
+        ci_implementation, release_implementation,
+        "CitizenWeb CI 与 Release 必须内嵌同一份正式制品实现"
+    );
+    for required in [
+        "const DELIVERY_CHANNEL = 'web';",
+        "['product_id', 'delivery_channel', 'software_version', 'git_commit_sha', 'tools', 'assets_sha256', 'files']",
+        "['product_id', 'delivery_channel', 'software_version', 'git_commit_sha', 'assets_sha256']",
+        "manifest.delivery_channel !== DELIVERY_CHANNEL",
+        "delivery_channel: DELIVERY_CHANNEL",
+        "sha256Bytes(stableJson(assetEntries)) !== manifest.assets_sha256",
+        "官网版本标记与 Release 候选不一致",
+        "候选 SHA256SUMS 不一致",
+    ] {
+        assert!(
+            release_implementation.contains(required),
+            "CitizenWeb Release 缺少交付渠道或完整性合同 {required}"
+        );
+    }
+    assert_eq!(
+        release_implementation
+            .matches("delivery_channel: DELIVERY_CHANNEL")
+            .count(),
+        3,
+        "CitizenWeb manifest、公开标记及其期望值必须各写一次交付渠道"
+    );
+    for forbidden in [
+        "manifest.platform",
+        "marker.platform",
+        "platform: DELIVERY_CHANNEL",
+        "platform: 'web'",
+    ] {
+        assert!(
+            !release_implementation.contains(forbidden),
+            "CitizenWeb 正式制品禁止旧 platform 或双写 {forbidden}"
+        );
+    }
+
+    let publisher_path = tata_console_root.join("app/Sources/CloudflarePublisher.swift");
+    let publisher = fs::read_to_string(&publisher_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_path.display()));
+    for required in [
+        "static func validateCitizenWebReleaseContract(",
+        "manifest[\"delivery_channel\"] as? String == \"web\"",
+        "marker[\"delivery_channel\"] as? String == \"web\"",
+        "marker[\"software_version\"] as? String == softwareVersion",
+        "marker[\"git_commit_sha\"] as? String == gitCommitSHA",
+        "marker[\"assets_sha256\"] as? String == assetsSHA256",
+        "input.productID == \"citizenweb\"",
+        "dist/citizenweb-release.json",
+    ] {
+        assert!(
+            publisher.contains(required),
+            "CitizenWeb 原生发布器缺少独立渠道身份复核 {required}"
+        );
+    }
+
+    let shared_path = tata_console_root.join("dictionary/gmb/shared.json");
+    let shared_text = fs::read_to_string(&shared_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", shared_path.display()));
+    let shared: Value = serde_json::from_str(&shared_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", shared_path.display()));
+    let fields = shared["fields"]
+        .as_array()
+        .expect("GMB 共享字典 fields 必须是数组");
+    let delivery_fields = fields
+        .iter()
+        .filter(|field| field["concept_id"] == "delivery_channel")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delivery_fields.len(),
+        1,
+        "delivery_channel 字段必须只有一个真源"
+    );
+    assert_eq!(delivery_fields[0]["field_name"], "delivery_channel");
+    assert_eq!(delivery_fields[0]["data_type"], "enum");
+    assert_eq!(delivery_fields[0]["value_set_id"], "delivery_channel");
+
+    let value_sets = shared["value_sets"]
+        .as_array()
+        .expect("GMB 共享字典 value_sets 必须是数组");
+    let delivery_value_sets = value_sets
+        .iter()
+        .filter(|value_set| value_set["value_set_id"] == "delivery_channel")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        delivery_value_sets.len(),
+        1,
+        "delivery_channel 值集必须只有一个真源"
+    );
+    assert_eq!(
+        delivery_value_sets[0]["values"].as_array().map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(delivery_value_sets[0]["values"][0]["value"], "web");
+
+    let publish_record = shared["contracts"]
+        .as_array()
+        .expect("GMB 共享字典 contracts 必须是数组")
+        .iter()
+        .find(|contract| contract["contract_id"] == "publish_record")
+        .expect("GMB 共享字典缺少 publish_record");
+    assert!(publish_record["fields"]
+        .as_array()
+        .expect("publish_record.fields 必须是数组")
+        .iter()
+        .any(|field| field == "delivery_channel"));
+    assert!(publish_record["value_sets"]
+        .as_array()
+        .expect("publish_record.value_sets 必须是数组")
+        .iter()
+        .any(|value_set| value_set == "delivery_channel"));
+
+    let citizenweb_path = tata_console_root.join("dictionary/gmb/citizenweb.json");
+    let citizenweb_text = fs::read_to_string(&citizenweb_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", citizenweb_path.display()));
+    let citizenweb: Value = serde_json::from_str(&citizenweb_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", citizenweb_path.display()));
+    assert_eq!(citizenweb["fields"].as_array().map(Vec::len), Some(0));
+    assert_eq!(citizenweb["value_sets"].as_array().map(Vec::len), Some(0));
+    let contracts = citizenweb["contracts"]
+        .as_array()
+        .expect("CitizenWeb contracts 必须是数组");
+    assert_eq!(
+        contracts.len(),
+        1,
+        "CitizenWeb 必须只有一个产品发布身份合同"
+    );
+    let contract = &contracts[0];
+    assert_eq!(contract["contract_id"], "citizenweb_release_identity");
+    let string_set = |value: &Value| {
+        value
+            .as_array()
+            .expect("合同字段必须是数组")
+            .iter()
+            .map(|item| item.as_str().expect("合同字段必须是字符串").to_string())
+            .collect::<BTreeSet<String>>()
+    };
+    assert_eq!(
+        string_set(&contract["paths"]),
+        ["citizenweb/test/release_manifest.test.mjs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["fields"]),
+        ["delivery_channel", "product_id"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["value_sets"]),
+        ["delivery_channel"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+}
+
+/// CitizenApp 的正式移动制品必须在公开 manifest 中使用标准平台名；动作、Tag 与
+/// QR_V1 仍使用既有内部 `ios`/`android` wire，二者只能在原生消费边界显式映射。
+#[test]
+fn citizenapp_release_assets_use_standard_public_platforms() {
+    let flow_root = tata_flow_root();
+    let tata_console_root = flow_root
+        .parent()
+        .expect("TATA_CONSOLE_FLOW_ROOT 必须位于 tataconsole/flows")
+        .to_path_buf();
+    let action_path = flow_root.join("gmb/citizenapp/action.yml");
+    let action = fs::read_to_string(&action_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", action_path.display()));
+    let step = |start: &str, end: &str| {
+        let start_index = action
+            .find(start)
+            .unwrap_or_else(|| panic!("CitizenApp action 缺少步骤 {start}"));
+        let end_index = action[start_index..]
+            .find(end)
+            .map(|offset| start_index + offset)
+            .unwrap_or_else(|| panic!("CitizenApp action 步骤 {start} 缺少结束边界 {end}"));
+        &action[start_index..end_index]
+    };
+    let android_writer = step(
+        "name: 生成并核验 Android 正式清单",
+        "name: 签署 Android 正式资产构建来源",
+    );
+    let ios_writer = step(
+        "name: 生成并核验 iOS 正式清单",
+        "name: 签署 iOS 正式资产构建来源",
+    );
+    assert_eq!(
+        android_writer.matches("platform: \"Android\"").count(),
+        2,
+        "CitizenApp Android APK/AAB 必须各声明一次标准公开平台"
+    );
+    assert_eq!(
+        ios_writer.matches("platform: 'iOS'").count(),
+        1,
+        "CitizenApp iOS IPA 必须声明一次标准公开平台"
+    );
+    for (writer, forbidden) in [
+        (android_writer, "platform: \"android\""),
+        (ios_writer, "platform: 'ios'"),
+    ] {
+        assert!(
+            !writer.contains(forbidden),
+            "CitizenApp 正式 manifest 禁止恢复小写公开平台 {forbidden}"
+        );
+    }
+    for internal_wire in [
+        "--prefix citizenapp-android-v --product-id citizenapp",
+        "--target android --workflow gmb.citizenapp.android.ci",
+        "--prefix citizenapp-ios-v --product-id citizenapp",
+        "--target ios --workflow gmb.citizenapp.ios.ci",
+    ] {
+        assert!(
+            action.contains(internal_wire),
+            "CitizenApp 内部 Tag/target wire 不得在本步局部改写 {internal_wire}"
+        );
+    }
+
+    let release_test_path = repo_root().join("citizenapp/test/release_manifest.test.mjs");
+    let release_test = fs::read_to_string(&release_test_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", release_test_path.display()));
+    for required in [
+        "gmb/citizenapp/action.yml",
+        "中央 action 中真正随 Release 上线的 heredoc",
+        "const topLevelFields = [",
+        "const assetFields = ['asset_name', 'asset_sha256', 'platform'];",
+        "platform: publicPlatform",
+        "value.assets[0].platform = 'android'",
+        "value.assets[0].platform = 'ios'",
+        "正式版本 Tag 前缀与内部 target 继续使用既有小写身份",
+    ] {
+        assert!(
+            release_test.contains(required),
+            "CitizenApp Release 测试缺少真实 writer 或失败关闭合同 {required}"
+        );
+    }
+
+    let publisher_path = tata_console_root.join("app/Sources/MobileStorePublisher.swift");
+    let publisher = fs::read_to_string(&publisher_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_path.display()));
+    let common_validator_start = publisher
+        .find("private func validatePublishManifest(")
+        .expect("MobileStorePublisher 缺少通用 manifest 验证器");
+    let mobile_validator_start = publisher
+        .find("static func validateCitizenMobileReleaseManifest(")
+        .expect("MobileStorePublisher 缺少公民移动 Release 共用验证器");
+    let common_validator = &publisher[common_validator_start..mobile_validator_start];
+    let call_offset = common_validator
+        .find("try Self.validateCitizenMobileReleaseManifest(")
+        .expect("通用 manifest 验证器未调用公民移动 Release 共用验证器");
+    let generic_guard_offset = common_validator
+        .find("guard manifest[\"product_id\"]")
+        .expect("通用 manifest 验证器缺少既有身份检查");
+    assert!(
+        call_offset < generic_guard_offset,
+        "公民移动 Release 共用验证必须先于文件读取和既有候选检查失败关闭"
+    );
+    let mobile_validator_end = publisher[mobile_validator_start..]
+        .find("private func publishAppleBuild(")
+        .map(|offset| mobile_validator_start + offset)
+        .expect("公民移动 Release 共用验证器缺少结束边界");
+    let mobile_validator = &publisher[mobile_validator_start..mobile_validator_end];
+    for required in [
+        "guard productID == \"citizenapp\" || productID == \"citizenwallet\" else { return }",
+        "let product = try StoreProduct.resolve(productID)",
+        "case \"ios\"",
+        "publicPlatform = \"iOS\"",
+        "expectedAssetNames = [\"\\(productID).ipa\"]",
+        "case \"android\"",
+        "publicPlatform = \"Android\"",
+        "expectedAssetNames = [\"\\(productID).apk\", \"\\(productID).aab\"]",
+        "Set(manifest.keys) == expectedManifestKeys",
+        "manifest[\"bundle_id\"] as? String == product.bundleID",
+        "manifest[\"package_name\"] as? String == product.packageName",
+        "Set(asset.keys) == expectedAssetKeys",
+        "asset[\"platform\"] as? String == publicPlatform",
+        "of: \"^[0-9a-f]{64}$\", options: .regularExpression",
+        "assetNames.insert(assetName).inserted",
+        "assetNames == expectedAssetNames",
+    ] {
+        assert!(
+            mobile_validator.contains(required),
+            "公民移动原生发布器缺少平台映射或严格字段合同 {required}"
+        );
+    }
+
+    let dictionary_path = tata_console_root.join("dictionary/gmb/citizenapp.json");
+    let dictionary_text = fs::read_to_string(&dictionary_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", dictionary_path.display()));
+    let dictionary: Value = serde_json::from_str(&dictionary_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", dictionary_path.display()));
+    let contracts = dictionary["contracts"]
+        .as_array()
+        .expect("CitizenApp contracts 必须是数组");
+    let matching = contracts
+        .iter()
+        .filter(|contract| contract["contract_id"] == "citizenapp_release_identity")
+        .collect::<Vec<_>>();
+    assert_eq!(matching.len(), 1, "CitizenApp 必须只有一个正式发布身份合同");
+    let contract = matching[0];
+    let string_set = |value: &Value| {
+        value
+            .as_array()
+            .expect("CitizenApp 发布合同字段必须是数组")
+            .iter()
+            .map(|item| item.as_str().expect("合同字段必须是字符串").to_string())
+            .collect::<BTreeSet<String>>()
+    };
+    assert_eq!(
+        string_set(&contract["paths"]),
+        ["citizenapp/test/release_manifest.test.mjs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["fields"]),
+        ["platform"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert!(
+        contract["value_sets"].as_array().is_some_and(Vec::is_empty),
+        "CitizenApp 发布合同必须复用共享 platform 字段且不得复制值集"
+    );
+}
+
+/// CitizenWallet 与 CitizenApp 共用同一原生移动清单验证器；产品仓测试必须直接执行
+/// TataConsole 唯一 writer，公开平台只允许 `Android`/`iOS`，内部签名 wire 保持小写。
+#[test]
+fn citizenwallet_release_assets_use_standard_public_platforms() {
+    let flow_root = tata_flow_root();
+    let tata_console_root = flow_root
+        .parent()
+        .expect("TATA_CONSOLE_FLOW_ROOT 必须位于 tataconsole/flows")
+        .to_path_buf();
+    let action_path = flow_root.join("gmb/citizenwallet/action.yml");
+    let action = fs::read_to_string(&action_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", action_path.display()));
+    let step = |start: &str, end: &str| {
+        let start_index = action
+            .find(start)
+            .unwrap_or_else(|| panic!("CitizenWallet action 缺少步骤 {start}"));
+        let end_index = action[start_index..]
+            .find(end)
+            .map(|offset| start_index + offset)
+            .unwrap_or_else(|| panic!("CitizenWallet action 步骤 {start} 缺少结束边界 {end}"));
+        &action[start_index..end_index]
+    };
+    let android_writer = step(
+        "name: 生成并核验 Android 正式清单",
+        "name: 签署 Android 正式资产构建来源",
+    );
+    let ios_writer = step(
+        "name: 生成并核验 iOS 正式清单",
+        "name: 签署 iOS 正式资产构建来源",
+    );
+    assert_eq!(
+        android_writer.matches("platform: \"Android\"").count(),
+        2,
+        "CitizenWallet Android APK/AAB 必须各声明一次标准公开平台"
+    );
+    assert_eq!(
+        ios_writer.matches("platform: 'iOS'").count(),
+        1,
+        "CitizenWallet iOS IPA 必须声明一次标准公开平台"
+    );
+    for (writer, forbidden) in [
+        (android_writer, "platform: \"android\""),
+        (ios_writer, "platform: 'ios'"),
+    ] {
+        assert!(
+            !writer.contains(forbidden),
+            "CitizenWallet 正式 manifest 禁止恢复小写公开平台 {forbidden}"
+        );
+    }
+    for internal_wire in [
+        "--prefix citizenwallet-android-v --product-id citizenwallet",
+        "--target android --workflow gmb.citizenwallet.android.ci",
+        "--prefix citizenwallet-ios-v --product-id citizenwallet",
+        "--target ios --workflow gmb.citizenwallet.ios.ci",
+    ] {
+        assert!(
+            action.contains(internal_wire),
+            "CitizenWallet 内部 Tag/target wire 不得在本步局部改写 {internal_wire}"
+        );
+    }
+    assert_eq!(
+        action
+            .matches("name: 校验正式 Release manifest 公开身份")
+            .count(),
+        2,
+        "CitizenWallet Android/iOS CI 必须各执行一次正式 manifest 合同测试"
+    );
+    assert_eq!(
+        action
+            .matches("node --test citizenwallet/test/release_manifest.test.mjs")
+            .count(),
+        2,
+        "CitizenWallet 真实 writer 测试不得成为只由人工运行的测试孤岛"
+    );
+
+    let release_test_path = repo_root().join("citizenwallet/test/release_manifest.test.mjs");
+    let release_test = fs::read_to_string(&release_test_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", release_test_path.display()));
+    for required in [
+        "gmb/citizenwallet/action.yml",
+        "测试必须执行中央 action 真正上线的 heredoc",
+        "const topLevelFields = [",
+        "const assetFields = ['asset_name', 'asset_sha256', 'platform'];",
+        "publicName: 'Android'",
+        "publicName: 'iOS'",
+        "value.assets[0].platform = 'android'",
+        "value.assets[0].platform = 'ios'",
+        "步骤所属 job 与 writer 同属发布合同",
+        "writer 必须绑定到对应正式 Release job",
+        "['产品身份漂移'",
+        "['Apple 身份漂移'",
+        "['Android 身份漂移'",
+        "['资产摘要漂移'",
+        "['资产重复'",
+        "正式 Tag 与内部 target/workflow 继续使用既有小写 wire",
+    ] {
+        assert!(
+            release_test.contains(required),
+            "CitizenWallet Release 测试缺少真实 writer 或失败关闭合同 {required}"
+        );
+    }
+
+    let publisher_path = tata_console_root.join("app/Sources/MobileStorePublisher.swift");
+    let publisher = fs::read_to_string(&publisher_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_path.display()));
+    for required in [
+        "case \"citizenwallet\"",
+        "bundleID: \"ios.citizenwallet\", packageName: \"com.crcfrcn.citizenwallet\"",
+        "guard productID == \"citizenapp\" || productID == \"citizenwallet\" else { return }",
+        "expectedAssetNames = [\"\\(productID).ipa\"]",
+        "expectedAssetNames = [\"\\(productID).apk\", \"\\(productID).aab\"]",
+    ] {
+        assert!(
+            publisher.contains(required),
+            "公民移动原生发布器缺少 CitizenWallet 共用严格合同 {required}"
+        );
+    }
+    // 中文边界：正式发布入口必须在读取候选二进制、访问 Keychain 或调用商店网络前
+    // 完成同一个清单验证；只测试 inspectCandidate 不能阻断 publishCandidate 顺序回退。
+    let publish_start = publisher
+        .find("func publishCandidate(")
+        .expect("MobileStorePublisher 缺少正式发布入口");
+    let publish_end = publisher[publish_start..]
+        .find("private func publishVersion(")
+        .map(|offset| publish_start + offset)
+        .expect("MobileStorePublisher 正式发布入口缺少结束边界");
+    let publish_candidate = &publisher[publish_start..publish_end];
+    let publish_validation = publish_candidate
+        .find("let githubRunNumber = try validatePublishManifest(")
+        .expect("正式发布入口未执行统一清单验证");
+    for side_effect in [
+        "let artifactData = try checkedPublishFile(",
+        "let issuerID = try textSecret(",
+        "let serviceAccountData = try vault.read(",
+        "let deploymentID = try publishAppleBuild(",
+        "let deploymentID = try publishGoogleBundle(",
+    ] {
+        let side_effect_offset = publish_candidate
+            .find(side_effect)
+            .unwrap_or_else(|| panic!("正式发布入口缺少受保护操作 {side_effect}"));
+        assert!(
+            publish_validation < side_effect_offset,
+            "统一清单验证必须早于候选二进制、Keychain 与商店网络操作 {side_effect}"
+        );
+    }
+    let publisher_tests_path = tata_console_root.join("app/Tests/MobileStorePublisherTests.swift");
+    let publisher_tests = fs::read_to_string(&publisher_tests_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", publisher_tests_path.display()));
+    for required in [
+        "testCitizenAppCandidateInspectionRejectsPublicPlatformDrift",
+        "testCitizenWalletCandidateInspectionUsesTheSharedStrictManifestContract",
+        "testCitizenWalletCandidateInspectionRejectsAssetPlatformDrift",
+        "testCitizenWalletCandidateInspectionRejectsFieldDrift",
+        "testCitizenWalletCandidateInspectionRejectsIdentityDrift",
+        "testCitizenWalletCandidateInspectionRejectsSHAContractDrift",
+        "testCitizenWalletCandidateInspectionRejectsAssetSetDrift",
+        "String(repeating: \"0\", count: 64)",
+        "合法格式但与 fixture 字节不符",
+        "testTuyuProductDoesNotEnterCitizenMobileManifestContract",
+    ] {
+        assert!(
+            publisher_tests.contains(required),
+            "MobileStorePublisherTests 缺少 CitizenWallet 正反消费门禁 {required}"
+        );
+    }
+
+    let dictionary_path = tata_console_root.join("dictionary/gmb/citizenwallet.json");
+    let dictionary_text = fs::read_to_string(&dictionary_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", dictionary_path.display()));
+    let dictionary: Value = serde_json::from_str(&dictionary_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", dictionary_path.display()));
+    let contracts = dictionary["contracts"]
+        .as_array()
+        .expect("CitizenWallet contracts 必须是数组");
+    let matching = contracts
+        .iter()
+        .filter(|contract| contract["contract_id"] == "citizenwallet_release_identity")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        matching.len(),
+        1,
+        "CitizenWallet 必须只有一个正式发布身份合同"
+    );
+    let contract = matching[0];
+    let string_set = |value: &Value| {
+        value
+            .as_array()
+            .expect("CitizenWallet 发布合同字段必须是数组")
+            .iter()
+            .map(|item| item.as_str().expect("合同字段必须是字符串").to_string())
+            .collect::<BTreeSet<String>>()
+    };
+    assert_eq!(
+        string_set(&contract["paths"]),
+        ["citizenwallet/test/release_manifest.test.mjs"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert_eq!(
+        string_set(&contract["fields"]),
+        ["platform"]
+            .into_iter()
+            .map(str::to_string)
+            .collect::<BTreeSet<String>>()
+    );
+    assert!(
+        contract["value_sets"].as_array().is_some_and(Vec::is_empty),
+        "CitizenWallet 发布合同必须复用共享 platform 字段且不得复制值集"
+    );
+}
+
 /// CitizenWallet 文档必须把公开 Android 平台名与官方 ABI 技术值分开表达。
 #[test]
 fn citizenwallet_documentation_separates_android_platform_from_abi() {
@@ -274,7 +1164,7 @@ fn citizenchain_macos_updater_uses_typed_public_route() {
         if !text.contains(required) {
             violations.push(format!("{label}: 缺少类型化 macOS updater 路由 {required}"));
         }
-        for forbidden in ["macos-arm64-updater", "macOS-updater"] {
+        for forbidden in [concat!("macos", "-arm64-updater"), "macOS-updater"] {
             if text.contains(forbidden) {
                 violations.push(format!("{label}: 禁止旧路由或复合平台名 {forbidden}"));
             }
@@ -329,7 +1219,7 @@ fn citizenchain_install_downloads_use_standard_public_routes() {
         ),
     ];
     let forbidden_paths = [
-        "/download/citizenchain/macos-arm64",
+        concat!("/download/citizenchain/macos", "-arm64"),
         "/download/citizenchain/windows-x86_64",
         "/download/citizenchain/linux-arm64",
         "/download/citizenchain/linux-amd64",
@@ -413,11 +1303,11 @@ fn citizenchain_download_publication_wire_is_cross_runtime_compatible() {
     assert_eq!(
         fixture["location"],
         "https://github.com/VoyagerRhett/GMB/releases/download/\
-citizenchain-node-macos-v1.2.3/citizenchain-node-macos-arm64-v1.2.3.dmg"
+citizenchain-node-macos-v1.2.3/citizenchain-node-macOS-v1.2.3.dmg"
     );
     assert_eq!(
         fixture["snapshot_anchor"],
-        "ccdp:macos:1:b16f850a8f568f01f26e27b2ec6beba51d31f4b80d5b36b65b0351260dcd1906"
+        "ccdp:macos:1:03939a59159d803ddc044c13c3aa0368006a7f0d69e3265c51b4d33ff6c9f9fc"
     );
 
     let put_body: Value = serde_json::from_str(
@@ -531,6 +1421,393 @@ citizenchain-node-macos-v1.2.3/citizenchain-node-macos-arm64-v1.2.3.dmg"
             swift_source_path.display()
         );
     }
+}
+
+/// CitizenChain 自定义 Release 资产必须在中央流程、发布器、下载服务和 golden 间一致。
+#[test]
+fn citizenchain_release_assets_are_cross_repository_consistent() {
+    let repo_root = repo_root();
+    let flow_root = tata_flow_root();
+    let tata_console_root = flow_root
+        .parent()
+        .expect("TATA_CONSOLE_FLOW_ROOT 必须位于 tataconsole/flows")
+        .to_path_buf();
+    let action_path = flow_root.join("gmb/citizenchain-node/action.yml");
+    let remote_jobs_path = flow_root.join("gmb/citizenchain-node/remote-jobs.json");
+    let swift_path = tata_console_root.join("app/Sources/CitizenChainDownloadPublisher.swift");
+    let serve_path = repo_root.join("citizenserve/src/downloads/citizenchain.ts");
+    let fixture_path =
+        tata_console_root.join("test/citizenchain-download-publication-interop-v1.json");
+
+    let action = fs::read_to_string(&action_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", action_path.display()));
+    let remote_jobs_text = fs::read_to_string(&remote_jobs_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", remote_jobs_path.display()));
+    let remote_jobs: Value = serde_json::from_str(&remote_jobs_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", remote_jobs_path.display()));
+    let swift = fs::read_to_string(&swift_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", swift_path.display()));
+    let serve = fs::read_to_string(&serve_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", serve_path.display()));
+    let fixture_text = fs::read_to_string(&fixture_path)
+        .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", fixture_path.display()));
+    let fixture: Value = serde_json::from_str(&fixture_text)
+        .unwrap_or_else(|e| panic!("解析 {} 失败: {e}", fixture_path.display()));
+
+    // platform 是 D1/流程内部键，stem 才是公开资产平台段；Tag 前缀保持原合同。
+    let contracts = [
+        (
+            "linux-arm",
+            "citizenchain-node-LinuxARM",
+            "citizenchain-node-LinuxARM.deb",
+            "citizenchain-node-LinuxARM.AppImage",
+            "citizenchain-node-latest-LinuxARM.json",
+        ),
+        (
+            "linux-amd",
+            "citizenchain-node-LinuxAMD",
+            "citizenchain-node-LinuxAMD.deb",
+            "citizenchain-node-LinuxAMD.AppImage",
+            "citizenchain-node-latest-LinuxAMD.json",
+        ),
+        (
+            "macos",
+            "citizenchain-node-macOS",
+            "citizenchain-node-macOS.dmg",
+            "citizenchain-node-macOS.app.tar.gz",
+            "citizenchain-node-latest-macOS.json",
+        ),
+        (
+            "windows",
+            "citizenchain-node-Windows",
+            "citizenchain-node-Windows.exe",
+            "",
+            "citizenchain-node-latest-Windows.json",
+        ),
+    ];
+    let legacy_asset_fragments = [
+        "citizenchain-node-linux-arm",
+        "citizenchain-node-linux-amd",
+        "citizenchain-node-macos",
+        "citizenchain-node-windows",
+        "citizenchain-node-latest-linux-arm",
+        "citizenchain-node-latest-linux-amd",
+        "citizenchain-node-latest-macos",
+        "citizenchain-node-latest-windows",
+    ];
+    let reject_legacy_asset = |label: &str, value: &str, violations: &mut Vec<String>| {
+        for legacy in &legacy_asset_fragments {
+            if value.contains(legacy) {
+                violations.push(format!("{label}: 自定义资产字段禁止旧名称 {legacy}"));
+            }
+        }
+    };
+    let mut violations = Vec::new();
+
+    // remote-jobs 只检查三个自定义资产字段；runner 架构、deb_arch 和内部 platform
+    // 属于官方技术值或内部键，不能因为含 ARM64/amd64/macos 等字样而被误杀。
+    let jobs = remote_jobs["jobs"]
+        .as_array()
+        .expect("remote-jobs.json 的 jobs 必须是数组");
+    let contexts = jobs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, job)| {
+            let context = job.get("context")?.as_object()?;
+            context
+                .contains_key("installer_name")
+                .then_some((index, context))
+        })
+        .collect::<Vec<_>>();
+    for &(platform, _, installer, updater, manifest) in &contracts {
+        let matching = contexts
+            .iter()
+            .filter(|(_, context)| {
+                context.get("platform").and_then(Value::as_str) == Some(platform)
+            })
+            .collect::<Vec<_>>();
+        if matching.len() != 2 {
+            violations.push(format!(
+                "remote-jobs.json: {platform} 必须各有一份 CI 和 Release 资产上下文，实际 {} 份",
+                matching.len()
+            ));
+        }
+        for (index, context) in matching {
+            for (field, expected) in [
+                ("installer_name", installer),
+                ("updater_asset_name", updater),
+                ("updater_manifest_name", manifest),
+            ] {
+                let actual = context.get(field).and_then(Value::as_str).unwrap_or("");
+                if actual != expected {
+                    violations.push(format!(
+                        "remote-jobs.json jobs[{index}].context.{field}: 期望 {expected:?}，实际 {actual:?}"
+                    ));
+                }
+                reject_legacy_asset(
+                    &format!("remote-jobs.json jobs[{index}].context.{field}"),
+                    actual,
+                    &mut violations,
+                );
+            }
+        }
+    }
+
+    // action 中的矩阵是内嵌 JSON；解析资产字段而不是全文扫描，避免命中
+    // linux-aarch64、windows-x86_64、ARM64/X64 runner 或 Debian 包架构。
+    let mut action_matrix_counts = vec![0_usize; contracts.len()];
+    for (line_index, line) in action.lines().enumerate() {
+        let Some(marker) = line.find("desktop_matrix=") else {
+            continue;
+        };
+        let tail = &line[marker + "desktop_matrix=".len()..];
+        let start = tail.find('[').unwrap_or_else(|| {
+            panic!(
+                "{}:{} desktop_matrix 缺少 JSON 数组",
+                action_path.display(),
+                line_index + 1
+            )
+        });
+        let end = tail.rfind(']').unwrap_or_else(|| {
+            panic!(
+                "{}:{} desktop_matrix 缺少 JSON 数组结尾",
+                action_path.display(),
+                line_index + 1
+            )
+        });
+        let matrix: Value = serde_json::from_str(&tail[start..=end]).unwrap_or_else(|e| {
+            panic!(
+                "解析 {}:{} desktop_matrix 失败: {e}",
+                action_path.display(),
+                line_index + 1
+            )
+        });
+        let object = matrix
+            .as_array()
+            .filter(|items| items.len() == 1)
+            .and_then(|items| items[0].as_object())
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}:{} desktop_matrix 必须只含一个对象",
+                    action_path.display(),
+                    line_index + 1
+                )
+            });
+        let platform = object
+            .get("platform")
+            .and_then(Value::as_str)
+            .expect("desktop_matrix 缺少 platform");
+        let Some((contract_index, contract)) = contracts
+            .iter()
+            .enumerate()
+            .find(|(_, contract)| contract.0 == platform)
+        else {
+            violations.push(format!(
+                "action.yml:{} desktop_matrix 使用未知平台 {platform}",
+                line_index + 1
+            ));
+            continue;
+        };
+        action_matrix_counts[contract_index] += 1;
+        for (field, expected) in [
+            ("installer_name", contract.2),
+            ("updater_asset_name", contract.3),
+            ("updater_manifest_name", contract.4),
+        ] {
+            let actual = object.get(field).and_then(Value::as_str).unwrap_or("");
+            if actual != expected {
+                violations.push(format!(
+                    "action.yml:{} {platform}.{field}: 期望 {expected:?}，实际 {actual:?}",
+                    line_index + 1
+                ));
+            }
+            reject_legacy_asset(
+                &format!("action.yml:{} {platform}.{field}", line_index + 1),
+                actual,
+                &mut violations,
+            );
+        }
+    }
+    for (index, count) in action_matrix_counts.into_iter().enumerate() {
+        if count != 2 {
+            violations.push(format!(
+                "action.yml: {} 必须各有一份 CI 和 Release desktop_matrix，实际 {count} 份",
+                contracts[index].0
+            ));
+        }
+    }
+    for &(_, _, _, _, manifest) in &contracts {
+        let output = format!("fs.writeFileSync('citizenchain-release/{manifest}'");
+        if !action.contains(&output) {
+            violations.push(format!("action.yml: 缺少正式 updater 清单输出 {manifest}"));
+        }
+    }
+    for (construction, expected_count) in [
+        (
+            r#"versioned_installer="${INSTALLER_NAME%.deb}-v${GMB_SOFTWARE_VERSION}.deb""#,
+            2,
+        ),
+        (
+            r#"versioned_updater="${UPDATER_ASSET_NAME%.AppImage}-v${GMB_SOFTWARE_VERSION}.AppImage""#,
+            2,
+        ),
+        (
+            r#"versioned_installer="${INSTALLER_NAME%.dmg}-v${GMB_SOFTWARE_VERSION}.dmg""#,
+            1,
+        ),
+        (
+            r#"versioned_updater="${UPDATER_ASSET_NAME%.app.tar.gz}-v${GMB_SOFTWARE_VERSION}.app.tar.gz""#,
+            1,
+        ),
+        (
+            r#"$versionedName = $installerName -replace '\.exe$', "-v$env:GMB_SOFTWARE_VERSION.exe""#,
+            1,
+        ),
+    ] {
+        let actual_count = action.matches(construction).count();
+        if actual_count != expected_count {
+            violations.push(format!(
+                "action.yml: 版本化资产构造 {construction} 应出现 {expected_count} 次，实际 {actual_count} 次"
+            ));
+        }
+    }
+    for (line_index, line) in action.lines().enumerate() {
+        if line.contains("fs.writeFileSync('citizenchain-release/citizenchain-node-latest-") {
+            reject_legacy_asset(
+                &format!("action.yml:{} updater 清单输出", line_index + 1),
+                line,
+                &mut violations,
+            );
+        }
+    }
+
+    for &(platform, stem, _, _, manifest) in &contracts {
+        for required in [
+            format!("installer = \"{stem}\""),
+            format!("manifest = \"{manifest}\""),
+        ] {
+            if !swift.contains(&required) {
+                violations.push(format!("Swift {platform}: 缺少资产合同 {required}"));
+            }
+        }
+        let updater = if platform == "windows" {
+            "updater = installer".to_string()
+        } else {
+            format!("updater = \"{stem}\"")
+        };
+        if !swift.contains(&updater) {
+            violations.push(format!("Swift {platform}: 缺少 updater 资产合同 {updater}"));
+        }
+    }
+    for required in [
+        r#"primary = "\(installer)-v\(version).deb""#,
+        r#"updaterName = "\(updater)-v\(version).AppImage""#,
+        r#"primary = "\(installer)-v\(version).dmg""#,
+        r#"updaterName = "\(updater)-v\(version).app.tar.gz""#,
+        r#"primary = "\(installer)-v\(version).exe""#,
+    ] {
+        if !swift.contains(required) {
+            violations.push(format!("Swift: 缺少版本化资产构造 {required}"));
+        }
+    }
+    for (line_index, line) in swift.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if ["installer = ", "updater = ", "manifest = "]
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+        {
+            reject_legacy_asset(
+                &format!("Swift:{} 自定义资产字段", line_index + 1),
+                trimmed,
+                &mut violations,
+            );
+        }
+    }
+
+    for required in [
+        "`citizenchain-node-LinuxARM-v${version}.deb`",
+        "`citizenchain-node-LinuxAMD-v${version}.deb`",
+        "`citizenchain-node-macOS-v${version}.dmg`",
+        "`citizenchain-node-Windows-v${version}.exe`",
+        "'citizenchain-node-latest-macOS.json'",
+    ] {
+        if !serve.contains(required) {
+            violations.push(format!("CitizenServe: 缺少正式资产合同 {required}"));
+        }
+    }
+    for (line_index, line) in serve.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("asset: (version) =>")
+            || trimmed.contains("? 'citizenchain-node-latest-")
+        {
+            reject_legacy_asset(
+                &format!("CitizenServe:{} 自定义资产字段", line_index + 1),
+                trimmed,
+                &mut violations,
+            );
+        }
+    }
+
+    let golden_asset = "citizenchain-node-macOS-v1.2.3.dmg";
+    let put_body: Value = serde_json::from_str(
+        fixture["put_body_json"]
+            .as_str()
+            .expect("golden put_body_json 必须是字符串"),
+    )
+    .expect("golden put_body_json 必须是合法 JSON");
+    let snapshot: Value = serde_json::from_str(
+        fixture["snapshot_json"]
+            .as_str()
+            .expect("golden snapshot_json 必须是字符串"),
+    )
+    .expect("golden snapshot_json 必须是合法 JSON");
+    let golden_values = [
+        (
+            "golden put_body_json.publication.asset_name",
+            put_body["publication"]["asset_name"]
+                .as_str()
+                .expect("golden PUT 资产名必须是字符串"),
+        ),
+        (
+            "golden snapshot_json.asset_name",
+            snapshot["asset_name"]
+                .as_str()
+                .expect("golden snapshot 资产名必须是字符串"),
+        ),
+    ];
+    for (label, value) in golden_values {
+        if value != golden_asset {
+            violations.push(format!("{label}: 期望 {golden_asset}，实际 {value}"));
+        }
+        reject_legacy_asset(label, value, &mut violations);
+    }
+    let golden_location = fixture["location"]
+        .as_str()
+        .expect("golden location 必须是字符串");
+    let expected_location = format!(
+        "https://github.com/VoyagerRhett/GMB/releases/download/\
+citizenchain-node-macos-v1.2.3/{golden_asset}"
+    );
+    if golden_location != expected_location {
+        violations.push(format!(
+            "golden location: 期望 {expected_location}，实际 {golden_location}"
+        ));
+    }
+    let golden_location_asset = golden_location
+        .rsplit('/')
+        .next()
+        .expect("golden location 必须含资产路径段");
+    reject_legacy_asset(
+        "golden location 资产段",
+        golden_location_asset,
+        &mut violations,
+    );
+
+    assert!(
+        violations.is_empty(),
+        "CitizenChain 跨仓 Release 资产一致性守卫失败:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]

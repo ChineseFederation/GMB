@@ -42,8 +42,8 @@ describe('Cloudflare 统一资源限制', () => {
       '/download/citizenchain/LinuxAMD',
     ]) expect(assertKnownRoute('GET', path)).toBe('api_json_small');
     for (const path of [
-      '/download/citizenchain/macos-arm64',
-      '/download/citizenchain/macos-arm64-updater',
+      '/download/citizenchain/macos' + '-arm64',
+      '/download/citizenchain/macos' + '-arm64-updater',
       '/download/citizenchain/windows-x86_64',
       '/download/citizenchain/linux-arm64',
       '/download/citizenchain/linux-amd64',

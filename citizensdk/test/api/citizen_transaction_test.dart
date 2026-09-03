@@ -18,7 +18,7 @@ void main() {
   });
 
   test('转账只传公开业务字段并返回Runtime终态', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final transfer = await sdk.transactions.transferWithRemark(
       sourceAccountId: _account(1),
       destinationAccountId: _account(2),
@@ -41,7 +41,7 @@ void main() {
   });
 
   test('finalized历史以账户闭集显式初始化和增量同步', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final initialized = await sdk.transactions.initializeFinalizedHistory(
       <String>[_account(1)],
     );
@@ -59,7 +59,7 @@ void main() {
   });
 
   test('交易公开API在字符串化、UTF-8编码和列表复制前拒绝超界输入', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final invalid = isA<CitizenSdkException>().having(
       (error) => error.code,
       'code',

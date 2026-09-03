@@ -8,12 +8,14 @@
 | iOS | 设备与模拟器变体；模拟器无 Secure Enclave 钱包能力 | `CitizenSDK.xcframework` |
 | macOS | 产品 ABI、Swift/Flutter；机器架构值 `arm64` | `CitizenSDK.xcframework` |
 
-LinuxARM、LinuxAMD、Windows 没有正式绑定、硬件金库和 Release 资产，不属于当前交付平台。legacy
-`libsmoldot.dylib` 仅为外部 macOS `arm64` 差分测试宿主库，不进入任何 Release 候选。
+LinuxARM、LinuxAMD 已有第 7.1 步尚未编译的 C/C++ Host、TPM 2.0 Vault 与合同测试源码，
+但还没有 Flutter 正式绑定、经过运行验证的硬件金库或 Release 资产，不属于当前交付平台。
+Windows 仍无平台投影。legacy `libsmoldot.dylib` 仅为外部 macOS `arm64` 差分测试宿主库，
+不进入任何 Release 候选。
 
 ## Dart 与 Flutter 公共边界
 
-根 Dart 入口只公开 `CitizenSdkClient` 及类型化 chain、wallet、transaction、history API。
+根 Dart 入口只公开 `CitizenSdk` 及类型化 chain、wallet、transaction、history API。
 Android 与 Apple Flutter adapter 均使用固定：
 
 ```text

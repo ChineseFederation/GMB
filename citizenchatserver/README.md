@@ -9,6 +9,15 @@ Release 只封装准确成功 CI 候选；发布只由 TataConsole 原生发布�
 
 CitizenChatServer 是公民产品使用的 TataChatServer Cloudflare 实例。该目录只保存宿主产品声明与资源配置，不复制通用聊天源码，也不保存编译产物、密钥或生产资源编号。
 
+CitizenChatServer 是无宿主操作系统平台的云端服务；Cloudflare 是它的部署供应商，不是
+iOS、Android、macOS、LinuxARM、LinuxAMD、Windows、WASM 或 SDK 这类发布平台。
+因此 `product.json` 与正式 Release manifest 使用 `deployment_provider: cloudflare`，禁止再把
+`cloudflare` 写入这两个合同的 `platform` 字段。
+
+QR_V1 发布/恢复签名载荷与现有 action 边界中的 `platform=cloudflare` 属于尚未迁移的既有
+签名协议字段。本次只纠正产品声明和 Release manifest，不能全局禁用该旧字段；其迁移必须
+在所有签名、验签和恢复端就绪后另行原子实施。
+
 - HTTPS：`https://chat.crcfrcn.com`
 - WSS：`wss://chat.crcfrcn.com/realtime`
 - 授权签发方：CitizenServe
@@ -16,7 +25,7 @@ CitizenChatServer 是公民产品使用的 TataChatServer Cloudflare 实例。�
 - 通用实现：TATA 仓库的 `tatachatserver`
 
 正式 Worker 由 TataChatServer 的 `cloudflare/assemble.mjs` 在
-`TataConsole/target/.work/citizenchatserver-cloudflare/` 中装配。装配器按 TATA 仓库原布局把
+`TATA/tataconsole/target/.work/citizenchatserver-cloudflare/` 中装配。装配器按 TATA 仓库原布局把
 TataChatServer 与构建期唯一协议源 TataChatSDK 复制到隔离目录，调用官方锁定版
 `worker-build`。TataChatSDK 只提供 OpenMLS/protobuf 规范，不进入最终候选。候选只保留：
 

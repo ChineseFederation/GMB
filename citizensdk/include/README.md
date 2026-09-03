@@ -153,3 +153,44 @@ An imported-state startup failure is one-way: the Engine enters `START_FAILED`.
 The binding must destroy that handle and create a new, never-imported instance
 to fall back to the packaged #0 checkpoint. ABI v1 does not delete a rejected
 host cache or retry it automatically.
+
+## Linux C++ projection
+
+The Step 7.1 Linux source projection includes this same root C header and adds a
+header-only RAII convenience layer under `linux/include/citizen_sdk`. The C++
+layer owns the Host lifetime, carries opaque wallet-flow handles, and releases
+result handles delivered through its event trampoline, but does not add a
+second binary ABI, provider, signer, wallet model or arbitrary RPC surface. `CitizenSDK::Core` and
+`CitizenSDK::Host` are CMake target names; the stable cross-toolchain boundary
+remains the functions and fixed-width structures declared here.
+The separate Linux Host ABI v1 is a closed set of 13 `citizensdk_host_*`
+composition/lifecycle functions; it does not duplicate any of the 70 Core
+product functions.
+
+The Linux Host supplies the five named stores and TPM-backed DEK vault required
+by `citizensdk_create_with_host`. It cannot access a child mini-secret through
+those callbacks. LinuxARM and LinuxAMD runtime libraries are not stored in the
+source tree and were not built or validated in Step 7.1; public platform support
+must not be inferred merely from the presence of the convenience headers.
+Wallet-flow presentation requires an opened Core; disabled wallet hosting maps
+to `CITIZENSDK_ERROR_UNSUPPORTED`, while a configured but unavailable TPM/auth
+boundary maps to `CITIZENSDK_ERROR_UNAVAILABLE`, before GTK presentation.
+If releasing a prepared-wallet handle fails, the Linux flow retains the sole
+handle owner and its lifecycle lease while a dedicated supervisor retries; it
+cannot erase the flow or let Host destruction proceed before Core confirms
+release.
+The Host owns its borrowed Core handle. Explicit close failures leave the Host
+handle with the caller for retry; a C++ destructor transfers an otherwise
+unreachable handle through `citizensdk_host_abandon` to the Linux process
+supervisor instead of silently leaking borrowed Core/store/vault contexts. The
+destructor performs only finite clear/destroy attempts; if even the ownership
+transfer fails it terminates rather than freeing a callback context still
+borrowed by Host. `EventObserver` receives an event/result only as a synchronous
+borrow: it must not retain or release the result, because the C++ trampoline
+releases every nonzero result exactly once after normal or exceptional return.
+Every Host call first acquires a lease under the same closing/admission fence.
+Destroy closes admission before waiting for extant API, callback, private-route,
+Vault, and wallet-UI leases; callback and parent-window updates share that
+linearization boundary. Teardown must not hold a lock needed by a callback that
+re-enters the Host API. A synchronous completion burst while a private route is
+being installed remains lossless beyond 64 events and under concurrency.

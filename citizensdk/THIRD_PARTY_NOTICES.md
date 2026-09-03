@@ -5,6 +5,12 @@ CitizenSDK 组合了不同许可证覆盖的源码。根 `LICENSE` 是组件许�
 来源说明和锁文件；Hosted Package 只过滤开发输入，但继续携带本文件、根许可证入口、MIT、
 GPL with Classpath Exception 原文，以及根许可证入口中完整重现的 Apache-2.0 原文。
 
+第 7.1 步新增的 `linux/` Host 与合同测试是 CitizenSDK 自有实现，适用根 MIT 许可证。该步只
+提交源码，没有在仓库中携带 TPM2-TSS、SQLite、GTK 或 C++ runtime 的第三方源码/二进制副本，
+也没有执行 Linux 编译或测试、没有生成 Linux `.so`。第 7.3 步必须根据最终静态/动态链接闭包重新核对每个组件的许可证、
+copyright notice 与可重分发条件并写入正式候选；本段不能替代届时从实际二进制和锁定构建输入
+得到的依赖清单。
+
 ## sr25519 signer
 
 `native/signer` 的最初密码学语义来自 `shared/citizen-signer`，许可证为 MIT；原文保存于根

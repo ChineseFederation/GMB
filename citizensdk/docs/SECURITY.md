@@ -101,6 +101,38 @@ Apple 通过分离的 typed public/secure SQLite 保存公开状态与加密秘�
 没有 `FLAG_SECURE` 等价能力，只能在录屏/后台切换时提供 best-available 覆盖层；macOS 的
 SDK-owned window 禁止系统共享。这些界面防护不是对恶意宿主进程或全部截屏路径的硬隔离。
 
+Linux 第 7.1 步以 TPM 2.0 作为唯一合格硬件金库后端。每个 wallet generation 使用独占、
+不可导出的 TPM KEK，以 RSA-OAEP-SHA256 wrap/unwrap 随机 32-byte DEK；TPM2-TSS 调用必须
+使用 salted HMAC session 与 parameter encryption，不使用 plaintext password session，也不
+把对象绑定到 PCR。设备金库解锁口令只在 SDK-owned GTK UI 和可清零原生缓冲区内短暂存在，
+不得与 BIP-39 password 混同，也不得进入 Dart、Flutter tuple、环境变量、命令行、日志或
+持久化记录。无 TPM、无强认证 UI、TPM 不可访问或 dictionary-attack lockout 时均失败关闭
+钱包/签名能力；禁止以 Secret Service、文件 KEK 或软件密钥自动降级。
+设备口令派生在 `secure-state-v1` 固定为 PBKDF2-HMAC-SHA256、600000 次迭代；持久化随机
+`auth_salt`，不持久化一份可被篡改为另一参数集的 KDF 配置。
+Linux public/secure store 目录均强制 `0700`，主 DB、rollback journal、WAL 与 SHM 均强制
+`0600`；最终目录和所有实际 sidecar 必须由进程有效 UID 拥有，文件 link count 必须为 1。
+CitizenSDK 自有 openat 型 SQLite VFS 只相对已验证目录 fd 创建、打开、访问和删除节点，并以
+`O_NOFOLLOW`、类型、owner、link count 与 inode 复核阻止路径替换；符号链接、hardlink、目录
+或其它非普通节点直接失败关闭。实现不得把 `/proc/self/fd` 路径交给默认 SQLite VFS。
+`sqlite_master` schema/约束闭集与 journal mode、同步、外键、超时、secure-delete PRAGMA 必须
+设置后读回；所有可失败后置检查都在 `COMMIT` 前完成，禁止 durable commit 后向 Core 报错。
+
+TPM object name 校验必须与 child public template 全字段白名单共同成立；type、nameAlg、object
+attributes、authPolicy、symmetric、scheme、keyBits 或 exponent 任一漂移都视为密钥失效。
+availability 还必须确认 owner authorization 兼容、storage hierarchy 已启用、DA 未锁定且参数
+有效，并以 `Esys_TestParms` 分别探测 RSA-2048/AES-128-CFB primary 与
+RSA-2048/OAEP-SHA256 wrap 的完整参数组合；不能只凭算法列表宣布钱包可用。generation 准入
+和 Vault object 写入在同一 secure-store 事务中条件提交；retire
+墓碑与 provision 线性化，unwrap 在长认证提示返回后、交付明文前再次核验未退休并在失败时
+清零输出。
+
+所有 Host API 先取得受统一 closing fence 管理的 lease；destroy 永久关闭 admission，并等
+现有 API、callback、route、Vault 与 UI lease 退役后才销毁 store/Vault。关闭不能持有回调
+可能重入的 API 锁等待 Core。建立私有 route 期间同步到达的 completion 必须对 65 个以上和
+并发突发保持无损。GTK parent 的 `destroy` 在 owner UI 线程立即清空并退休密码/恢复词控件、
+使 parent 引用失效并唤醒等待者，不能让后台认证稍后解引用悬空窗口。
+
 宿主进程仍属于信任边界，但公共 host v1 合同没有“任意键值仓储”或 child-secret callback：
 五类存储操作各自具名，金库只接触随机 DEK。恶意同进程宿主仍可篡改公开持久状态、拒绝
 completion 或观察本来就需要展示的恢复词，因此 SDK 不能宣称对宿主进程提供硬隔离；所有
@@ -260,12 +292,22 @@ checkpoint 到 provider/Engine 生命周期提交之间没有另一项链、钱�
 `citizensdk_*` 符号，并拒绝 `smoldot_*`、`citizen_sr25519_*` 与 `account_crypto_*`。legacy
 smoldot/signer 符号只允许存在于源码树外的 macOS `arm64` 差分测试宿主库，绝不进入候选。
 
+Linux C/C++ Host 同样只能加载唯一 `libcitizensdk.so`。预定的 `libcitizensdk_host.so` 不得
+重复导出 Core、内嵌第二份 smoldot/signer/Engine，或让恢复词、设备金库口令、DEK、child
+mini-secret 和 private key 穿过公共 C++/Flutter 边界。第 7.1 步只提交这套源码与测试合同，
+没有构建 `.so`，也没有取得 LinuxARM/LinuxAMD 或实体 TPM 的运行证据。
+
 聊天、广场、OpenMLS、TUYU 消息协议与产品数据库均被排除。测试夹具只能使用公开向量和
 非生产数据，不得加入真实助记词、设备密钥或用户数据。
 
 ## 构建与分发
 
 - SDK 源码树不得接收构建缓存、原生库或 Release 产物。
+- 本机 Linux 合同测试必须由 CMake/CTest 以 `CITIZENSDK_TEST_WORK_DIR` 注入
+  `/Users/rhett/TATA/tataconsole/target/citizensdk` 下有效 UID 所有、`0700`、任务独占的现有
+  绝对目录。测试 helper 逐级 no-follow 验证后，以 CSPRNG 随机名称和 `mkdirat` 只在已验证
+  目录 fd 下创建子目录，不回退 `/tmp`、当前目录或用户目录，也不递归删除未经 fd 与 inode
+  复核的路径。
 - 原生构建和 Release 在首次建目录前校验绝对规范路径及每一级既存祖先，拒绝路径穿越、
   符号链接祖先和非目录祖先。
 - CI/Release 使用锁文件与准确提交；Release 必须绑定同产品、同目标的成功 CI。
@@ -277,12 +319,18 @@ smoldot/signer 符号只允许存在于源码树外的 macOS `arm64` 差分测�
   三个平台使用同一产品 ABI、Core commit 和 SDK version。当前 Android ABI 为 `arm64-v8a`，
   Apple machine slice 架构元数据为 `arm64`。
 - GitHub Release 是正式分发终态，但不等于真机硬件金库安全验收；对应结果必须单独留档。
+- LinuxARM、LinuxAMD 当前只完成第 7.1 步源码边界，仍不在 Release manifest；公开支持前
+  必须分别验证 ELF/GLIBC、公共符号、依赖闭集、软件 TPM 与实体 TPM，且不能用软件 TPM
+  结果代替硬件证明。
 
 本轮 Apple 本机已编译 iOS 设备与模拟器变体两组测试 bundle，但因无 Simulator
 runtime 没有声称 iOS XCTest 已运行。macOS Core 50 项与 Flutter adapter 22 项 XCTest
 0 失败，1 项需要真机硬件的用例跳过；normal/supervisor smoke 通过。本机无真实
 Apple 移动设备，所以 Secure Enclave、生物认证和 device-only Keychain 仍需真机验收。
 当前 TataConsole Flow 尚未接入本闭集；本步未运行远程 CI、正式 Release、Hosted 上传或 Git。
+
+第 7.1 步也没有运行 Linux 编译、合同测试、Git、远程 CI、Release 或 Hosted 上传；其完整
+平台安全合同见 `LINUX_PLATFORM.md`。
 
 iOS 设备与模拟器变体的浅层 framework install ID 为
 `@rpath/CitizenSDK.framework/CitizenSDK`；macOS 标准 `Versions/A` framework install ID 为

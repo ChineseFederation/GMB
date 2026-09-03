@@ -17,8 +17,8 @@ import 'citizen_transactions.dart';
 import 'citizen_wallet.dart';
 
 /// CitizenSDK 的唯一 Dart/Flutter 公共门面。
-final class CitizenSdkClient {
-  CitizenSdkClient._(this._session, CitizenSdkFlutterCodec codec)
+final class CitizenSdk {
+  CitizenSdk._(this._session, CitizenSdkFlutterCodec codec)
     : chain = _CitizenChain(_session, codec),
       wallet = _CitizenWallet(_session, codec),
       transactions = _CitizenTransactions(_session, codec);
@@ -27,14 +27,14 @@ final class CitizenSdkClient {
   ///
   /// Flutter 产品投影当前覆盖 Android、iOS 与 macOS；三个投影使用
   /// 完全相同的公开 API、22 个固定 tuple 方法和事件合同。
-  static Future<CitizenSdkClient> open() async {
+  static Future<CitizenSdk> open() async {
     final codec = const CitizenSdkFlutterCodec();
     final platform = CitizenSdkPlatform.instance ?? _defaultPlatform();
     final session = await CitizenSdkFlutterSession.open(
       platform: platform,
       codec: codec,
     );
-    return CitizenSdkClient._(session, codec);
+    return CitizenSdk._(session, codec);
   }
 
   static final CitizenSdkPlatform _defaultFlutterPlatform =
@@ -55,13 +55,23 @@ final class CitizenSdkClient {
   }
 
   final CitizenSdkFlutterSession _session;
+
+  /// 已验证的公民链读取能力。
   final CitizenChain chain;
+
+  /// 设备本地热钱包与 sr25519 签名能力。
   final CitizenWallet wallet;
+
+  /// 公民链交易构造、提交、观察与历史能力。
   final CitizenTransactions transactions;
 
+  /// 当前 session 的类型化生命周期与请求事件。
   Stream<CitizenSdkEvent> get events => _session.events;
+
+  /// 当前 session 生命周期快照。
   CitizenSdkLifecycle get lifecycle => _session.lifecycle;
 
+  /// 启动当前 session 的公民链轻节点。
   Future<void> start() async {
     final value = await _session.invoke('start');
     final lifecycle = const CitizenSdkFlutterCodec().decodeLifecycle(value[0]);
@@ -73,6 +83,7 @@ final class CitizenSdkClient {
     }
   }
 
+  /// 在完成 checkpoint 后有序停止当前 session 的轻节点。
   Future<void> stop() async {
     final value = await _session.invoke('stop');
     final lifecycle = const CitizenSdkFlutterCodec().decodeLifecycle(value[0]);
@@ -84,10 +95,14 @@ final class CitizenSdkClient {
     }
   }
 
+  /// 返回当前宿主事实对应的能力快照。
   Future<CitizenCapabilitySnapshot> getCapabilities() =>
       chain.getCapabilities();
 
-  /// 只有原生侧完成 checkpoint、stop、结果释放和 destroy 后 Future 才完成。
+  /// 关闭已停止的 session；只有原生侧完成结果释放和 destroy 后才完成。
+  ///
+  /// 若 session 正在运行，调用方必须先等待 [stop] 成功，不能用 [close]
+  /// 绕过 checkpoint 与有序停止。
   Future<void> close() => _session.close();
 }
 

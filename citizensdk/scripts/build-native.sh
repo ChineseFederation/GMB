@@ -11,12 +11,16 @@ product_types_header="$sdk_dir/include/citizensdk_types.h"
 android_gradle_project="$sdk_dir/android"
 darwin_source_root="$sdk_dir/darwin/Sources/CitizenSDK"
 darwin_flutter_source_root="$sdk_dir/darwin/Sources/CitizenSDKFlutter"
+linux_source_root="$sdk_dir/linux"
 apple_asset_root="$sdk_dir/assets/citizenchain"
 target_name="${1:-all}"
-tata_console_target_root="/Users/rhett/TATA/tataconsole/target/citizensdk"
+tata_console_target_root="/Users/rhett/TATA/tataconsole/target"
+citizensdk_target_root="$tata_console_target_root/citizensdk"
+tata_console_work_root="$tata_console_target_root/.work"
 ios_deployment_target=16.0
 macos_deployment_target=13.0
 android_ndk_version=28.2.13676358
+linux_glibc_baseline=2.31
 
 fail() {
   echo "CitizenSDK 原生构建失败：$1" >&2
@@ -50,15 +54,31 @@ canonical_directory() {
   (cd "$path" && pwd -P)
 }
 
-# 中文注释：GitHub Actions 使用 Runner 临时盘；当前开发机的任何本地记录只能进入
-# TataConsole 统一 target/citizensdk。先检查原始路径，避免错误输入也创建目录。
+local_build_path_is_allowed() {
+  local path="$1" task_work="${TATA_CONSOLE_WORK_DIR:-}" dependency_root
+  case "$path/" in
+    "$citizensdk_target_root/"*) return 0 ;;
+  esac
+  [[ -n "$task_work" ]] || return 1
+  assert_safe_directory_path "$task_work" TATA_CONSOLE_WORK_DIR
+  case "$task_work/" in
+    "$tata_console_work_root/"*) ;;
+    *) return 1 ;;
+  esac
+  dependency_root="$task_work/citizensdk"
+  case "$path/" in
+    "$dependency_root/"*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# 中文注释：CitizenSDK 自身任务使用固定产品目录；宿主本机任务只允许把 SDK
+# 中间状态放进当前中央工作目录的 citizensdk 子目录，绝不借此放宽到源码树或任意路径。
 if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   for path in "${CITIZENSDK_WORK_DIR:-}" "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"; do
     assert_safe_directory_path "$path" 本机构建目录
-    case "$path/" in
-      "$tata_console_target_root/"*) ;;
-      *) fail "本机构建目录必须位于 $tata_console_target_root：${path:-<empty>}" ;;
-    esac
+    local_build_path_is_allowed "$path" \
+      || fail "本机构建目录必须位于 $citizensdk_target_root 或当前中央任务的 citizensdk 子目录：${path:-<empty>}"
   done
 fi
 
@@ -66,17 +86,15 @@ work_dir="$(canonical_directory "${CITIZENSDK_WORK_DIR:-}" CITIZENSDK_WORK_DIR)"
 output_dir="$(canonical_directory "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" CITIZENSDK_NATIVE_OUTPUT_DIR)"
 
 # 中文注释：无论本机、TataConsole 还是 GitHub runner，都禁止把 Cargo、二进制或符号清单
-# 回写到 SDK 源码树；TataConsole 本机调用时两个目录必须位于
-# /Users/rhett/TATA/tataconsole/target/citizensdk。
+# 回写到 SDK 源码树；TataConsole 本机调用时两个目录必须位于 CitizenSDK 固定产品目录，
+# 或当前宿主任务的独占 citizensdk 工作目录。
 for directory in "$work_dir" "$output_dir"; do
   case "$directory/" in
     "$sdk_dir/"*) fail "工作目录或产物目录位于 CitizenSDK 源码树：$directory" ;;
   esac
   if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
-    case "$directory/" in
-      "$tata_console_target_root/"*) ;;
-      *) fail "本机构建真实路径越出 $tata_console_target_root：$directory" ;;
-    esac
+    local_build_path_is_allowed "$directory" \
+      || fail "本机构建真实路径越出 CitizenSDK 中央目录或当前宿主任务：$directory"
   fi
 done
 
@@ -126,6 +144,30 @@ prepare_safe_output_file() {
   prepare_safe_directory "$root" "$parent" "$label 父目录"
   # 父目录创建后再 lstat 最终项，特别拒绝 `-e` 看不到的 dangling symlink。
   assert_new_file "$path"
+}
+
+assert_readonly_dependency_directory() {
+  local path="$1" label="$2" real_path
+  [[ -n "$path" ]] || fail "缺少 $label"
+  assert_safe_directory_path "$path" "$label"
+  [[ -d "$path" && ! -L "$path" ]] \
+    || fail "$label 必须是既存普通目录：$path"
+  real_path="$(cd "$path" && pwd -P)"
+  [[ "$real_path" == "$path" ]] \
+    || fail "$label 的真实路径发生漂移：$path -> $real_path"
+}
+
+assert_readonly_static_archive() {
+  local path="$1" label="$2" parent real_parent
+  [[ -n "$path" && "$path" == /* && "$path" == *.a ]] \
+    || fail "$label 必须是绝对 .a 路径：${path:-<empty>}"
+  parent="$(dirname "$path")"
+  assert_safe_directory_path "$parent" "$label 父目录"
+  [[ -f "$path" && ! -L "$path" ]] \
+    || fail "$label 必须是既存普通静态归档：$path"
+  real_parent="$(cd "$parent" && pwd -P)"
+  [[ "$real_parent" == "$parent" ]] \
+    || fail "$label 父目录的真实路径发生漂移：$parent -> $real_parent"
 }
 
 cargo_target_dir="$work_dir/cargo"
@@ -251,6 +293,130 @@ verify_android_elf_identity() {
     | grep -Fxc libcitizensdk.so || true)"
   [[ "$core_dependency_count" == 1 ]] \
     || fail "Android JNI 必须精确依赖一次 libcitizensdk.so；实际=${core_dependency_count}"
+}
+
+linux_host_header_symbols() {
+  local header="$linux_source_root/include/citizen_sdk/citizensdk_host.h"
+  [[ -f "$header" && ! -L "$header" ]] \
+    || fail "Linux Host 公共头缺失或不是普通文件：$header"
+  perl -0777 -ne \
+    'while (/\b(citizensdk_host_[a-z0-9_]+)\s*\(/g) { print "$1\n" }' \
+    "$header" | LC_ALL=C sort -u
+}
+
+linux_elf_dynamic_values() {
+  local library="$1" readelf_bin="$2" tag="$3"
+  "$readelf_bin" -d "$library" 2>/dev/null \
+    | sed -n "s/.*(${tag}).*\[\([^]]*\)\].*/\1/p"
+}
+
+version_is_greater() {
+  local value="$1" maximum="$2"
+  [[ "$value" != "$maximum" \
+    && "$(printf '%s\n%s\n' "$value" "$maximum" | sort -V | tail -n 1)" == "$value" ]]
+}
+
+verify_linux_glibc_contract() {
+  local library="$1" readelf_bin="$2" label="$3" versions version
+  versions="$("$readelf_bin" --version-info "$library" 2>/dev/null \
+    | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' \
+    | sed 's/^GLIBC_//' | sort -Vu || true)"
+  while IFS= read -r version; do
+    [[ -n "$version" ]] || continue
+    ! version_is_greater "$version" "$linux_glibc_baseline" \
+      || fail "$label 要求 GLIBC_$version，超过固定基线 GLIBC_$linux_glibc_baseline"
+  done <<<"$versions"
+  if "$readelf_bin" --version-info "$library" 2>/dev/null \
+      | grep -Eq 'GLIBCXX_|CXXABI_'; then
+    fail "$label 禁止依赖宿主 libstdc++/CXX ABI；C++ runtime 必须静态装配"
+  fi
+}
+
+verify_linux_machine() {
+  local library="$1" readelf_bin="$2" expected_machine="$3" label="$4"
+  local header machine
+  header="$(LC_ALL=C "$readelf_bin" -h "$library" 2>/dev/null)" \
+    || fail "无法读取 $label 的 ELF header"
+  printf '%s\n' "$header" | grep -Eq 'Class:[[:space:]]+ELF64' \
+    || fail "$label 必须是 ELF64"
+  printf '%s\n' "$header" \
+    | grep -Eq 'Data:[[:space:]]+2.s complement, little endian' \
+    || fail "$label 必须是 little-endian ELF"
+  printf '%s\n' "$header" | grep -Eq 'Type:[[:space:]]+DYN' \
+    || fail "$label 必须是 ET_DYN shared object"
+  machine="$(printf '%s\n' "$header" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
+  [[ "$machine" == "$expected_machine" ]] \
+    || fail "$label 机器类型漂移：预期=$expected_machine；实际=${machine:-无}"
+}
+
+verify_linux_host_symbols() {
+  local library="$1" nm_bin="$2" label="$3" actual expected forbidden
+  actual="$(product_library_symbols "$library" "$nm_bin" '')"
+  expected="$(linux_host_header_symbols)"
+  forbidden="$(printf '%s\n' "$actual" \
+    | grep -E '^(citizensdk_|smoldot_|citizen_sr25519_|account_crypto_)' \
+    | grep -Ev '^citizensdk_host_' \
+    || true)"
+  [[ -z "$forbidden" ]] \
+    || fail "$label 重复导出 Core 或低层符号：$(printf '%s' "$forbidden" | tr '\n' ' ')"
+  [[ "$actual" == "$expected" ]] || {
+    local missing extra
+    missing="$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"))"
+    extra="$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"))"
+    fail "$label 与 citizensdk_host.h 不一致；缺失=${missing:-无}；额外=${extra:-无}"
+  }
+}
+
+verify_linux_elf_identity() {
+  local platform="$1" core_library="$2" host_library="$3" readelf_bin="$4" nm_bin="$5"
+  local expected_machine core_soname host_soname core_needed host_needed
+  local core_rpath core_runpath host_rpath host_runpath core_dependency_count
+  case "$platform" in
+    LinuxARM) expected_machine=AArch64 ;;
+    LinuxAMD) expected_machine='Advanced Micro Devices X86-64' ;;
+    *) fail "未登记的 Linux 平台：$platform" ;;
+  esac
+  [[ -x "$readelf_bin" && -x "$nm_bin" ]] \
+    || fail "$platform 缺少可执行 readelf/nm"
+  for library in "$core_library" "$host_library"; do
+    [[ -f "$library" && ! -L "$library" ]] \
+      || fail "$platform 运行件必须是普通文件：$library"
+  done
+  verify_linux_machine "$core_library" "$readelf_bin" "$expected_machine" \
+    "$platform Core"
+  verify_linux_machine "$host_library" "$readelf_bin" "$expected_machine" \
+    "$platform Host"
+  core_soname="$(linux_elf_dynamic_values "$core_library" "$readelf_bin" SONAME)"
+  host_soname="$(linux_elf_dynamic_values "$host_library" "$readelf_bin" SONAME)"
+  core_needed="$(linux_elf_dynamic_values "$core_library" "$readelf_bin" NEEDED)"
+  host_needed="$(linux_elf_dynamic_values "$host_library" "$readelf_bin" NEEDED)"
+  core_rpath="$(linux_elf_dynamic_values "$core_library" "$readelf_bin" RPATH)"
+  core_runpath="$(linux_elf_dynamic_values "$core_library" "$readelf_bin" RUNPATH)"
+  host_rpath="$(linux_elf_dynamic_values "$host_library" "$readelf_bin" RPATH)"
+  host_runpath="$(linux_elf_dynamic_values "$host_library" "$readelf_bin" RUNPATH)"
+  [[ "$core_soname" == libcitizensdk.so ]] \
+    || fail "$platform Core SONAME 漂移：${core_soname:-无}"
+  [[ "$host_soname" == libcitizensdk_host.so ]] \
+    || fail "$platform Host SONAME 漂移：${host_soname:-无}"
+  [[ -z "$core_rpath" && -z "$core_runpath" ]] \
+    || fail "$platform Core 禁止 RPATH/RUNPATH"
+  [[ -z "$host_rpath" && "$host_runpath" == '$ORIGIN' ]] \
+    || fail "$platform Host RUNPATH 必须精确为字面量 \$ORIGIN"
+  if printf '%s\n%s\n' "$core_needed" "$host_needed" | grep -q '/'; then
+    fail "$platform DT_NEEDED 禁止包含构建机路径"
+  fi
+  if printf '%s\n%s\n' "$core_needed" "$host_needed" \
+      | grep -Eq '(^|/)(libsmoldot|libstdc\+\+|libgcc_s|libsqlite3|libtss2-|libcrypto|libssl)'; then
+    fail "$platform 运行件泄漏禁止的动态依赖"
+  fi
+  core_dependency_count="$(printf '%s\n' "$host_needed" \
+    | grep -Fxc libcitizensdk.so || true)"
+  [[ "$core_dependency_count" == 1 ]] \
+    || fail "$platform Host 必须精确依赖一次 libcitizensdk.so"
+  verify_product_abi_symbols "$core_library" "$nm_bin" '' "$platform Core"
+  verify_linux_host_symbols "$host_library" "$nm_bin" "$platform Host"
+  verify_linux_glibc_contract "$core_library" "$readelf_bin" "$platform Core"
+  verify_linux_glibc_contract "$host_library" "$readelf_bin" "$platform Host"
 }
 
 resolve_gradle() {
@@ -1593,6 +1759,156 @@ build_apple() {
   echo "CitizenSDK iOS/macOS XCFramework 完成：$destination"
 }
 
+linux_platform_contract() {
+  local platform="$1" expected_arch rust_target
+  [[ "$(uname -s)" == Linux ]] \
+    || fail "$platform 只允许在匹配的原生 Linux runner 构建"
+  case "$platform" in
+    LinuxARM)
+      expected_arch=aarch64
+      rust_target=aarch64-unknown-linux-gnu
+      ;;
+    LinuxAMD)
+      expected_arch=x86_64
+      rust_target=x86_64-unknown-linux-gnu
+      ;;
+    *) fail "未登记的 Linux 平台：$platform" ;;
+  esac
+  [[ "$(uname -m)" == "$expected_arch" ]] \
+    || fail "$platform 必须在 $expected_arch 原生 runner 构建；实际=$(uname -m)"
+  printf '%s|%s\n' "$rust_target" "$expected_arch"
+}
+
+build_linux() {
+  local platform="$1" contract rust_target expected_arch cmake_bin ctest_bin
+  local nm_bin readelf_bin strip_bin cmake_build runtime_stage source_core built_host
+  local destination core_destination host_destination linux_platform_work
+  local linux_test_work
+  local sqlite_include openssl_include tss2_include
+  local sqlite_archive crypto_archive tss2_esys_archive tss2_mu_archive
+  local tss2_sys_archive tss2_rc_archive tss2_tcti_device_archive
+  contract="$(linux_platform_contract "$platform")"
+  IFS='|' read -r rust_target expected_arch <<<"$contract"
+  require_rust_target "$rust_target"
+  [[ -d "$linux_source_root" && ! -L "$linux_source_root" ]] \
+    || fail "CitizenSDK 缺少普通 Linux 平台源码目录"
+  for tool in cmake ctest; do
+    command -v "$tool" >/dev/null 2>&1 || fail "$platform 缺少 $tool"
+  done
+  cmake_bin="$(command -v cmake)"
+  ctest_bin="$(command -v ctest)"
+  nm_bin="$(command -v llvm-nm || command -v nm || true)"
+  readelf_bin="$(command -v llvm-readelf || command -v readelf || true)"
+  strip_bin="$(command -v llvm-strip || command -v strip || true)"
+  [[ -n "$nm_bin" && -n "$readelf_bin" && -n "$strip_bin" ]] \
+    || fail "$platform 缺少 llvm-nm/nm、llvm-readelf/readelf 或 llvm-strip/strip"
+
+  # Linux Host 只能链接 CI/Release 预先锁定并放在源码树外的静态依赖。
+  # 禁止 CMake 从宿主动态库或源码目录临时下载另一份 SQLite、crypto 或 TPM2-TSS。
+  sqlite_include="${CITIZENSDK_HOST_SQLITE_INCLUDE_DIR:-}"
+  openssl_include="${CITIZENSDK_HOST_OPENSSL_INCLUDE_DIR:-}"
+  tss2_include="${CITIZENSDK_HOST_TSS2_INCLUDE_DIR:-}"
+  sqlite_archive="${CITIZENSDK_HOST_SQLITE_ARCHIVE:-}"
+  crypto_archive="${CITIZENSDK_HOST_CRYPTO_ARCHIVE:-}"
+  tss2_esys_archive="${CITIZENSDK_HOST_TSS2_ESYS_ARCHIVE:-}"
+  tss2_mu_archive="${CITIZENSDK_HOST_TSS2_MU_ARCHIVE:-}"
+  tss2_sys_archive="${CITIZENSDK_HOST_TSS2_SYS_ARCHIVE:-}"
+  tss2_rc_archive="${CITIZENSDK_HOST_TSS2_RC_ARCHIVE:-}"
+  tss2_tcti_device_archive="${CITIZENSDK_HOST_TSS2_TCTI_DEVICE_ARCHIVE:-}"
+  assert_readonly_dependency_directory "$sqlite_include" \
+    CITIZENSDK_HOST_SQLITE_INCLUDE_DIR
+  assert_readonly_dependency_directory "$openssl_include" \
+    CITIZENSDK_HOST_OPENSSL_INCLUDE_DIR
+  assert_readonly_dependency_directory "$tss2_include" \
+    CITIZENSDK_HOST_TSS2_INCLUDE_DIR
+  assert_readonly_static_archive "$sqlite_archive" CITIZENSDK_HOST_SQLITE_ARCHIVE
+  assert_readonly_static_archive "$crypto_archive" CITIZENSDK_HOST_CRYPTO_ARCHIVE
+  assert_readonly_static_archive "$tss2_esys_archive" CITIZENSDK_HOST_TSS2_ESYS_ARCHIVE
+  assert_readonly_static_archive "$tss2_mu_archive" CITIZENSDK_HOST_TSS2_MU_ARCHIVE
+  assert_readonly_static_archive "$tss2_sys_archive" CITIZENSDK_HOST_TSS2_SYS_ARCHIVE
+  assert_readonly_static_archive "$tss2_rc_archive" CITIZENSDK_HOST_TSS2_RC_ARCHIVE
+  assert_readonly_static_archive "$tss2_tcti_device_archive" \
+    CITIZENSDK_HOST_TSS2_TCTI_DEVICE_ARCHIVE
+
+  linux_platform_work="$work_dir/linux/$platform"
+  [[ ! -e "$linux_platform_work" && ! -L "$linux_platform_work" ]] \
+    || fail "$platform 工作目录必须全新：$linux_platform_work"
+  prepare_safe_directory "$work_dir" "$linux_platform_work" "$platform 工作目录"
+  cmake_build="$linux_platform_work/cmake"
+  runtime_stage="$linux_platform_work/runtime"
+  linux_test_work="$linux_platform_work/test-state"
+  destination="$output_dir/$platform"
+  prepare_safe_directory "$work_dir" "$cmake_build" "$platform CMake 目录"
+  prepare_safe_directory "$work_dir" "$runtime_stage" "$platform 运行件暂存目录"
+  prepare_safe_directory "$work_dir" "$linux_test_work" "$platform 测试状态目录"
+  # Linux Host 测试只可在当前平台任务独占的中央目录落盘；0700 是
+  # CITIZENSDK_TEST_WORK_DIR 的公开前置条件，不能依赖 runner 的 umask。
+  chmod 0700 "$linux_test_work"
+  [[ "$(stat -c '%a' "$linux_test_work")" == 700 ]] \
+    || fail "$platform 测试状态目录权限必须精确为 0700：$linux_test_work"
+  core_destination="$runtime_stage/libcitizensdk.so"
+  host_destination="$runtime_stage/libcitizensdk_host.so"
+  prepare_safe_output_file "$work_dir" "$core_destination" "$platform Core 暂存"
+
+  # 机器 target triple 是类型化工具链字段，不得提升为公开平台名或输出目录名。
+  CARGO_PROFILE_RELEASE_STRIP=false \
+  RUSTFLAGS='-C link-arg=-Wl,-soname,libcitizensdk.so -C link-arg=-static-libgcc' \
+    cargo build --manifest-path "$product_ffi_manifest" --release --locked \
+      --target "$rust_target"
+  source_core="$CARGO_TARGET_DIR/$rust_target/release/libcitizensdk.so"
+  [[ -f "$source_core" && ! -L "$source_core" ]] \
+    || fail "$platform Rust Core 未生成普通 libcitizensdk.so"
+  cp "$source_core" "$core_destination"
+  "$strip_bin" --strip-unneeded "$core_destination"
+
+  "$cmake_bin" -S "$linux_source_root" -B "$cmake_build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER="${CC:-cc}" \
+    -DCMAKE_CXX_COMPILER="${CXX:-c++}" \
+    -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$runtime_stage" \
+    -DCITIZENSDK_PLATFORM="$platform" \
+    -DCITIZENSDK_CORE_LIBRARY="$core_destination" \
+    -DCITIZENSDK_CORE_INCLUDE_DIR="$sdk_dir/include" \
+    -DCITIZENSDK_ASSET_DIR="$apple_asset_root" \
+    -DCITIZENSDK_SQLITE_INCLUDE_DIR="$sqlite_include" \
+    -DCITIZENSDK_OPENSSL_INCLUDE_DIR="$openssl_include" \
+    -DCITIZENSDK_TSS2_INCLUDE_DIR="$tss2_include" \
+    -DCITIZENSDK_SQLITE_ARCHIVE="$sqlite_archive" \
+    -DCITIZENSDK_CRYPTO_ARCHIVE="$crypto_archive" \
+    -DCITIZENSDK_TSS2_ESYS_ARCHIVE="$tss2_esys_archive" \
+    -DCITIZENSDK_TSS2_MU_ARCHIVE="$tss2_mu_archive" \
+    -DCITIZENSDK_TSS2_SYS_ARCHIVE="$tss2_sys_archive" \
+    -DCITIZENSDK_TSS2_RC_ARCHIVE="$tss2_rc_archive" \
+    -DCITIZENSDK_TSS2_TCTI_DEVICE_ARCHIVE="$tss2_tcti_device_archive" \
+    -DCITIZENSDK_TEST_WORK_DIR="$linux_test_work" \
+    -DCITIZENSDK_BUILD_TESTS=ON \
+    -DCITIZENSDK_ENABLE_WALLET_UI=ON \
+    -DCITIZENSDK_WARNINGS_AS_ERRORS=ON
+  "$cmake_bin" --build "$cmake_build" --config Release --parallel
+  LD_LIBRARY_PATH="$runtime_stage" \
+    "$ctest_bin" --test-dir "$cmake_build" --build-config Release \
+      --output-on-failure
+  built_host="$runtime_stage/libcitizensdk_host.so"
+  [[ -f "$built_host" && ! -L "$built_host" ]] \
+    || fail "$platform CMake 未生成普通 libcitizensdk_host.so"
+  # CMake 已直接写入受控 runtime_stage；目标与暂存路径相同时不复制。
+  if [[ "$built_host" != "$host_destination" ]]; then
+    cp "$built_host" "$host_destination"
+  fi
+  "$strip_bin" --strip-unneeded "$host_destination"
+  verify_linux_elf_identity "$platform" "$core_destination" \
+    "$host_destination" "$readelf_bin" "$nm_bin"
+  destination="$output_dir/$platform"
+  prepare_safe_directory "$output_dir" "$destination" "$platform 输出目录"
+  prepare_safe_output_file "$output_dir" "$destination/libcitizensdk.so" \
+    "$platform Core 输出"
+  prepare_safe_output_file "$output_dir" "$destination/libcitizensdk_host.so" \
+    "$platform Host 输出"
+  cp "$core_destination" "$destination/libcitizensdk.so"
+  cp "$host_destination" "$destination/libcitizensdk_host.so"
+  echo "CitizenSDK $platform 双运行件完成：$destination"
+}
+
 build_host() {
   [[ "$(uname -s)" == "Darwin" ]] || fail "当前宿主测试库只允许在 macOS runner 构建"
   local destination arm_library nm_bin symbols architectures
@@ -1678,6 +1994,8 @@ verify_outputs() {
 case "$target_name" in
   android) build_android ;;
   apple) build_apple ;;
+  LinuxARM) build_linux LinuxARM ;;
+  LinuxAMD) build_linux LinuxAMD ;;
   host) build_host ;;
   abi-host) build_abi_host ;;
   apple-tests) build_apple_tests ;;
@@ -1724,5 +2042,5 @@ case "$target_name" in
       "$output_dir/$CITIZENSDK_TEST_OUTPUT_RELATIVE" \
       "CitizenSDK 安全写路径测试目标"
     ;;
-  *) fail "用法：$0 [android|apple|apple-tests|host|abi-host|all|verify]" ;;
+  *) fail "用法：$0 [android|apple|LinuxARM|LinuxAMD|apple-tests|host|abi-host|all|verify]" ;;
 esac

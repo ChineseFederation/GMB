@@ -13,5 +13,5 @@
 只能建议 bootnode，不能替换这组三文件信任闭集。
 
 Android、iOS 与 macOS 正式公共 API 均不导出或调用本目录，也不打包 legacy `libsmoldot`。
-`CitizenSdkClient` 通过产品 ABI 调用 Rust Engine/smoldot provider。旧测试显式导入内部路径，
+`CitizenSdk` 通过产品 ABI 调用 Rust Engine/smoldot provider。旧测试显式导入内部路径，
 只能作为差分基线，不能被误认为新的产品 API；删除时必须同步更新来源与测试闭集。

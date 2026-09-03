@@ -10,7 +10,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test('Hosted Package根入口公开稳定API与公开模型', () {
-    expect(CitizenSdkClient.open, isA<Function>());
+    expect(CitizenSdk.open, isA<Function>());
     expect(isA<CitizenChain>(), isNotNull);
     expect(isA<CitizenWallet>(), isNotNull);
     expect(isA<CitizenTransactions>(), isNotNull);
@@ -76,9 +76,9 @@ void main() {
       TargetPlatform.macOS,
     ]) {
       debugDefaultTargetPlatformOverride = target;
-      final client = await CitizenSdkClient.open();
-      expect(client.lifecycle, CitizenSdkLifecycle.created);
-      await client.close();
+      final sdk = await CitizenSdk.open();
+      expect(sdk.lifecycle, CitizenSdkLifecycle.created);
+      await sdk.close();
     }
     expect(nextSession, 3);
   });
@@ -92,7 +92,7 @@ void main() {
     });
 
     await expectLater(
-      CitizenSdkClient.open(),
+      CitizenSdk.open(),
       throwsA(
         isA<CitizenSdkException>().having(
           (error) => error.code,

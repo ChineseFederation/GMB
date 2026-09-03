@@ -17,8 +17,8 @@ void main() {
     await platform.dispose();
   });
 
-  test('根入口只装配最终公开 client、链、钱包、交易和公开模型', () async {
-    final sdk = await CitizenSdkClient.open();
+  test('根入口只装配最终公开 CitizenSdk、链、钱包、交易和公开模型', () async {
+    final sdk = await CitizenSdk.open();
 
     expect(sdk.chain, isA<CitizenChain>());
     expect(sdk.wallet, isA<CitizenWallet>());

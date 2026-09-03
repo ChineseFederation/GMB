@@ -20,6 +20,7 @@
 /darwin/.swiftpm/
 /darwin/Pods/
 /darwin/DerivedData/
+/linux/test/
 
 # CitizenSDK 在 Android/Apple 已统一经固定 Flutter tuple 调用产品 C ABI。
 # 下列 Dart 实现仅作 CitizenApp 迁移差分、回归和来源审计输入；它们不是

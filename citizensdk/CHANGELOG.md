@@ -2,6 +2,20 @@
 
 ## 1.0.0 - Unreleased
 
+- Added the Step 7.1 source-only Linux host projection shared by LinuxARM and
+  LinuxAMD: typed public/secure SQLite stores, a TPM 2.0 KEK/DEK vault,
+  SDK-owned wallet-flow primitives, a C/C++ host API, and native contract-test
+  sources. This step did not build or run those tests, inject Linux shared
+  libraries, register the Flutter plugin, or add Linux to the release manifest;
+  Linux support is therefore not yet delivered. The test targets explicitly
+  keep assertions enabled under the Release build configuration. Linux state
+  sources require effective-UID ownership, one-link DB/journal/WAL/SHM files,
+  an openat-backed SQLite VFS, exact schema/PRAGMA validation, and a durable
+  commit point that cannot report failure after a successful commit. Host
+  admission leases, lossless 65+ synchronous completions, parent-destroy UI
+  retirement, generation-conditional Vault writes, post-prompt retirement
+  checks, exact TPM child templates, owner/hierarchy/DA-state checks, and exact
+  `Esys_TestParms` probes are part of the same source contract.
 - Froze the first stable CitizenSDK package contract around one product ABI for
   Android, the iOS device and simulator variants, and macOS. The current Android
   ABI is `arm64-v8a`; Apple machine architecture metadata is `arm64`.

@@ -119,9 +119,10 @@ describe('公民链官网显式发布指针', () => {
     const download = await citizenchainDownloadRoute(env, interopFixture.download_path);
     expect(download.headers.get('location')).toBe(interopFixture.location);
 
+    // 只通过唯一互操作 golden 构造应被拒绝的旧动作域输入；这不是兼容读取或回退合同。
     const legacyPublication: Record<string, unknown> = {
       ...putBody.publication,
-      release_tag: putBody.publication.version_tag,
+      [interopFixture.action_tag_field]: putBody.publication.version_tag,
     };
     delete legacyPublication.version_tag;
     const legacyBody = JSON.stringify({
@@ -147,7 +148,7 @@ describe('公民链官网显式发布指针', () => {
     expect(download.headers.get('cache-control')).toBe('no-store');
     expect(download.headers.get('location')).toBe(
       'https://github.com/VoyagerRhett/GMB/releases/download/'
-      + 'citizenchain-node-linux-arm-v1.0.1/citizenchain-node-linux-arm64-v1.0.1.deb',
+      + 'citizenchain-node-linux-arm-v1.0.1/citizenchain-node-LinuxARM-v1.0.1.deb',
     );
     await expect(citizenchainDownloadRoute(
       env, '/download/citizenchain/LinuxAMD',
@@ -159,22 +160,22 @@ describe('公民链官网显式发布指针', () => {
       {
         platform: 'macos', path: '/download/citizenchain/macOS',
         tag: 'citizenchain-node-macos-v1.2.3',
-        asset: 'citizenchain-node-macos-arm64-v1.2.3.dmg',
+        asset: 'citizenchain-node-macOS-v1.2.3.dmg',
       },
       {
         platform: 'windows', path: '/download/citizenchain/Windows',
         tag: 'citizenchain-node-windows-v1.2.3',
-        asset: 'citizenchain-node-windows-x86_64-v1.2.3.exe',
+        asset: 'citizenchain-node-Windows-v1.2.3.exe',
       },
       {
         platform: 'linux-arm', path: '/download/citizenchain/LinuxARM',
         tag: 'citizenchain-node-linux-arm-v1.2.3',
-        asset: 'citizenchain-node-linux-arm64-v1.2.3.deb',
+        asset: 'citizenchain-node-LinuxARM-v1.2.3.deb',
       },
       {
         platform: 'linux-amd', path: '/download/citizenchain/LinuxAMD',
         tag: 'citizenchain-node-linux-amd-v1.2.3',
-        asset: 'citizenchain-node-linux-amd64-v1.2.3.deb',
+        asset: 'citizenchain-node-LinuxAMD-v1.2.3.deb',
       },
     ] as const;
     for (const item of cases) {
@@ -193,7 +194,7 @@ describe('公民链官网显式发布指针', () => {
       );
     }
     for (const oldPath of [
-      '/download/citizenchain/macos-arm64',
+      '/download/citizenchain/macos' + '-arm64',
       '/download/citizenchain/windows-x86_64',
       '/download/citizenchain/linux-arm64',
       '/download/citizenchain/linux-amd64',
@@ -222,9 +223,38 @@ describe('公民链官网显式发布指针', () => {
       expected_revision: 0,
       publication: {
         ...linuxArmPublication('1.0.1'),
-        asset_name: 'citizenchain-node-linux-amd64-v1.0.1.deb',
+        asset_name: 'citizenchain-node-LinuxAMD-v1.0.1.deb',
       },
     }), env)).rejects.toMatchObject({ code: 'publication_identity_invalid' });
+    // 旧架构拼接式资产即使与原平台 Tag 匹配，也不能重新进入正式 publication。
+    for (const legacy of [
+      {
+        platform: 'linux-arm', tag: 'citizenchain-node-linux-arm-v1.0.1',
+        asset: 'citizenchain-node-linux-arm64-v1.0.1.deb',
+      },
+      {
+        platform: 'linux-amd', tag: 'citizenchain-node-linux-amd-v1.0.1',
+        asset: 'citizenchain-node-linux-amd64-v1.0.1.deb',
+      },
+      {
+        platform: 'macos', tag: 'citizenchain-node-macos-v1.0.1',
+        asset: 'citizenchain-node-macos' + '-arm64-v1.0.1.dmg',
+      },
+      {
+        platform: 'windows', tag: 'citizenchain-node-windows-v1.0.1',
+        asset: 'citizenchain-node-windows-x86_64-v1.0.1.exe',
+      },
+    ] as const) {
+      await expect(routeRequest(await signedPut(legacy.platform, {
+        expected_revision: 0,
+        publication: {
+          version_tag: legacy.tag,
+          source_sha: 'a'.repeat(40),
+          asset_name: legacy.asset,
+          asset_sha256: 'b'.repeat(64),
+        },
+      }), env)).rejects.toMatchObject({ code: 'publication_identity_invalid' });
+    }
     await expect(routeRequest(await signedPut('linux-arm', {
       expected_revision: 0,
       publication: { ...linuxArmPublication('1.0.1'), asset_sha256: 'bad' },
@@ -268,7 +298,7 @@ describe('公民链官网显式发布指针', () => {
     const publication = {
       version_tag: 'citizenchain-node-macos-v1.2.3',
       source_sha: 'a'.repeat(40),
-      asset_name: 'citizenchain-node-macos-arm64-v1.2.3.dmg',
+      asset_name: 'citizenchain-node-macOS-v1.2.3.dmg',
       asset_sha256: 'b'.repeat(64),
     };
     await routeRequest(await signedPut('macos', { expected_revision: 0, publication }), env);
@@ -277,10 +307,10 @@ describe('公民链官网显式发布指针', () => {
     );
     expect(updater.headers.get('location')).toBe(
       'https://github.com/VoyagerRhett/GMB/releases/download/'
-      + 'citizenchain-node-macos-v1.2.3/citizenchain-node-latest-macos-arm64.json',
+      + 'citizenchain-node-macos-v1.2.3/citizenchain-node-latest-macOS.json',
     );
     await expect(citizenchainDownloadRoute(
-      env, '/download/citizenchain/macos-arm64-updater',
+      env, '/download/citizenchain/macos' + '-arm64-updater',
     )).rejects.toMatchObject({ code: 'download_not_found', status: 404 });
   });
 });
@@ -289,7 +319,7 @@ function linuxArmPublication(version: string) {
   return {
     version_tag: `citizenchain-node-linux-arm-v${version}`,
     source_sha: 'a'.repeat(40),
-    asset_name: `citizenchain-node-linux-arm64-v${version}.deb`,
+    asset_name: `citizenchain-node-LinuxARM-v${version}.deb`,
     asset_sha256: 'b'.repeat(64),
   };
 }

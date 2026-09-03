@@ -15,6 +15,21 @@ finalized 数据库、多账户热钱包、硬件金库、任意协议载荷
 CitizenApp 现有功能和
 依赖保持不变；只有在 SDK 稳定后，才会另行设计 CitizenApp 的切换步骤。
 
+Flutter 消费者只从根库打开唯一公开门面：
+
+```dart
+import 'package:citizen_sdk/citizen_sdk.dart';
+
+final CitizenSdk sdk = await CitizenSdk.open();
+await sdk.start();
+// 通过 sdk.chain、sdk.wallet 和 sdk.transactions 使用公民链能力。
+await sdk.stop();
+await sdk.close();
+```
+
+`open()` 只创建 session，不会隐式启动轻节点；若 session 已处于 `running`，调用 `close()` 前
+必须先成功 `stop()`，以完成 checkpoint 和有序停止。
+
 Rust 路径已经建立 `native/contracts`、`native/engine`、真实
 `native/smoldot/provider` 和产品级唯一 `native/ffi`。根 `include/citizensdk.h` 只公开
 `citizensdk_*`。ABI v1 保持 legacy `citizensdk_create` 路径原有 36 个符号及其数值、布局和
@@ -77,7 +92,7 @@ TUYU challenge、TuyuBooking 员工身份及其它业务授权不进入 SDK。�
 同一用户公钥签一段明确载荷，但不能因此把三套账户、权限或审计记录合并。
 
 产品 C ABI 与 Dart/Android/Apple 官方投影已经落地。根 Dart 入口只公开类型化
-`CitizenSdkClient`；Android Flutter 插件与原生 AAR 都调用同一个 Kotlin facade、JNI 和
+`CitizenSdk`；Android Flutter 插件与原生 AAR 都调用同一个 Kotlin facade、JNI 和
 Rust Core。iOS 与 macOS 共用 `darwin/` 的 Swift、Flutter adapter、typed SQLite stores 与
 `SecretVault`，并通过同一个 `CitizenSDK.xcframework` 消费产品 Core；三端正式绑定均不运行
 legacy Dart 钱包或 legacy `libsmoldot`。完整 `citizensdk_create_with_host` 组合固定 smoldot provider、准确
@@ -85,6 +100,17 @@ Runtime nonce 与唯一 `Sr25519SoftwareSigner`，并要求宿主提供 chain da
 cache、wallet profile、transaction history、encrypted secret blob 五类职责隔离的 store；
 secure store 与 `SecretVault` 必须全有或全无。原 `citizensdk_create` 则继续准确保持
 chain-only，不能把一个构造的能力快照冒充整个 ABI 的能力边界。
+
+第 7.1 步在 `linux/` 新增 LinuxARM、LinuxAMD 共用的 C/C++ Host 源码投影：它只负责
+HostBridge、五类 typed store、TPM 2.0 KEK/DEK Vault、SDK-owned GTK 钱包流程和 header-only
+C++ convenience API，仍调用上述同一产品 ABI，不复制 Engine、smoldot 或 sr25519。该步骤只
+冻结源码和合同；Flutter plugin、两种机器目标的 `.so`、真实平台运行验证和公开 manifest
+启用均未完成，所以 Linux 仍不是当前已交付平台。
+Linux typed store 通过自有 openat SQLite VFS 把主库和全部 sidecar 绑定到已验证目录 fd，
+并精确核验 schema、PRAGMA、权限、owner、link count、inode 与 durable commit 点；不依赖
+`/proc/self/fd` 路径。Host 统一 closing/admission lease、65+ 同步 completion 无损路由、GTK
+parent 销毁退休、Vault generation 条件写/退休重验，以及 TPM child template/DA lockout
+检查均属于同一第 7.1 步源码合同，尚未构成运行验收。
 
 产品 ABI 不导出 private key、child mini-secret、裸 signer 或钱包 signed extrinsic。创建钱包
 唯一允许输出助记词的边界是 SDK 拥有、绑定 owner instance handle 的 prepared-wallet 会话：
@@ -112,7 +138,9 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   Enclave，硬件金库与钱包能力必须如实报告不可用。
 - macOS 与 iOS 共用上述 Darwin 源码、Swift API、Flutter adapter 和
   XCFramework 产品边界；产品名始终只写作 macOS。
-- LinuxARM、LinuxAMD、Windows 仍没有完成语言绑定、平台金库、打包与发布闭环，不能宣称已经交付。
+- LinuxARM、LinuxAMD 已有第 7.1 步 C/C++ Host、typed store、TPM Vault 和合同测试源码，但
+  尚未编译、运行或注入候选，Flutter adapter 与发布闭环也未完成；Windows 尚无平台投影。
+  三者均不能宣称已经交付。
 - 聊天、广场、OpenMLS、TUYU 账户签名协议、旅行/生活/商家业务均不属于 CitizenSDK。
 - CitizenWallet 冷钱包是独立产品，不属于本 SDK 的能力收编范围。
 
@@ -151,7 +179,7 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   CAS、永久墓碑和 generation retirement，不能只依赖进程锁。
 - SDK 不包含远程签名或通用远程 RPC；公民链交易由设备内 smoldot 轻节点通过 P2P 广播。
 - 归档 legacy Dart 差分基线仍含 `WalletRepository`、`SecureSeedStore` 等高级注入点；它们不是根
-  `CitizenSdkClient` 或任何正式平台 API。使用这些内部注入点的测试进入受信任边界，SDK 无法
+  `CitizenSdk` 或任何正式平台 API。使用这些内部注入点的测试进入受信任边界，SDK 无法
   防止恶意实现复制传入的秘密。
 
 Rust 钱包交易只公开一个 `transfer_with_remark` 高级入口：内部构造对象不可从 Engine 取出，必须先
@@ -245,7 +273,8 @@ CitizenSDK 最终统一流程合同使用 `公民SDK · CI · SDK` 与
 宣称 `citizen_sdk: ^1.0.0` 已可从 Hosted Registry 获取。
 
 GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，其中
-tgz 保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，用于来源审计、校验和离线留档；
+tgz 当前保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，并在第 7.1 步纳入
+Linux Host 源码闭集，用于来源审计、校验和离线留档；
 Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/Apple 原生投影、README 和完整法律声明。
 其 Dart 运行闭包精确为 17 个文件：根入口 1 个、`lib/src/api` 6 个、
 `lib/src/crypto/account_codec.dart` 1 个、`lib/src/models` 5 个和 `lib/src/platform` 4 个；
@@ -265,6 +294,12 @@ Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 
 或历史三件套。本步没有执行 Hosted 上传、
 远程 CI、正式 Release 或 Git 写操作。
 
+第 7.1 步没有运行编译、测试、Git、远程 CI、Release 或 Hosted 上传，也没有生成任何 Linux
+原生产物。后续 Linux 验证产生的全部状态仍只能写入
+`/Users/rhett/TATA/tataconsole/target/citizensdk` 下的任务独占目录，不能写入源码树。Linux
+CTest 配置必须用 `CITIZENSDK_TEST_WORK_DIR` 显式注入该目录中已存在、有效 UID 所有且权限
+为 `0700` 的绝对工作根；测试不回退到 `/tmp`、当前目录或用户目录。
+
 详细说明见 `docs/ARCHITECTURE.md`、`docs/C_ABI.md`、`docs/DART_API.md`、`docs/WALLET_MODEL.md`、
 `docs/SECURITY.md`、`docs/SOURCE_PROVENANCE.md`、`docs/MOBILE_PLATFORM.md` 与
-`docs/NATIVE_PACKAGING.md`。
+`docs/NATIVE_PACKAGING.md`；Linux 当前源码边界与未交付状态见 `docs/LINUX_PLATFORM.md`。

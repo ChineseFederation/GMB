@@ -10,7 +10,7 @@ import 'package:citizen_sdk/citizen_sdk.dart';
 
 Android、iOS 与 macOS 已安装正式 binding。iOS 和 macOS 在 `pubspec.yaml` 中共同使用
 `sharedDarwinSource: true`，由 `darwin/` 的同一 Swift/Flutter adapter 投影产品 ABI。
-`CitizenSdkClient.open()` 在 LinuxARM、LinuxAMD、Windows 和 WASM 上稳定返回
+`CitizenSdk.open()` 在 LinuxARM、LinuxAMD、Windows 和 WASM 上稳定返回
 `CitizenSdkErrorCode.unsupported`，不会误走移动或 Darwin channel。
 iOS 模拟器变体可运行产品 ABI 与公开链能力，但没有 Secure Enclave；硬件金库、钱包和
 依赖它们的签名/交易能力必须通过 capability snapshot 报告不可用。
@@ -28,7 +28,7 @@ Hosted Package 的 Dart 运行时闭包精确为 17 个文件：
 ```text
 lib/citizen_sdk.dart
 lib/src/api/citizen_chain.dart
-lib/src/api/citizen_sdk_client.dart
+lib/src/api/citizen_sdk.dart
 lib/src/api/citizen_sdk_error.dart
 lib/src/api/citizen_sdk_events.dart
 lib/src/api/citizen_transactions.dart
@@ -61,7 +61,7 @@ Flutter 对插件 Swift Package Manager 目录的识别警告与 Android built-i
 ## 会话与生命周期
 
 ```dart
-final sdk = await CitizenSdkClient.open();
+final sdk = await CitizenSdk.open();
 await sdk.start();
 final capabilities = await sdk.getCapabilities();
 await sdk.stop();

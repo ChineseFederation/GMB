@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { afterEach, test } from 'node:test';
 import {
   cpSync,
@@ -61,6 +62,35 @@ function writeCitizenWebArchive(candidatePath, archivePath) {
   runRelease(['--verify', candidatePath, '--archive', archivePath]);
 }
 
+function sha256File(path) {
+  return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+// 中文注释：公开版本标记是已登记候选文件；负向测试修改它时必须同步更新文件清单与
+// SHA256SUMS，确保失败真正来自渠道身份合同，而不是更早的通用文件哈希检查。
+function rewriteReleaseMarker(candidatePath, mutate) {
+  const markerPath = join(candidatePath, 'dist', 'citizenweb-release.json');
+  const manifestPath = join(candidatePath, 'release-manifest.json');
+  const marker = JSON.parse(readFileSync(markerPath, 'utf8'));
+  mutate(marker);
+  writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
+
+  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  const markerEntry = manifest.files.find(({ path }) => path === 'dist/citizenweb-release.json');
+  assert.ok(markerEntry, 'Release manifest 缺少官网公开版本标记');
+  markerEntry.sha256 = sha256File(markerPath);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const checksums = [
+    ...manifest.files,
+    { path: 'release-manifest.json', sha256: sha256File(manifestPath) },
+  ].sort((left, right) => left.path.localeCompare(right.path));
+  writeFileSync(
+    join(candidatePath, 'SHA256SUMS'),
+    `${checksums.map(({ sha256, path }) => `${sha256}  ${path}`).join('\n')}\n`,
+  );
+}
+
 function temporaryRoot() {
   const path = mkdtempSync(join(tmpdir(), 'gmb-citizenweb-release-'));
   temporaryRoots.push(path);
@@ -109,7 +139,7 @@ test('公民链四端下载固定走后端白名单代理，不受 Runtime Relea
   );
   assert.doesNotMatch(ecosystemSource, /label: 'Linux-(?:arm|amd)'/);
   for (const oldPath of [
-    '/download/citizenchain/macos-arm64',
+    '/download/citizenchain/macos' + '-arm64',
     '/download/citizenchain/windows-x86_64',
     '/download/citizenchain/linux-arm64',
     '/download/citizenchain/linux-amd64',
@@ -146,9 +176,20 @@ test('相同官网构建与 Git SHA 生成完全一致的候选和归档', () =>
     readFileSync(join(first.outputPath, 'release-manifest.json'), 'utf8'),
     readFileSync(join(second.outputPath, 'release-manifest.json'), 'utf8'),
   );
+  assert.deepEqual(Object.keys(first.manifest).sort(), [
+    'assets_sha256',
+    'delivery_channel',
+    'files',
+    'git_commit_sha',
+    'product_id',
+    'software_version',
+    'tools',
+  ]);
+  assert.equal(first.manifest.delivery_channel, 'web');
+  assert.equal(Object.hasOwn(first.manifest, 'platform'), false);
 });
 
-test('官网公开版本标记绑定软件版本、Git SHA 和全部静态资源摘要', () => {
+test('官网公开版本标记绑定 Web 交付渠道、软件版本、Git SHA 和全部静态资源摘要', () => {
   const root = temporaryRoot();
   const candidate = build(root);
   const marker = JSON.parse(readFileSync(
@@ -158,11 +199,56 @@ test('官网公开版本标记绑定软件版本、Git SHA 和全部静态资源
 
   assert.deepEqual(marker, {
     product_id: 'citizenweb',
+    delivery_channel: 'web',
     software_version: candidate.manifest.software_version,
     git_commit_sha: gitCommitSha,
     assets_sha256: candidate.manifest.assets_sha256,
   });
+  assert.equal(Object.hasOwn(marker, 'platform'), false);
   assert.ok(candidate.manifest.files.some(({ path }) => path === 'dist/assets/app.js'));
+});
+
+test('Release manifest 拒绝缺失、错误、旧 platform、双写和额外渠道字段', () => {
+  const root = temporaryRoot();
+  const cases = [
+    ['missing', (manifest) => delete manifest.delivery_channel, /release manifest 字段集合不正确/],
+    ['wrong', (manifest) => { manifest.delivery_channel = 'other'; }, /候选交付渠道不正确/],
+    ['legacy', (manifest) => {
+      delete manifest.delivery_channel;
+      manifest.platform = 'web';
+    }, /release manifest 字段集合不正确/],
+    ['dual', (manifest) => { manifest.platform = 'web'; }, /release manifest 字段集合不正确/],
+    ['extra', (manifest) => { manifest.surface = 'web'; }, /release manifest 字段集合不正确/],
+  ];
+
+  for (const [name, mutate, expected] of cases) {
+    const candidate = build(root, `manifest-${name}`);
+    const path = join(candidate.outputPath, 'release-manifest.json');
+    const manifest = JSON.parse(readFileSync(path, 'utf8'));
+    mutate(manifest);
+    writeFileSync(path, `${JSON.stringify(manifest, null, 2)}\n`);
+    assert.throws(() => verifyCitizenWebRelease(candidate.outputPath, gitCommitSha), expected);
+  }
+});
+
+test('官网公开版本标记拒绝缺失、错误、旧 platform、双写和额外渠道字段', () => {
+  const root = temporaryRoot();
+  const cases = [
+    ['missing', (marker) => delete marker.delivery_channel, /官网版本标记 字段集合不正确/],
+    ['wrong', (marker) => { marker.delivery_channel = 'other'; }, /官网版本标记与 Release 候选不一致/],
+    ['legacy', (marker) => {
+      delete marker.delivery_channel;
+      marker.platform = 'web';
+    }, /官网版本标记 字段集合不正确/],
+    ['dual', (marker) => { marker.platform = 'web'; }, /官网版本标记 字段集合不正确/],
+    ['extra', (marker) => { marker.surface = 'web'; }, /官网版本标记 字段集合不正确/],
+  ];
+
+  for (const [name, mutate, expected] of cases) {
+    const candidate = build(root, `marker-${name}`);
+    rewriteReleaseMarker(candidate.outputPath, mutate);
+    assert.throws(() => verifyCitizenWebRelease(candidate.outputPath, gitCommitSha), expected);
+  }
 });
 
 test('官网依赖 Cloudflare Pages 原生 SPA 回退，不发布全局资源改写规则', () => {

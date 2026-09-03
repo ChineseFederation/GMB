@@ -1,0 +1,162 @@
+// 验证请求路由、Host operation 身份和同步早到 completion 的无损准入门。
+#include <atomic>
+#include <cassert>
+#include <condition_variable>
+#include <fstream>
+#include <iterator>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "citizen_sdk_operation.hpp"
+
+#ifndef CITIZENSDK_LINUX_TEST_SOURCE_DIR
+#error "CITIZENSDK_LINUX_TEST_SOURCE_DIR must point at the Linux source root"
+#endif
+#ifdef NDEBUG
+#error "CitizenSDK Linux contract assertions must remain enabled"
+#endif
+
+namespace {
+
+constexpr std::size_t kConcurrentCompletions = 96;
+
+void run_completion_wave(
+    citizen_sdk::linux::CompletionAdmission &admission) {
+  std::mutex gate_lock;
+  std::condition_variable gate_ready;
+  std::size_t ready = 0;
+  bool proceed = false;
+  std::atomic<std::size_t> completed{0};
+  std::vector<std::thread> workers;
+  workers.reserve(kConcurrentCompletions);
+
+  admission.begin();
+  for (std::size_t index = 0; index < kConcurrentCompletions; ++index) {
+    workers.emplace_back([&, index] {
+      {
+        std::unique_lock<std::mutex> guard(gate_lock);
+        ++ready;
+        gate_ready.notify_all();
+        gate_ready.wait(guard, [&] { return proceed; });
+      }
+      const auto request = static_cast<citizensdk_request_id_t>(index + 1);
+      admission.await_route(request);
+      completed.fetch_add(1, std::memory_order_release);
+    });
+  }
+  {
+    std::unique_lock<std::mutex> guard(gate_lock);
+    gate_ready.wait(guard, [&] { return ready == kConcurrentCompletions; });
+    proceed = true;
+  }
+  gate_ready.notify_all();
+
+  // begin() 尚未发布时，所有参与者已经抵达等待边界且无一能够完成。
+  assert(completed.load(std::memory_order_acquire) == 0);
+  admission.publish_route();
+  for (auto &worker : workers) worker.join();
+  assert(completed.load(std::memory_order_acquire) ==
+         kConcurrentCompletions);
+  assert(admission.idle());
+}
+
+}  // namespace
+
+int main() {
+  using citizen_sdk::linux::CompletionAdmission;
+  using citizen_sdk::linux::HostError;
+  using citizen_sdk::linux::OperationTracker;
+  using citizen_sdk::linux::RequestRouter;
+
+  OperationTracker operations;
+  assert(!operations.accept(0));
+  assert(operations.accept(7));
+  assert(!operations.accept(7));
+  assert(!operations.empty());
+  operations.finish(7);
+  operations.finish(7);
+  assert(operations.empty());
+
+  RequestRouter router;
+  int completions = 0;
+  citizensdk_result_handle_t delivered = 0;
+  router.prime([&](citizensdk_result_handle_t result) {
+    ++completions;
+    delivered = result;
+  });
+  bool duplicate_rejected = false;
+  try {
+    router.prime([](citizensdk_result_handle_t) {});
+  } catch (const HostError &error) {
+    duplicate_rejected = error.code() == CITIZENSDK_ERROR_CONFLICT;
+  }
+  assert(duplicate_rejected);
+
+  citizensdk_event_t unrelated{};
+  unrelated.event_type = CITIZENSDK_EVENT_CAPABILITIES_CHANGED;
+  unrelated.request_id = 9;
+  assert(!router.take(unrelated));
+  assert(completions == 0);
+
+  router.bind(9);
+  citizensdk_event_t crossed{};
+  crossed.event_type = CITIZENSDK_EVENT_REQUEST_COMPLETED;
+  crossed.request_id = 10;
+  crossed.result = 12;
+  assert(!router.take(crossed));
+
+  citizensdk_event_t completion{};
+  completion.event_type = CITIZENSDK_EVENT_REQUEST_COMPLETED;
+  completion.request_id = 9;
+  completion.result = 11;
+  auto handler = router.take(completion);
+  assert(static_cast<bool>(handler));
+  handler(completion.result);
+  assert(!router.take(completion));
+  assert(completions == 1);
+  assert(delivered == 11);
+  assert(router.empty());
+  router.prime([](citizensdk_result_handle_t) {});
+  router.cancel_primed();
+  assert(router.empty());
+
+  // 96 个并发等待者明确超过旧固定 64 槽边界。准入门不缓存 result，
+  // route 发布后每个 completion 都继续，且门可回到完整 idle 状态。
+  CompletionAdmission admission;
+  assert(admission.idle());
+  run_completion_wave(admission);
+
+  const std::string source_path =
+      std::string(CITIZENSDK_LINUX_TEST_SOURCE_DIR) +
+      "/src/citizen_sdk_host_bridge.cc";
+  std::ifstream stream(source_path, std::ios::binary);
+  assert(stream.good());
+  const std::string source((std::istreambuf_iterator<char>(stream)),
+                           std::istreambuf_iterator<char>());
+  const auto dispatch = source.find("HostBridge::dispatch_core_event");
+  const auto await_route =
+      source.find("completion_admission_.await_route(event.request_id)",
+                  dispatch);
+  const auto routed = source.find("dispatch_routed_event(event)", await_route);
+  const auto submit = source.find("HostBridge::submit_private");
+  const auto prime = source.find("private_requests_.prime", submit);
+  const auto begin = source.find("completion_admission_.begin()", prime);
+  const auto accept = source.find("accept(&request)", begin);
+  const auto cancel = source.find("private_requests_.cancel_primed()", accept);
+  const auto bind = source.find("private_requests_.bind(request)", cancel);
+  const auto publish_route =
+      source.find("completion_admission_.publish_route()", bind);
+  assert(dispatch != std::string::npos && await_route != std::string::npos &&
+         routed != std::string::npos && submit != std::string::npos &&
+         prime != std::string::npos && begin != std::string::npos &&
+         accept != std::string::npos && cancel != std::string::npos &&
+         bind != std::string::npos && publish_route != std::string::npos);
+  assert(dispatch < await_route && await_route < routed && routed < submit);
+  assert(submit < prime && prime < begin && begin < accept &&
+         accept < cancel && cancel < bind && bind < publish_route);
+  assert(source.find("early_events_") == std::string::npos);
+  assert(source.find("publish_discard") == std::string::npos);
+  return 0;
+}

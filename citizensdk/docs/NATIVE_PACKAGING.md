@@ -4,7 +4,8 @@
 
 `/Users/rhett/GMB/citizensdk` 只保存源码、`assets/README.md` 资产边界、
 `assets/citizenchain` 固定链资产、manifest、锁文件、文档和测试源码，
-不得保存 `.so`、`.a`、`target`、`build`、`.dart_tool`、Gradle/CocoaPods 状态或 Release 包。
+不得保存 `.so`、`.a`、`target`、`build`、CMake cache、`.dart_tool`、Gradle/CocoaPods 状态或
+Release 包。
 
 根 `Cargo.toml` workspace 现包含 `native/contracts`、`native/engine`、`native/ffi`、
 `native/signer` 和 `native/smoldot/provider`。前三项是 CitizenSDK 自有 Core/产品 ABI 闭集；
@@ -68,6 +69,10 @@ host export 与 graceful stop 自动 exact-CAS 持久化；legacy constructor �
 host start/stop/import 独占异步 admission，平台包装必须先收口较早请求，并在完成前阻止后续控制；
 Android/Apple 包装不得自行解析私有 store 信封或另造缓存协议，且直接 destroy 不作为 checkpoint。
 
+第 7.1 步新增 LinuxARM、LinuxAMD 共用的 Host/C/C++ 源码、typed stores、TPM Vault 与合同测试，
+但不修改 Rust Core、根 C ABI、Cargo workspace 或 Dart 平台注册。该步没有生成 `.so`，没有运行
+Linux 编译/测试，也没有把 Linux 加入正式候选 manifest。
+
 Android NDK 版本在 SDK 原生入口中固定为 `28.2.13676358`，与 GMB 官方依赖合同一致。
 调用方提供 `ANDROID_NDK_HOME` 时必须精确指向该版本；同时提供 `ANDROID_HOME` 与
 `ANDROID_SDK_ROOT` 时两者必须一致。若三个 Android 环境变量均缺失，本机入口只从宿主标准
@@ -79,6 +84,40 @@ iOS 模拟器变体与 macOS 三次 `cargo build` 分别使用 `aarch64-apple-io
 `aarch64-apple-ios-sim` 与 `aarch64-apple-darwin`，并显式设置对应最低系统版本，避免 Rust/C
 对象继承构建机当前系统。`darwin/citizen_sdk.podspec` 与 `darwin/Package.swift` 使用相同最低
 版本合同；所有 Swift module、framework binary 与 XCFramework 的机器架构元数据都必须精确为 `arm64`。
+
+## LinuxARM 与 LinuxAMD 第 7.1 步边界
+
+Flutter 官方平台源码目录固定为小写 `linux/`；公开平台目录和 manifest 值只允许
+`LinuxARM`、`LinuxAMD`。两者对应的工具链值分别是 `aarch64-unknown-linux-gnu` 与
+`x86_64-unknown-linux-gnu`，首版动态兼容基线固定为 glibc 2.31。这些 target triple、ELF
+machine 和 `CMAKE_SYSTEM_PROCESSOR` 只属于机器字段，不能演变为额外产品名。
+
+第 7.3 步构建完成后，唯一候选允许注入：
+
+```text
+linux/lib/LinuxARM/libcitizensdk.so
+linux/lib/LinuxARM/libcitizensdk_host.so
+linux/lib/LinuxAMD/libcitizensdk.so
+linux/lib/LinuxAMD/libcitizensdk_host.so
+```
+
+Core 必须精确导出 70 个根 `citizensdk_*`；Host 只装配 typed stores、TPM/认证、SDK-owned
+钱包流程和生命周期，不复制 smoldot、signer 或 Engine。Host 只能按 SONAME 依赖 Core 一次，
+两库不得出现绝对 `DT_NEEDED` 或构建机 RPATH/RUNPATH。CMake 公开目标固定为
+`CitizenSDK::Core` 与 `CitizenSDK::Host`，C++ convenience API 保持 header-only，不引入跨
+编译器 C++ ABI。Host 使用自有 openat 型 SQLite VFS，把主库、journal、WAL 与 SHM 的实际
+文件操作绑定到已验证目录 fd；不得依赖 `/proc/self/fd` 或重新解析可替换路径。第 7.3 步
+relocated-install consumer smoke 必须覆盖目录替换、sidecar、精确 schema/PRAGMA 与 durable
+commit 线性化合同。
+
+所有 Linux 构建与测试状态必须写入
+`/Users/rhett/TATA/tataconsole/target/citizensdk` 下的任务独占工作目录。第 7.1 步只固定源码
+和 Release 源文件反向闭集；上述候选路径、ELF、GLIBC、TPM 和两种机器运行门禁尚未执行，
+因此当前 release manifest 仍精确只包含 Android、iOS、macOS。
+Linux CMake/CTest 调用方必须以
+`-DCITIZENSDK_TEST_WORK_DIR=<该任务目录>` 注入一个已存在、有效 UID 所有、权限为 `0700` 的
+绝对目录；测试不创建或猜测中央根，只在已验证目录 fd 下以 CSPRNG 名称和 `mkdirat` 创建
+本用例子目录，也没有 `/tmp` fallback。
 
 ## Android 与 Apple 注入
 
@@ -243,3 +282,8 @@ CitizenServe/CitizenWeb/Cloudflare 下载指针。Android、iOS 与 macOS 源码
 Simulator runtime 和真实 Apple 移动设备，因此不声称 iOS XCTest 已运行或真机硬件金库
 已验收。当前 TataConsole Flow 仍未集成本闭集，也未运行远程 CI、正式 Release、
 Hosted 上传或 Git。
+
+Linux 第 7.1 步源码已进入 GitHub 审计候选的受控源闭集，但 Hosted 运行时和正式平台清单仍
+不包含 Linux。只有第 7.2 步完成 Flutter adapter、并在第 7.3 步完成 LinuxARM/LinuxAMD
+真实构建、测试、ELF/ABI 反向校验后，才允许一次性修改 `.pubignore`、pubspec 和 manifest；
+不能先发布一个声明 Linux、实际缺少对应运行库的 Dart 包。

@@ -14,6 +14,28 @@ ABI v1 preserves the original 36 symbols, layouts, numeric values and legacy
 wallet, signing, transfer and history functions: the product header and native
 library contain exactly 70 public symbols.
 
+The Step 7.1 Linux C/C++ Host source projection also consumes this exact ABI.
+Its header-only C++ facade does not define another binary contract, and its Host
+library must not re-export or duplicate the Core symbols. Linux Flutter
+registration, LinuxARM/LinuxAMD shared libraries and public release-manifest
+entries are deferred; source presence alone is not a delivered platform claim.
+The Linux Host ABI v1 is a closed set of 13 `citizensdk_host_*` functions that
+compose and own the root instance; `citizensdk_host_abandon` is only an ownership-transfer escape hatch
+for a destructor that can no longer report a close error. It schedules the same
+checkpoint-first monotonic teardown and does not create a second Core ABI.
+The C++ destructor makes only finite callback-clear/destroy attempts before that
+transfer and terminates if ownership cannot be transferred safely. Its
+`EventObserver` only borrows each event/result synchronously; the observer must
+not retain or release the result because the wrapper releases every nonzero
+result exactly once after normal or exceptional observer return.
+Every Host call obtains a lease through one admission/closing fence. Destroy
+first closes admission, then waits for API, callback, private-route, Vault and
+wallet-UI leases without holding a lock a re-entrant root callback needs;
+callback and parent-window installation use the same linearization boundary.
+Completions that arrive synchronously while a private route is being installed
+remain lossless for 65 or more events and concurrent bursts; a fixed local
+buffer limit is never permission to release an otherwise owned result.
+
 Both creation boundaries accept raw packaged manifest, chainspec and light sync
 state bytes. Rust rechecks the exact manifest field set and product/network
 identity, both SHA-256 digests, the complete genesis #0 header, its Blake2b-256
@@ -161,6 +183,22 @@ vault are either both supplied or both absent. The Apple adapter implements the
 same named operations with separate typed public and secure SQLite databases;
 neither database introduces a generic key/value escape hatch.
 
+The Linux Host implements the same five operations over separate public and
+secure SQLite files and combines them with a TPM 2.0 vault. TPM callbacks wrap
+or unwrap only a random 32-byte DEK; the SDK-owned device-vault unlock secret,
+mnemonic, BIP-39 password, child mini-secret and private key have no public Host
+record or result representation. Absence of a qualifying TPM or strong local
+authentication must report the corresponding vault availability and keep
+wallet/signing capabilities not ready; it must not select a file or Secret
+Service software fallback.
+Linux wallet-flow presentation first requires an opened public Core, then
+returns `UNSUPPORTED` when wallet hosting is disabled or `UNAVAILABLE` when the
+configured TPM/authentication facts are not available. These checks happen
+before a GTK window can be created.
+A failed prepared-wallet release keeps both the handle and wallet-flow
+lifecycle lease owned by the flow. Its supervisor retries until Core confirms
+release; only then may registry removal and Host teardown continue.
+
 Host operations use acceptance plus exactly-one completion. A callback that
 returns a non-OK synchronous status must not later complete; one that accepts
 must complete exactly once. Ordinary input pointers are borrowed only for the
@@ -251,6 +289,10 @@ checkpoint. Retrying the same mutated provider is forbidden. Automatic cache
 deletion/retry exists only in the archived legacy Dart differential baseline;
 all official Android, iOS and macOS bindings follow this explicit
 destroy-and-recreate rule.
+
+The Linux source adapter is required to follow the same rule. Step 7.1 did not
+build or execute its C++ contract tests, so this paragraph records the adapter
+contract rather than a Linux runtime verification result.
 
 Private keys and child mini-secrets never cross this ABI. A prepared wallet
 result owns its mnemonic in a dedicated Rust handle: the host may size-query and

@@ -42,6 +42,7 @@ citizensdk/
 ├── darwin/                 iOS/macOS 共享 Apple 投影
 │   ├── Sources/CitizenSDK/ Rust Core 的 Swift API、typed stores、Vault 与 SDK-owned UI
 │   └── Sources/CitizenSDKFlutter/ 只消费 CitizenSDK.framework 的 Flutter adapter
+├── linux/                  LinuxARM/LinuxAMD 共用 Host、C/C++ API、typed stores 与 TPM Vault
 ├── assets/
 │   ├── README.md           随包静态资产与设备运行状态边界
 │   └── citizenchain/       manifest、chain spec 与 #0 light sync state
@@ -212,6 +213,15 @@ runtime cache 与交易公开事实，secure store 保存钱包公开资料、�
 共用一套无类型键值逃生口。iOS 与 macOS 复用相同 schema 和 CAS 语义，但使用各自平台允许的
 文件保护能力。
 
+Linux 第 7.1 步 Host 使用同一逻辑分层和两套独立 SQLite 文件，不复用 Apple 平台代码，也不
+改变 Rust envelope/schema。公开库承载 chain database、runtime cache 与 transaction history；
+安全库承载 wallet profile、encrypted secret envelope 及 TPM 对象引用。Linux store 同样要求
+跨进程共享、耐久、强原子 CAS，拒绝符号链接与非普通节点，把目录及 DB/journal/WAL/SHM
+分别强制为 `0700`/`0600`，并禁止把 SQLite 后端错误伪装成空记录。CitizenSDK 自有 openat
+VFS 将实际 SQLite 主库与 sidecar 操作绑定到已验证目录 fd，不经过 `/proc/self/fd`；Host 还
+逐项读回 schema/PRAGMA，并把所有可失败后置条件放在 `COMMIT` 前，使 durable commit 与成功
+返回使用同一线性化点。
+
 Apple 绑定对 C ABI 宿主上下文使用显式 +1 retain lease。关闭只能沿
 `live -> monitorStopped -> destroyOnly -> closed` 单调前进；callback clear 在首次 destroy
 前持久成关闭阶段，后续错误只能重试 destroy。成功 destroy 时先断开 HostBridge
@@ -262,6 +272,22 @@ Provider 上重试。完整 ABI 规则见 `C_ABI.md`。
 轻客户端不收编全节点 `author` 出块代码，以及 identity keystore/seed phrase 私钥入口；
 只保留 JSON-RPC 所需的 `identity::ss58` 公钥地址编解码。全节点 SQLite 数据库源码按上游
 快照保留并受 feature 控制，移动轻节点使用 finalized database 序列化。
+
+第 7.1 步 Linux C/C++ 投影仍以根 C ABI 为唯一稳定二进制边界。`libcitizensdk_host.so` 只
+组合 HostBridge、typed stores、TPM/认证和 SDK-owned GTK 钱包流程，并且只依赖一次
+`libcitizensdk.so`；C++ convenience API 是 header-only RAII 包装，不形成第二个 C++ ABI。
+显式 close 失败仍由调用者持有 handle；RAII 析构无法返回错误时通过
+`citizensdk_host_abandon` 把完整 Host 交给进程 supervisor，不能静默遗失。该 supervisor
+请求 checkpointed stop 后只沿同一 teardown 状态继续重试；析构自身只有有限 clear/destroy
+尝试，连 ownership transfer 都失败时以 `std::terminate` 失败关闭。C++ `EventObserver` 只同步
+借用 event/result，不能自行 release；trampoline 在 observer 正常或异常返回后 RAII exact-once
+释放非零 result。所有公开 API、callback、parent、route、Vault 与钱包 UI 都服从一个 closing
+admission/lease fence；关闭封闭新租约后等待既有租约退役，并避免持锁等待可重入 Core callback。
+私有 route 安装期间的同步 completion 对 65+ 和并发突发保持无损。本步没有生成上述 `.so`，也没有
+修改 Core、Cargo workspace 或根产品头。
+Linux 钱包 flow 对 prepared-handle release 失败保留唯一所有权和 lifecycle lease，由专用
+supervisor 重试至 Core 明确确认后才允许 registry 移除和 Host teardown，不能把失败清理静默
+丢成孤儿 handle。
 
 ## CI、Release 与平台边界
 
@@ -336,7 +362,9 @@ Android Gradle/Kotlin persistent project state 只允许位于 TataConsole 中�
 `@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A` framework
 和 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK` install ID。候选只允许 macOS
 framework 标准布局所需的精确五个内部相对符号链接，其他任何符号链接均失败关闭。
-LinuxARM、LinuxAMD、Windows 仍没有已交付的绑定、硬件金库和正式资产。legacy `libsmoldot.dylib` 只允许
+LinuxARM、LinuxAMD 已有第 7.1 步 Linux Host、TPM Vault、C/C++ API 与合同测试源码，但没有
+运行两种机器目标的编译/测试，也没有 Flutter adapter、`.so` 注入或 manifest 平台项；因此
+仍未交付。Windows 仍没有平台投影。legacy `libsmoldot.dylib` 只允许
 作为 macOS `arm64` 差分测试宿主库；其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选并须随
 本机工作目录清理。
 
@@ -346,6 +374,10 @@ LinuxARM、LinuxAMD、Windows 仍没有已交付的绑定、硬件金库和正�
 pubspec 与两个平台版本。因此 GitHub Release 和 Hosted Package 只能来自同一准确版本提交，
 不能在 Runner 中把旧源码临时改号。本步骤不执行 Hosted 上传；Hosted 身份、凭证和首次实际
 发布仍需另行明确授权。现有 Release 仍只有 GitHub 正式分发动作，没有新增“发布”按钮。
+
+Linux 完整设计、GNU target、glibc 2.31 基线、TPM fail-closed 规则和第 7.1 步未验证声明见
+`LINUX_PLATFORM.md`。第 7.1 步只更新 canonical 源码/Release 源文件闭集，没有运行测试、
+编译、Git、远程 CI、Release 或 Hosted 上传，也没有修改 TataConsole 执行流程。
 
 ## 产品外部边界
 

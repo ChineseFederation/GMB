@@ -21,7 +21,7 @@ void main() {
   });
 
   test('create/import/add只启动原生安全流程并返回公开profile', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final created = await sdk.wallet.create(
       wordCount: CitizenWalletWordCount.words24,
     );
@@ -52,7 +52,7 @@ void main() {
   });
 
   test('sign消息使用临时副本并仅返回公开sr25519签名', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final callerPayload = Uint8List.fromList(<int>[1, 2, 3]);
     final signature = await sdk.wallet.sign(
       accountId: _account(1),
@@ -66,7 +66,7 @@ void main() {
   });
 
   test('空签名载荷有效且账户名在编码前统一修剪', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     await sdk.wallet.sign(accountId: _account(1), payload: Uint8List(0));
     await sdk.wallet.renameAccount(accountId: _account(1), name: '  旅行钱包  ');
 
@@ -79,7 +79,7 @@ void main() {
   });
 
   test('钱包公开API在复制或递增请求序号前拒绝超界输入', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final invalid = isA<CitizenSdkException>().having(
       (error) => error.code,
       'code',
@@ -119,7 +119,7 @@ void main() {
   });
 
   test('delete返回null profile且不能把秘密放入Dart响应', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     await sdk.wallet.delete();
     expect(platform.argumentsByMethod['deleteWallet'], hasLength(3));
     await sdk.close();

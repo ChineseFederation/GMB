@@ -41,6 +41,11 @@ all-or-none secure store/KEK-DEK Vault，并投影第 4.1 步钱包入口。旧�
 Secure Enclave 只保护 generation-scoped KEK，不执行 sr25519；legacy Dart
 `WalletService`/`WalletRepository`/`SecureSeedStore` 只作为归档差分基线，正式绑定不可达。
 
+Linux 第 7.1 步 Host 使用同一 `citizensdk_create_with_host` 和同一 Rust 钱包状态机，并以
+分离的 public/secure SQLite 与 TPM 2.0 generation-scoped KEK 实现平台合同。它不复制派生、
+provisioning、cleanup 或签名逻辑。该步只提交源码与合同测试，没有运行 Linux 编译/测试，
+也没有交付 Linux 钱包。
+
 同一 host 构造在 start 前自动恢复公开链数据库，并在 export/graceful stop 时 exact-CAS
 checkpoint；这只处理可重建的公开轻节点状态，不把钱包 profile、密文或 Vault 引用混入链库。
 checkpoint 失败会阻止后续 stop 副作用，直接 destroy 不替代 graceful stop。host start/stop/import
@@ -71,6 +76,11 @@ handle；只有明确备份 UI 能 size-query/copy，commit/release/destroy 后�
 释放或消费。import/add 的恢复词仅为用户显式输入。Rust 为每个 child 生成随机 32 字节 DEK
 和随机 nonce，以完整 `SecretRef` 作为 AAD 执行 AES-256-GCM；宿主只 wrap/unwrap DEK，unwrap
 直接写入 Rust-owned 的精确 32 字节缓冲区。
+
+Linux 的 CitizenSDK 设备金库解锁口令仅授权 TPM 对象 unwrap，与上述 BIP-39 可选 password
+不同。两者不得互换或自动复用；设备口令不参与账户派生，BIP-39 password 也不能冒充每次
+Vault 强认证。无合格 TPM/认证 UI 时保留链读取能力，但钱包创建、导入、追加、签名与钱包
+交易构造失败关闭，禁止自动改用文件 KEK、Secret Service 或软件密钥。
 
 ## 双存储一致性
 
@@ -134,6 +144,26 @@ Android 与 Apple 标准装配使用固定 `citizensdk` 硬件金库与产品 ty
 
 SDK 不读取、转换或删除其它产品的密文。普通读取只访问
 `citizensdk.wallet.secret.*`；任何其它产品的数据切换都必须单独设计和批准。
+
+Linux Host 同样固定 `citizensdk` 命名空间；TPM public/private object blobs、随机 `auth_salt`
+与安全库记录只属于本 SDK。v1 的 PBKDF2-HMAC-SHA256 与 600000 次迭代由 `secure-state-v1`
+实现版本固定，不另存为可漂移 KDF 字段。Host 层不能接收 child mini-secret，unwrap 目标仍是 Rust-owned
+32-byte buffer。SDK-owned GTK 钱包流程是恢复词/password 唯一展示或输入例外，其终态必须
+best-effort 清空控件和原生敏感缓冲区。创建只接受 12/24 词，导入/追加的无关 `word_count`
+必须为 0，追加 index 只接受唯一 `1..1989`。Core 未打开、wallet 未启用或 Vault 不可用时
+必须在展示 GTK 前分别失败关闭；GTK 终态只能在 owner UI thread 清理，有限调度重试仍失败
+时 terminate，不能从 worker 析构。parent 销毁必须立即在该 UI 线程清空并退休 dialog、恢复词
+和 password 控件、使 parent 引用失效并唤醒等待线程。
+prepared handle 的 release 失败不得清空唯一所有权或提前结束 wallet lifecycle；Linux flow
+保留 handle 并由专用 supervisor 重试，直到 Core 确认 release 后才移除 flow，使 Host close
+在整个清理窗口保持 `BUSY`。
+
+Linux generation 准入与 Vault object 条件写必须在同一 secure-store 事务内成立，确保 retire
+墓碑与并发/迟到 provision 线性化；unwrap 在可能持续数分钟的认证提示返回后、明文交付前再次
+核验 generation 未退休，失败则清零输出。TPM load/unwrap 还必须验证完整批准 child public
+template；availability 必须检查 owner authorization、storage hierarchy 与 DA 状态，并通过
+`Esys_TestParms` 探测准确 primary 和 OAEP-SHA256 参数组合。第 7.1 步尚无
+实体 TPM 或两种 Linux 机器运行证明。
 
 Rust Core 不提供私钥导出。金库解锁的 child 只进入 `SecretBuffer -> ChainSigner`，不得经过
 Dart、Swift、Kotlin 或产品 C ABI；创建结果中的助记词只保留在待受控备份 UI 消费的 Rust

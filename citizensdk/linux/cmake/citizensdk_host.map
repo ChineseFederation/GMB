@@ -1,0 +1,18 @@
+{
+  global:
+    citizensdk_host_abi_version;
+    citizensdk_host_config_size;
+    citizensdk_host_create;
+    citizensdk_host_create_sdk;
+    citizensdk_host_sdk;
+    citizensdk_host_set_event_callback;
+    citizensdk_host_set_parent_window;
+    citizensdk_host_vault_availability;
+    citizensdk_host_present_wallet_flow;
+    citizensdk_host_cancel_wallet_flow;
+    citizensdk_host_destroy;
+    citizensdk_host_abandon;
+    citizensdk_host_last_error_copy;
+  local:
+    *;
+};

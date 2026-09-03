@@ -5,10 +5,10 @@ import 'package:citizen_sdk/src/platform/citizen_sdk_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  late _ClientPlatform platform;
+  late _SdkPlatform platform;
 
   setUp(() {
-    platform = _ClientPlatform();
+    platform = _SdkPlatform();
     CitizenSdkPlatform.instance = platform;
   });
 
@@ -17,8 +17,8 @@ void main() {
     await platform.dispose();
   });
 
-  test('client按open-start-capabilities-stop-close顺序投影Core', () async {
-    final sdk = await CitizenSdkClient.open();
+  test('CitizenSdk按open-start-capabilities-stop-close顺序投影Core', () async {
+    final sdk = await CitizenSdk.open();
     await sdk.start();
     final capabilities = await sdk.getCapabilities();
     await sdk.stop();
@@ -38,7 +38,7 @@ void main() {
   });
 
   test('事件只接收当前session且event sequence独立连续', () async {
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
     final events = <CitizenSdkEvent>[];
     final subscription = sdk.events.listen(events.add);
 
@@ -66,7 +66,7 @@ void main() {
 
   test('余额与nonce响应必须精确绑定请求账户', () async {
     platform.wrongAccountResponses = true;
-    final sdk = await CitizenSdkClient.open();
+    final sdk = await CitizenSdk.open();
 
     await expectLater(
       sdk.chain.getAccountBalance(_account(1)),
@@ -80,7 +80,7 @@ void main() {
   });
 }
 
-final class _ClientPlatform implements CitizenSdkPlatform {
+final class _SdkPlatform implements CitizenSdkPlatform {
   final StreamController<Object?> _events =
       StreamController<Object?>.broadcast();
   final List<String> methods = <String>[];

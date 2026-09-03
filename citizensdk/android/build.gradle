@@ -2,6 +2,25 @@ group = 'org.citizen.sdk'
 version = '1.0.0'
 
 def sdkProductRoot = project.projectDir.parentFile.canonicalFile
+def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
+def localCitizenSdkRoots = {
+    def roots = [new File(tataConsoleTargetRoot, 'citizensdk').canonicalFile]
+    def taskWorkValue = System.getenv('TATA_CONSOLE_WORK_DIR')
+    if (taskWorkValue != null && !taskWorkValue.trim().isEmpty()) {
+        def taskWork = file(taskWorkValue).canonicalFile
+        def sharedWorkRoot = new File(tataConsoleTargetRoot, '.work').canonicalFile
+        if (taskWork.path.startsWith(sharedWorkRoot.path + File.separator)) {
+            // 宿主产品只得到自己任务目录下的 CitizenSDK 工作空间，不获得任意外部写权限。
+            roots.add(new File(taskWork, 'citizensdk').canonicalFile)
+        }
+    }
+    roots
+}
+def staysInLocalCitizenSdkRoot = { File candidate ->
+    localCitizenSdkRoots().any { File root ->
+        candidate.path == root.path || candidate.path.startsWith(root.path + File.separator)
+    }
+}
 def androidBuildValue = System.getenv('CITIZENSDK_ANDROID_BUILD_DIR')
 if (androidBuildValue != null && !androidBuildValue.trim().isEmpty()) {
     def androidBuildInput = file(androidBuildValue)
@@ -9,7 +28,6 @@ if (androidBuildValue != null && !androidBuildValue.trim().isEmpty()) {
         throw new GradleException('CITIZENSDK_ANDROID_BUILD_DIR must be absolute')
     }
     def androidBuildRoot = androidBuildInput.canonicalFile
-    def localBuildRoot = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
     if (System.getenv('GITHUB_ACTIONS') == 'true') {
         def githubWorkspaceValue = System.getenv('GITHUB_WORKSPACE')
         if (githubWorkspaceValue != null && !githubWorkspaceValue.trim().isEmpty()) {
@@ -18,9 +36,8 @@ if (androidBuildValue != null && !androidBuildValue.trim().isEmpty()) {
                 throw new GradleException('CitizenSDK Android output must remain outside the GitHub source checkout')
             }
         }
-    } else if (!(androidBuildRoot.path == localBuildRoot.path ||
-        androidBuildRoot.path.startsWith(localBuildRoot.path + File.separator))) {
-        throw new GradleException('Local CitizenSDK Android output must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+    } else if (!staysInLocalCitizenSdkRoot(androidBuildRoot)) {
+        throw new GradleException('Local CitizenSDK Android output must stay in the CitizenSDK product root or current host task')
     }
     if (androidBuildRoot.toPath().startsWith(sdkProductRoot.toPath())) {
         throw new GradleException('CitizenSDK Android output must remain outside the source tree')
@@ -71,10 +88,8 @@ if (stagedAndroidAbiValue != null && !stagedAndroidAbiValue.trim().isEmpty()) {
             throw new GradleException('CitizenSDK Android native staging must remain outside the GitHub source checkout')
         }
     } else {
-        def localBuildRoot = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
-        if (!(selectedAndroidAbiDirectory.path == localBuildRoot.path ||
-            selectedAndroidAbiDirectory.path.startsWith(localBuildRoot.path + File.separator))) {
-            throw new GradleException('Local CitizenSDK Android staging must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+        if (!staysInLocalCitizenSdkRoot(selectedAndroidAbiDirectory)) {
+            throw new GradleException('Local CitizenSDK Android staging must stay in the CitizenSDK product root or current host task')
         }
     }
     if (selectedAndroidAbiDirectory.toPath().startsWith(sdkProductRoot.toPath())) {

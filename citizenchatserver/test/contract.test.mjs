@@ -6,16 +6,18 @@ const root = new URL('../', import.meta.url);
 const product = JSON.parse(readFileSync(new URL('product.json', root), 'utf8'));
 const wrangler = JSON.parse(readFileSync(new URL('wrangler.jsonc', root), 'utf8'));
 
-test('CitizenChatServer 是 TataChatServer 的独立 Cloudflare 实例', () => {
+test('CitizenChatServer 是 TataChatServer 的独立 Cloudflare 部署实例', () => {
   assert.deepEqual(product, {
     product_id: 'citizenchatserver',
     version: '1.0.0',
     source_repository: 'VoyagerRhett/TATA',
     source_product_id: 'tatachatserver',
-    platform: 'cloudflare',
+    deployment_provider: 'cloudflare',
     public_url: 'https://chat.crcfrcn.com',
     realtime_url: 'wss://chat.crcfrcn.com/realtime',
   });
+  // 中文注释：服务没有宿主 OS 平台；这里显式拒绝旧字段，避免仅增加新字段形成双写。
+  assert.equal(Object.hasOwn(product, 'platform'), false);
   assert.equal(wrangler.name, 'citizenchatserver-workers');
   assert.equal(wrangler.main, 'worker/shim.mjs');
   assert.equal(wrangler.build, undefined);

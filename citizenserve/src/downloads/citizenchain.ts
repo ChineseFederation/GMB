@@ -40,25 +40,26 @@ const downloadPlatforms = new Map<string, CitizenchainDownloadPlatform>([
   ['/download/citizenchain/LinuxAMD', 'linux-amd'],
 ]);
 
+// Release Tag 继续沿用既有事务身份；只有 GitHub 自定义资产段改用统一公开平台名。
 const platformContracts: Readonly<Record<CitizenchainDownloadPlatform, {
   tag: RegExp;
   asset: (version: string) => string;
 }>> = {
   'linux-arm': {
     tag: /^citizenchain-node-linux-arm-v(\d+\.\d{1,2}\.\d{1,2})$/,
-    asset: (version) => `citizenchain-node-linux-arm64-v${version}.deb`,
+    asset: (version) => `citizenchain-node-LinuxARM-v${version}.deb`,
   },
   'linux-amd': {
     tag: /^citizenchain-node-linux-amd-v(\d+\.\d{1,2}\.\d{1,2})$/,
-    asset: (version) => `citizenchain-node-linux-amd64-v${version}.deb`,
+    asset: (version) => `citizenchain-node-LinuxAMD-v${version}.deb`,
   },
   macos: {
     tag: /^citizenchain-node-macos-v(\d+\.\d{1,2}\.\d{1,2})$/,
-    asset: (version) => `citizenchain-node-macos-arm64-v${version}.dmg`,
+    asset: (version) => `citizenchain-node-macOS-v${version}.dmg`,
   },
   windows: {
     tag: /^citizenchain-node-windows-v(\d+\.\d{1,2}\.\d{1,2})$/,
-    asset: (version) => `citizenchain-node-windows-x86_64-v${version}.exe`,
+    asset: (version) => `citizenchain-node-Windows-v${version}.exe`,
   },
 };
 
@@ -79,7 +80,7 @@ export async function citizenchainDownloadRoute(env: Env, path: string): Promise
   }
   validatePublication(platform, row);
   const assetName = path.endsWith('/updater')
-    ? 'citizenchain-node-latest-macos-arm64.json'
+    ? 'citizenchain-node-latest-macOS.json'
     : row.asset_name;
   const location = `${githubDownloadPrefix}${encodeURIComponent(row.version_tag)}/${encodeURIComponent(assetName)}`;
   return new Response(null, {

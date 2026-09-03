@@ -4,6 +4,25 @@ version = rootProject.version
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
+def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
+def localCitizenSdkRoots = {
+    def roots = [new File(tataConsoleTargetRoot, 'citizensdk').canonicalFile]
+    def taskWorkValue = System.getenv('TATA_CONSOLE_WORK_DIR')
+    if (taskWorkValue != null && !taskWorkValue.trim().isEmpty()) {
+        def taskWork = file(taskWorkValue).canonicalFile
+        def sharedWorkRoot = new File(tataConsoleTargetRoot, '.work').canonicalFile
+        if (taskWork.path.startsWith(sharedWorkRoot.path + File.separator)) {
+            // 与 Flutter 插件工程使用同一中央目录边界，避免两个 Gradle 工程判断不一致。
+            roots.add(new File(taskWork, 'citizensdk').canonicalFile)
+        }
+    }
+    roots
+}
+def staysInLocalCitizenSdkRoot = { File candidate ->
+    localCitizenSdkRoots().any { File root ->
+        candidate.path == root.path || candidate.path.startsWith(root.path + File.separator)
+    }
+}
 def configuredBuildDir = System.getenv('CITIZENSDK_ANDROID_BUILD_DIR')
 def fallbackRoot = new File(System.getProperty('java.io.tmpdir'), 'citizensdk-unconfigured')
 def normalizedTarget = configuredBuildDir == null || configuredBuildDir.trim().isEmpty()
@@ -21,10 +40,8 @@ if (configuredBuildDir != null && !configuredBuildDir.trim().isEmpty()) {
             }
         }
     } else {
-        def allowedTarget = file('/Users/rhett/TATA/tataconsole/target/citizensdk').canonicalFile
-        if (!(normalizedTarget.path == allowedTarget.path ||
-              normalizedTarget.path.startsWith(allowedTarget.path + File.separator))) {
-            throw new GradleException('CitizenSDK Android output must stay below /Users/rhett/TATA/tataconsole/target/citizensdk')
+        if (!staysInLocalCitizenSdkRoot(normalizedTarget)) {
+            throw new GradleException('CitizenSDK Android output must stay in the CitizenSDK product root or current host task')
         }
     }
 }

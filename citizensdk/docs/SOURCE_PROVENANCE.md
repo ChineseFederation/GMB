@@ -120,8 +120,11 @@ formatter 归一外不改行为；发布器继续对迁移闭集逐文件固定�
 历史 `README.md`、`BUILD.md`、`UPSTREAM.md` 中的桌面平台、CitizenApp 路径及源码树内
 `target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前产品
 ABI 投影覆盖 Android、iOS 与 macOS。当前 Android ABI 为 `arm64-v8a`；iOS 设备与模拟器变体
-及 macOS 的 Apple machine slice 架构值为 `arm64`。宿主测试库与全部生成记录只能写入 Runner
-临时目录或 TataConsole 中央目录。legacy `libsmoldot.dylib` 仅允许 macOS `arm64` 差分测试；
+及 macOS 的 Apple machine slice 架构值为 `arm64`。本机宿主测试库与全部生成记录只能写入
+`/Users/rhett/TATA/tataconsole/target/citizensdk` 下的任务独占目录；Linux 合同测试由
+`CITIZENSDK_TEST_WORK_DIR` 显式接收现有 `0700` 目录且没有 `/tmp` fallback。远程 Runner 也
+必须由统一流程显式注入其 checkout 外的任务独占构建根，不能让测试自行选择临时目录。
+legacy `libsmoldot.dylib` 仅允许 macOS `arm64` 差分测试；
 其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选。实际指引以本文件、
 根 README 和 `docs/NATIVE_PACKAGING.md` 为准。
 
@@ -434,6 +437,31 @@ iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Rele
 运行声明。Flutter 对插件 Swift Package Manager 目录的未来识别警告和 Android built-in
 Kotlin 迁移提示延后到第 9 步 Hosted/Flutter 集成处理，不在第 6 步引入第二套投影。
 
+## Linux 自有 Host 投影
+
+`linux/` 是 CitizenSDK 自有 LinuxARM/LinuxAMD Host 源码，不从 CitizenApp、Android、Darwin
+或另一个仓库运行时读取文件。它复用的是根产品 C ABI 的语义，不是把 Apple/Kotlin 代码机械
+翻译成第二份 Engine：HostBridge、typed SQLite、TPM 2.0 Vault、SDK-owned GTK 钱包流程和
+header-only C++ facade 都位于 CitizenSDK 权威目录；链、Runtime、钱包状态机、sr25519 和交易
+继续只有 Rust Core 一份真源。
+
+Linux store 的 openat SQLite VFS、精确 schema/PRAGMA/commit 合同，Host admission lease 与
+无损早完成路由，Vault retirement 条件写/长提示后重验，GTK parent 销毁退休，以及 TPM child
+public-template、owner/hierarchy/DA 状态与准确 `Esys_TestParms` 参数探测都是该 Host 自有源码
+的一部分。它们不应复制进 Core，也不能以
+Android/Apple 适配源码作为运行时依赖。
+
+第 7.1 步没有把 TPM2-TSS、SQLite、GTK 或 C++ runtime 的第三方源码/二进制复制进仓库，
+也没有生成 Linux `.so`。这些依赖的最终锁定来源、版本、链接方式、许可证和可重分发闭包必须
+由第 7.3 步真实构建产物反向得出；不能用设计文档臆测替代。Linux Host 自有源码适用根 MIT
+许可证，外部依赖仍适用各自许可证。
+
+第 7.1 步新增的 `linux/test` 是对应 Host 的 canonical 合同测试源码，覆盖同一 ABI/Host
+语义和 Linux 专属 store/TPM/UI 边界。该步没有执行这些测试，未验证 LinuxARM/LinuxAMD，
+也未修改 Flutter/Hosted 公开平台声明。源码同步若改变根 ABI 或 Rust envelope/schema，必须
+同时更新 Linux Host、测试、本文和 `LINUX_PLATFORM.md`，禁止以平台适配文件反向覆盖 Core
+真源。
+
 ## 锁文件与测试收编
 
 CitizenSDK 的受控依赖输入包括：
@@ -449,7 +477,8 @@ native/smoldot/pow/Cargo.lock
 使用 locked/enforce-lockfile 模式。`docs/smoldot-dart/source-pubspec.lock` 只保存来源事实，
 不参与解析。锁文件属于源码输入，
 不是编译产物。Release 还反向固定 Dart/Android/Darwin 生产源码、root/native/平台测试与产品
-文档，新增、删除、单字节漂移或候选混入未登记平台文件都会失败。Release 还逐字节固定根 `Cargo.lock`（当前 SHA-256
+文档；第 7.1 步再把 Linux Host、Linux 合同测试与 Linux 文档加入对应源码闭集。新增、删除、
+单字节漂移或候选混入未登记平台文件都会失败。Release 还逐字节固定根 `Cargo.lock`（当前 SHA-256
 `338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32`）和根
 `pubspec.lock`（SHA-256
 `892803b0312a36b83f6015e0c9bd26b7fe8d4912bf15d27175b6db11552f8563`）；其中根 Cargo 锁是

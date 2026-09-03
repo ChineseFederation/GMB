@@ -27,6 +27,7 @@ import {
   assertHostedPackageSource,
   assertHostedRuntimeDartProjection,
   assertLicenseSources,
+  assertLinuxBindingSource,
   assertMobileBindingSource,
   assertNativeArtifactSources,
   assertNoSecrets,
@@ -1574,6 +1575,58 @@ test('Dart、Android 与 Apple 生产绑定以固定哈希和反向闭集进入 
   }
 });
 
+test('Linux Host 源码固定哈希、目录拓扑且不提前接纳生成状态', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-binding-test-'));
+  try {
+    cpSync(join(citizenSdkRoot, 'linux'), join(root, 'linux'), {
+      recursive: true,
+    });
+    assert.equal(assertLinuxBindingSource(root), '1.0.0');
+
+    const source = join(root, 'linux', 'src', 'citizen_sdk_assets.cc');
+    writeFileSync(source, `${readFileSync(source, 'utf8')}\n`);
+    assert.throws(
+      () => assertLinuxBindingSource(root),
+      /Linux Host 来源文件哈希漂移：linux\/src\/citizen_sdk_assets\.cc/,
+    );
+    copyFileSync(
+      join(citizenSdkRoot, 'linux', 'src', 'citizen_sdk_assets.cc'),
+      source,
+    );
+
+    const unexpected = join(root, 'linux', 'src', 'unexpected_host.cc');
+    writeFileSync(unexpected, 'int unexpected_host = 0;\n');
+    assert.throws(
+      () => assertLinuxBindingSource(root),
+      /Linux Host 文件闭集漂移.*unexpected_host\.cc/,
+    );
+    rmSync(unexpected);
+
+    const sourceLink = join(root, 'linux', 'src', 'citizen_sdk_source_link.cc');
+    symlinkSync('citizen_sdk_assets.cc', sourceLink);
+    assert.throws(
+      () => assertLinuxBindingSource(root),
+      /禁止未声明符号链接/,
+    );
+    rmSync(sourceLink);
+
+    mkdirSync(join(root, 'linux', 'CMakeFiles'));
+    assert.throws(
+      () => assertLinuxBindingSource(root),
+      /Linux Host 目录闭集漂移.*CMakeFiles/,
+    );
+    rmSync(join(root, 'linux', 'CMakeFiles'), { recursive: true });
+
+    writeFileSync(join(root, 'linux', 'libcitizensdk_host.so'), 'ELF');
+    assert.throws(
+      () => assertLinuxBindingSource(root),
+      /Linux Host 文件闭集漂移.*libcitizensdk_host\.so/,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('provider 递归 registry 闭包与随包 PoW 锁逐项一致且完全离线', () => {
   const root = mkdtempSync(join(workRoot, 'release-provider-lock-parity-test-'));
   try {
@@ -2040,7 +2093,7 @@ test('产品文档固定根说明、架构与平台模块的完整反向闭集',
   const root = mkdtempSync(join(workRoot, 'release-documentation-test-'));
   try {
     copyFileSync(join(citizenSdkRoot, 'README.md'), join(root, 'README.md'));
-    for (const relativeRoot of ['docs', 'android', 'darwin', 'lib/src']) {
+    for (const relativeRoot of ['docs', 'android', 'darwin', 'lib/src', 'linux']) {
       const destination = join(root, ...relativeRoot.split('/'));
       mkdirSync(dirname(destination), { recursive: true });
       cpSync(join(citizenSdkRoot, ...relativeRoot.split('/')), destination, {
@@ -2084,6 +2137,7 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
       'CHANGELOG.md',
       'android/build.gradle',
       'darwin/citizen_sdk.podspec',
+      'linux/CMakeLists.txt',
       'pubspec.yaml',
     ]) {
       const destination = join(root, path);
@@ -2092,6 +2146,19 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     }
     assert.doesNotThrow(() => assertHostedRuntimeDartProjection(root));
     assert.doesNotThrow(() => assertHostedPackageSource(root));
+
+    const facadePath = join(root, 'lib', 'src', 'api', 'citizen_sdk.dart');
+    const facade = readFileSync(facadePath, 'utf8');
+    const forbiddenFacadeName = ['CitizenSdk', 'Client'].join('');
+    writeFileSync(
+      facadePath,
+      facade.replace('final class CitizenSdk', `final class ${forbiddenFacadeName}`),
+    );
+    assert.throws(
+      () => assertHostedRuntimeDartProjection(root),
+      /唯一公开门面必须精确命名为 CitizenSdk/,
+    );
+    writeFileSync(facadePath, facade);
 
     const requiredRuntime = join(root, 'lib', 'src', 'api', 'citizen_chain.dart');
     rmSync(requiredRuntime);
@@ -2140,6 +2207,23 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     copyFileSync(
       join(citizenSdkRoot, 'android', 'build.gradle'),
       androidVersionPath,
+    );
+
+    const linuxVersionPath = join(root, 'linux', 'CMakeLists.txt');
+    writeFileSync(
+      linuxVersionPath,
+      readFileSync(linuxVersionPath, 'utf8').replace(
+        'project(CitizenSDKHost VERSION 1.0.0 LANGUAGES C CXX)',
+        'project(CitizenSDKHost VERSION 1.0.1 LANGUAGES C CXX)',
+      ),
+    );
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /包版本不一致：pubspec\.yaml=1\.0\.0；linux\/CMakeLists\.txt=1\.0\.1/,
+    );
+    copyFileSync(
+      join(citizenSdkRoot, 'linux', 'CMakeLists.txt'),
+      linuxVersionPath,
     );
 
     writeFileSync(pubignorePath, 'drift\n');
@@ -2243,6 +2327,7 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
       'android/native/src/androidTest',
       'android/src/test',
       'darwin/Tests',
+      'linux/test',
     ]) {
       const destination = join(root, ...relativeRoot.split('/'));
       mkdirSync(dirname(destination), { recursive: true });
@@ -2613,6 +2698,7 @@ test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', 
 
 test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir 前拒绝穿越和中间符号链接', () => {
   const root = mkdtempSync(join(workRoot, 'native-path-guard-test-'));
+  const hostTask = `/Users/rhett/TATA/tataconsole/target/.work/citizensdk-host-path-${process.pid}`;
   try {
     const nativeBuildScript = readFileSync(
       join(citizenSdkRoot, 'scripts', 'build-native.sh'),
@@ -2726,8 +2812,51 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
     assert.notEqual(symlinkResult.status, 0);
     assert.match(symlinkResult.stderr, /符号链接/);
     assert.equal(existsSync(sourceProbe), false);
+
+    const hostEnvironment = {
+      ...process.env,
+      GITHUB_ACTIONS: 'false',
+      TATA_CONSOLE_WORK_DIR: hostTask,
+      CITIZENSDK_WORK_DIR: join(hostTask, 'citizensdk/work'),
+      CITIZENSDK_NATIVE_OUTPUT_DIR: join(hostTask, 'citizensdk/output'),
+    };
+    const acceptedHostResult = spawnSync(
+      '/bin/bash', ['scripts/build-native.sh', 'invalid-target'], {
+        cwd: citizenSdkRoot,
+        encoding: 'utf8',
+        env: hostEnvironment,
+      },
+    );
+    assert.notEqual(acceptedHostResult.status, 0);
+    assert.match(acceptedHostResult.stderr, /用法：/u);
+    assert.doesNotMatch(acceptedHostResult.stderr, /本机构建目录必须|真实路径越出/u);
+
+    const escapedHostResult = spawnSync(
+      '/bin/bash', ['scripts/build-native.sh', 'invalid-target'], {
+        cwd: citizenSdkRoot,
+        encoding: 'utf8',
+        env: {
+          ...hostEnvironment,
+          CITIZENSDK_NATIVE_OUTPUT_DIR: join(hostTask, 'other-output'),
+        },
+      },
+    );
+    assert.notEqual(escapedHostResult.status, 0);
+    assert.match(escapedHostResult.stderr, /本机构建目录必须/u);
+
+    const androidPlugin = readFileSync(join(citizenSdkRoot, 'android', 'build.gradle'), 'utf8');
+    const androidNative = readFileSync(
+      join(citizenSdkRoot, 'android', 'native', 'build.gradle'),
+      'utf8',
+    );
+    for (const gradle of [androidPlugin, androidNative]) {
+      assert.match(gradle, /TATA_CONSOLE_WORK_DIR/u);
+      assert.match(gradle, /new File\(taskWork, 'citizensdk'\)/u);
+      assert.match(gradle, /startsWith\(sharedWorkRoot\.path \+ File\.separator\)/u);
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
+    rmSync(hostTask, { recursive: true, force: true });
   }
 });
 

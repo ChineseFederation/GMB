@@ -69,8 +69,15 @@ future，不占用短操作池。只有 canonical finalized body、准确块 met
 `System.Events` 形成终态；取消或中断只结束本次观察，durable Pending/InBlock 门保持。
 
 原生轻节点源码闭包、FFI、Dart smoldot 包、来源测试与锁文件已经迁入；当前不存在通过
-CitizenApp 或 `shared` 相对路径取得运行时源码的依赖。`android/` 与 `darwin/` 平台目录只负责
-链接、装载、typed stores 和设备安全能力，不复制链或签名实现。
+CitizenApp 或 `shared` 相对路径取得运行时源码的依赖。`android/`、`darwin/` 与第 7.1 步
+新增的 `linux/` 平台目录只负责链接、装载、typed stores 和设备安全能力，不复制链或签名实现。
+Linux Host 通过根 `citizensdk_create_with_host` 注入分离的 public/secure SQLite 和 TPM 2.0
+KEK/DEK Vault；其 C++ convenience API 只是根 C ABI 的 header-only RAII 包装。
+Linux 的 SQLite 文件身份由 Host 自有 openat VFS 绑定，不经过 `/proc/self/fd` 路径；既有
+schema/PRAGMA 与 transaction commit 点必须精确失败关闭。Host closing lease、同步早完成无损
+路由、Vault retirement 线性化、GTK parent 销毁退休和 TPM child-template/DA-lockout 检查都
+位于 Linux 宿主层；TPM readiness 还通过 `Esys_TestParms` 探测准确 primary/OAEP 参数组合，
+不改变 Rust Core 的钱包、交易或签名语义。
 
 `engine` 精确使用官方 `subxt-core = 0.43.0` 解码 metadata 与 `System.Events`，不实现网络
 连接或任意 RPC；网络验证只由 `smoldot/provider` 的 `VerifiedChainClient` 提供。Provider
@@ -92,7 +99,9 @@ sr25519 与安全存储只负责本地秘密和签名；TUYU、员工登录等 c
 全节点出块、全节点 identity 私钥、聊天、OpenMLS、TUYU 与产品业务被排除。候选合同打包
 Android `arm64-v8a` 产品 Core/JNI 双库，以及由同一 Core 生成的 iOS 设备与模拟器变体和
 macOS `CitizenSDK.xcframework`；根 Dart、Android 与 Apple 均使用产品 ABI。
-LinuxARM、LinuxAMD、Windows 仍未交付。本轮 Android AAR 与 Apple 单一 XCFramework 构建通过；
+LinuxARM、LinuxAMD 已加入第 7.1 步 Host 与合同测试源码，但没有执行两种机器目标的编译、
+测试或候选注入，Flutter adapter 也未加入；Windows 仍无平台投影，三者均未交付。本轮此前
+Android AAR 与 Apple 单一 XCFramework 构建通过；
 框架只含 iOS 设备与模拟器变体及 macOS 三个 Apple `arm64` machine slice。Apple 本机已编译
 iOS 的两组测试 bundle；因无
 Simulator runtime 未执行 iOS XCTest。macOS Core 50 项和 Flutter adapter 22 项 XCTest
