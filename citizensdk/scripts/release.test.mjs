@@ -5377,6 +5377,9 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
       GITHUB_ACTIONS: 'false',
       TATA_CONSOLE_WORK_DIR: virtualHostTask,
     };
+    // GitHub 作业会为生产构建注入 Runner 专属根；本用例验证的是未注入时的
+    // macOS 本机默认根，必须显式隔离外层作业环境，避免把 Hosted 根混入断言。
+    delete hostEnvironment.TATA_CONSOLE_TARGET_ROOT;
     const acceptedHostResult = spawnSync(
       '/bin/bash', ['-c', hostPredicate, 'citizensdk-host-path-contract',
         join(virtualHostTask, 'citizensdk/output')], {

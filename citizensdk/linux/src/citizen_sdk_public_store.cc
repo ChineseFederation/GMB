@@ -12,10 +12,10 @@ PublicStore::PublicStore(const std::filesystem::path &directory)
                    "revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0), "
                    "record BLOB NOT NULL CHECK(typeof(record) = 'blob' AND "
                    "((domain = 1 AND length(record) <= 524288) OR "
-                   "(domain = 4 AND length(record) <= 33554432)))",
+                   "(domain = 4 AND length(record) <= 33554432))))",
                    "CREATE TABLE IF NOT EXISTS runtime_cache ("
                    "record_key TEXT PRIMARY KEY, record BLOB NOT NULL "
-                   "CHECK(typeof(record) = 'blob' AND length(record) <= 8388608))"},
+                   "CHECK(typeof(record) = 'blob' AND length(record) <= 8388608)))"},
                   false) {}
 
 HostRecord PublicStore::chain_database_load() {

@@ -35,23 +35,23 @@ SecureStore::SecureStore(const std::filesystem::path &directory)
                    "wallet_index INTEGER PRIMARY KEY CHECK(wallet_index = 0), "
                    "revision INTEGER NOT NULL CHECK(typeof(revision) = 'integer' AND revision > 0), "
                    "record BLOB NOT NULL "
-                   "CHECK(typeof(record) = 'blob' AND length(record) <= 1048576))",
+                   "CHECK(typeof(record) = 'blob' AND length(record) <= 1048576)))",
                    "CREATE TABLE IF NOT EXISTS encrypted_secret ("
                    "record_key TEXT PRIMARY KEY, revision INTEGER NOT NULL "
                    "CHECK(typeof(revision) = 'integer' AND revision > 0), "
-                   "record BLOB NOT NULL CHECK(typeof(record) = 'blob' AND length(record) <= 65536))",
+                   "record BLOB NOT NULL CHECK(typeof(record) = 'blob' AND length(record) <= 65536)))",
                    "CREATE TABLE IF NOT EXISTS vault_generation ("
                    "record_key TEXT PRIMARY KEY, wallet_index INTEGER NOT NULL "
                    "CHECK(typeof(wallet_index) = 'integer' AND wallet_index >= 0), "
                    "generation BLOB NOT NULL CHECK(typeof(generation) = 'blob' AND length(generation) = 16), "
                    "state INTEGER NOT NULL CHECK(typeof(state) = 'integer' AND state IN (1,2)), "
-                   "operation_id BLOB NOT NULL CHECK(typeof(operation_id) = 'blob' AND length(operation_id) = 16))",
+                   "operation_id BLOB NOT NULL CHECK(typeof(operation_id) = 'blob' AND length(operation_id) = 16)))",
                    "CREATE TABLE IF NOT EXISTS vault_object ("
                    "record_key TEXT PRIMARY KEY, public_blob BLOB NOT NULL "
                    "CHECK(typeof(public_blob) = 'blob' AND length(public_blob) BETWEEN 1 AND 8192), "
                    "private_blob BLOB NOT NULL CHECK(typeof(private_blob) = 'blob' AND length(private_blob) BETWEEN 1 AND 8192), "
                    "object_name BLOB NOT NULL CHECK(typeof(object_name) = 'blob' AND length(object_name) = 34), "
-                   "auth_salt BLOB NOT NULL CHECK(typeof(auth_salt) = 'blob' AND length(auth_salt) = 16))"},
+                   "auth_salt BLOB NOT NULL CHECK(typeof(auth_salt) = 'blob' AND length(auth_salt) = 16)))"},
                   true) {}
 
 HostRecord SecureStore::wallet_profile_load() {
