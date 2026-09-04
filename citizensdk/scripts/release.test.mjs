@@ -1430,8 +1430,11 @@ test('第10.5步静态归档逐成员拒绝错误架构薄归档及动态输入'
     if (platform === 'Windows') malformed.writeUInt16LE(99, 68 + 2);
     else malformed.writeBigUInt64LE(999999n, 68 + 40);
     assert.throws(() => assertCitizenSdkStaticArchive(malformed, platform), /section table/);
-    for (const other of ['LinuxARM', 'LinuxAMD', 'Windows'].filter((x) => x !== platform))
-      assert.throws(() => assertCitizenSdkStaticArchive(bytes, other), /静态|对象/);
+    for (const other of ['LinuxARM', 'LinuxAMD', 'Windows'].filter((x) => x !== platform)) {
+      const error = platform === 'Windows' || other === 'Windows' ? /静态|对象/
+        : /非目标 Linux ELF relocatable 对象：fixture\.o\//;
+      assert.throws(() => assertCitizenSdkStaticArchive(bytes, other), error);
+    }
     for (const bad of [Buffer.from('!<thin>\n'), bytes.subarray(0, -1),
       Buffer.from('dynamic shared library'), Buffer.from('!<arch>\n')])
       assert.throws(() => assertCitizenSdkStaticArchive(bad, platform), /静态依赖/);

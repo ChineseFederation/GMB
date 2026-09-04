@@ -836,7 +836,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
-  'scripts/release.test.mjs': '6353c49fd9e08ace3b10d705270aca4598aee35b329b45ef728b588242e7f733',
+  'scripts/release.test.mjs': 'd5f683c774d75f1072dd4aa7a08ae1a818cb01d5bae0080b79309685668b5d47',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': '037b35aec6ebb55cfb05316a1e7ae595e42601c9679b602d31eca5c1b675b2b8',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',
@@ -3719,6 +3719,8 @@ export function assertCitizenSdkStaticArchive(bytes, platform) {
       dependencyCheck(/^[A-Za-z0-9_.+@-]+$/.test(actualName), 'GNU ar 长名称字符无效');
     }
     if (!['/', '//', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED'].includes(actualName)) {
+      // 归档成员名只用于失败诊断；限制为短 ASCII，避免第三方归档把控制字符写入 CI 日志。
+      const diagnosticName = /^[\x20-\x7e]{1,80}$/.test(actualName) ? actualName : '<invalid-name>';
       if (platform === 'Windows') {
         dependencyCheck(object.length >= 20 && object.readUInt16LE(0) === 0x8664
           && object.readUInt16LE(2) > 0 && object.readUInt16LE(16) === 0, '非 Windows MSVC 静态对象');
@@ -3733,7 +3735,8 @@ export function assertCitizenSdkStaticArchive(bytes, platform) {
       } else {
         dependencyCheck(object.length >= 64 && object.subarray(0, 4).equals(Buffer.from([127, 69, 76, 70]))
           && object[4] === 2 && object[5] === 1 && object.readUInt16LE(16) === 1
-          && object.readUInt16LE(18) === (platform === 'LinuxARM' ? 183 : 62), '非目标 Linux ELF relocatable 对象');
+          && object.readUInt16LE(18) === (platform === 'LinuxARM' ? 183 : 62),
+        `非目标 Linux ELF relocatable 对象：${diagnosticName}`);
         const table = Number(object.readBigUInt64LE(40)), count = object.readUInt16LE(60);
         dependencyCheck(object.readUInt16LE(52) === 64 && object.readUInt16LE(58) === 64
           && Number.isSafeInteger(table) && table >= 64 && count > 0
