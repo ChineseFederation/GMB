@@ -11,7 +11,7 @@ internal func citizenSDKValidateWalletPassword(_ password: String, confirmation:
 #if os(iOS)
 import UIKit
 
-public extension CitizenSDK {
+public extension CitizenSdk {
     /// Presents the only supported secret-entry/recovery interface. No secret
     /// is an argument or result of this API.
     @MainActor
@@ -38,7 +38,7 @@ public extension CitizenSDK {
 
 @MainActor
 private final class CitizenSDKWalletViewController: UIViewController {
-    private let sdk: CitizenSDK
+    private let sdk: CitizenSdk
     private let request: CitizenSDKWalletFlowRequest
     private let completion: (CitizenSDKWalletFlowResult) -> Void
     private let mnemonic = UITextView()
@@ -56,7 +56,7 @@ private final class CitizenSDKWalletViewController: UIViewController {
     private var finished = false
     private var screenSecurity: CitizenSDKScreenSecurity?
 
-    init(sdk: CitizenSDK, request: CitizenSDKWalletFlowRequest,
+    init(sdk: CitizenSdk, request: CitizenSDKWalletFlowRequest,
          completion: @escaping (CitizenSDKWalletFlowResult) -> Void) {
         self.sdk = sdk
         self.request = request

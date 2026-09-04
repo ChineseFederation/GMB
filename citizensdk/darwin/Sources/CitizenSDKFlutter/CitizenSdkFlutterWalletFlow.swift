@@ -18,7 +18,7 @@ internal final class CitizenSdkFlutterWalletFlow {
     }
     private var active: [Key: Entry] = [:]
 
-    func launch(sdk: CitizenSDK, request: CitizenSdkFlutterCodec.Request) async throws -> CitizenWalletProfile? {
+    func launch(sdk: CitizenSdk, request: CitizenSdkFlutterCodec.Request) async throws -> CitizenWalletProfile? {
         guard let session = request.sessionID, let sequence = request.sequence else {
             throw CitizenSDKError(.invalidArgument, "wallet flow requires a session request")
         }

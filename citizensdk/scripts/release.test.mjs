@@ -1794,7 +1794,7 @@ function assertAppleDeploymentTargetContract(source) {
   assert.equal(smokeShell.split('"$executable" normal').length - 1, 1);
   assert.equal(smokeShell.split('"$executable" supervisor').length - 1, 1);
   assert.doesNotMatch(smokeShell, /product_ffi_manifest|static_library|darwin_source_root/);
-  assert.match(consumerSmoke, /CitizenSDK\.open\(\)/);
+  assert.match(consumerSmoke, /CitizenSdk\.open\(\)/);
   assert.match(consumerSmoke, /capabilities\.statuses\.count == 10/);
   assert.match(consumerSmoke, /capabilities\.revision >= 1/);
   assert.match(consumerSmoke, /CitizenCapabilityName\.allCases/);
@@ -1804,7 +1804,7 @@ function assertAppleDeploymentTargetContract(source) {
   assert.match(consumerSmoke, /public-state-v1\.sqlite3/);
   assert.match(consumerSmoke, /secure-state-v1\.sqlite3/);
   assert.match(consumerSmoke, /abandoned = nil/);
-  assert.match(consumerSmoke, /let reopened = try CitizenSDK\.open\(\)/);
+  assert.match(consumerSmoke, /let reopened = try CitizenSdk\.open\(\)/);
   assert.doesNotMatch(consumerSmoke, /\.start\(|hardwareVault|SecretVault/);
   assert.doesNotMatch(apple, /x86_64|universal|libsmoldot\.a|lipo -create/);
   assert.match(host, /--target aarch64-apple-darwin/);
@@ -2615,6 +2615,12 @@ test('Dart、Android 与 Apple 生产绑定以固定哈希和反向闭集进入 
     cpSync(join(citizenSdkRoot, 'android'), join(root, 'android'), { recursive: true });
     cpSync(join(citizenSdkRoot, 'darwin'), join(root, 'darwin'), { recursive: true });
     assert.doesNotThrow(() => assertMobileBindingSource(root));
+    const swiftFacade = readFileSync(
+      join(root, 'darwin', 'Sources', 'CitizenSDK', 'CitizenSDK.swift'),
+      'utf8',
+    );
+    assert.match(swiftFacade, /public final class CitizenSdk:/u);
+    assert.doesNotMatch(swiftFacade, /public (?:final class|typealias) CitizenSDK\b/u);
 
     const darwinSourceLink = join(
       root,

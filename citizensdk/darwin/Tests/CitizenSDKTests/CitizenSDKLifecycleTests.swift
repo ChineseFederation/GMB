@@ -40,7 +40,7 @@ final class CitizenSDKLifecycleTests: XCTestCase {
 
     func testOpenLifecycleFailureRunsCleanupAndPreservesError() {
         var cleanups = 0
-        XCTAssertThrowsError(try CitizenSDK.finalizeOpen(
+        XCTAssertThrowsError(try CitizenSdk.finalizeOpen(
             lifecycle: { throw ProbeFailure.lifecycle },
             install: { _ in XCTFail("install must not run") },
             cleanup: { cleanups += 1 }
@@ -50,7 +50,7 @@ final class CitizenSDKLifecycleTests: XCTestCase {
 
     func testOpenListenerInstallFailureRunsCleanup() {
         var cleanups = 0
-        XCTAssertThrowsError(try CitizenSDK.finalizeOpen(
+        XCTAssertThrowsError(try CitizenSdk.finalizeOpen(
             lifecycle: { .created },
             install: { _ -> Int in throw ProbeFailure.install },
             cleanup: { cleanups += 1 }
@@ -60,7 +60,7 @@ final class CitizenSDKLifecycleTests: XCTestCase {
 
     func testSuccessfulOpenFinalizationDoesNotCleanup() throws {
         var cleanups = 0
-        let value: Int = try CitizenSDK.finalizeOpen(
+        let value: Int = try CitizenSdk.finalizeOpen(
             lifecycle: { .created }, install: { _ in 9 }, cleanup: { cleanups += 1 }
         )
         XCTAssertEqual(value, 9)

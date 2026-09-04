@@ -1,6 +1,6 @@
 # CitizenSDK Flutter Apple adapter
 
-This target only projects the native `CitizenSDK` Swift API through the same
+This target only projects the native `CitizenSdk` Swift facade through the same
 fixed-position protocol-v1 tuples used by Android. It contains no Core, chain,
 wallet, signer, state-store, or secret-vault implementation.
 

@@ -13,12 +13,12 @@ import FlutterMacOS
 @MainActor
 internal final class CitizenSdkFlutterSessions: NSObject, @preconcurrency FlutterStreamHandler {
     private final class Session {
-        let sdk: CitizenSDK
+        let sdk: CitizenSdk
         var nextRequest: Int64 = 1
         var nextEvent: Int64 = 1
         var closing = false
         var outstanding: [UUID: Outstanding] = [:]
-        init(_ sdk: CitizenSDK) { self.sdk = sdk }
+        init(_ sdk: CitizenSdk) { self.sdk = sdk }
     }
 
     private struct Outstanding {
@@ -150,7 +150,7 @@ internal final class CitizenSdkFlutterSessions: NSObject, @preconcurrency Flutte
 
     private func open(_ result: @escaping FlutterResult) {
         do {
-            let sdk = try CitizenSDK.open()
+            let sdk = try CitizenSdk.open()
             let session = Session(sdk)
             let epoch = subscriptionEpoch
             _ = try citizenSDKFlutterFinalizeOpen(

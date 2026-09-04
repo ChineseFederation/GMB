@@ -1566,7 +1566,7 @@ private func require(_ condition: @autoclosure () -> Bool, _ message: String) th
     guard condition() else { throw SmokeFailure.failed(message) }
 }
 
-private func verifyCapabilities(_ sdk: CitizenSDK) throws {
+private func verifyCapabilities(_ sdk: CitizenSdk) throws {
     let capabilities = try sdk.capabilities()
     let actual = capabilities.statuses.map(\.name.rawValue).sorted()
     let expected = CitizenCapabilityName.allCases.map(\.rawValue).sorted()
@@ -1594,7 +1594,7 @@ private func citizenSDKSQLiteFileDescriptors() -> Set<String> {
 }
 
 private func normalCloseSmoke() throws {
-    let sdk = try CitizenSDK.open()
+    let sdk = try CitizenSdk.open()
     try require(sdk.lifecycle == .created, "open must produce created lifecycle")
     try verifyCapabilities(sdk)
     try sdk.close()
@@ -1604,7 +1604,7 @@ private func normalCloseSmoke() throws {
 }
 
 private func supervisorSmoke() throws {
-    var abandoned: CitizenSDK? = try CitizenSDK.open()
+    var abandoned: CitizenSdk? = try CitizenSdk.open()
     try verifyCapabilities(abandoned!)
     let initiallyOpen = citizenSDKSQLiteFileDescriptors()
     try require(initiallyOpen.contains(where: { $0.hasSuffix(publicSQLiteSuffix) }),
@@ -1621,7 +1621,7 @@ private func supervisorSmoke() throws {
     try require(citizenSDKSQLiteFileDescriptors().isEmpty,
                 "supervisor must close public and secure SQLite descriptors")
 
-    let reopened = try CitizenSDK.open()
+    let reopened = try CitizenSdk.open()
     try verifyCapabilities(reopened)
     try reopened.close()
     try require(reopened.lifecycle == .disposed,
@@ -3883,7 +3883,7 @@ NODE
     local framework simulator_sdk swift_source="$root/consumer.swift"
     framework="$(resolve_xcframework_framework_slice "$package/darwin/CitizenSDK.xcframework" CitizenSDK ios simulator)"
     simulator_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
-    printf '%s\n' 'import CitizenSDK' 'public func citizenSdkConsumer() throws { let sdk = try CitizenSDK.open(); try sdk.close() }' >"$swift_source"
+    printf '%s\n' 'import CitizenSDK' 'public func citizenSdkConsumer() throws { let sdk = try CitizenSdk.open(); try sdk.close() }' >"$swift_source"
     xcrun --sdk iphonesimulator swiftc "$swift_source" -emit-library -O -warnings-as-errors \
       -sdk "$simulator_sdk" -target arm64-apple-ios16.0-simulator \
       -module-cache-path "$incremental_root/ios/module-cache" \

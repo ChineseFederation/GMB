@@ -225,7 +225,7 @@ internal final class CitizenSDKDeferredEventGate: @unchecked Sendable {
 internal actor CitizenSDKLifecycleSupervisor {
     static let shared = CitizenSDKLifecycleSupervisor()
     private var nativeEntries: [ObjectIdentifier: CitizenSDKNative] = [:]
-    private var facadeEntries: [ObjectIdentifier: CitizenSDK] = [:]
+    private var facadeEntries: [ObjectIdentifier: CitizenSdk] = [:]
 
     func adopt(_ native: CitizenSDKNative) {
         let identity = ObjectIdentifier(native)
@@ -234,7 +234,7 @@ internal actor CitizenSDKLifecycleSupervisor {
         Task { await recoverNative(identity) }
     }
 
-    func adopt(_ facade: CitizenSDK) {
+    func adopt(_ facade: CitizenSdk) {
         let identity = ObjectIdentifier(facade)
         guard facadeEntries[identity] == nil else { return }
         facadeEntries[identity] = facade

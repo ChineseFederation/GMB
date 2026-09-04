@@ -5,7 +5,7 @@ import Foundation
 /// C handles, result handles, prepared-wallet handles, mnemonics and passwords
 /// are absent from this public surface. Wallet creation/import/add-account
 /// secrets are accepted only by the SDK-owned Apple UI.
-public final class CitizenSDK: @unchecked Sendable {
+public final class CitizenSdk: @unchecked Sendable {
     public let sessionID = UUID().uuidString
     private let stateLock = NSLock()
     private let native: CitizenSDKNative
@@ -19,21 +19,21 @@ public final class CitizenSDK: @unchecked Sendable {
         CitizenSDKWalletFlowRegistry.shared.registerOpen(self)
     }
 
-    public static func open() throws -> CitizenSDK {
+    public static func open() throws -> CitizenSdk {
         let native = try CitizenSDKNative.open(assets: CitizenSDKAssets.load())
         return try finishOpen(native)
     }
 
-    internal static func open(storageRoot: URL) throws -> CitizenSDK {
+    internal static func open(storageRoot: URL) throws -> CitizenSdk {
         let native = try CitizenSDKNative.open(assets: CitizenSDKAssets.load(), storageRoot: storageRoot)
         return try finishOpen(native)
     }
 
-    private static func finishOpen(_ native: CitizenSDKNative) throws -> CitizenSDK {
+    private static func finishOpen(_ native: CitizenSDKNative) throws -> CitizenSdk {
         try finalizeOpen(
             lifecycle: native.lifecycle,
             install: { lifecycle in
-            let sdk = CitizenSDK(native: native, lifecycle: lifecycle)
+            let sdk = CitizenSdk(native: native, lifecycle: lifecycle)
             native.setEventListener { [weak sdk] event in sdk?.receive(event) }
             return sdk
             },

@@ -1,7 +1,7 @@
 #if os(macOS)
 import AppKit
 
-public extension CitizenSDK {
+public extension CitizenSdk {
     @MainActor
     func presentWalletFlow(from parent: NSWindow, request: CitizenSDKWalletFlowRequest,
                            completion: @escaping (CitizenSDKWalletFlowResult) -> Void) throws -> CitizenSDKWalletFlow {
@@ -29,7 +29,7 @@ public extension CitizenSDK {
 
 @MainActor
 private final class CitizenSDKWalletViewControllerMacOS: NSViewController {
-    let sdk: CitizenSDK
+    let sdk: CitizenSdk
     let request: CitizenSDKWalletFlowRequest
     let completion: (CitizenSDKWalletFlowResult) -> Void
     var security: CitizenSDKScreenSecurity?
@@ -47,7 +47,7 @@ private final class CitizenSDKWalletViewControllerMacOS: NSViewController {
     private var irreversible = false
     private var finished = false
 
-    init(sdk: CitizenSDK, request: CitizenSDKWalletFlowRequest,
+    init(sdk: CitizenSdk, request: CitizenSDKWalletFlowRequest,
          completion: @escaping (CitizenSDKWalletFlowResult) -> Void) {
         self.sdk = sdk; self.request = request; self.completion = completion
         super.init(nibName: nil, bundle: nil)

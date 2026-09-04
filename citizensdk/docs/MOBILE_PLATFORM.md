@@ -113,7 +113,7 @@ EventChannel `onCancel` 只解除 Dart sink，不停止 session。只有 engine 
 
 ## Apple 单一实现
 
-`darwin/` 是 iOS 与 macOS 唯一共享生产源码。它提供 `CitizenSDK` Swift API、
+`darwin/` 是 iOS 与 macOS 唯一共享生产源码。它提供 `CitizenSdk` Swift 公开门面、
 `CitizenSDKFlutter` 薄 adapter、typed host services 与平台安全设施，并通过单一
 `CitizenSDK.xcframework` 调用同一 Rust 产品 Core。`pubspec.yaml` 对 iOS 和 macOS 均使用
 `sharedDarwinSource: true`；iOS 最低版本为 16.0，macOS 最低版本为 13.0。产品名称始终只写
