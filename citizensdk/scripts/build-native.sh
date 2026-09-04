@@ -18,7 +18,7 @@ target_name="${1:-all}"
 # 六个显式参数表示消费最终包；没有参数的原生构建仍由各平台原入口负责。
 hosted_consumer=false
 if [[ "$#" -gt 1 ]]; then hosted_consumer=true; fi
-tata_console_target_root="/Users/rhett/TATA/target"
+tata_console_target_root="${TATA_CONSOLE_TARGET_ROOT:-/Users/rhett/TATA/tataconsole/target}"
 citizensdk_target_root="$tata_console_target_root/GMB/citizensdk/SDK"
 tata_console_work_root="$tata_console_target_root/.work"
 ios_deployment_target=16.0

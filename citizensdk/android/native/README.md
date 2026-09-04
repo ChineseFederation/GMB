@@ -23,7 +23,7 @@ module writes only below `<root>/native`; the Flutter host uses `<root>/flutter`
 The release AAR therefore has the stable Gradle location
 `<root>/native/outputs/aar/native-release.aar`.
 On the maintained workstation it must be below
-`/Users/rhett/TATA/target/GMB/citizensdk/SDK`; GitHub Actions may use an absolute runner
+`/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`; GitHub Actions may use an absolute runner
 directory outside the source checkout. Never leave a
 `build`, `.gradle`, CMake, binary, database or test artifact in this source
 directory.

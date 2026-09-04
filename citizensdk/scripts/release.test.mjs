@@ -3430,7 +3430,7 @@ test('Windows Hosted 19/33 闭集与全部复制预检保持七头原字节及�
     // 不创建越界路径；调用必须在任何 mkdir/write 之前被本机双根门禁拒绝。
     if (process.env.GITHUB_ACTIONS !== 'true') {
       assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix,
-        '/Users/rhett/TATA/target/GMB/unregistered/SDK/candidate'), /目录|路径/u);
+        '/Users/rhett/TATA/tataconsole/target/GMB/unregistered/SDK/candidate'), /目录|路径/u);
     }
     copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected);
     assert.deepEqual(readFileSync(header), bytes);
@@ -5056,8 +5056,8 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
   // GitHub 分支仍在通用路径检查之后；不把本机进程伪装成 GitHub 来绕过门禁。
   assert.match(functions[2], /const target = assertSafeTargetPath\(path, label\);\n  if \(process\.env\.GITHUB_ACTIONS === 'true'\) return target;/u);
   const expectedRoots = [
-    '/Users/rhett/TATA/target/GMB/citizensdk/SDK',
-    '/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK',
   ];
 
   // 仅替换文件系统事实，不复制路径算法，也不在其它 OS 创建真实 /Users 目录。
@@ -5145,16 +5145,16 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
     withEntry(leaf, 'file', () => { assert.equal(check(leaf), leaf); });
   }
   for (const path of [
-    '/Users/rhett/TATA/target/citizensdk/candidate',
-    '/Users/rhett/TATA/target/.work/citizensdk/candidate',
-    '/Users/rhett/TATA/target/GMB/citizenapp/SDK/candidate',
-    '/Users/rhett/TATA/target/.work/GMB/citizenapp/SDK/candidate',
-    '/Users/rhett/TATA/target/TUYU/citizensdk/SDK/candidate',
-    '/Users/rhett/TATA/target/.work/TATA/citizensdk/SDK/candidate',
-    '/Users/rhett/TATA/target/GMB/citizensdk/macOS/candidate',
-    '/Users/rhett/TATA/target/.work/GMB/citizensdk/Windows/candidate',
-    '/Users/rhett/TATA/target/GMB/citizensdk',
-    '/Users/rhett/TATA/target/.work/GMB/citizensdk',
+    '/Users/rhett/TATA/tataconsole/target/citizensdk/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/citizensdk/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/TUYU/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/TATA/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/macOS/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/Windows/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk',
   ]) {
     assert.throws(() => check(path), /本地路径/u);
   }
@@ -5371,7 +5371,7 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
       'local_build_path_is_allowed "$1"',
     ].join('\n');
     assert.doesNotMatch(hostPredicate, /canonical_directory|\bmkdir\b/u);
-    const virtualHostTask = `/Users/rhett/TATA/target/.work/citizensdk-host-path-${process.pid}`;
+    const virtualHostTask = `/Users/rhett/TATA/tataconsole/target/.work/citizensdk-host-path-${process.pid}`;
     const hostEnvironment = {
       ...process.env,
       GITHUB_ACTIONS: 'false',
@@ -7249,10 +7249,21 @@ test('Hosted 工具调度固定版本和两次独立命令，失败不上传且�
       const controller = new AbortController(), output = join(root, `abort-${stage}`);
       const result = buildCitizenSdkHosted({ candidatePath: candidate, archivePath: audit, outputPath: output,
         dartPath: dart, flutterRoot: flutter, pubCachePath: cache, expectedGitSha: '0'.repeat(40), signal: controller.signal });
-      const rejected = assert.rejects(result, /取消/u);
+      let failure;
+      const rejected = assert.rejects(result, (error) => {
+        failure = error;
+        return /取消|未确认退出/u.test(error.message);
+      });
       try { await ready(); } finally { controller.abort(); await rejected; }
+      const denied = failure?.preserveHostedOutput === true && failure.cause?.code === 'EPERM';
+      if (denied) {
+        preserveRoot = true;
+        context.diagnostic(`${stage} 的进程组探测被沙箱拒绝：发布器已失败并保留现场`);
+        const deadline = Date.now() + 15000;
+        while (orphanAlive() && Date.now() < deadline) await new Promise((resume) => setTimeout(resume, 25));
+      }
       assert.equal(orphanAlive(), false, `${stage} 返回前整组后代退出`);
-      assert.equal(existsSync(output), false, `${stage} 仅清理自己的新建目录`);
+      assert.equal(existsSync(output), denied, `${stage} 必须按退出证据清理或保留自己的新建目录`);
       assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, expectedCalls);
       assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
       assert.deepEqual(readFileSync(audit), original);
@@ -7361,7 +7372,7 @@ if (process.env.CITIZENSDK_APPLE_NATIVE) {
       nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path',
         'assert_readonly_dependency_directory', 'macos_hosted_root']),
       'tata_console_work_root="$1"; sdk_dir="$2"; macos_hosted_root',
-    ].join('\n'), 'macos-hosted-root', '/Users/rhett/TATA/target/.work', resolve(citizenSdkRoot)], {
+    ].join('\n'), 'macos-hosted-root', '/Users/rhett/TATA/tataconsole/target/.work', resolve(citizenSdkRoot)], {
       cwd: workRoot, encoding: 'utf8', timeout: 10000,
       env: { PATH: process.env.CITIZENSDK_TOOL_PATH,
         GITHUB_ACTIONS: process.env.GITHUB_ACTIONS, RUNNER_TEMP: process.env.RUNNER_TEMP,

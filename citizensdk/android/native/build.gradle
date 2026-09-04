@@ -4,7 +4,7 @@ version = rootProject.version
 apply plugin: 'com.android.library'
 apply plugin: 'kotlin-android'
 
-def tataConsoleTargetRoot = file('/Users/rhett/TATA/target').canonicalFile
+def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
 def localCitizenSdkRoots = {
     def roots = [new File(tataConsoleTargetRoot, 'GMB/citizensdk/SDK').canonicalFile]
     def taskWorkValue = System.getenv('TATA_CONSOLE_WORK_DIR')

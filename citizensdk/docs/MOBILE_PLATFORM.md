@@ -79,7 +79,7 @@ CITIZENSDK_ANDROID_BUILD_DIR
 CITIZENSDK_ANDROID_CORE_DIR
 ```
 
-本机路径必须位于 `/Users/rhett/TATA/target/GMB/citizensdk/SDK`，GitHub Actions 路径必须位于 checkout
+本机路径必须位于 `/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，GitHub Actions 路径必须位于 checkout
 之外。源码树不得产生 Gradle、CMake、SO、AAR 或测试报告。
 
 ## Android 钱包安全界面

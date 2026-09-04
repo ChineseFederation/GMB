@@ -99,7 +99,7 @@ The Apple host provides separate typed public/secure SQLite stores and a
 KEK-only Secure Enclave vault; no secret or native handle crosses Flutter.
 
 Build and test output must be redirected to
-`/Users/rhett/TATA/target/GMB/citizensdk/SDK`. This source directory must
+`/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`. This source directory must
 stay free of generated headers and native artifacts; there is intentionally no
 `build.rs`.
 
