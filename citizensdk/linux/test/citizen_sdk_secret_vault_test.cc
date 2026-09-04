@@ -117,5 +117,23 @@ int main() {
          tombstone != std::string::npos && physical_delete != std::string::npos &&
          retire < retire_lock && retire_lock < tombstone &&
          tombstone < physical_delete);
+
+  const std::string bridge_path =
+      std::string(CITIZENSDK_LINUX_TEST_SOURCE_DIR) +
+      "/src/citizen_sdk_host_bridge.hpp";
+  std::ifstream bridge_stream(bridge_path, std::ios::binary);
+  assert(bridge_stream.good());
+  const std::string bridge((std::istreambuf_iterator<char>(bridge_stream)),
+                            std::istreambuf_iterator<char>());
+  const auto service = bridge.find("auto service_call(Function function)");
+  const auto lease = bridge.find("ServiceLease lease(*this)", service);
+  const auto invoke = bridge.find("return function()", lease);
+  assert(service != std::string::npos && lease != std::string::npos &&
+         invoke != std::string::npos && service < lease && lease < invoke);
+  assert(bridge.substr(service, invoke - service).find("lock_guard") ==
+         std::string::npos);
+  assert(bridge.find("host_.lifecycle_.begin_service()") != std::string::npos);
+  assert(bridge.find("~ServiceLease() { host_.lifecycle_.finish_service(); }") !=
+         std::string::npos);
   return 0;
 }

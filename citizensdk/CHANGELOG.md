@@ -2,6 +2,66 @@
 
 ## 1.0.0 - Unreleased
 
+- 第 9.2 步完成官方 Hosted 解包包的 macOS Flutter Release 消费验收实现及本机原生编译。
+  新增公开 `CitizenSdk` 消费测试，沿用唯一构建器/发布器；测试来源闭集增至 197 文件。
+  归档、构建和消费者分别使用单层隔离；保留失败诊断，插件来源按目录身份核对。
+  不改变平台、Core/ABI、钱包或链实现。用户确认将实际 Flutter macOS 安装运行移交
+  第 10 步 GitHub 统一 CI；本机 Xcode/SwiftPM 权限失败记录保留，不改记为通过。
+  本机开发验收与远程待验收范围以中央任务卡第 35 节为准。
+
+- 第 9.1 步在唯一发布器增加官方 Pub 本地归档与完整安全解包验真。固定 Dart 3.12.2，
+  单独要求 dry-run 零 warnings，再生成一个 Hosted 包；来源仍是同版审计候选，不改
+  `.pubignore` 或平台集合。覆盖官方 GNU 长名、Apple 合法链接展开、完整路径/类型/
+  权限/字节闭集、损坏/越界/资源上限和失败清理。本机官方工具往返使用跨平台格式夹具，
+  不代表真实全平台产物、安装运行或正式发布；未执行原生编译、上传、Git 或控制台操作。
+
+- 第 8.4 步把 Windows 官方 Flutter 注册、CitizenSdk 默认入口、21 项同版安装件与
+  33 项 Hosted 运行输入一起纳入唯一 SDK。新增公开 Flutter Release 消费者，保留原有
+  14+2 测试并接入六项 adapter 检查，全部成功后才导出。核心算法、Host/adapter 生产
+  实现和其它平台不变；不改控制台或工作流，Windows 实际运行与正式发布仍待统一验收。
+
+- 第 8.3 步增加独立 Windows C11/C++17 安装消费者，仅使用公开头和同版安装库。
+  唯一构建器保留 14 项原生测试，核对 21 项安装闭集、来源字节与 PE 导出，消费验证全部
+  通过后才导出全新目标；既有输出不覆盖。新增失败和边界回归，不改 Host/Core、平台
+  列表、Dart 默认入口、Hosted 或候选。Windows 实际运行仍留统一 GitHub CI/Release。
+
+- 第 8.2.1 步修正唯一发布器的本机目录门禁，仅接纳中央 `target/GMB/citizensdk/SDK`
+  与 `target/.work/GMB/citizensdk/SDK` 的严格子路径，拒绝永久根自身、越界与链接。
+  新增执行真实生产函数的路径矩阵回归，保留完整打包测试；GitHub 分支、候选内容、
+  原生构建器和平台实现不变。
+
+- 第 8.2 步补齐 Windows Flutter adapter 源码，使用官方 StandardMethodCodec、固定双通道与
+  22 方法，连接同版已安装 Host/Core；钱包秘密不进入 Flutter 消息。Windows 宿主需一次
+  显式声明稳定的 `CITIZENSDK_APPLICATION_ID`，构建拒绝缺失或非法身份。会话保留 Host
+  关闭重试与原生 UI 退休所有权，新增六项 adapter 测试源码；本步不修改 Dart 默认平台、
+  pubspec、原生构建器或 Windows 候选。Windows 编译、测试和实际安装消费者仍须后续统一
+  GitHub CI/Release 验证，不能把本机 macOS 检查视为 Windows 运行通过。
+
+- 第 7.4 步将 LinuxARM/LinuxAMD 的 26 项合并安装投影、候选 manifest、官方 `linux`
+  plugin 注册与默认 `CitizenSdk.open()` 原子纳入同一 SDK 版本。Hosted 精确保留 38 项 Linux
+  运行输入，排除 Host 私有源码；真实 Flutter 消费者改用公开入口，不注入内部 platform，
+  不临时修改 pubspec 或补 runner RPATH。ABI、22 方法及 Core 实现不变。Linux 实际编译、
+  C/C++/Flutter、GTK/TPM 与许可证证据仍待后续统一 GitHub CI/Release，不宣称已运行或发布。
+
+- 第 7.3 步增加 Linux 安装闭集、已安装 C/C++ 消费者和真实 Flutter Release 通道消费者的
+  装配源码，全部沿用唯一原生构建入口。安装验收覆盖字节、版本、平台、ELF/ABI/GLIBC；
+  消费者覆盖真实异步完成、启停和关闭所有权。当前开发以本机 macOS 编译通过为验收标准，
+  不再等待用户提供 Linux/TPM 环境；2026-09-03 已通过 `abi-host` 与 `apple`，包含 Core/C ABI、
+  Swift/Flutter 原生绑定和单一 XCFramework 构建验证，本轮未改生产实现。跨平台构建与功能验证
+  后续统一进入同产品、同版本的 GitHub CI 增量缓存与 Release 全量构建，仍只交付一个
+  CitizenSDK Release。LinuxARM/LinuxAMD 及实体 TPM 尚无本轮运行结果；未改变公开平台、
+  Core/Host 实现、移动端、控制台或正式发布流程。
+
+- Added the Step 7.2 source-only Linux Flutter adapter. It maps the same fixed
+  22-method `citizen/sdk/core/v1` and `citizen/sdk/events/v1` tuple contract
+  onto the installed same-version Linux Host/Core pair, preserves embedded NUL
+  bytes in standard-codec strings, confines Flutter values to the GTK thread,
+  and keeps wallet secrets inside the existing native GTK/Host/Core path. Its
+  CMake, codec, session, wallet-flow, environment, plugin, shutdown, and secret
+  boundary tests were source contracts only: that step did not register Linux
+  in the public package or Release manifest. Actual LinuxARM/LinuxAMD
+  validation belongs to the later unified GitHub CI/Release matrix for the
+  same SDK version; local macOS acceptance does not establish Linux support.
 - Added the Step 7.1 source-only Linux host projection shared by LinuxARM and
   LinuxAMD: typed public/secure SQLite stores, a TPM 2.0 KEK/DEK vault,
   SDK-owned wallet-flow primitives, a C/C++ host API, and native contract-test
@@ -16,6 +76,14 @@
   retirement, generation-conditional Vault writes, post-prompt retirement
   checks, exact TPM child templates, owner/hierarchy/DA-state checks, and exact
   `Esys_TestParms` probes are part of the same source contract.
+- Completed the Step 7.1 source review follow-up: fixed strict C++ pointer
+  conversions and GNU namespace-macro collisions, classified TPM response
+  layers using official TPM2-TSS definitions, and added regression-test
+  sources. Provider service leases no longer hold the Host mutex while GTK
+  authentication waits; explicit destroy returns `BUSY` for concurrent API
+  leases, and abandonment hands the complete graph to a lease-aware
+  supervisor. Callback self-retirement and a final registry-probe race are
+  covered without claiming Linux compilation or runtime validation.
 - Froze the first stable CitizenSDK package contract around one product ABI for
   Android, the iOS device and simulator variants, and macOS. The current Android
   ABI is `arm64-v8a`; Apple machine architecture metadata is `arm64`.
@@ -200,3 +268,17 @@
 - Added Android `arm64-v8a` and iOS Apple `arm64` machine-library packaging contracts.
 - Added a Hosted Package candidate contract derived from the same verified
   GitHub Release candidate. This version remains a pre-1.0 release candidate.
+
+## 第 8.1 步：Windows 原生 Host 源码
+
+- 新增 Windows C/C++ Host、Win32 安全交互、句柄绑定 SQLite 存储与 PCP/TPM 2.0 设备金库。
+- 同一 Rust Core、70 项根 ABI 和 13 项薄 Host ABI；现有平台、Flutter 默认入口与 Release 平台列表不变。
+- 唯一构建器追加 Windows 目标，唯一发布器只收编审计源码；Hosted 暂不包含 Windows。
+- Windows 编译、UI、跨进程存储和真实 TPM 授权尚未执行，不能以 macOS 结果替代。
+
+## 第 8.1.1 步：Linux 同源缺陷修正
+
+- 两处 SQLite 结构计数精确识别 sqlite_ 系统前缀，拒绝 sqlitex 对象绕过初始化/既有库检查。
+- RequestRouter 明确清空已移交 callback；补直接头依赖、回调重入与迟到完成回归测试。
+- 公共库与密文库分别补版本 0 初始化拒绝和版本 1 表/触发器拒绝用例；不改变 schema、平台、
+  Core、钱包、签名、轻节点、交易或构建流程。Linux 原生运行结果仍由统一平台验收取得。

@@ -1,4 +1,3 @@
-TATACHATSDK_ROOT="/Users/rhett/TATA/tatachatsdk"
 #!/usr/bin/env bash
 # CitizenApp 本机与 CI 唯一 Flutter 测试入口。
 #
@@ -10,54 +9,46 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CITIZENAPP_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$CITIZENAPP_DIR")"
+export GMB_ROOT="$REPO_ROOT"
 FLUTTER_BIN="${FLUTTER_BIN:-flutter}"
-
-if [[ "${CI:-}" != true && "${GMB_CENTRAL_SNAPSHOT:-}" != 1 ]]; then
-  TATA_CONSOLE_TARGET_ROOT="${TATA_CONSOLE_TARGET_ROOT:-/Users/rhett/Only/tataconsole/target}"
-  TATA_CONSOLE_WORK_DIR="$TATA_CONSOLE_TARGET_ROOT/.work/citizenapp-test"
-  helper=/Users/rhett/Only/tataconsole/actions/local-build.sh
-  [[ -f "$helper" && "$TATA_CONSOLE_WORK_DIR" == /Users/rhett/Only/tataconsole/target/.work/citizenapp-test ]] \
-    || { echo '本机CitizenApp测试缺少TataConsole中央快照入口' >&2; exit 1; }
-  /usr/bin/find "$TATA_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-  mkdir -p "$TATA_CONSOLE_WORK_DIR"
-  export TATA_CONSOLE_TARGET_ROOT TATA_CONSOLE_WORK_DIR
-  # shellcheck disable=SC1090
-  source "$helper"
-  snapshot_root="$(stage_gmb_mobile_source "$REPO_ROOT" citizenapp)"
-  # CitizenApp 只保留必须与链运行时一致的 SCALE 金标；TataChatSDK 与 TataChatServer
-  # 各自在产品目录验证自己的实现，应用测试不得再复制或读取聊天服务源码。
-  snapshot_truth_sources=(
-    citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json
-    citizenchain/runtime/tests/fixtures/role_permission.json
-  )
-  for relative_path in "${snapshot_truth_sources[@]}"; do
-    source_path="$REPO_ROOT/$relative_path"
-    snapshot_path="$snapshot_root/$relative_path"
-    [[ -f "$source_path" ]] \
-      || { echo "CitizenApp测试真源缺失：$source_path" >&2; exit 1; }
-    mkdir -p "$(dirname "$snapshot_path")"
-    /usr/bin/ditto "$source_path" "$snapshot_path"
-  done
-  cleanup_snapshot() {
-    /usr/bin/find "$TATA_CONSOLE_WORK_DIR" -depth -delete 2>/dev/null || true
-    rmdir "$TATA_CONSOLE_TARGET_ROOT/.work" 2>/dev/null || true
-  }
-  trap cleanup_snapshot EXIT INT TERM HUP
-  GMB_CENTRAL_SNAPSHOT=1 TATA_CONSOLE_TARGET_ROOT="$TATA_CONSOLE_TARGET_ROOT" \
-    TATA_CONSOLE_WORK_DIR="$TATA_CONSOLE_WORK_DIR" \
-    bash "$snapshot_root/citizenapp/scripts/citizenapp-test.sh" "$@"
-  exit $?
-fi
+FLUTTER_ROOT="$CITIZENAPP_DIR"
 
 if [[ "${CI:-}" != true ]]; then
-  [[ "$CITIZENAPP_DIR" == "$TATA_CONSOLE_WORK_DIR/source/GMB/citizenapp" ]] \
-    || { echo "CitizenApp本机测试源码不在TataConsole中央快照：$CITIZENAPP_DIR" >&2; exit 1; }
-  # 中央快照中的本机测试直接消费同一快照内 TataChatSDK；覆盖文件随快照统一清理。
-  cat > "$CITIZENAPP_DIR/pubspec_overrides.yaml" <<'YAML'
-dependency_overrides:
-  tatachat_sdk:
-    path: ../../TATA/tatachatsdk
-YAML
+  : "${TATA_CONSOLE_TARGET_ROOT:?本机检查必须由控制台提供中央产物根}"
+  : "${TATA_CONSOLE_WORK_DIR:?本机检查必须由控制台提供当前任务目录}"
+  : "${TATA_CONSOLE_FLUTTER_ROOT:?本机检查必须使用当前任务Flutter配置}"
+  case "$TATA_CONSOLE_WORK_DIR" in
+    "$TATA_CONSOLE_TARGET_ROOT/.work/GMB/citizenapp/ios"|"$TATA_CONSOLE_TARGET_ROOT/.work/GMB/citizenapp/android") ;;
+    *) echo 'CitizenApp 本机检查只能在所属移动端任务内执行' >&2; exit 1 ;;
+  esac
+  # 检查沿用调用方持有的本端身份；不抢占目录、不复制源码、不删除别的运行记录。
+  python3 - "$TATA_CONSOLE_WORK_DIR" "gmb.citizenapp.${TATA_CONSOLE_WORK_DIR##*/}.build" <<'PY'
+import json, os, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+lock = root / '.owner'
+if str(root.resolve()) != str(root) or lock.is_symlink() or not lock.is_file():
+    raise SystemExit('CitizenApp 检查缺少本端任务所有权')
+owner = json.loads(lock.read_text())
+if owner.get('canonicalId') != sys.argv[2] or not owner.get('runId') or not isinstance(owner.get('pid'), int) or owner['pid'] <= 0:
+    raise SystemExit('CitizenApp 检查任务身份不匹配')
+if os.environ.get('TATA_CONSOLE_RUN_ID') != owner['runId']:
+    raise SystemExit('CitizenApp 检查运行任务不匹配')
+os.kill(owner['pid'], 0)
+PY
+  [[ "$TATA_CONSOLE_FLUTTER_ROOT" == "$TATA_CONSOLE_WORK_DIR" \
+    && -f "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" \
+    && ! -L "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" \
+    && -f "$TATA_CONSOLE_FLUTTER_ROOT/pubspec_overrides.yaml" \
+    && ! -L "$TATA_CONSOLE_FLUTTER_ROOT/pubspec_overrides.yaml" ]] || {
+    echo 'CitizenApp 检查缺少本端独立依赖配置' >&2; exit 1
+  }
+  FLUTTER_ROOT="$TATA_CONSOLE_FLUTTER_ROOT"
+  export CARGO_TARGET_DIR="$TATA_CONSOLE_WORK_DIR/cache/cargo-tests"
+  export PUB_CACHE="$TATA_CONSOLE_WORK_DIR/cache/dart-pub"
+  export XDG_CONFIG_HOME="$TATA_CONSOLE_WORK_DIR/cache/flutter-config"
+  export TMPDIR="$TATA_CONSOLE_WORK_DIR/"
+  export DYLD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:$CARGO_TARGET_DIR/debug"
+  export LD_LIBRARY_PATH="$CARGO_TARGET_DIR/release:$CARGO_TARGET_DIR/debug"
 fi
 
 if ! command -v "$FLUTTER_BIN" >/dev/null 2>&1; then
@@ -78,12 +69,12 @@ if [ "$ACTUAL_FLUTTER_VERSION" != "$EXPECTED_FLUTTER_VERSION" ]; then
   exit 1
 fi
 
-if [ ! -f "$CITIZENAPP_DIR/.dart_tool/package_config.json" ]; then
+if [ ! -f "$FLUTTER_ROOT/.dart_tool/package_config.json" ]; then
   if [[ "${CI:-}" == true ]]; then
     echo "错误: 缺少 .dart_tool/package_config.json；CI必须先执行锁定依赖解析" >&2
     exit 1
   fi
-  (cd "$CITIZENAPP_DIR" && "$FLUTTER_BIN" pub get --enforce-lockfile)
+  (cd "$FLUTTER_ROOT" && "$FLUTTER_BIN" pub get --enforce-lockfile)
 fi
 
 # 设备 Release 构建会先 cargo clean；测试必须从宿主库构建开始一直持锁到最后一个
@@ -126,9 +117,12 @@ release_native_build_lock() {
   NATIVE_BUILD_LOCK_KIND=""
 }
 
-cd "$CITIZENAPP_DIR"
-acquire_native_build_lock
-trap release_native_build_lock EXIT
+cd "$FLUTTER_ROOT"
+# GitHub Runner 保持既有原生锁；本机由控制台的准确任务所有权隔离，不使用跨端共享锁。
+if [[ "${CI:-}" == true ]]; then
+  acquire_native_build_lock
+  trap release_native_build_lock EXIT
+fi
 if rg -n --hidden --glob '!target/**' 'tatachat_sdk' "$CITIZENAPP_DIR/smoldot"; then
   echo '错误: CitizenApp Smoldot 目录仍包含 TataChatSDK 编译或链接依赖' >&2
   exit 1

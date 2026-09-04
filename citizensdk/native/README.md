@@ -42,7 +42,7 @@ provider 的准确 finalized 块取得，持久 runtime cache 只用于性能，
 wallet profile、transaction history 与 encrypted secret blob；secure store/Vault
 all-or-none。旧构造准确报告 chain-only 能力，host 构造则组合真实钱包/历史能力；不能再把
 旧构造的 unsupported 快照写成整个产品 ABI 尚未投影。根 Dart、Android 与共享 Darwin
-绑定均已切换到 host 产品组合。
+绑定及 Linux、Windows Host 均已使用 host 产品组合。
 
 创建准备会话的助记词仅经绑定 owner instance handle 的 SDK-owned handle 提供给明确备份 UI；
 import/add 的恢复词是用户显式输入。Rust 以随机 DEK/nonce 和完整 `SecretRef` AAD 执行
@@ -69,8 +69,8 @@ future，不占用短操作池。只有 canonical finalized body、准确块 met
 `System.Events` 形成终态；取消或中断只结束本次观察，durable Pending/InBlock 门保持。
 
 原生轻节点源码闭包、FFI、Dart smoldot 包、来源测试与锁文件已经迁入；当前不存在通过
-CitizenApp 或 `shared` 相对路径取得运行时源码的依赖。`android/`、`darwin/` 与第 7.1 步
-新增的 `linux/` 平台目录只负责链接、装载、typed stores 和设备安全能力，不复制链或签名实现。
+CitizenApp 或 `shared` 相对路径取得运行时源码的依赖。`android/`、`darwin/`、`linux/` 与
+`windows/` 平台目录只负责链接、装载、typed stores 和设备安全能力，不复制链或签名实现。
 Linux Host 通过根 `citizensdk_create_with_host` 注入分离的 public/secure SQLite 和 TPM 2.0
 KEK/DEK Vault；其 C++ convenience API 只是根 C ABI 的 header-only RAII 包装。
 Linux 的 SQLite 文件身份由 Host 自有 openat VFS 绑定，不经过 `/proc/self/fd` 路径；既有
@@ -99,8 +99,13 @@ sr25519 与安全存储只负责本地秘密和签名；TUYU、员工登录等 c
 全节点出块、全节点 identity 私钥、聊天、OpenMLS、TUYU 与产品业务被排除。候选合同打包
 Android `arm64-v8a` 产品 Core/JNI 双库，以及由同一 Core 生成的 iOS 设备与模拟器变体和
 macOS `CitizenSDK.xcframework`；根 Dart、Android 与 Apple 均使用产品 ABI。
-LinuxARM、LinuxAMD 已加入第 7.1 步 Host 与合同测试源码，但没有执行两种机器目标的编译、
-测试或候选注入，Flutter adapter 也未加入；Windows 仍无平台投影，三者均未交付。本轮此前
+LinuxARM、LinuxAMD 已具备 Host、Flutter adapter、合同测试和安装消费者源码；第 7.4 步把
+两种同版安装投影合并进唯一候选合同，并同步默认 Dart 入口和官方 plugin 注册。尚未执行
+Linux 实际编译、测试或生成可分发候选，后续由统一 GitHub CI/Release 验证，不宣称 Linux
+已运行或发布。Windows 已有原生 Host、Flutter adapter 和独立 C/C++ 安装消费者；
+第 8.4 步同步接入默认 Flutter 注册、`CitizenSdk.open()` 及同版候选/Hosted 运行投影。
+Windows 安装件精确 21 项，Hosted Windows 输入精确 33 项；不在宿主内重新编译 Core/Host。
+Windows 尚未实际编译、运行或正式发布，源码合同不替代后续统一平台验收。此前
 Android AAR 与 Apple 单一 XCFramework 构建通过；
 框架只含 iOS 设备与模拟器变体及 macOS 三个 Apple `arm64` machine slice。Apple 本机已编译
 iOS 的两组测试 bundle；因无
@@ -123,5 +128,20 @@ no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）和 ma
 通过；完整 Dart 316/316（`--timeout=2m`）、Hosted 17 文件分析 0 问题，Android 原生
 Kotlin/Java 单元测试 Gradle 17 个 task 成功。
 
-任何编译状态和原生产物都必须写入调用方指定的源码树外目录。本机唯一允许目录是
-`/Users/rhett/TATA/tataconsole/target/citizensdk`。
+任何编译状态和原生产物都必须写入源码树外的中央目录。本机成功产物容器是
+`/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，工作状态容器是
+`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK`；永久容器保留，只清理本次
+有明确归属的子项，不能在产品源码内生成构建记录。
+
+## Windows Host 与同一 Core
+
+第 8.1 步的 `../windows/` 只增加系统 Host。唯一构建器继续从原 `ffi/Cargo.toml` 生成
+`citizensdk.dll`，Host 用 import library 链接它；不在 native/ 新建 Engine、signer 或
+provider。TPM 只保护 KEK/DEK，sr25519、链协议和交易实现保持字节不变。
+
+第 8.2 步 Windows Flutter adapter 只消费已安装的同版 Host/Core，不在 native 新增绑定、
+算法或平台分支。固定 22 方法、秘密不跨 Flutter、关闭 BUSY 可重试；一次性原生
+application_id 声明只固定数据命名空间，不改变 Core 身份或 chain ID。第 8.4 步已把
+Windows 纳入默认公开平台与唯一候选。唯一构建器在原生及 C/C++ 消费通过后，执行六项
+Flutter adapter CTest 与真实公开 Release 消费者，全部通过才复验并导出；本机 macOS
+验证不冒充这些 Windows 测试已经运行。公共链、钱包、交易和签名仍只由同一 Core 实现。

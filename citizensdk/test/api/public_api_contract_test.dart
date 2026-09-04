@@ -22,7 +22,7 @@ void main() {
     );
   });
 
-  test('Flutter三平台channel名称、22方法及无任意RPC/裸extrinsic闭集固定', () {
+  test('Flutter五种平台注册共用channel、22方法及无任意RPC/裸extrinsic闭集', () {
     expect(FlutterCitizenSdkPlatform.methodChannelName, 'citizen/sdk/core/v1');
     expect(FlutterCitizenSdkPlatform.eventChannelName, 'citizen/sdk/events/v1');
     expect(CitizenSdkFlutterCodec.methods, hasLength(22));
@@ -32,11 +32,12 @@ void main() {
     expect(CitizenSdkFlutterCodec.methods, isNot(contains('exportPrivateKey')));
   });
 
-  test('Android、iOS与macOS默认选择同一Flutter transport', () async {
+  test('Android、iOS、macOS、Linux与Windows默认选择同一Flutter transport', () async {
     CitizenSdkPlatform.instance = null;
     const core = MethodChannel(FlutterCitizenSdkPlatform.methodChannelName);
     const events = MethodChannel(FlutterCitizenSdkPlatform.eventChannelName);
     var nextSession = 0;
+    var closes = 0;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(events, (_) async => null);
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
@@ -52,6 +53,7 @@ void main() {
             ];
           }
           if (call.method == 'close') {
+            closes++;
             return <Object?>[
               1,
               arguments[1],
@@ -74,23 +76,45 @@ void main() {
       TargetPlatform.android,
       TargetPlatform.iOS,
       TargetPlatform.macOS,
+      TargetPlatform.linux,
+      TargetPlatform.windows,
     ]) {
       debugDefaultTargetPlatformOverride = target;
       final sdk = await CitizenSdk.open();
       expect(sdk.lifecycle, CitizenSdkLifecycle.created);
       await sdk.close();
+      expect(sdk.lifecycle, CitizenSdkLifecycle.disposed);
+      await sdk.close();
     }
-    expect(nextSession, 3);
+    expect(nextSession, 5);
+    expect(closes, 5);
   });
 
-  test('未交付平台不会误走Flutter channel', () async {
+  test('Fuchsia未支持平台在进入任何channel前拒绝', () async {
     CitizenSdkPlatform.instance = null;
-    debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+    const core = MethodChannel(FlutterCitizenSdkPlatform.methodChannelName);
+    const events = MethodChannel(FlutterCitizenSdkPlatform.eventChannelName);
+    var calls = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(core, (_) async {
+          calls++;
+          throw StateError('未支持平台不应进入原生通道');
+        });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(events, (_) async {
+          calls++;
+          throw StateError('未支持平台不应订阅原生事件');
+        });
     addTearDown(() {
       debugDefaultTargetPlatformOverride = null;
       CitizenSdkPlatform.instance = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(core, null);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(events, null);
     });
 
+    debugDefaultTargetPlatformOverride = TargetPlatform.fuchsia;
     await expectLater(
       CitizenSdk.open(),
       throwsA(
@@ -101,6 +125,54 @@ void main() {
         ),
       ),
     );
+    expect(calls, 0);
+  });
+
+  test('五种默认平台缺少原生插件时失败关闭且不替换transport', () async {
+    CitizenSdkPlatform.instance = null;
+    const core = MethodChannel(FlutterCitizenSdkPlatform.methodChannelName);
+    const events = MethodChannel(FlutterCitizenSdkPlatform.eventChannelName);
+    var opens = 0;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(events, (_) async => null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(core, (call) async {
+          expect(call.method, 'open');
+          expect(call.arguments, const <Object?>[1]);
+          opens++;
+          // 所有已开放平台都走官方通道；缺少插件时不得伪造原生 session。
+          throw MissingPluginException('CitizenSDK plugin missing');
+        });
+    addTearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      CitizenSdkPlatform.instance = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(core, null);
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(events, null);
+    });
+
+    for (final target in <TargetPlatform>[
+      TargetPlatform.android,
+      TargetPlatform.iOS,
+      TargetPlatform.macOS,
+      TargetPlatform.linux,
+      TargetPlatform.windows,
+    ]) {
+      debugDefaultTargetPlatformOverride = target;
+      await expectLater(
+        CitizenSdk.open(),
+        throwsA(
+          isA<CitizenSdkException>().having(
+            (error) => error.code,
+            'code',
+            CitizenSdkErrorCode.unsupported,
+          ),
+        ),
+      );
+    }
+    expect(opens, 5);
+    expect(CitizenSdkPlatform.instance, isNull);
   });
 }
 

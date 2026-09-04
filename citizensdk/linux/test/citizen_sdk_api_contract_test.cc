@@ -114,6 +114,12 @@ int main() {
                        std::istreambuf_iterator<char>());
   };
   const std::string cmake = read_source("/CMakeLists.txt");
+  // GNU 扩展模式的 linux 宏不得改写 citizen_sdk::linux 命名空间。
+  assert(cmake.find("set(CMAKE_CXX_EXTENSIONS OFF)") != std::string::npos);
+  const std::string gtk_parent = read_source("/src/citizen_sdk_gtk_parent.cc");
+  assert(gtk_parent.find(
+             "static_cast<GObject *>(g_weak_ref_get(&impl_->weak))") !=
+         std::string::npos);
   assert(cmake.find("$<BUILD_INTERFACE:citizensdk_core>") !=
          std::string::npos);
   assert(cmake.find("$<INSTALL_INTERFACE:CitizenSDK::Core>") !=

@@ -296,6 +296,19 @@ int main() {
   assert(read_text_pragma(wrong_schema / "secure-state-v1.sqlite3",
                           "PRAGMA journal_mode") == "delete");
 
+  // 初始化计数与既有 schema 计数分别守门：版本为零时同样不得忽略 sqlitex_* 表。
+  const auto uninitialized = temporary.path() / "sqlitex-secure-uninitialized";
+  std::filesystem::create_directory(uninitialized);
+  const auto uninitialized_database = uninitialized / "secure-state-v1.sqlite3";
+  execute_sql(uninitialized_database, "CREATE TABLE sqlitex_extra(value BLOB);");
+  assert(read_text_pragma(uninitialized_database, "PRAGMA user_version") == "0");
+  expect_integrity_on_open(uninitialized);
+  assert(read_text_pragma(uninitialized_database, "PRAGMA user_version") == "0");
+  assert(read_text_pragma(uninitialized_database, "PRAGMA journal_mode") == "delete");
+  assert(read_text_pragma(uninitialized_database,
+                         "SELECT count(*) FROM sqlite_master WHERE name IN "
+                         "('wallet_profile','encrypted_secret','vault_generation','vault_object')") == "0");
+
   const auto extra_schema = temporary.path() / "extra-secure-schema";
   {
     SecureStore store(extra_schema);
@@ -303,6 +316,23 @@ int main() {
   execute_sql(extra_schema / "secure-state-v1.sqlite3",
               "CREATE TABLE unexpected_secret(value BLOB);");
   expect_integrity_on_open(extra_schema);
+
+  // 密文库同样拒绝 sqlitex_* 用户表/触发器，不能把 '_' 当任意单字符通配符。
+  const auto disguised_table = temporary.path() / "sqlitex-secure-table";
+  {
+    SecureStore store(disguised_table);
+  }
+  execute_sql(disguised_table / "secure-state-v1.sqlite3",
+              "CREATE TABLE sqlitex_extra(value BLOB);");
+  expect_integrity_on_open(disguised_table);
+  const auto disguised_trigger = temporary.path() / "sqlitex-secure-trigger";
+  {
+    SecureStore store(disguised_trigger);
+  }
+  execute_sql(disguised_trigger / "secure-state-v1.sqlite3",
+              "CREATE TRIGGER sqlitex_extra AFTER INSERT ON wallet_profile "
+              "BEGIN SELECT 1; END;");
+  expect_integrity_on_open(disguised_trigger);
 
   const auto corrupt_revision = temporary.path() / "secure-corrupt-revision";
   {

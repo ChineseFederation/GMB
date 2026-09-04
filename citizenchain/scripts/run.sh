@@ -111,7 +111,7 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
 GMB_REPOSITORY_ROOT="$(dirname "$REPO_ROOT")"
 : "${TATA_CONSOLE_TARGET_ROOT:?公民链本机编译必须由TataConsole提供中央产物目录}"
 : "${TATA_CONSOLE_WORK_DIR:?公民链本机编译必须由TataConsole提供中央工作目录}"
-[[ "$TATA_CONSOLE_WORK_DIR" == "$TATA_CONSOLE_TARGET_ROOT/.work/citizenchain-macos" ]] || {
+[[ "$TATA_CONSOLE_WORK_DIR" == "$TATA_CONSOLE_TARGET_ROOT/.work/GMB/citizenchain-node/macos" ]] || {
     echo "    [error] 公民链中央工作目录不合法：$TATA_CONSOLE_WORK_DIR" >&2
     exit 1
 }
@@ -126,7 +126,7 @@ export npm_config_cache="$INCREMENTAL_CACHE_DIR/npm"
 NODE_FRONTEND_DIST="$TATA_CONSOLE_WORK_DIR/node-frontend"
 ONCHINA_BUILD_DIST="$TATA_CONSOLE_WORK_DIR/onchina-frontend/dist"
 PACKAGE_RESOURCES="$TATA_CONSOLE_WORK_DIR/resources"
-ARTIFACT_DIR="$TATA_CONSOLE_TARGET_ROOT/citizenchain"
+ARTIFACT_DIR="$TATA_CONSOLE_TARGET_ROOT/GMB/citizenchain-node/macos"
 GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 
 # 读取仓库统一依赖真源中的精确 Node.js 版本和 npm lockfile。

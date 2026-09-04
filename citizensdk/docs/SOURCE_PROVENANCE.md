@@ -1,5 +1,36 @@
 # CitizenSDK 源码来源与同步策略
 
+## 固定原生静态依赖来源（第 10.5 步）
+
+下列官方归档已核验实际下载字节；它们不是 CitizenApp 的逐字节收编源码，也不是本机
+已编译验证的依赖。完整官方源码只在中央准备工作区解包，SDK 源树没有新增源码副本或产物。
+
+| 组件 | 官方准确归档 | SHA256 |
+| --- | --- | --- |
+| SQLite 3.53.4 | https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip | 1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d |
+| OpenSSL 3.5.8 | https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz | a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2 |
+| TPM2-TSS 4.2.0 | https://github.com/tpm2-software/tpm2-tss/releases/download/4.2.0/tpm2-tss-4.2.0.tar.gz | b53f0c5c8c4ce17f05701a410ca9688f725ca380c9bc4640eacd0eadb1fea124 |
+
+SQLite 官方发布页提供的 SHA3-256 为
+628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e；
+上表 SQLite SHA256 是对同一通过官方 SHA3 校验的归档另行计算，不冒称官方公布。
+OpenSSL/TPM2-TSS SHA256 与官方 GitHub Release asset digest 一致。
+
+既有 LICENSE 原文保留；追加 SQLite sqlite3.h 的 public-domain 声明、OpenSSL 完整
+LICENSE.txt、TPM2-TSS 完整 LICENSE。OpenSSL 原文 SHA256：
+7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a；
+TPM2-TSS 原文 SHA256：
+18c1bf4b1ba1fb2c4ffa7398c234d83c0d55475298e470ae1e5e3a8a8bd2e448。
+根 THIRD_PARTY_NOTICES.md 保留所选生产源码/头的版权归属，不能因 TPM2-TSS 根许可
+未列版权人而遗漏声明。OpenSSL 没有额外 NOTICE 文件；未交付的 FAPI/SPI/I2C/Policy、
+OpenSSL Perl 构建工具不冒充本次运行库闭集。
+
+当前两端使用的 24 个 SQLite 函数均在固定官方 sqlite3.h 中存在；
+TPM2-TSS 的 esys_crypto_ossl.c 包含 OpenSSL 3 的正式分支。以上仅证明接口声明和来源，
+不代表实际链接或运行通过。准备参数、八个 TSS2 头、142 个 OpenSSL 头、静态对象门禁及
+生成证据职责见 NATIVE_PACKAGING.md；中央合同是版本/来源准备唯一入口，SDK 只固定其摘要。
+
+
 ## 权威来源
 
 `/Users/rhett/GMB/citizensdk` 是 CitizenSDK 产品源码、测试、锁文件、文档与打包脚本的唯一
@@ -16,10 +47,10 @@ CitizenApp、CitizenWallet 或上游 fork，必须列出两侧精确文件、分
 
 ## 版本权威
 
-`pubspec.yaml` 是 CitizenSDK 软件版本入口；`android/build.gradle` 与
-`darwin/citizen_sdk.podspec` 必须保存同一版本。首个稳定源码版本冻结为 `1.0.0`。Release 请求的
+`pubspec.yaml` 是 CitizenSDK 软件版本入口；`android/build.gradle`、
+`darwin/citizen_sdk.podspec`、`linux/CMakeLists.txt` 与 `windows/CMakeLists.txt` 必须保存同一版本。首个稳定源码版本冻结为 `1.0.0`。Release 请求的
 software version 必须等于该提交的源码版本，生成后 `citizensdk-release.json`、Dart pubspec、
-Android Gradle 和 Darwin podspec 还会再次交叉核验。发布器不允许从 `0.1.0` 或其它旧版本源码在
+Android Gradle、Darwin podspec、Linux CMake 和 Windows CMake 还会再次交叉核验。发布器不允许从 `0.1.0` 或其它旧版本源码在
 Runner 中临时改号成 `1.0.0`，未来升级也必须先提交准确版本源码。
 
 版本冻结只证明候选身份，不等于 Hosted Registry 已接受该版本；首次不可逆发布必须另行取得
@@ -121,7 +152,7 @@ formatter 归一外不改行为；发布器继续对迁移闭集逐文件固定�
 `target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前产品
 ABI 投影覆盖 Android、iOS 与 macOS。当前 Android ABI 为 `arm64-v8a`；iOS 设备与模拟器变体
 及 macOS 的 Apple machine slice 架构值为 `arm64`。本机宿主测试库与全部生成记录只能写入
-`/Users/rhett/TATA/tataconsole/target/citizensdk` 下的任务独占目录；Linux 合同测试由
+`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；Linux 合同测试由
 `CITIZENSDK_TEST_WORK_DIR` 显式接收现有 `0700` 目录且没有 `/tmp` fallback。远程 Runner 也
 必须由统一流程显式注入其 checkout 外的任务独占构建根，不能让测试自行选择临时目录。
 legacy `libsmoldot.dylib` 仅允许 macOS `arm64` 差分测试；
@@ -437,13 +468,18 @@ iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Rele
 运行声明。Flutter 对插件 Swift Package Manager 目录的未来识别警告和 Android built-in
 Kotlin 迁移提示延后到第 9 步 Hosted/Flutter 集成处理，不在第 6 步引入第二套投影。
 
-## Linux 自有 Host 投影
+## Linux 自有 Host 与 Flutter 投影
 
 `linux/` 是 CitizenSDK 自有 LinuxARM/LinuxAMD Host 源码，不从 CitizenApp、Android、Darwin
 或另一个仓库运行时读取文件。它复用的是根产品 C ABI 的语义，不是把 Apple/Kotlin 代码机械
 翻译成第二份 Engine：HostBridge、typed SQLite、TPM 2.0 Vault、SDK-owned GTK 钱包流程和
 header-only C++ facade 都位于 CitizenSDK 权威目录；链、Runtime、钱包状态机、sr25519 和交易
 继续只有 Rust Core 一份真源。
+
+第 7.2 步在同一 `linux/` 权威目录实现 Flutter codec、sessions、wallet-flow bridge、environment
+和 plugin。它按根 Dart tuple 及 Android/Darwin 已验证装配合同做平台适配，但不复制三端
+源码作为运行依赖，也不复制 Core 行为。Linux 新增生产/测试文件全部进入既有 Release 来源
+哈希与目录反向闭集；第 8.2 步后五份绑定的 22 方法表由 Node 来源合同逐项对拍。
 
 Linux store 的 openat SQLite VFS、精确 schema/PRAGMA/commit 合同，Host admission lease 与
 无损早完成路由，Vault retirement 条件写/长提示后重验，GTK parent 销毁退休，以及 TPM child
@@ -453,14 +489,40 @@ Android/Apple 适配源码作为运行时依赖。
 
 第 7.1 步没有把 TPM2-TSS、SQLite、GTK 或 C++ runtime 的第三方源码/二进制复制进仓库，
 也没有生成 Linux `.so`。这些依赖的最终锁定来源、版本、链接方式、许可证和可重分发闭包必须
-由第 7.3 步真实构建产物反向得出；不能用设计文档臆测替代。Linux Host 自有源码适用根 MIT
+由后续统一 GitHub CI/Release 的真实 Linux 构建产物反向得出；不能用设计文档或本机 macOS
+编译结果臆测替代。Linux Host 自有源码适用根 MIT
 许可证，外部依赖仍适用各自许可证。
 
-第 7.1 步新增的 `linux/test` 是对应 Host 的 canonical 合同测试源码，覆盖同一 ABI/Host
+第 7.1/7.2 步新增的 `linux/test` 是对应 Host/Flutter adapter 的 canonical 合同测试源码，覆盖同一 ABI/Host
 语义和 Linux 专属 store/TPM/UI 边界。该步没有执行这些测试，未验证 LinuxARM/LinuxAMD，
-也未修改 Flutter/Hosted 公开平台声明。源码同步若改变根 ABI 或 Rust envelope/schema，必须
+也未修改 Flutter/Hosted 公开平台声明。第 7.2 步同样只写测试源码并执行 Node 来源合同；
+源码同步若改变根 ABI 或 Rust envelope/schema，必须
 同时更新 Linux Host、测试、本文和 `LINUX_PLATFORM.md`，禁止以平台适配文件反向覆盖 Core
 真源。
+
+第 7.3 步的四个消费者输入位于既有 `linux/test/`：`CitizenSDKConsumer.cmake`、
+`citizen_sdk_c_consumer.c`、`citizen_sdk_cpp_consumer.cc`、`citizen_sdk_flutter_consumer.dart`。
+它们是 SDK 自有验收源码，不是新的绑定、协议或 Core；与修改后的测试 CMake 一起进入既有
+测试哈希闭集。安装和临时 Flutter 工程仍由唯一 `scripts/build-native.sh` 装配，不增加工作流。
+第 7.4 步把两种单平台 19 项安装件合并为唯一候选 `linux/` 下的 26 项：根 C ABI 与 7 个
+Host/C++ 头、3 个 CitizenChain 资产的重叠必须字节一致；每个平台的双库及 5 项 CMake 包
+配置分别隔离。源码树仍只保存 canonical 输入，准确生成投影只在中央候选中存在。
+Hosted 精确保留 38 项 Linux 运行输入，即 26 项安装件加 `CMakeLists.txt`、
+`cmake/CitizenSDKFlutter.cmake`、5 个 plugin `.cc`、4 个内部 `.hpp` 和 Flutter 注册头。
+原生 Host 私有源码、测试和构建模板仍只用于 GitHub 审计闭集，不进入 Hosted。
+同轮同步官方 `linux` 注册与默认 `CitizenSdk.open()`；真实 Flutter 消费者不注入内部 platform、
+不临时改写 pubspec，也不由 runner 补充 plugin 的 `$ORIGIN`。这些是候选源码合同，不是
+Linux 运行或正式发布结果；真实同版产物、依赖与许可证证据不齐不得生成可分发候选。
+当前开发以本机 macOS 编译通过为验收标准；2026-09-03 已通过既有 `abi-host` 与 `apple`。
+前者验证 Core/C ABI 和 C11/C++17 头，后者完成 iOS 设备、iOS 模拟器及 macOS 的 Swift/Flutter
+原生绑定编译和单一 XCFramework 验证；第 7.3 步该轮没有运行平台 XCTest，也没有修改生产实现。
+不再等待用户提供 Linux/TPM 环境。跨平台构建与功能验证后续统一进入 GitHub CI/Release，CI 使用
+增量缓存，Release 使用全量构建，保持同一 Core commit、SDK 版本、ABI 版本和一个 CitizenSDK
+Release，不拆分平台产品或另建流程。
+后续 Linux 测试使用的 Flutter 工具和 Dart Hosted 缓存必须来源明确且预先备齐，只能在获准的
+中央临时目录内产生工具状态；缺失时失败，不自动下载。静态依赖实际版本、许可证、GTK/TPM
+及两种 Linux 运行事实由该统一验证分项记录；目前尚未运行，Node 来源合同与 macOS 编译均不能
+证明这些外部运行事实，也不能把 Linux 源码注册写成已正式发布。
 
 ## 锁文件与测试收编
 
@@ -556,3 +618,111 @@ Android JUnit 3/3、Release 合同 18/18、TataConsole 99/99 与统一数据字�
 
 任何同步都不得在 CI/Release 时回指 CitizenApp，也不得让一个产品静默覆盖另一个产品的
 权威源码。
+
+## Windows 原生 Host 来源与差异（第 8.1 步）
+
+本轮原有 Core/FFI、Engine、signer、smoldot、链资产保持字节不变。平台无关 C++ 包装、
+HostRecord、输入上限、Lifecycle、RecordKey、PublicStore、钱包 validation 和流程来自已审查
+Linux Host，保留算法并迁移相应测试，平台无关部分仅调整内部 namespace/guard/平台注释。
+Operation 同源，但本机 C++ 测试揭示不能依赖 `std::function` 移动后必为空；Windows 改为与
+空对象 `swap`，并补测试的直接头依赖。Windows SQLite 的结构闭集改用 `GLOB 'sqlite_*'`
+精确识别系统前缀，不能沿用把下划线当通配符的 `LIKE`。第 8.1 步没有反向修改 Linux；
+用户另行确认的第 8.1.1 步已将三项必要修正应用到 Linux，并补初始化、既有库和重入测试。
+两平台的这些修正是明确登记的 SDK 实现修正，不能写成仍与原始 Linux 基线逐字节一致。
+不能称作逐字节复制的必要差异：HWND 和 UTF-8 path、UI 退休握手、Win32 安全输入、
+SecureZeroMemory、HANDLE/ACL/SQLite VFS、PCP 持久 KEK 引用与跨实例串行化、MSVC CMake。
+唯一 release.mjs 固定新源码、注释、测试与文档闭集；没有新链、交易或签名实现。Windows
+仍未实际编译/运行/发布，来源检查和 macOS 编译不能替代平台证据。
+
+## Windows Flutter adapter 来源与差异（第 8.2 步）
+
+固定双通道、22 方法、tuple 语义、公开结果与事件映射沿用现有绑定合同；Windows codec
+的请求语义与 Linux 对应段逐段核对，不把平台迁移写成重新设计链或钱包。Windows 使用
+官方 EncodableValue 与 StandardMethodCodec，删除 Linux GLib 专用的字符串表示适配。
+官方解码前增加有界标准 wire 预检，拒绝截断、尾随及资源超限，但仍由官方 codec 产生
+MethodCall；这是明确登记的 Windows 输入安全适配，不改固定方法或合法 tuple 语义。
+会话与钱包流程沿用既有所有权规则，增加 Windows Host 已释放 Core、仍等待原生 UI 退休
+时的关闭重试守门；初次缺少 Core 或非法生命周期不被放行。这些明确的平台适配差异不能
+宣称整个新文件与 Linux 逐字节一致。
+
+环境解析、Win32 UI 队列、官方 BinaryMessenger 注册、BCryptGenRandom 和 MSVC CMake 是
+Windows 适配源码，不是上游原文。适配器只连接已安装 Host/Core、调用现有安全钱包 UI，
+不包含 Host 私有实现、不重编译密码学或轻节点。原生 Host、Rust/Core/FFI、signer、smoldot、
+链资产、Dart .dart 文件和原生构建器均不在本步修改。
+Windows 生产来源闭集由 51 增至 62 文件，测试输入由 17 增至 24 文件；新增六项 adapter
+测试和一个共享 helper。唯一 release.mjs 同时固定五份绑定与所有获准来源摘要；Windows
+默认入口、Hosted 注册与候选投影在第 8.4 步接入；实际平台执行仍留统一 GitHub 验收。
+
+## 本机发布器路径门禁（第 8.2.1 步）
+
+唯一发布器改用中央 `target/GMB/citizensdk/SDK` 与 `target/.work/GMB/citizensdk/SDK`
+两个固定永久根，仅接受严格子路径；只核验命中根，不改 GitHub 隔离分支。回归测试提取
+生产校验函数原文，在有限文件状态中执行，不复制算法或增加生产测试入口；既有真实
+磁盘链接与完整打包测试保留。本步仅修改发布器、其测试和五份 SDK 文档，逐文件来源摘要
+同步固定；原生构建器、Core/FFI、钱包、签名、轻节点、各平台实现和候选内容均不变。
+
+## Windows 已安装 C/C++ 消费者（第 8.3 步）
+
+新增两份消费者及独立 CMake 输入，Windows 测试闭集由 24 增至 27，整个 SDK 自有测试
+闭集由 192 增至 195。消费者仅使用现有公开 C/C++ API 与已安装同版库；生命周期和结果
+所有权沿用现有合同，Windows 路径、等待和 DLL 来源检查使用系统 API，不新增链算法。
+唯一原生构建器增加 21 项安装闭集及本轮来源字节核对，保留 14 项原生 CTest，再验证两个
+安装消费者，全部成功后才导出全新安装目标。Node 合成安装和 PE 输入测试校验逻辑，
+不能作为 Windows 编译、Win32、TPM 或钱包运行证据。
+
+本步不修改 Host/Core/FFI、签名、钱包、轻节点、链资产、Dart 入口或其它平台实现；根
+Hosted 与候选当时不开放 Windows，后续接入见第 8.4 步。文档、测试及唯一发布器中的
+来源摘要同步固定。
+
+## Windows 正式入口与运行投影（第 8.4 步）
+
+唯一 CitizenSdk 默认平台与 pubspec 官方 Windows 注册一起接入。新 Flutter 消费者沿用
+既有公开生命周期、事件、能力和关闭合同，按 Windows Release 环境检查；不复制 Linux
+XDG/GTK 路径，不注入内部平台或变更 SDK 副本。Windows 测试输入由 27 增至 28 文件，
+SDK 自有测试合同由 195 增至 196，Windows 原有 62 份生产源码不新增算法。
+
+同一发布器验证并复制 21 项安装件，七个重叠 Host 头必须与来源相同，剩余十四项精确注入。
+Hosted 只保留 33 项 Windows 运行输入，不带入 Host 私有实现；正式候选共享同一 SDK
+版本、ABI 和平台集合。PE/COFF、导出/依赖和 CMake/资产结构检查不能证明二进制来自某个
+commit，构建来源、许可证和真实 Windows 行为仍由后续统一 CI/Release 提供。
+
+唯一构建器保留 14+2 检查并连接既有六项 adapter CTest 与真实公开 Flutter Release 消费者。
+本步不修改 Core、Host、签名、轻节点、链资产或其它平台实现；没有新构建/发布流程。
+源码、测试、文档与摘要同一步同步；本机 macOS 与合成夹具不冒称 Windows 实测。
+
+## 官方 Hosted 归档与完整验真（第 9.1 步）
+
+`release.mjs` 的新 Hosted 编排、完整闭集和有界 gzip/tar 校验是 CitizenSDK 自有安全适配，
+不是公民链算法移植，也不宣称是 Pub 源码逐字节复制。旧审计候选/归档反向校验保持不变；
+不改 `.pubignore`、Core/ABI、平台实现、链资产、钱包或 signer。
+
+依据 Dart 3.12.2 `DEPS`，固定 Pub 来源 revision 为
+`74408212b5348003381bc63f3b59274aaa23cfa3`，tar 来源 revision 为
+`13479f7c2a18f499e840ad470cfcca8c579f6909`。核对官方 `lish.dart` 的独立 dry-run/local-archive
+分支、`io.dart` 的链接展开和权限，以及 tar writer 的 GNU 长名、版本字段和终止记录后，
+通过实际官方工具往返验证，而不是只验证自行构造的 tar。版本锁定不等于第三方工具二进制
+供应链签名认证；后续统一流程仍须提供自己的受信任工具来源。
+
+来源投影逐路径/类型/模式/字节对应同一候选；Apple convenience links 在审计归档保留身份，
+在 Hosted 按已验真目标展开。格式夹具覆盖六个公开平台标签，不能作为真实库构建来源或
+体积证明；真实 macOS 安装消费与统一全平台正式产物验证仍未由本步完成。
+
+本机测试在只允许中央工作根写入的外部 sandbox 中执行，额外拒绝 Git 执行、用户 Pub cache
+和 Dart 配置/凭据读取；隔离缓存只复制已有 lock 所列依赖及对应 hash 记录，不复制凭据。
+未执行原生编译、Hosted 上传、远程 CI/Release、Git 或控制台操作。源码闭集、摘要、准确
+成绩和独占临时目录清理记录统一见中央任务卡第 34 节。
+
+## macOS 公开包消费者来源（第 9.2 步本机开发验收完成）
+
+`darwin/Tests/citizen_sdk_flutter_consumer.dart` 从已有 Windows 公开消费者最小适配，
+保留同一 CitizenSdk API、Release 真条件、事件/关闭合同和超时，改为 macOS 平台判断与
+准确宿主隔离说明。它是测试输入，不进入 Hosted 运行包，不修改 Core、ABI 或绑定。
+自有测试来源闭集因此由 196 增至 197；完整候选仍保持一个 SDK 版本和平台集合。
+
+本机真实 Apple 构建、混合格式件的本地测试候选、官方 Hosted 编码和真实 macOS Flutter
+运行是不同证据，必须分别记录。既有 Apple Swift smoke 和内部源码测试不是这次正式
+Flutter 安装的证明；失败或等待授权时不能写为通过。具体成绩及工具/状态隔离见中央
+任务卡第 35 节；没有授权修改 Flutter 官方启动脚本、宿主生产 SDK 或其它平台源码。
+用户已确认将实际 Flutter macOS 安装运行移交第 10 步 GitHub 统一 CI，本机保留已通过
+的 Apple 原生编译和包合同。原 Xcode/SwiftPM 权限失败仍为失败；范围调整不产生新的
+运行成功证据，也不把其它平台格式件升级为真实件或正式发布包。

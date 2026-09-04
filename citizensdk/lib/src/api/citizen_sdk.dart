@@ -25,8 +25,10 @@ final class CitizenSdk {
 
   /// 打开当前受支持平台的 CitizenSDK session，但不隐式启动轻节点。
   ///
-  /// Flutter 产品投影当前覆盖 Android、iOS 与 macOS；三个投影使用
-  /// 完全相同的公开 API、22 个固定 tuple 方法和事件合同。
+  /// Flutter 产品投影覆盖 Android、iOS、macOS、Linux 与 Windows；Linux 的两种
+  /// 机器目标共用官方 linux 注册。全部使用相同的公开 API、22 个固定
+  /// tuple 方法和事件合同；同版原生插件缺失时失败关闭，不注入替代实现。
+  /// Windows 宿主在构建时声明 CITIZENSDK_APPLICATION_ID；此入口不接收路径或秘密。
   static Future<CitizenSdk> open() async {
     final codec = const CitizenSdkFlutterCodec();
     final platform = CitizenSdkPlatform.instance ?? _defaultPlatform();
@@ -44,13 +46,15 @@ final class CitizenSdk {
     if (!kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.android ||
             defaultTargetPlatform == TargetPlatform.iOS ||
-            defaultTargetPlatform == TargetPlatform.macOS)) {
+            defaultTargetPlatform == TargetPlatform.macOS ||
+            defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.windows)) {
       return _defaultFlutterPlatform;
     }
     throw const CitizenSdkException(
       code: CitizenSdkErrorCode.unsupported,
       message:
-          'CitizenSDK Flutter binding 当前仅支持 Android、iOS 与 macOS',
+          'CitizenSDK Flutter binding 当前仅支持 Android、iOS、macOS、LinuxARM、LinuxAMD 与 Windows',
     );
   }
 

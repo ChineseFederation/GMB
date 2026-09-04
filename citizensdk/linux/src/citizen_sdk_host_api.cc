@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <condition_variable>
 #include <filesystem>
 #include <exception>
 #include <iterator>
@@ -22,10 +21,6 @@ namespace {
 
 thread_local std::string last_error;
 std::mutex &registry_lock() { static auto *value = new std::mutex(); return *value; }
-std::condition_variable &registry_idle() {
-  static auto *value = new std::condition_variable();
-  return *value;
-}
 
 struct HostEntry final {
   std::shared_ptr<HostBridge> host;
@@ -95,7 +90,6 @@ class HostLease final {
       std::lock_guard<std::mutex> guard(registry_lock());
       if (entry_->active_calls == 0) std::terminate();
       --entry_->active_calls;
-      registry_idle().notify_all();
     } catch (...) {
       std::terminate();
     }
@@ -124,7 +118,7 @@ HostLease acquire_host(citizensdk_host_handle_t handle,
 citizensdk_error_code_t begin_retirement(
     citizensdk_host_handle_t handle, const HostLease &lease,
     bool abandon) {
-  std::unique_lock<std::mutex> guard(registry_lock());
+  std::lock_guard<std::mutex> guard(registry_lock());
   const auto found = registry().find(handle);
   if (found == registry().end() || found->second != lease.entry()) {
     return CITIZENSDK_ERROR_INVALID_HANDLE;
@@ -134,16 +128,15 @@ citizensdk_error_code_t begin_retirement(
     return abandon && entry->abandoned ? CITIZENSDK_OK
                                        : CITIZENSDK_ERROR_BUSY;
   }
+  // Never wait for another public call here. A callback-registration call may
+  // itself be waiting for this callback thread, and GTK calls may be needed
+  // to finish a provider. Returning BUSY keeps both callers able to unwind.
+  if (!abandon && entry->active_calls != 1) return CITIZENSDK_ERROR_BUSY;
   entry->retiring = true;
-  entry->abandoned = abandon;
-  try {
-    registry_idle().wait(guard, [&] { return entry->active_calls == 1; });
-  } catch (...) {
-    entry->retiring = false;
-    entry->abandoned = false;
-    registry_idle().notify_all();
-    throw;
-  }
+  // Do not advertise successful supervision until its callback barrier and
+  // worker admission have both committed. Concurrent abandon calls are BUSY
+  // while this first caller still has a fallible admission step to perform.
+  entry->abandoned = false;
   return CITIZENSDK_OK;
 }
 
@@ -152,7 +145,6 @@ void cancel_retirement(const std::shared_ptr<HostEntry> &entry) noexcept {
     std::lock_guard<std::mutex> guard(registry_lock());
     entry->retiring = false;
     entry->abandoned = false;
-    registry_idle().notify_all();
   } catch (...) {
     std::terminate();
   }
@@ -180,6 +172,16 @@ void supervise_abandoned_host(
   const std::shared_ptr<HostBridge> host = entry->host;
   auto delay = std::chrono::milliseconds(10);
   for (;;) {
+    bool leases_retired = false;
+    try {
+      std::lock_guard<std::mutex> guard(registry_lock());
+      leases_retired = entry->abandoned && entry->active_calls == 0;
+    } catch (...) {}
+    if (!leases_retired) {
+      try { std::this_thread::sleep_for(delay); } catch (...) {}
+      delay = std::min(delay * 2, std::chrono::milliseconds(5000));
+      continue;
+    }
     try { (void)host->set_event_callback(nullptr, nullptr); } catch (...) {}
     const citizensdk_handle_t sdk = host->sdk();
     if (sdk != 0) {
@@ -365,11 +367,15 @@ citizensdk_error_code_t citizensdk_host_destroy(
     }
     std::lock_guard<std::mutex> guard(registry_lock());
     const auto found = registry().find(host_handle);
-    if (found == registry().end() || found->second != host.entry() ||
-        found->second->active_calls != 1) {
+    if (found == registry().end() || found->second != host.entry()) {
       set_error("CitizenSDK closed Host registry ownership is inconsistent");
       return CITIZENSDK_ERROR_INTERNAL;
     }
+    // begin_retirement admitted destroy with exactly its own lease and closed
+    // all ordinary entries. A later include_retiring abandon probe may hold a
+    // registry-only lease, but sees retiring/non-abandoned and cannot borrow
+    // HostBridge. Its shared_ptr keeps the entry alive after this erase; it
+    // must not strand a successfully closed Host in a permanent retiring state.
     registry().erase(found);
   } catch (...) {
     if (retirement_started) cancel_retirement(host.entry());
@@ -409,11 +415,16 @@ citizensdk_error_code_t citizensdk_host_abandon(
   }
   std::thread supervisor;
   try {
+    // The worker cannot observe the entry before this lock is released. The
+    // committed flag therefore means both detach and the callback barrier
+    // succeeded; no second abandon can report success for a failed attempt.
+    std::lock_guard<std::mutex> guard(registry_lock());
     supervisor = std::thread(
         [host_handle, entry = host.entry()] {
           supervise_abandoned_host(host_handle, entry);
         });
     supervisor.detach();
+    host.entry()->abandoned = true;
   } catch (...) {
     if (supervisor.joinable()) std::terminate();
     cancel_retirement(host.entry());

@@ -55,9 +55,10 @@ The checked-in package manifest and podspec consume the XCFramework injected
 into this directory by the canonical candidate builder. Build intermediates,
 archives, DerivedData, Pods, SwiftPM state and the XCFramework itself must stay
 under TataConsole's central CitizenSDK work directory and never be committed.
-For local Step 6 verification that root is exactly
-`/Users/rhett/TATA/tataconsole/target/citizensdk/step6-verification`; it must not
-reuse TataConsole's independently managed and cleaned `.work` directory.
+本机当前工作根固定为
+`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK`，只使用本任务独占子目录。
+成功产物根为 `/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，已有产物不能被
+失败验收覆盖。第 6 步路径仅是任务卡内已结束的历史记录，不是当前生成目录。
 
 The Step 6 Flutter consumer built an Android release APK for ABI `arm64-v8a`, an unsigned iOS
 device Release app, a generic iOS simulator variant target using `aarch64-apple-ios-sim`, and a macOS Release

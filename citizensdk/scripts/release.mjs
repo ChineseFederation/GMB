@@ -2,16 +2,26 @@
 
 // CitizenSDK 确定性候选打包器。源码只读，所有候选和归档必须落在源码树之外。
 import { createHash } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { gzipSync, inflateRawSync } from 'node:zlib';
 import {
   copyFileSync,
+  chmodSync,
+  closeSync,
+  constants,
+  cpSync,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   readlinkSync,
   realpathSync,
   readdirSync,
+  rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -20,7 +30,36 @@ import { fileURLToPath } from 'node:url';
 
 const PRODUCT_ID = 'citizensdk';
 const PACKAGE_NAME = 'citizen_sdk';
-const TATA_CONSOLE_TARGET_ROOT = '/Users/rhett/TATA/tataconsole/target/citizensdk';
+const TATA_CONSOLE_TARGET_ROOT = '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK';
+const TATA_CONSOLE_WORK_ROOT = '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK';
+// 独立于任何 binding 源码的 Flutter v1 公共面金标。五份绑定都必须从自己的
+// 权威常量/方法表解析并逐项匹配；不能用一端源码生成另一端预期值。
+const FLUTTER_METHOD_CHANNEL = 'citizen/sdk/core/v1';
+const FLUTTER_EVENT_CHANNEL = 'citizen/sdk/events/v1';
+const FLUTTER_METHODS = Object.freeze([
+  'open',
+  'start',
+  'stop',
+  'close',
+  'getCapabilities',
+  'getFinalizedHead',
+  'getAccountBalance',
+  'getAccountNonce',
+  'getFeeSnapshot',
+  'getWalletProfile',
+  'createWallet',
+  'importWallet',
+  'addWalletAccounts',
+  'setActiveWalletAccount',
+  'renameWalletAccount',
+  'deleteWalletAccount',
+  'deleteWallet',
+  'reconcileWalletCleanup',
+  'signWalletPayload',
+  'transferWithRemark',
+  'initializeFinalizedHistory',
+  'syncFinalizedHistory',
+]);
 const ROOT_FILES = [
   '.gitignore',
   '.pubignore',
@@ -47,6 +86,7 @@ const ROOT_DIRECTORIES = [
   'native',
   'scripts',
   'test',
+  'windows',
 ];
 const FORBIDDEN_DIRECTORIES = new Set([
   '.build', '.dart_tool', '.gradle', '.kotlin', '.swiftpm', 'CitizenSDK.xcframework',
@@ -62,6 +102,80 @@ const NATIVE_FILES = Object.freeze({
 const NATIVE_DIRECTORIES = Object.freeze({
   'darwin/CitizenSDK.xcframework': 'apple/CitizenSDK.xcframework',
 });
+const RELEASE_PLATFORMS = Object.freeze(['Android', 'iOS', 'macOS', 'LinuxARM', 'LinuxAMD', 'Windows']);
+const LINUX_PLATFORMS = Object.freeze(['LinuxARM', 'LinuxAMD']);
+const LINUX_HOST_HEADERS = Object.freeze([
+  'citizen_sdk.hpp', 'citizen_sdk_config.hpp', 'citizen_sdk_error.hpp',
+  'citizen_sdk_events.hpp', 'citizen_sdk_models.hpp', 'citizen_sdk_wallet_flow.hpp',
+  'citizensdk_host.h',
+]);
+const LINUX_CMAKE_FILES = Object.freeze([
+  'CitizenSDKConfig.cmake', 'CitizenSDKConfigVersion.cmake',
+  'CitizenSDKDependencies.cmake', 'CitizenSDKTargets.cmake',
+  'CitizenSDKTargets-release.cmake',
+]);
+// 一个产品的两个机器变体：各自完整的 19 项安装前缀合并为 26 项。
+// 七个 Host 头与来源重叠，必须比较字节，绝不以产物覆盖来源。
+function linuxInstallPaths(platform) {
+  return [
+    'include/citizensdk.h', 'include/citizensdk_types.h',
+    ...LINUX_HOST_HEADERS.map((name) => `include/citizen_sdk/${name}`),
+    `lib/${platform}/libcitizensdk.so`, `lib/${platform}/libcitizensdk_host.so`,
+    ...LINUX_CMAKE_FILES.map((name) => `lib/${platform}/cmake/CitizenSDK/${name}`),
+    ...['manifest.json', 'chainspec.json', 'light_sync_state.json']
+      .map((name) => `share/citizensdk/citizenchain/${name}`),
+  ].sort();
+}
+const LINUX_RELEASE_FILES = Object.freeze([...new Set(
+  LINUX_PLATFORMS.flatMap(linuxInstallPaths),
+)].sort());
+const LINUX_INJECTED_FILES = new Set(LINUX_RELEASE_FILES.filter(
+  (path) => !LINUX_HOST_HEADERS.some((name) => path === `include/citizen_sdk/${name}`),
+));
+const HOSTED_LINUX_PLUGIN_FILES = Object.freeze([
+  'CMakeLists.txt', 'cmake/CitizenSDKFlutter.cmake',
+  'include/citizen_sdk/citizen_sdk_plugin.h', 'src/citizen_sdk_plugin.cc',
+  ...['codec', 'sessions', 'wallet_flow', 'environment'].flatMap(
+    (name) => ['cc', 'hpp'].map((extension) => `src/citizen_sdk_flutter_${name}.${extension}`),
+  ),
+]);
+const WINDOWS_HOST_HEADERS = Object.freeze([
+  'citizen_sdk.hpp', 'citizen_sdk_config.hpp', 'citizen_sdk_error.hpp',
+  'citizen_sdk_events.hpp', 'citizen_sdk_models.hpp', 'citizen_sdk_wallet_flow.hpp',
+  'citizensdk_host.h',
+]);
+const WINDOWS_CMAKE_FILES = Object.freeze([
+  'CitizenSDKConfig.cmake', 'CitizenSDKConfigVersion.cmake',
+  'CitizenSDKDependencies.cmake', 'CitizenSDKTargets.cmake', 'CitizenSDKTargets-release.cmake',
+]);
+const WINDOWS_RELEASE_FILES = Object.freeze([
+  'include/citizensdk.h', 'include/citizensdk_types.h',
+  ...WINDOWS_HOST_HEADERS.map((name) => `include/citizen_sdk/${name}`),
+  'bin/Windows/citizensdk.dll', 'bin/Windows/citizensdk_host.dll',
+  'lib/Windows/citizensdk.dll.lib', 'lib/Windows/citizensdk_host.lib',
+  ...WINDOWS_CMAKE_FILES.map((name) => `lib/Windows/cmake/CitizenSDK/${name}`),
+  ...['manifest.json', 'chainspec.json', 'light_sync_state.json']
+    .map((name) => `share/citizensdk/citizenchain/${name}`),
+].sort());
+const WINDOWS_INJECTED_FILES = new Set(WINDOWS_RELEASE_FILES.filter(
+  (path) => !WINDOWS_HOST_HEADERS.some((name) => path === `include/citizen_sdk/${name}`),
+));
+const HOSTED_WINDOWS_PLUGIN_FILES = Object.freeze([
+  'CMakeLists.txt', 'cmake/CitizenSDKFlutter.cmake',
+  'include/citizen_sdk/citizen_sdk_plugin.h', 'src/citizen_sdk_plugin.cc',
+  ...['codec', 'sessions', 'wallet_flow', 'environment'].flatMap(
+    (name) => ['cc', 'hpp'].map((extension) => `src/citizen_sdk_flutter_${name}.${extension}`),
+  ),
+]);
+function parentDirectories(paths) {
+  const directories = new Set();
+  for (const path of paths) {
+    for (let parent = dirname(path); parent !== '.'; parent = dirname(parent)) {
+      directories.add(parent);
+    }
+  }
+  return [...directories].sort();
+}
 const APPLE_XCFRAMEWORK_PATH = 'darwin/CitizenSDK.xcframework';
 // LibraryIdentifier 由 xcodebuild 生成，必须视为不透明技术标识。
 // 下列合同只依赖 Apple 官方 SupportedPlatform/
@@ -171,15 +285,15 @@ const SOURCE_FIXTURE_FILES = Object.freeze({
 });
 // Release 必须保留根级许可入口和两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
 const LICENSE_SOURCE_FILES = Object.freeze({
-  'LICENSE': '85cbc4861f93949326d45a484db8df26125af2c19ba78b35f2a9e51bcaa5042a',
+  'LICENSE': 'e18cd42a76f530deefa3db97a1b2728eccbfc4d24a2057eef36e5eb73c96b58f',
   'LICENSE-GPL-3.0': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
   'LICENSE-MIT': '39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c',
 });
 // Hosted Package 不建立第二份候选：官方 Dart 发布工具直接读取已注入 Android/Apple
 // 原生库的 GitHub Release 候选，并由这份固定 .pubignore 只筛出运行时闭包。
 const HOSTED_PACKAGE_SOURCE_FILES = Object.freeze({
-  '.pubignore': '9ff5b60a4b9b59b88c89c4784546fc0dcf8d2215ddb599142be4a3507c0c8cca',
-  'CHANGELOG.md': 'b7b7ecf3b3042807285c212f61f1626e9a6729ef5a0b85b960c80392fda74fa7',
+  '.pubignore': '274144e30683b08f8e52b0875fff68a6afd318db4f2ea9b12bb08245bf660a80',
+  'CHANGELOG.md': '6f5e592b3c2d8138c2e14a123ca1a922cf7a25cfe7d49e94c7202b4562e095e3',
 });
 // pub.dev/Hosted 包只公开产品 API、公开模型、固定 Flutter tuple 与无秘密
 // AccountId/SS58 codec。其余 Dart 来源继续留在 GitHub 审计包作迁移差分，
@@ -226,7 +340,7 @@ const HOSTED_DEV_DEPENDENCIES = Object.freeze({
 // 根 include/ 是 CitizenSDK 唯一产品 ABI。三文件完整闭集既固定字节，也阻止
 // 上游 smoldot/signer 符号、任意 RPC 和秘密导出接口绕过 citizensdk_* 边界。
 const PUBLIC_ABI_FILES = Object.freeze({
-  'include/README.md': '924c6467b7e5b23cff9785381cf67aa6f4d5079d4171543d61a19f471e99ba18',
+  'include/README.md': 'd77ccb28f2847d9d97b479d2bd6ab0c2eb246348771bc86954b5e5cc996294b7',
   'include/citizensdk.h': '8c6f23911ab79ccb3beeeac7e646ca81eade2d01fe8b712ef98a52270d54852f',
   'include/citizensdk_types.h': '57923cd2c0ce5b7fb360a52125f36734611e386471e5b9e147db016134c95b4d',
 });
@@ -308,7 +422,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'darwin/citizen_sdk.podspec': '0407e833b3f1d82f19b8c7ef4142e8606a848ef5bf59733ad6766eb5948158e0',
   'lib/citizen_sdk.dart': 'bd1898ad89082355429235224e2f71f24d461e1261fdcee484c34118bf2cd72d',
   'lib/src/api/citizen_chain.dart': '1c5e919a933608cd06896d1e4538534752875ec279e79d4c62329868d610bd72',
-  'lib/src/api/citizen_sdk.dart': '6904ebaaff492c206981bdf2abb200aca931bd5362231bd883d7c410625dc68d',
+  'lib/src/api/citizen_sdk.dart': '7bef11333e7e8ef5282144b5ed0ef54f28f531307adcfc2fef3b2a8c9cbc1336',
   'lib/src/api/citizen_sdk_error.dart': 'e26382dc9af2da918da3e4eb1921f6340b1d9edb0e8956ba2f374eb9925d3f5f',
   'lib/src/api/citizen_sdk_events.dart': 'c0117d1b2e849e826046f4f4b38fe8313f48d5ab994d58f58ebc62bd310f5cb7',
   'lib/src/api/citizen_transactions.dart': 'bc66a6c4ca6a522d5d0b19221a418e022aced230431ab14cf40da2c314d60bdd',
@@ -335,7 +449,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'lib/src/platform/citizen_sdk_flutter_codec.dart': '4921673ba75062ac4018270f38a3df0d50ac28c577a5d9da243fe5d6ef532ce1',
   'lib/src/platform/citizen_sdk_flutter_sessions.dart': 'c34155c9c7b37eb4c71cd4adb378e0811ae5825e95817f83a58a409a74e9cf10',
   'lib/src/platform/citizen_sdk_platform.dart': '295798fba26533cdbba0ec993acd215cf48889b9b744b43c2192e6566fe29f6c',
-  'lib/src/platform/flutter_citizen_sdk_platform.dart': '05ab45cfeefd1e39e4a89355d5f0e845b596c8695f7b4d79639b1ffa4dbd8953',
+  'lib/src/platform/flutter_citizen_sdk_platform.dart': '0d53dac35a8b3da17f80be8d24503d2d903aeef416de0aa69ea2219baed7b7bc',
   'lib/src/platform/preferences_chain_database_store.dart': '8cf0647a688af0e2cc87c6d86b934b340f6255397e76e326f38de2505da35337',
   'lib/src/platform/preferences_data_store.dart': '0ee490b8d0dbd342963de640576779fd44c290ee9a698c54b35e0a0e7a0028c7',
   'lib/src/platform/preferences_finalized_transaction_repository.dart': '34c7e373f808ba57cadbccf6344397053a8392c4603ed41ea5754e4460fbc4b6',
@@ -355,10 +469,74 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'lib/src/wallet/wallet_repository.dart': '08ca473679979ab5627d2807754aeb61667b9f9f5eb46dae43acc91d448225bf',
   'lib/src/wallet/wallet_service.dart': '9fdaf97646524c90c2545696cb85c7f90e981f0ca646a7b3d4e57ecd34d6b9c3',
 });
-// Linux C/C++ Host 是根产品 ABI 的宿主投影，不是第二份 Core。测试和
-// README 分别由测试、文档闭集固定；其余 CMake、公共头与实现逐字节进入
-// 独立来源闭集，后续 Flutter adapter 只能显式扩展，不能悄然混入。
-const LINUX_BINDING_SOURCE_FILE_COUNT = 49;
+// Linux C/C++ Host 与 Flutter adapter 都只是根产品 ABI 的宿主投影，不是
+// 第二份 Core。测试和 README 分别由测试、文档闭集固定；其余 CMake、公共头
+// 与实现逐字节进入独立来源闭集，不能悄然混入另一套协议或生成产物。
+const WINDOWS_BINDING_SOURCE_FILES = Object.freeze({
+  'windows/cmake/CitizenSDKFlutter.cmake': '9dcbbb80a62f9ef5be022e99b8270dfbd69f3af08131ff1b8c5e04d63218877d',
+  'windows/include/citizen_sdk/citizen_sdk_plugin.h': 'ed4a806687c01f9be2a4c4c76dff5dd7d8676f7fe0c6860551006c3a056256ec',
+  'windows/src/citizen_sdk_flutter_codec.cc': 'a597c82b752420f58586b35b9c48c0507334a670999d8c3c2a80f4e4bffec7e3',
+  'windows/src/citizen_sdk_flutter_codec.hpp': '05af2bce62ef393cdba9e2811ca17606600e4f8de411ecf440d64b5c4e26322d',
+  'windows/src/citizen_sdk_flutter_environment.cc': '39994758bd4b3e97f0c9433aacf36179221472b8bac394fe70e385d663eca695',
+  'windows/src/citizen_sdk_flutter_environment.hpp': 'cb06688559abb17e290ed3ac1fe1e35639c050b758b86ff522bc34cc81943e3f',
+  'windows/src/citizen_sdk_flutter_sessions.cc': '907467fa121d7ae4ad240fede9cda68430007a023d8581d1d9f4db89cfefd5aa',
+  'windows/src/citizen_sdk_flutter_sessions.hpp': 'a0219d8fe270b77100cfa4b1fa452b85c37892c1017f1dcf999e8ce3538090f1',
+  'windows/src/citizen_sdk_flutter_wallet_flow.cc': 'f1902394964cd88cbce002492e3883925695b16fc29a70bd3ba1dacdbe85411e',
+  'windows/src/citizen_sdk_flutter_wallet_flow.hpp': '57bf33cf4b84783e41931dc1eea22a0dd5e9a57d12b847f579ef03d5a323fb0b',
+  'windows/src/citizen_sdk_plugin.cc': 'df65715b1ac8f8eea4903bea079f128cd79b679abd7b09d965845f4c86ad2d17',
+  'windows/CMakeLists.txt': 'ca0b892e54dd1e70e01ac982bf045aea44e5c69c66dcd73667b561d164e1d061',
+  'windows/cmake/CitizenSDKConfig.cmake.in': '81744e9502983d927f9963a8288dd20a33f47b0bb0dbba96ec620bb93b0e5671',
+  'windows/cmake/CitizenSDKConfigVersion.cmake.in': '5e180138e3d7ac236ad945c42a15184f48d3076a40206a3d7c90d545d42be235',
+  'windows/cmake/CitizenSDKDependencies.cmake': '22e2ce5543f07f84def46b119df9fd9ab248f4c4df8ab27d4ab5f86c9ac65300',
+  'windows/cmake/citizensdk_host.def': '0b474ef015c36d25f2d2a8485dab29c3d5a4530e036bacd11c8c68148d352dc6',
+  'windows/include/citizen_sdk/citizen_sdk.hpp': '317340eb514255048f9333970460577810dccb624384ddee9591b5ba04284c4e',
+  'windows/include/citizen_sdk/citizen_sdk_config.hpp': '06d0a5a384ebfdaae44fc546aba81a5397ab5c4b9aa9d6b854cc184509952439',
+  'windows/include/citizen_sdk/citizen_sdk_error.hpp': 'ad835a6ecaded36731a23b18aa6959b806d1515ef8f41cf940026341065e0bd0',
+  'windows/include/citizen_sdk/citizen_sdk_events.hpp': '32c2f64beb04bc2ec274c909ff9776e47ab3c05a0face18e879a16d5a4069dc7',
+  'windows/include/citizen_sdk/citizen_sdk_models.hpp': 'bad7dded29d0f341524cd4dad9161847d4adcf2bfd3c40bff3e2581bd1c7fb3e',
+  'windows/include/citizen_sdk/citizen_sdk_wallet_flow.hpp': '48e1fc188ddfae60c0f01d050d7e9144ba6a1f7e64aee28eab55a47e6f7d561c',
+  'windows/include/citizen_sdk/citizensdk_host.h': '208c7f730d3e4b295ba88b4753b52302a0b70b83895e9263150f233e270558bb',
+  'windows/src/citizen_sdk_assets.cc': '9f55e98f71f87f8baa3c2608bf64c52e2e8755aed4fa7ded13e47494f9968207',
+  'windows/src/citizen_sdk_assets.hpp': '5e50c7ca69023c63af645eec4b97fa1bf74ae3089aef86fdcf1d35fcd4fab8cc',
+  'windows/src/citizen_sdk_cng.cc': '88c6cc4d5532eec088d30211826e8cd4583e629557a43d687768a49353d39ffc',
+  'windows/src/citizen_sdk_cng.hpp': 'b7e15414228fb0671cbf907aa1a6cbe0ca3ff57a1101805306b2c40c3f3321e5',
+  'windows/src/citizen_sdk_directory.cc': 'e32bdb3c8d1f752bc750eae1bbf104b81c54e665fbec6ec8d9d3173a6d5c6844',
+  'windows/src/citizen_sdk_directory.hpp': 'c46f0679df4c328b2a43be50260cb8001341f5da66d0ede2830b258c801d546a',
+  'windows/src/citizen_sdk_host_api.cc': '1fb7dd6a0ff532fcb20762230bd84556a6ea0814258364900bee199ac7cce414',
+  'windows/src/citizen_sdk_host_bridge.cc': '688daaedce17c53788814dfc437479757a07b3d53606a2db5affd362af41fc3d',
+  'windows/src/citizen_sdk_host_bridge.hpp': '3614ba8518685f8a8a4915803f9ec5c8ddfcc3fbcb039489089b5f7900d4a7bb',
+  'windows/src/citizen_sdk_host_record.cc': 'ef59ba6feefc4686f5d5ed619a7a5cc43d5bd4a167fae1ba4f7022da85d19c39',
+  'windows/src/citizen_sdk_host_record.hpp': '9e53109d9d1c3fe31e8f591acba8ec83b869031ff831013f44599a0f80914f68',
+  'windows/src/citizen_sdk_input_limits.cc': '7147826545727da42d3b655e231c14dc079e7db9f2c2ea4082c5d60063428e09',
+  'windows/src/citizen_sdk_input_limits.hpp': 'b7f00682ec50320c832247056b2f53ec19efc3a2fb24266660c69817b25ecb55',
+  'windows/src/citizen_sdk_lifecycle.cc': '31cf403c44b29cf6f632a4457a120ea4d07ffd216ea951ad90cb2f0baa02d4de',
+  'windows/src/citizen_sdk_lifecycle.hpp': '46f4bb12bd1f103f8e50e07b1a86d9c4f250dedce3a5201034cf03e9e2ca5b23',
+  'windows/src/citizen_sdk_operation.cc': '1d83a173d0a403ac26990b3b455b0655938665583325b0e5c3d1c1d7c0d3b771',
+  'windows/src/citizen_sdk_operation.hpp': '631404a8099b19062aad81f4872b7bfbda7195b48a24d22566aaf954e7aa4a4c',
+  'windows/src/citizen_sdk_public_store.cc': 'd6a34beb5d7c3a495f88f59bec188c9cd3e9a88229fb8184dd9b217bdb3f1fb1',
+  'windows/src/citizen_sdk_public_store.hpp': '8ca78b5aa56b3ab5829782cc42f28f8625cc82940f1b81aa0fb56a2c3315bdbf',
+  'windows/src/citizen_sdk_record_key.cc': '689eb3eab6a279b930f60ebd292b594f17ca2fb06faa0c938ed8311c23cdf3df',
+  'windows/src/citizen_sdk_record_key.hpp': '8f41cb538870037827ecda3401178dcaee5d839d052375ddb6b5e9e74326f736',
+  'windows/src/citizen_sdk_secret_vault.cc': 'da5a01b0823419871648efc3548c6722a2ecbf156f0482bc0b983287d6b2892e',
+  'windows/src/citizen_sdk_secret_vault.hpp': 'a72e3cb5b7854d16ad7097cdcffbbe490762b3638b84adc4c114eea81b340ef8',
+  'windows/src/citizen_sdk_secure_store.cc': 'daa23ab6fce9853b6139494a91da4f901601849ef37d380f935ea355d42455e6',
+  'windows/src/citizen_sdk_secure_store.hpp': '9749e169f1ea50642c2837f80b5eb658ce49cfcf002012d893437d75cd6793b6',
+  'windows/src/citizen_sdk_sensitive_buffer.cc': '3e57b05e29b90c92f95dee292360debeb0c330af1fce41a24de9cf9c3d04dff6',
+  'windows/src/citizen_sdk_sensitive_buffer.hpp': '99c5cd23993b3bed07605f4a707eec55cdf087a97677bbd684f8363355ef3ce7',
+  'windows/src/citizen_sdk_sqlite.cc': 'd582717fa3d74c1f040119e010d972cc9ed8087f60b972a20d129317320d2098',
+  'windows/src/citizen_sdk_sqlite.hpp': 'ff52d0f0456b0fd96a567bd7b4a46950dbbb65290e78b4d52986d56983aa7d99',
+  'windows/src/citizen_sdk_user_auth.cc': 'ab2ea0f5e08511eca3b456ff2a1949f8ebb944ee91bcd39df805b8cb79db75bf',
+  'windows/src/citizen_sdk_user_auth.hpp': '037c02c3e1ed32b2846d34e6a1d27b108a366cea6debbf30948f3d85188d91c1',
+  'windows/src/citizen_sdk_wallet_flow.cc': '567af30da604fe8b526a4cd908d9deb64777cd1333cc58f3fe8b9cee4bc623db',
+  'windows/src/citizen_sdk_wallet_flow.hpp': 'a22fc04969d4bb062b3cf83277472d732b0f26614ecd1943b199017cf35ed84b',
+  'windows/src/citizen_sdk_wallet_validation.cc': 'ba27e646b0094ce86a14eb404926b8cf501a9eac0c4ee9625fcc765529072709',
+  'windows/src/citizen_sdk_wallet_validation.hpp': '37187abe9c1dc07c018cdb67a5b401ad85b5f6ff6961b5c33ba44cb7b52a3716',
+  'windows/src/citizen_sdk_wallet_window.cc': 'bd9a285016fe8320e0af5f4db3eb09b4dec8838aa34c129a0277826ed5bf9764',
+  'windows/src/citizen_sdk_wallet_window.hpp': '67953d80a3fce773f391e44c52978ff9271b723ff0b313c3e3ad7d99fd6ae773',
+  'windows/src/citizen_sdk_window.cc': '76673550457b05c7f75a426739cfc925e8322b98c872c3519420a465d79afe7c',
+  'windows/src/citizen_sdk_window.hpp': '60fff1bbed42f818449e351e819aae65e30029b95bb27b92421f7793a1ccfa6b',
+});
+const LINUX_BINDING_SOURCE_FILE_COUNT = 60;
 const LINUX_BINDING_SOURCE_DIRECTORIES = Object.freeze([
   'cmake',
   'include',
@@ -367,33 +545,44 @@ const LINUX_BINDING_SOURCE_DIRECTORIES = Object.freeze([
   'test',
 ]);
 const LINUX_BINDING_SOURCE_FILES = Object.freeze({
-  'linux/CMakeLists.txt': '71af5c303804fb31d6488dd9d9209d25bff27397913d9ab387d40a0325becb3c',
+  'linux/CMakeLists.txt': 'b81135c46cf76d4d09243d8ef4744d87d72c27053b20baf2a21771723a911f77',
   'linux/cmake/CitizenSDKConfig.cmake.in': '0f3981dcfdab1fbea6f893af38f2bfe3dd093aac9258a5deb8a26ee6a666f211',
   'linux/cmake/CitizenSDKConfigVersion.cmake.in': 'b2dd2bb6bb58f1255b6e9eca0f61b635f589ee2809537f7ba7fa45d46e3d7685',
   'linux/cmake/CitizenSDKDependencies.cmake': 'c0ab6dffc4577ebfff8b3eb467f37f2b8c7fb45158bf3f64b7e8d753b9d8f5d0',
+  'linux/cmake/CitizenSDKFlutter.cmake': '9bf8c3d1d720070f7081063e18e06a8201910d095d0be662b633d1ca52d76a64',
   'linux/cmake/citizensdk_host.map': '715e804778195c26411262ac345da2a1194de1ceff931c1150bdff250eaa1bf4',
   'linux/include/citizen_sdk/citizen_sdk.hpp': '2f52a24513deec45db84b52f04989f6c657b6f03d207be210ea230bd0f5870df',
   'linux/include/citizen_sdk/citizen_sdk_config.hpp': '0bca7aa1112da959b2b68768854bd31a47af709c6558edf1f256f62d2729229e',
   'linux/include/citizen_sdk/citizen_sdk_error.hpp': 'ad835a6ecaded36731a23b18aa6959b806d1515ef8f41cf940026341065e0bd0',
   'linux/include/citizen_sdk/citizen_sdk_events.hpp': '32c2f64beb04bc2ec274c909ff9776e47ab3c05a0face18e879a16d5a4069dc7',
   'linux/include/citizen_sdk/citizen_sdk_models.hpp': 'bad7dded29d0f341524cd4dad9161847d4adcf2bfd3c40bff3e2581bd1c7fb3e',
+  'linux/include/citizen_sdk/citizen_sdk_plugin.h': '06636001f326a317617a39f7c1108eb510b127f416de7f0dcb4c4cdd84be0c2f',
   'linux/include/citizen_sdk/citizen_sdk_wallet_flow.hpp': '48e1fc188ddfae60c0f01d050d7e9144ba6a1f7e64aee28eab55a47e6f7d561c',
   'linux/include/citizen_sdk/citizensdk_host.h': 'cf8713368176b833193ebdeafff90420e5dcda72e89f143ffc580b5c2e9f34a7',
   'linux/src/citizen_sdk_assets.cc': 'b663b653299c22d62a44a7f242e1e57f2d8471408d0d3d81728bbe37929d0cb6',
   'linux/src/citizen_sdk_assets.hpp': '44d30123c623ea266030235126552e4a9334839f0d5d44adb5931f56d8b93401',
-  'linux/src/citizen_sdk_gtk_parent.cc': '17bb6d9ae4296ce2d2e2c0101ffcec75859c393e740952fc530b4ae128b8a654',
+  'linux/src/citizen_sdk_flutter_codec.cc': '27f1117512aa355e18949bbc7b4abb463141a2e69fbab22d8bf5a0b494ab3d9a',
+  'linux/src/citizen_sdk_flutter_codec.hpp': 'ec91f2160fec1b4093177f410222181ccc11523f3aad4ee5d68f95b6e8576eae',
+  'linux/src/citizen_sdk_flutter_environment.cc': 'ae92a0aba12371ff6dab4eb1f2834a030814224af01058871b14c60fd3e3536c',
+  'linux/src/citizen_sdk_flutter_environment.hpp': 'ae7dca71b44a55d4d8aee270c94dbbd594f2b206284392ff8ee5ca8650cfe486',
+  'linux/src/citizen_sdk_flutter_sessions.cc': '266fc6024ce37f3fd09ad41571f3f9130fc04fa62172556277564abd172c2edd',
+  'linux/src/citizen_sdk_flutter_sessions.hpp': '00abe54d171898aa154c1c0a936f3d7fec2fd9597ac3dfd9d151ee7c10f17f8f',
+  'linux/src/citizen_sdk_flutter_wallet_flow.cc': '2904965a00d6839cf351b58175127a9ed92d1bb88dc6fbb0828dc317bec3d089',
+  'linux/src/citizen_sdk_flutter_wallet_flow.hpp': '0313edebd1a10feaf1029d6ae1c91e0363153c863148f1de70eddffdf2807dd4',
+  'linux/src/citizen_sdk_gtk_parent.cc': '885485999900f9d121cec35fb859abf8b378f0caa0fb674a2b909f96377cf5ba',
   'linux/src/citizen_sdk_gtk_parent.hpp': '891a3fb929951b7a51a0e76854d50aa289a72795ca90c3f8c7140292a19a8cad',
-  'linux/src/citizen_sdk_host_api.cc': '6b9f50f402c68d2811f0df98788dc94d8d10dd5742eb775b57c05d729e29ac1a',
-  'linux/src/citizen_sdk_host_bridge.cc': '7132d4539f47c16ad7e6a8d49209469dcc983d4cc3cef42c29c8f8d00aa04b08',
-  'linux/src/citizen_sdk_host_bridge.hpp': 'a582609b525ba60a9606ea3d56ae4eaccf6890bf4279d6de53b1f4f097a5c4a5',
+  'linux/src/citizen_sdk_host_api.cc': '0de026ff88c0320eb818783040deb3696dbbe102a04734d60f35c8b6d9b6aed3',
+  'linux/src/citizen_sdk_host_bridge.cc': 'edff2f4630d634adcf42948fd247808b5f491c7b768a20d79d8a0dbee3584a11',
+  'linux/src/citizen_sdk_host_bridge.hpp': 'eafa488770fbf3d7d5722ed992f5932ab6f57c27c1cf3783b5eed46c4926ba41',
   'linux/src/citizen_sdk_host_record.cc': '68fea5575759fadbc9bd9257a32bbb00779bad9961908e76135329c3fcc110c3',
   'linux/src/citizen_sdk_host_record.hpp': 'd3c5b9cfaf91c85ee47bf86713f1299f204ef220614035257adb1c2d56be5742',
   'linux/src/citizen_sdk_input_limits.cc': 'f01656812df1df0447be7a4a9a8fbdf40f14bf24f5b5ce447f238b8963ad7b41',
   'linux/src/citizen_sdk_input_limits.hpp': '984f3e033ee2a918199512280217c0eb84220f313673aebe8b99454079edae9c',
-  'linux/src/citizen_sdk_lifecycle.cc': '8319aaed8e1f102aa204968a71e3f0c4f7af8f5e77ca25c8ec5efd441068a457',
-  'linux/src/citizen_sdk_lifecycle.hpp': '2a900f5ec113868f666819e7a2c5a80c098394a2d21b964e75b026f754a71602',
-  'linux/src/citizen_sdk_operation.cc': 'f8bdcd552140bb1995e9255549381c48019637555eb975bd1fb530acf8ae2c1e',
+  'linux/src/citizen_sdk_lifecycle.cc': '699b015d446e3de84b25a705bdde9baae5d2820c10de0a2e2e84b1905355cb05',
+  'linux/src/citizen_sdk_lifecycle.hpp': 'e5251c01d91e3470caa5188b00706cb556ff3f5452413f7a639debd9cd0d4456',
+  'linux/src/citizen_sdk_operation.cc': '5cff05d1e1f031880d89a4b9e03aa83c0acf3310d41e2f7bc1d03438030187bb',
   'linux/src/citizen_sdk_operation.hpp': '77becb3dd81f8ae63d4a50ad893989133b81b5fd41f8bf5a573359bc94855bf2',
+  'linux/src/citizen_sdk_plugin.cc': '243ff9de5874a073b97e329150726788c03a9468dffa5c581d2994bc2602981e',
   'linux/src/citizen_sdk_public_store.cc': 'f0af676d08d4bf41fae06f4beeef8e3b031089d3ba2ca928d854f288dde3380d',
   'linux/src/citizen_sdk_public_store.hpp': '81ce101979a04edcca47db6768cbf7b66c8446ad18cb4e8f02ad2c4c49370351',
   'linux/src/citizen_sdk_record_key.cc': '80425cd8dffa7b537ab6634018b8877f2bac365949dc41667c8f0b8945be193e',
@@ -404,10 +593,10 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
   'linux/src/citizen_sdk_secure_store.hpp': '7fd52a836df5cc796c0a9c287d24ae92e5d07715a31af9a44506718f0ddebced',
   'linux/src/citizen_sdk_sensitive_buffer.cc': '3904d22d1d02bf03512d84fb5a06d30912793b7e5abecba283b30ba3b15d1e90',
   'linux/src/citizen_sdk_sensitive_buffer.hpp': 'ea8254eb8420c7abe4b7adc338d87fdf0ce9cc8a44ca42ec305618c3788b1046',
-  'linux/src/citizen_sdk_sqlite.cc': 'de6eda567302e95476a452100f98be395e58f5c7cb58740c2be679acf182d42c',
+  'linux/src/citizen_sdk_sqlite.cc': 'fb66b695bdecc6ab5990f55331a785f389567db1ce0d7d237ede697b29511f87',
   'linux/src/citizen_sdk_sqlite.hpp': 'de27dec91b0609268db4619673e7e8cb2082f38eec50c495894c6bd90447ae87',
-  'linux/src/citizen_sdk_tpm2.cc': 'c3cf57f48d80d755b319c45f6f54a5bde6a315bf1e8a680f59f862331ffbf549',
-  'linux/src/citizen_sdk_tpm2.hpp': '56c834c03e93723b43612740e4fc60fa4a4c800445fb1627278b1728d131f8b9',
+  'linux/src/citizen_sdk_tpm2.cc': '09fee7a54f2163d81584c9cdef05ca38d5b533057437d0621c1c2d44357310e9',
+  'linux/src/citizen_sdk_tpm2.hpp': 'a8a7c68d743b8e662ad57a736c23ff54518e53155d72ccae9913b61964cae644',
   'linux/src/citizen_sdk_user_auth.cc': '294bc99ed0dd30303d9eb6b1bde57706c6c4a6a0ba9106f247a14530fb331f01',
   'linux/src/citizen_sdk_user_auth.hpp': 'e37f54727a9c0d2b5ef33e51ae5c857d5fc65aff09d750ffd2a39218c5184a5f',
   'linux/src/citizen_sdk_wallet_flow.cc': 'f4f29ec018afd8fecc12277d9706224da99a506f37e6e89df8b27d53c05bc4f8',
@@ -421,9 +610,12 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
 // docs/smoldot-dart、测试说明、许可证、CHANGELOG、
 // THIRD_PARTY_NOTICES、资产/include/Core/signer/smoldot/test 说明分别由既有
 // 更窄的权威来源合同固定，不能在这里建立第二套来源流程。
-const DOCUMENTATION_FILE_COUNT = 33;
+const DOCUMENTATION_FILE_COUNT = 36;
 const DOCUMENTATION_SHA256 = Object.freeze({
-  'README.md': 'a1067360005dfd8b660baabaa2bad02e975f838ea814af4bebf3ec2909710b32',
+  'docs/WINDOWS_PLATFORM.md': 'b13a1fd705c3f803e68f000a144528d43e59258249ffc331161515e0058d5c65',
+  'windows/README.md': 'cf48e278842328b784bd77ece08035ac3524a569ab0ea06d36ff3940aeeae91b',
+  'windows/include/README.md': '869d3e21d0a9f8d437d652769a79215f06992751d1524ac64692f811f0aedc6a',
+  'README.md': 'ee456a05736511cb222032888bf6cd43f9f97dcd51dd4f47e15fa301147d5488',
   'android/README.md': 'b3140a230ccf7d11e92e54b2131c3a89b2cf87dd1c2de91bc2137d77c9ea0e10',
   'android/native/README.md': '1aae20d765e59f40ea37332c901bfed6e51a354442824b6e36e72d3331eb7b60',
   'android/native/src/main/cpp/README.md': 'ccbd436d19620fa3069f2407236765366358d27c8f4f72cddf0a6fd91044b289',
@@ -436,31 +628,31 @@ const DOCUMENTATION_SHA256 = Object.freeze({
   'android/src/main/kotlin/README.md': 'cd06f97683e5b86c1a4ce4e5a5e19ca7e91239d2130b45594b58d27320582fdd',
   'android/src/main/kotlin/org/README.md': '74cbcbc590e49ae488097691b67911df3b001aba71b553f463e6dbd2eb36e53b',
   'android/src/main/kotlin/org/citizen/README.md': '1a7193606a774df8d6ad9d7c3c64dbb0b28a0cc7f6f61d0052a71726ec5400ef',
-  'darwin/README.md': '22c44aba138b6d14732f96f495d16b9861ed1b28a30fc8013d6bb6acc45e93af',
+  'darwin/README.md': 'a118ecde9eb63ef48a938f7d4356b01d020d3004d6cd22d7eb537b8a7e7a07c0',
   'darwin/Sources/CitizenSDKFlutter/README.md': '5bc38bab7a72890919779f6cfb01bd43e91e82a5f420b9ccdf9883f089d6a8c3',
-  'docs/ARCHITECTURE.md': '6d102fc0392e79438247c5cc2e188d016418ed0181905fa6ab1ab5af63661e75',
-  'docs/C_ABI.md': 'ae469d18b3ae8ce459b794667f88a838f4feebd834d99793feffae451fd368d0',
-  'docs/DART_API.md': 'c4e58cccae9ba0a07ea79c1946874b95edbef4325eab7b734b918c179fd49d52',
-  'docs/LINUX_PLATFORM.md': '01531fab692ed6a7265607518eaba2b6262c652b68234a39ec025b5aafa72e74',
-  'docs/MOBILE_PLATFORM.md': '2858dd74a436a559e00d8065568ce6036edcd2b69a6714f08cb3c937755842ef',
-  'docs/NATIVE_PACKAGING.md': 'f3a64cdd470e33150e8958fa49427714d2932a3fbea37ab3996b17ddc26fdb03',
-  'docs/SECURITY.md': 'b464c1b364199bfc3f56bdc31b677cf2bf4dabfdb9a204f5a7ef5c00bb99cf49',
-  'docs/SOURCE_PROVENANCE.md': '6350e2fbb13d34d554aaae8c352fb06ccd5e64c230fc4a84df02e7afb27bc2d6',
+  'docs/ARCHITECTURE.md': 'b6ead8efc37afe1ea32da8a63f5012b1e0003e195e1289d30082aed81a43426c',
+  'docs/C_ABI.md': '0a9b6e783e107417ea5ba0ee83a09bc4bf76dfd7db34458ac74db60644f0b299',
+  'docs/DART_API.md': '175b2b9d376d016b9f2c0bf2cc0d30f5bf408310a23aa9479ee545061d39ab54',
+  'docs/LINUX_PLATFORM.md': '40a78372b1c399e1e7beb9eb7f65183c3649c691b1451ecb8f2d3c0334b2d8c5',
+  'docs/MOBILE_PLATFORM.md': '07c301fc26d2a965dba3c83895aae284ddf3eba889dcbef8f9022de02df0aa97',
+  'docs/NATIVE_PACKAGING.md': '6a14bdc9a644e6c94c1b444112c2ee996fc30413a5c1a38d023470e7582c992f',
+  'docs/SECURITY.md': '225e53d9565aa420437d3f869ae1a10d8e437023b1469d6ded741cbd7a3be6ad',
+  'docs/SOURCE_PROVENANCE.md': '0a79325b15075dcf0abceff4223b257d9c35e2f14564a1617363405d3b448419',
   'docs/WALLET_MODEL.md': '7c056ef4b773864beca0c0f06c3e030f542a41afeeeba21f4ce7a438c89fc154',
-  'lib/src/api/README.md': 'd01476719b57985939e77459c1c5f4fe6953501f89df1705834a29ad4915ef02',
+  'lib/src/api/README.md': '08814d9924ae8e054e2e33401752e37d865650b1507f0a47dffcb0fe4dc3db8b',
   'lib/src/crypto/README.md': 'f5d051b65879c9d361ee42700be7c694f3d83dc28145bd3e57e573af145353a6',
   'lib/src/models/README.md': '5506efb021f3c238a8c2cc2badebc7d1f442a5352c16182e5dcd9241b0a6224a',
   'lib/src/node/README.md': 'da9c040a876ccafa424ee88475621637e2c0b99777d41321c4a354cb1c358984',
-  'lib/src/platform/README.md': 'a150304fce16ac86bd0ac1c269bc3aa7195e5257dc90b8dbb5e99c165cf8fa4f',
+  'lib/src/platform/README.md': '02648c5d326dd649ea72211b7253ed451fa46f3cb1de372ccb859585cdec3af9',
   'lib/src/transaction/README.md': '464649ceb1e05e32c21cb53bccfd985aa96b9f95593837ed99186b327244418c',
   'lib/src/wallet/README.md': '7caa07c6b73fe1cc1583e537eee43b660520d403f2e7e1a9cb06c2371d83cf25',
-  'linux/README.md': '02fd0406dc914d54812ddfa6f347a83b4c22ef72e07bcb0bd0660a1cc84824c1',
-  'linux/include/README.md': '1b64fdfd14665868845fdb0fe151514a24343f76fedb9ddecbcc8e1f2e88bbd5',
+  'linux/README.md': 'a651fe56dbad6cc9f461844d161b52283b062ff17c185189659a4951a8d71a55',
+  'linux/include/README.md': '3d6f2631d0f53f3081b687efec694df13a65034d9ffaa2b0329cec918f6eef1a',
 });
-// 根 Flutter、Core Rust/FFI、smoldot provider、signer、Android、Apple 与
-// Release 合同测试共同构成 SDK 自有 157 文件反向测试闭集。
+// 根 Flutter、Core Rust/FFI、smoldot provider、signer、Android、Apple、
+// Linux/Windows Host/Flutter、安装消费者与 Release 合同测试共同构成 SDK 自有 196 文件反向测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
-const SDK_TEST_CONTRACT_FILE_COUNT = 157;
+const SDK_TEST_CONTRACT_FILE_COUNT = 197;
 const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'test',
   'native/contracts/tests',
@@ -473,6 +665,7 @@ const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'android/native/src/androidTest',
   'darwin/Tests',
   'linux/test',
+  'windows/test',
 ]);
 // scripts/ 同时包含生产构建器，不能把整个目录误当成测试目录；只反向枚举
 // Node 正式测试命名 `*.test.mjs`，避免新增测试未进入固定闭集却仍被文档宣称已覆盖。
@@ -490,9 +683,37 @@ const SDK_SCRIPT_ENTRIES = Object.freeze({
   'release.test.mjs': 'pinned-test',
 });
 const SDK_PRODUCTION_SCRIPT_FILES = Object.freeze({
-  'scripts/build-native.sh': 'fafde6e2b421fa15b4458ee0ce9ff2b522e271730b0b611b770ef18f34c983e8',
+  'scripts/build-native.sh': 'd15c9792202be1d9da24c80ca36cd620b4cf166cfb73ea65b08fa13108e0a4b0',
 });
 const SDK_TEST_CONTRACT_FILES = Object.freeze({
+  'windows/test/citizen_sdk_flutter_consumer.dart': '3fa6ba79f8a53a38830e8b89b06da871ca38204fb6814fe03c4942abe00d38c3',
+  'windows/test/CitizenSDKConsumer.cmake': '025fff5bfc95a553bff57f7378372148c9d4932476c887fb84ce438e5c0e8117',
+  'windows/test/citizen_sdk_c_consumer.c': 'e04e086a6d8407ffcc353bb1f57f5149acde19b11c81bffa5eb9ea9bc2daa739',
+  'windows/test/citizen_sdk_cpp_consumer.cc': '269150d5748d24ed19351eca4b71e6ed45b1179da356d9066a07aed1b61ceecc',
+  'windows/test/citizen_sdk_flutter_codec_test.cc': 'af286ade04b6d3bc099b6f9b6ca515ffb9d2ecdce628bab64c7655702773d269',
+  'windows/test/citizen_sdk_flutter_environment_test.cc': 'b153c2b846c74bd1c59699b4e2b0084bc322cd61d3f882b78fc910b08572ba72',
+  'windows/test/citizen_sdk_flutter_plugin_test.cc': 'fa32be9c0ea8818996bd5b89dd6c33a451247fbc0a5e8f0b4cb9c05109dc9524',
+  'windows/test/citizen_sdk_flutter_secret_boundary_test.cc': '5af637815c403f5fa7d45f0fcb67e0f99d0882e2b3f528fdd7d68c578abba457',
+  'windows/test/citizen_sdk_flutter_sessions_test.cc': 'f701878eae5f468234f14e01e1101eeebda8cc4f8207098c6034aa25f80e5621',
+  'windows/test/citizen_sdk_flutter_test_support.hpp': 'a54094df8d24cfe1176bea0e09513aecf047c1e62cf60fe2f11b1334b1dc3d49',
+  'windows/test/citizen_sdk_flutter_wallet_flow_test.cc': '5a5adcf888df7d43c3ca5c19c379e85f7135bafc05efddb70944eace8100a5ad',
+  'windows/test/CMakeLists.txt': 'bdefe9290f43ba954e606a816d988fd60105f7335657db97d9f0cf20d00f8b38',
+  'windows/test/README.md': '034b0c654e1576ea26296222379ea954a127728835ea47e472ed5090846bb076',
+  'windows/test/citizen_sdk_api_contract_test.cc': '5bef6e91c00b29c07244b8429a284b1a995d4418585ad4dc4a2da4c6c51469a5',
+  'windows/test/citizen_sdk_assets_test.cc': '2d1e8d32af98b75afdeffefb2371c98bf95fda7017fabfe6c51a301373d8ea9e',
+  'windows/test/citizen_sdk_cng_test.cc': '2041c11af27e7424295d4294f271c1d0cd8c7162c64d67af9155eaced422f4fc',
+  'windows/test/citizen_sdk_directory_test.cc': '952bdc527cb00371cf721f7bad8bd527a7d7f4251799df45e38d19087f4aac61',
+  'windows/test/citizen_sdk_host_operation_test.cc': '46aacac61374656827114de427323b5451ca00d33f5549c6d6f1e8ed94e39d0e',
+  'windows/test/citizen_sdk_lifecycle_test.cc': '2b8135bcebf9f37c00195669811e26b5fa585d6d687d07101c509d0436384e20',
+  'windows/test/citizen_sdk_public_store_test.cc': '1b41c554acf086c9eeeba7fe2efc9e6bb04711a6f445d85ceffd1c74f6518d06',
+  'windows/test/citizen_sdk_record_key_test.cc': '421e9dd2e9950c02addb9343fe12ca23f3d9c1832c4a25725420928dbc9423e1',
+  'windows/test/citizen_sdk_secret_boundary_test.cc': '69e72ac87d39672e99d24febef337565d646c1bfd390fcdbc2fd83c5a8237fe5',
+  'windows/test/citizen_sdk_secret_vault_test.cc': '68f11d0cea1083a66fbfc6723ea92c6c3dc1243b0d2877e5874a4c5170cc791b',
+  'windows/test/citizen_sdk_secure_store_test.cc': 'f4e06493a7bd9b64dc43255fb2f51ee8e7af5b8c894ffc53b775f6f9ab35b0c0',
+  'windows/test/citizen_sdk_sensitive_buffer_test.cc': '23d0d8f7f28db585ff1dc6ac23d350018c7f6636adb07925f3b3891d0b4eceee',
+  'windows/test/citizen_sdk_test_support.hpp': 'd128551fc1e6f8aefb9604ac88ed32cfedcc2d57c97be30995aa974e7a5ee38c',
+  'windows/test/citizen_sdk_user_auth_test.cc': '18b1d3a39e0b12ab15745549965f8013a3cd3a63bc6fc89cc8430878e9c1db91',
+  'windows/test/citizen_sdk_wallet_flow_test.cc': '9577e0f709f065de21ea8d16d532a26082fffc1cf6fad460c5bf688219b9afcf',
   'android/native/src/androidTest/README.md': 'fc7724688dc94982b92077881caec5f5126e79c15eb7317dcde2aff8bdbdca54',
   'android/native/src/androidTest/kotlin/README.md': 'd44a06282ecd8c781d7b954acae7496a847bb8b80a1f36a7cdab5ff8c2a73cec',
   'android/native/src/androidTest/kotlin/org/README.md': '0e29cc6c8238a1e6dac76629c85a79da9e4ac8f07fae0a74ffc41f714f48c5cb',
@@ -544,21 +765,33 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'darwin/Tests/CitizenSDKTests/CitizenSDKSecureStoreTests.swift': 'af1ee11996f8706b419494d4615fe9ba268480792e2786b1d4cddbe2118271d3',
   'darwin/Tests/CitizenSDKTests/CitizenSDKSensitiveBufferTests.swift': 'd5163c7df3fd41897dceb3f1f1e175ef4982d92918eef498e0b6817bbdb93cbc',
   'darwin/Tests/CitizenSDKTests/CitizenSDKWalletFlowTests.swift': 'd3575c5c889f68197d5022e97d2160d7da08ada34942ba77d925515b44007c9c',
-  'darwin/Tests/README.md': '9cbc9287f49340f3cc26474654490f619f7d74f0436b4d47b58356481743acf9',
-  'linux/test/CMakeLists.txt': '087d9fdd216ad895095bd854dd6528c39b870ec99aaa8ab49cd31fd339da2dbd',
-  'linux/test/README.md': '0f3c89fba25f3e98cf1b09fc8defa547d75e48c9b22ee0fe6ac63dbfc38dba3d',
-  'linux/test/citizen_sdk_api_contract_test.cc': 'a7ab7774e1c0cb214efcf087edb1decda349c0daa47d2efff6d347c47a28cf3a',
+  'darwin/Tests/README.md': '8754ecf2cf82e7909e6051df5906ada9fd1565ab4ae4bdf0e8a83d66fbc5d725',
+  'darwin/Tests/citizen_sdk_flutter_consumer.dart': '44b4a9b132fdd52fafdf0930b7a12173bcd2e5de5477c9d1a8894ae672b5357c',
+  'linux/test/CitizenSDKConsumer.cmake': '70bcb6aa7484daa5b480a9db9f8d2e556cebbdd680f7501bbc086602761c58ed',
+  'linux/test/citizen_sdk_c_consumer.c': '1d7f6f2443edd4c94838e2ae3ea1b2d113dbc7ba27a634dd5c67197f02d6426a',
+  'linux/test/citizen_sdk_cpp_consumer.cc': 'c5be8a74703d197204faea23bb9e4c78e6679b61b9decdf4314da821aa07d721',
+  'linux/test/citizen_sdk_flutter_consumer.dart': '655ed90e2a2924469450be4fc17e8d9b4247e60f685de561ff6d1f972b51fbfc',
+  'linux/test/CMakeLists.txt': 'c31fd31d70dc94a014a2fdbc889829418066d6d80911f4f890a9e6564be8ca5f',
+  'linux/test/README.md': '47153e3644538b88bd8bc2c056923552768387893cf99b778160db67e50d0e9a',
+  'linux/test/citizen_sdk_api_contract_test.cc': 'c5ffc8c63edc7a0ebfde61be2875f8cb586b3b56311eaeb2e43e872d6e6e8bb7',
   'linux/test/citizen_sdk_assets_test.cc': '9d5b6f2ad9e23fc55c759deed22e0a50bdca8886608ebe53dd80d0696f5f9e08',
-  'linux/test/citizen_sdk_host_operation_test.cc': '13c8f93d0178f9452a13a2c579a0bf796bebf8550cb77719f31a7ff521dd905e',
-  'linux/test/citizen_sdk_lifecycle_test.cc': 'd1aef6a02d527618d00a618daf6b24eeff8d17e53b1a1635783767731ac7cbfc',
-  'linux/test/citizen_sdk_public_store_test.cc': '0d39dd11b5104596a53a8bf3489232a221d181ab23dd047ca3e26f3569fcc23c',
+  'linux/test/citizen_sdk_host_operation_test.cc': 'c07698f0c6662693a73cf375bcdfa10e8b5da0d57b9aeb8a10d6325162e96503',
+  'linux/test/citizen_sdk_lifecycle_test.cc': 'd891558d1096d4c2a3d9e1db7c32548e33ce4f872e062b3ef2497a680770832b',
+  'linux/test/citizen_sdk_public_store_test.cc': 'd3d737877e6048709e8819ae78c0d457d88263c9a416477327b4a75db82135a5',
   'linux/test/citizen_sdk_record_key_test.cc': '11871f6372b6983d7265fddb1714ed9b283d9ff43a9f6e782759d47dd5c74e4d',
-  'linux/test/citizen_sdk_secret_boundary_test.cc': 'e3f6a4593e9471f3bf15cb4551f2f3a2173c08aa673e8471137009e39c8b76bc',
-  'linux/test/citizen_sdk_secret_vault_test.cc': '8c5c727abad2b7ab16ebb5995367b978a9fba1f8d762075aee51ec544e84d577',
-  'linux/test/citizen_sdk_secure_store_test.cc': '77fa181b5a50ce83b78abecba48ad8ed8b0791367b37617bee2d51f757855164',
+  'linux/test/citizen_sdk_flutter_codec_test.cc': '1097fa3a234be49e4c506dd4f93c24d59d63bcd9745af20d3321ac89cc03f801',
+  'linux/test/citizen_sdk_flutter_environment_test.cc': '976f79e48dbc36d36bc01a884051c1e7a5bfa49d65fc4f7c24e9b44225c77594',
+  'linux/test/citizen_sdk_flutter_plugin_test.cc': '82ccb9490b01473153e7ab5725b847f6634e0b582189150b39e06aad08b2e468',
+  'linux/test/citizen_sdk_flutter_secret_boundary_test.cc': 'a67b1c10d47342ca031d1ce9fd5b8f3145220132ad1b761f552ebd831a476be2',
+  'linux/test/citizen_sdk_flutter_sessions_test.cc': 'f53288bc03234c620b5f5999dae51c280cbdc6df55c6009fac3f9ed9106b5782',
+  'linux/test/citizen_sdk_flutter_test_support.hpp': '1b92cf8f6a6fd0df6a58d5630f72ad29578d3118f7aa886ee1b3149b86606f56',
+  'linux/test/citizen_sdk_flutter_wallet_flow_test.cc': 'f83c322a69bcaefe886cf049b90d9831a012c5fa13ee507e0023ffa1da9d9a47',
+  'linux/test/citizen_sdk_secret_boundary_test.cc': '7aaa92c93aefee1ca5d3a87993bcb276ace9519ec28af6f99d8f6b1ce466bb31',
+  'linux/test/citizen_sdk_secret_vault_test.cc': '48c7632dbf37c0787969e1ba3c4d6e35711b59d9e51ac88c3ec3c31175d6f67d',
+  'linux/test/citizen_sdk_secure_store_test.cc': '739ea8ed2fe3518ff87d4bbaea9c5abf219d67507c4a20274c0ef9030f5be0ef',
   'linux/test/citizen_sdk_sensitive_buffer_test.cc': 'e82855221fde7e20ce07ef194619c18cd1c25ed7b8c9ae5a85fd8f94256a5ec0',
   'linux/test/citizen_sdk_test_support.hpp': '44aa52fe606af4e69b9e14a423658864b51b191e8dd32580a37ad4ed4063c263',
-  'linux/test/citizen_sdk_tpm2_test.cc': 'c3df6181e76f34655c29b7c884e2ac7d196b80924cd0b5a549d5ceb857311c47',
+  'linux/test/citizen_sdk_tpm2_test.cc': '29146093852ac3a51d7925e6d9a27f042e5f136c37d58a6367de2bd119c9f8e5',
   'linux/test/citizen_sdk_wallet_flow_test.cc': 'afb55607f7f44cd89b0e4d4fc61d10dccfe554aa99ecd4839b55754fa63be7d8',
   'native/contracts/tests/account_contract.rs': '2f2af9930ccaba2cf73a21c1ea3593295a6e7d8633a95db05fbcb642e7c74992',
   'native/contracts/tests/capability_contract.rs': '7a94545fbf1572e127d12a4d4a9ce1478fa3dcc22fb7aa688fde747135a89f7f',
@@ -603,12 +836,12 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
-  'scripts/release.test.mjs': '24ed61389312d27a87524e70e5ac15015bd326d7a577198ba24c744238f5bfe1',
+  'scripts/release.test.mjs': 'bd19c391be2dfd4d8f30478f7e7046c1bb840e43cf1a4ee1009f66ac6b0f3312',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': '037b35aec6ebb55cfb05316a1e7ae595e42601c9679b602d31eca5c1b675b2b8',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',
   'test/api/citizen_wallet_flow_test.dart': '0d6c9a8264eff89fef16610cbef9712e362b31b217c1f7109d4bfa5e341550b1',
-  'test/api/public_api_contract_test.dart': '5d645eaca54597de223ee85d06fe8b98407b37972140414abccca65227b0301a',
+  'test/api/public_api_contract_test.dart': '731558c61da48bb35989bdf6f4267b6917bab02657d2ab191985a9f06a99bc54',
   'test/citizen_sdk_facade_test.dart': '5135b62ca569676fddf23bda0156e88ba592eed008499db0603e43c4f4aa168a',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
   'test/crypto/wallet_password_test.dart': 'b269b7cb28233c9b00cf183d037419e9a7687143613f432477cfa3bf8fa30460',
@@ -838,9 +1071,9 @@ const NATIVE_ROOT_ENTRIES = Object.freeze({
 const CORE_RUST_BOUNDARY_FILES = Object.freeze({
   'Cargo.toml': 'c2001e230187da0e5ca7df7227696d60e4c99d0f44622e389ba8dac8ee949b24',
   'Cargo.lock': '338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32',
-  'docs/C_ABI.md': 'ae469d18b3ae8ce459b794667f88a838f4feebd834d99793feffae451fd368d0',
-  'native/README.md': '44689181344a51f45d3135f612f49439fe52c99deba946dbf5fc39b0d087c479',
-  'THIRD_PARTY_NOTICES.md': '649f73986ca1e49e2dd4789a40ba9b1db093c4039f5825c73ed33edb37dbd484',
+  'docs/C_ABI.md': '0a9b6e783e107417ea5ba0ee83a09bc4bf76dfd7db34458ac74db60644f0b299',
+  'native/README.md': '57895b15a2f05c3370730562dbac4bf32ce37c5a8fa5eafe5d3385755f0ccb05',
+  'THIRD_PARTY_NOTICES.md': 'a66332e74e9e2a2dea9f3bd2049cc87ac9dca9c547b08432e9d4bcce26ebcb15',
 });
 // 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
 // byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
@@ -882,6 +1115,132 @@ const SIGNER_FILES = Object.freeze({
 
 function fail(message) {
   throw new Error(message);
+}
+
+function regularSourceText(root, relativePath, label) {
+  const path = join(root, ...relativePath.split('/'));
+  if (!existsSync(path) || lstatSync(path).isSymbolicLink()
+      || !lstatSync(path).isFile()) {
+    fail(`CitizenSDK Flutter ${label} 权威源码缺失或不是普通文件：${relativePath}`);
+  }
+  return readFileSync(path, 'utf8');
+}
+
+function uniqueSourceCapture(source, pattern, label) {
+  const matches = [...source.matchAll(pattern)];
+  if (matches.length !== 1) {
+    fail(`CitizenSDK Flutter ${label} 权威声明必须唯一`);
+  }
+  return matches[0][1];
+}
+
+function methodLiterals(block, label) {
+  const pattern = /["']([A-Za-z][A-Za-z0-9]*)["']/g;
+  const methods = [...block.matchAll(pattern)].map((match) => match[1]);
+  const residue = block.replace(pattern, '').replace(/[\s,]/g, '');
+  if (residue.length !== 0) {
+    fail(`CitizenSDK Flutter ${label} 方法权威表只能包含字符串字面量`);
+  }
+  return methods;
+}
+
+/**
+ * Freeze the shared Flutter protocol without treating any binding as another
+ * binding's source of truth. Named channel constants and the one authoritative
+ * method table are parsed from Dart, Android, Darwin, Linux and Windows independently,
+ * then matched against the standalone v1 gold list above.
+ */
+export function assertFlutterBindingContract(root) {
+  const sourceRoot = resolve(root);
+  const bindings = [
+    {
+      label: 'Dart',
+      channelPath: 'lib/src/platform/flutter_citizen_sdk_platform.dart',
+      methodPath: 'lib/src/platform/citizen_sdk_flutter_codec.dart',
+      methodChannel: /static const String methodChannelName\s*=\s*'([^']+)'\s*;/g,
+      eventChannel: /static const String eventChannelName\s*=\s*'([^']+)'\s*;/g,
+      runtimeMethodChannel: /methodChannel\s*\?\?\s*const MethodChannel\('([^']+)'\)/g,
+      runtimeEventChannel: /eventChannel\s*\?\?\s*const EventChannel\('([^']+)'\)/g,
+      methods: /static const Set<String> methods\s*=\s*<String>\{([\s\S]*?)^[ \t]{2}\};/gm,
+    },
+    {
+      label: 'Android',
+      channelPath: 'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt',
+      methodPath: 'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt',
+      methodChannel: /const val METHOD_CHANNEL\s*=\s*"([^"]+)"/g,
+      eventChannel: /const val EVENT_CHANNEL\s*=\s*"([^"]+)"/g,
+      methods: /val methods: Set<String>\s*=\s*linkedSetOf\(([\s\S]*?)^[ \t]{4}\)/gm,
+    },
+    {
+      label: 'Darwin',
+      channelPath: 'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift',
+      methodPath: 'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift',
+      methodChannel: /static let methodChannel\s*=\s*"([^"]+)"/g,
+      eventChannel: /static let eventChannel\s*=\s*"([^"]+)"/g,
+      methods: /static let methods: Set<String>\s*=\s*\[([\s\S]*?)^[ \t]{4}\]/gm,
+    },
+    {
+      label: 'Linux',
+      channelPath: 'linux/src/citizen_sdk_flutter_codec.hpp',
+      methodPath: 'linux/src/citizen_sdk_flutter_codec.cc',
+      methodChannel: /kMethodChannel\s*=\s*"([^"]+)"\s*;/g,
+      eventChannel: /kEventChannel\s*=\s*"([^"]+)"\s*;/g,
+      methods: /constexpr const char \*kMethods\[\]\s*=\s*\{([\s\S]*?)^\};/gm,
+    },
+    {
+      label: 'Windows',
+      channelPath: 'windows/src/citizen_sdk_flutter_codec.hpp',
+      methodPath: 'windows/src/citizen_sdk_flutter_codec.cc',
+      methodChannel: /kMethodChannel\s*=\s*"([^"]+)"\s*;/g,
+      eventChannel: /kEventChannel\s*=\s*"([^"]+)"\s*;/g,
+      methods: /constexpr const char \*kMethods\[\]\s*=\s*\{([\s\S]*?)^\};/gm,
+    },
+  ];
+  const expectedMethods = JSON.stringify(FLUTTER_METHODS);
+  for (const binding of bindings) {
+    const channelSource = regularSourceText(
+      sourceRoot, binding.channelPath, `${binding.label} channel`,
+    );
+    const methodSource = binding.methodPath === binding.channelPath
+      ? channelSource
+      : regularSourceText(sourceRoot, binding.methodPath, `${binding.label} method`);
+    const methodChannel = uniqueSourceCapture(
+      channelSource, binding.methodChannel, `${binding.label} MethodChannel`,
+    );
+    const eventChannel = uniqueSourceCapture(
+      channelSource, binding.eventChannel, `${binding.label} EventChannel`,
+    );
+    if (methodChannel !== FLUTTER_METHOD_CHANNEL) {
+      fail(`CitizenSDK ${binding.label} Flutter MethodChannel 合同漂移`);
+    }
+    if (eventChannel !== FLUTTER_EVENT_CHANNEL) {
+      fail(`CitizenSDK ${binding.label} Flutter EventChannel 合同漂移`);
+    }
+    // Dart currently exposes named channel constants and also instantiates the
+    // default channels at its runtime seam. Freeze both until Dart switches to
+    // directly referencing those constants; otherwise an unused constant could
+    // conceal a real transport-channel drift.
+    if (binding.runtimeMethodChannel !== undefined
+        && uniqueSourceCapture(channelSource, binding.runtimeMethodChannel,
+                               `${binding.label} runtime MethodChannel`)
+          !== FLUTTER_METHOD_CHANNEL) {
+      fail(`CitizenSDK ${binding.label} Flutter runtime MethodChannel 合同漂移`);
+    }
+    if (binding.runtimeEventChannel !== undefined
+        && uniqueSourceCapture(channelSource, binding.runtimeEventChannel,
+                               `${binding.label} runtime EventChannel`)
+          !== FLUTTER_EVENT_CHANNEL) {
+      fail(`CitizenSDK ${binding.label} Flutter runtime EventChannel 合同漂移`);
+    }
+    const methods = methodLiterals(
+      uniqueSourceCapture(methodSource, binding.methods,
+                          `${binding.label} methods`),
+      binding.label,
+    );
+    if (methods.length !== 22 || JSON.stringify(methods) !== expectedMethods) {
+      fail(`CitizenSDK ${binding.label} Flutter 方法合同漂移：必须精确为固定 22 项`);
+    }
+  }
 }
 
 function sha256File(path) {
@@ -947,12 +1306,15 @@ function assertSafeTargetPath(path, label) {
 function assertLocalTarget(path, label) {
   const target = assertSafeTargetPath(path, label);
   if (process.env.GITHUB_ACTIONS === 'true') return target;
-  const root = assertSafeTargetPath(TATA_CONSOLE_TARGET_ROOT, 'TataConsole 中央目录');
+  // 仓库、产品和平台是永久容器，只允许写严格后代；仅核验本次命中的根。
+  const root = [TATA_CONSOLE_TARGET_ROOT, TATA_CONSOLE_WORK_ROOT]
+    .find((candidate) => target.startsWith(`${candidate}${sep}`));
+  if (!root) {
+    fail(`${label} 的本地路径必须位于 ${TATA_CONSOLE_TARGET_ROOT} 或 ${TATA_CONSOLE_WORK_ROOT} 的严格子路径：${target}`);
+  }
+  assertSafeTargetPath(root, 'TataConsole 中央目录');
   if (!existsSync(root) || !lstatSync(root).isDirectory()) {
     fail(`TataConsole 中央目录不存在或不是普通目录：${root}`);
-  }
-  if (target !== root && !target.startsWith(`${root}${sep}`)) {
-    fail(`${label} 的本地路径必须位于 ${root}：${target}`);
   }
   return target;
 }
@@ -1705,14 +2067,51 @@ export function assertMobileBindingSource(
 }
 
 /**
- * Verify the source-only LinuxARM/LinuxAMD Host projection.
- *
- * Step 7.1 intentionally does not admit ELF artifacts, a Flutter plugin, or
- * public Release platforms. README files and linux/test are owned by their
- * narrower documentation/test contracts; every other Linux file and every
- * directory is closed here so an empty CMake cache cannot bypass hashing.
+ * Windows 来源与同版安装件分别闭合；仅候选显式允许十四个新增安装文件。
+ * 文档与 test 各归准确闭集；目录反向枚举防止空 CMake 缓存绕过文件哈希。
  */
-export function assertLinuxBindingSource(root) {
+export function assertWindowsBindingSource(root, { allowInjectedWindowsArtifacts = false } = {}) {
+  const sourceRoot = resolve(root);
+  const windowsRoot = join(sourceRoot, 'windows');
+  if (!existsSync(windowsRoot) || lstatSync(windowsRoot).isSymbolicLink()
+      || !lstatSync(windowsRoot).isDirectory()) fail('CitizenSDK 缺少普通 Windows Host 来源目录');
+  if (Object.keys(WINDOWS_BINDING_SOURCE_FILES).length !== 62) {
+    fail('CitizenSDK Windows Host/Flutter 固定生产清单必须精确为 62 文件');
+  }
+  const directories = regularDirectories(windowsRoot);
+  const expectedDirectories = [...new Set(['cmake', 'include', 'include/citizen_sdk', 'src', 'test',
+    ...(allowInjectedWindowsArtifacts ? parentDirectories(WINDOWS_RELEASE_FILES) : []),
+  ])].sort();
+  if (JSON.stringify(directories) !== JSON.stringify(expectedDirectories)) {
+    fail('CitizenSDK Windows Host 目录闭集漂移');
+  }
+  const files = regularFiles(windowsRoot)
+    .filter((path) => !allowInjectedWindowsArtifacts || !WINDOWS_INJECTED_FILES.has(path))
+    .filter((path) => !path.startsWith('test/'))
+    .filter((path) => path === 'CMakeLists.txt' || !isDocumentationFile(path))
+    .map((path) => `windows/${path}`).sort();
+  if (JSON.stringify(files) !== JSON.stringify(Object.keys(WINDOWS_BINDING_SOURCE_FILES).sort())) {
+    fail('CitizenSDK Windows Host 文件闭集漂移');
+  }
+  assertPinnedFiles(sourceRoot, WINDOWS_BINDING_SOURCE_FILES, 'Windows Host 来源');
+  const cmake = readFileSync(join(windowsRoot, 'CMakeLists.txt'), 'utf8');
+  const versions = [...cmake.matchAll(/^project\(CitizenSDKHost VERSION (\d+\.\d{1,2}\.\d{1,2}) LANGUAGES C CXX\)$/gm)];
+  if (versions.length !== 1) fail('CitizenSDK Windows Host 产品身份或版本字段不唯一');
+  const pubspec = join(sourceRoot, 'pubspec.yaml');
+  if (existsSync(pubspec) && readFileSync(pubspec, 'utf8').match(/^version: (.+)$/m)?.[1] !== versions[0][1]) {
+    fail('CitizenSDK Windows Host 版本必须与唯一 SDK 版本一致');
+  }
+  const header = readFileSync(join(windowsRoot, 'include/citizen_sdk/citizensdk_host.h'), 'utf8');
+  const functions = [...new Set([...header.matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/g)].map((m) => m[1]))].sort();
+  const exports = readFileSync(join(windowsRoot, 'cmake/citizensdk_host.def'), 'utf8')
+    .split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !line.startsWith('LIBRARY ') && line !== 'EXPORTS').sort();
+  if (functions.length !== 13 || JSON.stringify(functions) !== JSON.stringify(exports)) {
+    fail('CitizenSDK Windows Host 导出闭集漂移');
+  }
+  return versions[0][1];
+}
+
+export function assertLinuxBindingSource(root, { allowInjectedLinuxArtifacts = false } = {}) {
   const sourceRoot = resolve(root);
   const linuxRoot = join(sourceRoot, 'linux');
   if (!existsSync(linuxRoot)
@@ -1725,16 +2124,21 @@ export function assertLinuxBindingSource(root) {
     fail(`CitizenSDK Linux Host 固定清单必须精确为 ${LINUX_BINDING_SOURCE_FILE_COUNT} 文件`);
   }
   const actualDirectories = regularDirectories(linuxRoot);
+  const expectedDirectories = [...new Set([
+    ...LINUX_BINDING_SOURCE_DIRECTORIES,
+    ...(allowInjectedLinuxArtifacts ? parentDirectories(LINUX_RELEASE_FILES) : []),
+  ])].sort();
   if (JSON.stringify(actualDirectories)
-      !== JSON.stringify([...LINUX_BINDING_SOURCE_DIRECTORIES])) {
+      !== JSON.stringify(expectedDirectories)) {
     const actual = new Set(actualDirectories);
-    const expected = new Set(LINUX_BINDING_SOURCE_DIRECTORIES);
-    const missing = LINUX_BINDING_SOURCE_DIRECTORIES
+    const expected = new Set(expectedDirectories);
+    const missing = expectedDirectories
       .filter((path) => !actual.has(path));
     const extra = actualDirectories.filter((path) => !expected.has(path));
     fail(`CitizenSDK Linux Host 目录闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
   }
   const actualPaths = regularFiles(linuxRoot)
+    .filter((path) => !allowInjectedLinuxArtifacts || !LINUX_INJECTED_FILES.has(path))
     .filter((path) => !path.startsWith('test/'))
     .filter((path) => path === 'CMakeLists.txt' || !isDocumentationFile(path))
     .map((path) => `linux/${path}`)
@@ -1795,7 +2199,7 @@ export function assertDocumentationSource(
     .map((path) => `docs/${path}`)
     .filter((path) => !path.startsWith('docs/smoldot-dart/')));
 
-  for (const relativeRoot of ['android', 'darwin', 'lib/src', 'linux']) {
+  for (const relativeRoot of ['android', 'darwin', 'lib/src', 'linux', 'windows']) {
     const documentationRoot = join(sourceRoot, ...relativeRoot.split('/'));
     if (!existsSync(documentationRoot)
         || lstatSync(documentationRoot).isSymbolicLink()
@@ -1808,10 +2212,10 @@ export function assertDocumentationSource(
     actualPaths.push(...documentationFiles
       .filter((path) => isDocumentationFile(path)
         && path !== 'native/src/main/cpp/CMakeLists.txt'
-        && (relativeRoot !== 'linux' || path !== 'CMakeLists.txt')
+        && (!['linux', 'windows'].includes(relativeRoot) || path !== 'CMakeLists.txt')
         && (relativeRoot !== 'android' || !isAndroidTestPath(path))
         && (relativeRoot !== 'darwin' || !isDarwinTestOrInjectedArtifact(path)))
-      .filter((path) => relativeRoot !== 'linux' || !path.startsWith('test/'))
+      .filter((path) => !['linux', 'windows'].includes(relativeRoot) || !path.startsWith('test/'))
       .map((path) => `${relativeRoot}/${path}`));
   }
 
@@ -1840,10 +2244,16 @@ function compileRootedPubignoreRule(rawRule) {
     const character = pattern[index];
     if (character === '*') {
       if (pattern[index + 1] === '*') {
-        expression += '.*';
-        index += 1;
+        // 官方 **/ 也匹配零层目录；末尾 /* 不可把父目录自身当作子项排除。
+        if (pattern[index + 2] === '/') {
+          expression += '(?:.*/)?';
+          index += 2;
+        } else {
+          expression += '.*';
+          index += 1;
+        }
       } else {
-        expression += '[^/]*';
+        expression += pattern[index - 1] === '/' && index === pattern.length - 1 ? '[^/]+' : '[^/]*';
       }
     } else if (character === '?') {
       expression += '[^/]';
@@ -1853,7 +2263,7 @@ function compileRootedPubignoreRule(rawRule) {
   }
   return {
     ignored: !negated,
-    pattern: new RegExp(`^${expression}${directory ? '(?:/.*)?' : ''}$`),
+    pattern: new RegExp(`^${expression}${directory ? '(?:/.*)?' : '/?'}$`),
   };
 }
 
@@ -1907,6 +2317,38 @@ export function assertHostedRuntimeDartProjection(root) {
   }
 }
 
+/** The published Linux subtree contains 19 source inputs or 38 candidate inputs. */
+export function assertHostedRuntimeLinuxProjection(root, { allowInjectedLinuxArtifacts = false } = {}) {
+  const sourceRoot = resolve(root);
+  const rules = hostedPubignoreRules(sourceRoot);
+  const expected = [...new Set([
+    ...HOSTED_LINUX_PLUGIN_FILES,
+    ...(allowInjectedLinuxArtifacts ? LINUX_RELEASE_FILES
+      : LINUX_HOST_HEADERS.map((name) => `include/citizen_sdk/${name}`)),
+  ])].map((path) => `linux/${path}`).sort();
+  const actual = regularFiles(join(sourceRoot, 'linux'))
+    .map((path) => `linux/${path}`)
+    .filter((path) => !isHostedIgnored(path, rules)).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(`CitizenSDK Hosted Linux 运行闭集漂移；缺失=${expected.filter((path) => !actual.includes(path)).join(',') || '无'}；额外=${actual.filter((path) => !expected.includes(path)).join(',') || '无'}`);
+  }
+}
+
+/** Windows 源码可见十九项；候选仅增加十四项，运行包精确为三十三项。 */
+export function assertHostedRuntimeWindowsProjection(root, { allowInjectedWindowsArtifacts = false } = {}) {
+  const sourceRoot = resolve(root);
+  const rules = hostedPubignoreRules(sourceRoot);
+  const expected = [...new Set([...HOSTED_WINDOWS_PLUGIN_FILES,
+    ...(allowInjectedWindowsArtifacts ? WINDOWS_RELEASE_FILES
+      : WINDOWS_HOST_HEADERS.map((name) => `include/citizen_sdk/${name}`)),
+  ])].map((path) => `windows/${path}`).sort();
+  const actual = regularFiles(join(sourceRoot, 'windows')).map((path) => `windows/${path}`)
+    .filter((path) => !isHostedIgnored(path, rules)).sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(`CitizenSDK Hosted Windows 运行闭集漂移；缺失=${expected.filter((path) => !actual.includes(path)).join(',') || '无'}；额外=${actual.filter((path) => !expected.includes(path)).join(',') || '无'}`);
+  }
+}
+
 function yamlTopLevelSection(source, name) {
   const lines = source.split(/\r?\n/);
   const start = lines.findIndex((line) => line === `${name}:`);
@@ -1941,10 +2383,14 @@ function assertHostedDependencySection(pubspec, name, expected) {
   }
 }
 
-export function assertHostedPackageSource(root) {
+export function assertHostedPackageSource(root, {
+  allowInjectedLinuxArtifacts = false, allowInjectedWindowsArtifacts = false,
+} = {}) {
   const sourceRoot = resolve(root);
   assertPinnedFiles(sourceRoot, HOSTED_PACKAGE_SOURCE_FILES, 'Hosted Package 合同');
   assertHostedRuntimeDartProjection(sourceRoot);
+  assertHostedRuntimeLinuxProjection(sourceRoot, { allowInjectedLinuxArtifacts });
+  assertHostedRuntimeWindowsProjection(sourceRoot, { allowInjectedWindowsArtifacts });
   const pubspecPath = join(sourceRoot, 'pubspec.yaml');
   if (!existsSync(pubspecPath)
       || lstatSync(pubspecPath).isSymbolicLink()
@@ -1970,6 +2416,7 @@ export function assertHostedPackageSource(root) {
     ['android/build.gradle', /^version = '(\d+\.\d{1,2}\.\d{1,2})'$/m],
     ['darwin/citizen_sdk.podspec', /^  spec\.version\s+= '(\d+\.\d{1,2}\.\d{1,2})'$/m],
     ['linux/CMakeLists.txt', /^project\(CitizenSDKHost VERSION (\d+\.\d{1,2}\.\d{1,2}) LANGUAGES C CXX\)$/m],
+    ['windows/CMakeLists.txt', /^project\(CitizenSDKHost VERSION (\d+\.\d{1,2}\.\d{1,2}) LANGUAGES C CXX\)$/m],
   ].map(([relativePath, pattern]) => {
     const path = join(sourceRoot, ...relativePath.split('/'));
     if (!existsSync(path) || lstatSync(path).isSymbolicLink() || !lstatSync(path).isFile()) {
@@ -2233,6 +2680,7 @@ function applySoftwareVersion(output, version) {
   replaceExact(join(output, 'android/build.gradle'), /^version = '\d+\.\d{1,2}\.\d{1,2}'$/gm, `version = '${version}'`, 'android/build.gradle');
   replaceExact(join(output, 'darwin/citizen_sdk.podspec'), /^  spec\.version\s+= '\d+\.\d{1,2}\.\d{1,2}'$/gm, `  spec.version          = '${version}'`, 'citizen_sdk.podspec');
   replaceExact(join(output, 'linux/CMakeLists.txt'), /^project\(CitizenSDKHost VERSION \d+\.\d{1,2}\.\d{1,2} LANGUAGES C CXX\)$/gm, `project(CitizenSDKHost VERSION ${version} LANGUAGES C CXX)`, 'linux/CMakeLists.txt');
+  replaceExact(join(output, 'windows/CMakeLists.txt'), /^project\(CitizenSDKHost VERSION \d+\.\d{1,2}\.\d{1,2} LANGUAGES C CXX\)$/gm, `project(CitizenSDKHost VERSION ${version} LANGUAGES C CXX)`, 'windows/CMakeLists.txt');
 }
 
 function nativeArtifactSource(nativeRoot, sourcePath, expectedType = 'file') {
@@ -2269,6 +2717,1313 @@ function nativeArtifactSource(nativeRoot, sourcePath, expectedType = 'file') {
  * ordinary directories, so an allowed internal link cannot redirect the
  * native source root.
  */
+// Read ELF64 little-endian directly on any CI host. PT_DYNAMIC is the runtime
+// authority: section tables must identify the same mapped bytes, not a decoy
+// table appended to an unrelated library. This is structural validation, not
+// evidence that Linux/GTK/TPM execution or dependency provenance has passed.
+function assertLinuxElf(path, platform, host, expectedSymbols) {
+  const bytes = readFileSync(path);
+  const label = `CitizenSDK ${platform} ${host ? 'Host' : 'Core'} ELF`;
+  const reject = (message) => fail(`${label} ${message}`);
+  const range = (offset, size) => {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(size)
+        || offset < 0 || size < 0 || offset > bytes.length - size) reject('范围越界');
+    return offset;
+  };
+  const u64 = (offset) => {
+    range(offset, 8);
+    const value = bytes.readBigUInt64LE(offset);
+    if (value > BigInt(Number.MAX_SAFE_INTEGER)) reject('64 位字段越界');
+    return Number(value);
+  };
+  range(0, 64);
+  if (!bytes.subarray(0, 7).equals(Buffer.from([127, 69, 76, 70, 2, 1, 1]))
+      || bytes.readUInt16LE(16) !== 3
+      || bytes.readUInt16LE(18) !== (platform === 'LinuxARM' ? 183 : 62)
+      || bytes.readUInt32LE(20) !== 1 || bytes.readUInt16LE(52) !== 64
+      || bytes.readUInt16LE(54) !== 56 || bytes.readUInt16LE(58) !== 64) {
+    reject('必须是对应架构的 ELF64 little-endian ET_DYN');
+  }
+  const phoff = u64(32);
+  const shoff = u64(40);
+  const phnum = bytes.readUInt16LE(56);
+  const shnum = bytes.readUInt16LE(60);
+  if (!phnum || phnum === 0xffff || !shnum || shnum >= 0xff00) reject('段/节数量无效');
+  range(phoff, phnum * 56);
+  range(shoff, shnum * 64);
+  const segments = Array.from({ length: phnum }, (_, index) => {
+    const offset = phoff + index * 56;
+    const file = u64(offset + 8);
+    const address = u64(offset + 16);
+    const size = u64(offset + 32);
+    range(file, size);
+    if (size > u64(offset + 40) || !Number.isSafeInteger(address + size)) reject('段长度无效');
+    return { type: bytes.readUInt32LE(offset), flags: bytes.readUInt32LE(offset + 4), file, address, size };
+  });
+  const mapped = (address, size) => {
+    const matches = segments.filter((segment) => segment.type === 1
+      && address >= segment.address && size <= segment.size
+      && address - segment.address <= segment.size - size);
+    if (matches.length !== 1) reject('动态地址缺失或有歧义');
+    return range(matches[0].file + address - matches[0].address, size);
+  };
+  const sections = Array.from({ length: shnum }, (_, index) => {
+    const offset = shoff + index * 64;
+    const type = bytes.readUInt32LE(offset + 4);
+    const file = u64(offset + 24);
+    const size = u64(offset + 32);
+    if (type !== 8) range(file, size); // SHT_NOBITS does not occupy file bytes.
+    return { type, file, size, address: u64(offset + 16), link: bytes.readUInt32LE(offset + 40), entry: u64(offset + 56) };
+  });
+  const onlySection = (type) => {
+    const matches = sections.filter((section) => section.type === type);
+    if (matches.length !== 1) reject('动态节缺失或重复');
+    return matches[0];
+  };
+  const dynamics = segments.filter((segment) => segment.type === 2);
+  if (dynamics.length !== 1 || dynamics[0].size % 16 !== 0) reject('PT_DYNAMIC 无效');
+  const dynamic = dynamics[0];
+  const dynamicSection = onlySection(6);
+  if (dynamicSection.file !== dynamic.file || dynamicSection.size !== dynamic.size
+      || mapped(dynamic.address, dynamic.size) !== dynamic.file
+      || dynamicSection.address !== dynamic.address || dynamicSection.entry !== 16) {
+    reject('动态段/节不一致');
+  }
+  const tags = new Map();
+  let terminated = false;
+  for (let offset = dynamic.file; offset < dynamic.file + dynamic.size; offset += 16) {
+    const tag = u64(offset);
+    const value = u64(offset + 8);
+    if (tag === 0) { terminated = true; break; }
+    if (!tags.has(tag)) tags.set(tag, []);
+    tags.get(tag).push(value);
+  }
+  if (!terminated) reject('动态表未终止');
+  const one = (tag) => {
+    const values = tags.get(tag);
+    if (values?.length !== 1) reject(`动态字段 ${tag} 缺失或重复`);
+    return values[0];
+  };
+  const symbols = onlySection(11);
+  const strings = sections[symbols.link];
+  if (!strings || strings.type !== 3 || dynamicSection.link !== symbols.link
+      || symbols.entry !== 24 || symbols.size % 24 !== 0 || symbols.size / 24 > 1000000
+      || one(11) !== 24 || one(6) !== symbols.address
+      || mapped(symbols.address, symbols.size) !== symbols.file
+      || one(5) !== strings.address || one(10) !== strings.size
+      || mapped(strings.address, strings.size) !== strings.file) reject('动态符号/字符串表不一致');
+  const string = (index) => {
+    if (!Number.isSafeInteger(index) || index < 0 || index >= strings.size) reject('字符串索引越界');
+    const start = strings.file + index;
+    const end = bytes.indexOf(0, start);
+    if (end < start || end >= strings.file + strings.size) reject('字符串缺少终止符');
+    const value = bytes.subarray(start, end);
+    if (value.some((byte) => byte < 32 || byte > 126)) reject('动态名称不是可审计 ASCII');
+    return value.toString('ascii');
+  };
+  const soname = string(one(14));
+  if (soname !== (host ? 'libcitizensdk_host.so' : 'libcitizensdk.so')) reject('SONAME 漂移');
+  if (tags.has(15) || (!host && tags.has(29))
+      || (host && string(one(29)) !== '$ORIGIN')) reject('RPATH/RUNPATH 必须遵守包内单 Core 合同');
+  const needed = (tags.get(1) ?? []).map(string);
+  if (new Set(needed).size !== needed.length || needed.some((name) => !name
+      || name.includes('/') || name.includes('\\')
+      || /^(?:libsmoldot|libstdc\+\+|libgcc_s|libsqlite3|libtss2-|libcrypto|libssl)/.test(name))
+      || (host && needed.filter((name) => name === 'libcitizensdk.so').length !== 1)
+      || (!host && needed.some((name) => /^libcitizensdk/.test(name)))) reject('DT_NEEDED 依赖闭包漂移');
+  const exported = [];
+  for (let offset = symbols.file; offset < symbols.file + symbols.size; offset += 24) {
+    const info = bytes[offset + 4];
+    const visibility = bytes[offset + 5] & 7;
+    const section = bytes.readUInt16LE(offset + 6);
+    if (!section || ![1, 2, 10].includes(info >> 4) || [1, 2].includes(visibility)) continue;
+    const name = string(bytes.readUInt32LE(offset));
+    if (![0, 3].includes(visibility) || (info & 15) !== 2 || section >= sections.length) reject('公开符号必须是已定义函数');
+    const address = u64(offset + 8);
+    if (!segments.some((segment) => segment.type === 1 && (segment.flags & 1)
+      && address >= segment.address && address - segment.address < segment.size)) reject('导出函数地址不在可执行段');
+    exported.push(name);
+  }
+  if (JSON.stringify(exported.sort()) !== JSON.stringify(expectedSymbols)) reject('公开导出符号闭集漂移');
+  // Version requirements are linked from PT_DYNAMIC and bounded by the matching
+  // SHT_GNU_verneed. Reject newer/private glibc or leaked C++ runtime dependencies.
+  const versionSections = sections.filter((section) => section.type === 0x6ffffffe);
+  if (tags.has(0x6ffffffe) || tags.has(0x6fffffff) || versionSections.length) {
+    const section = onlySection(0x6ffffffe);
+    const count = one(0x6fffffff);
+    if (!count || count > 10000 || section.link !== symbols.link
+        || section.address !== one(0x6ffffffe)
+        || mapped(section.address, section.size) !== section.file) reject('版本需求表不一致');
+    const versionRange = (offset, size) => {
+      if (offset < section.file || offset > section.file + section.size - size) reject('版本链越界');
+      return range(offset, size);
+    };
+    const occupied = new Set();
+    const occupy = (offset) => {
+      versionRange(offset, 16);
+      for (let byte = offset; byte < offset + 16; byte += 1) {
+        if (occupied.has(byte)) reject('版本链循环或重叠');
+        occupied.add(byte);
+      }
+    };
+    let offset = section.file;
+    for (let index = 0; index < count; index += 1) {
+      occupy(offset);
+      const auxCount = bytes.readUInt16LE(offset + 2);
+      if (bytes.readUInt16LE(offset) !== 1 || !auxCount
+          || !needed.includes(string(bytes.readUInt32LE(offset + 4)))) reject('版本需求库无效');
+      let aux = offset + bytes.readUInt32LE(offset + 8);
+      for (let item = 0; item < auxCount; item += 1) {
+        occupy(aux);
+        const name = string(bytes.readUInt32LE(aux + 8));
+        if (/^(?:GLIBCXX_|CXXABI_)/.test(name)) reject('C++ 动态运行库版本泄漏');
+        if (name.startsWith('GLIBC_')) {
+          const version = /^GLIBC_(\d+)\.(\d+)(?:\.(\d+))?$/.exec(name);
+          if (!version || Number(version[1]) > 2
+              || (Number(version[1]) === 2 && (Number(version[2]) > 31
+                || (Number(version[2]) === 31 && Number(version[3] ?? 0) > 0)))) reject('GLIBC 需求超过 2.31 或使用私有版本');
+        }
+        const next = bytes.readUInt32LE(aux + 12);
+        if ((item + 1 < auxCount) !== (next !== 0)) reject('版本辅助链长度不一致');
+        aux += next;
+      }
+      const next = bytes.readUInt32LE(offset + 12);
+      if ((index + 1 < count) !== (next !== 0)) reject('版本需求链长度不一致');
+      offset += next;
+    }
+  }
+}
+
+// Canonical instructions emitted by CMake; comments are not executable input.
+// The export check is complete, so a second set_property/include cannot override
+// a previously checked path. Unknown generator instructions fail closed.
+const LINUX_CMAKE_PACKAGE_INIT = [
+  "get_filename_component(PACKAGE_PREFIX_DIR \"${CMAKE_CURRENT_LIST_DIR}/../../../../\" ABSOLUTE)",
+  "macro(set_and_check _var _file)",
+  "  set(${_var} \"${_file}\")",
+  "  if(NOT EXISTS \"${_file}\")",
+  "    message(FATAL_ERROR \"File or directory ${_file} referenced by variable ${_var} does not exist !\")",
+  "  endif()",
+  "endmacro()",
+  "macro(check_required_components _NAME)",
+  "  foreach(comp ${${_NAME}_FIND_COMPONENTS})",
+  "    if(NOT ${_NAME}_${comp}_FOUND)",
+  "      if(${_NAME}_FIND_REQUIRED_${comp})",
+  "        set(${_NAME}_FOUND FALSE)",
+  "      endif()",
+  "    endif()",
+  "  endforeach()",
+  "endmacro()",
+].join('\n');
+const LINUX_CMAKE_TARGETS = [
+  "if(\"${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}\" LESS 2.8)",
+  "   message(FATAL_ERROR \"CMake >= 2.8.12 required\")",
+  "endif()",
+  "if(CMAKE_VERSION VERSION_LESS \"2.8.12\")",
+  "   message(FATAL_ERROR \"CMake >= 2.8.12 required\")",
+  "endif()",
+  "cmake_policy(PUSH)",
+  "cmake_policy(VERSION 2.8.12...4.0)",
+  "set(CMAKE_IMPORT_FILE_VERSION 1)",
+  "set(_cmake_targets_defined \"\")",
+  "set(_cmake_targets_not_defined \"\")",
+  "set(_cmake_expected_targets \"\")",
+  "foreach(_cmake_expected_target IN ITEMS CitizenSDK::Host)",
+  "  list(APPEND _cmake_expected_targets \"${_cmake_expected_target}\")",
+  "  if(TARGET \"${_cmake_expected_target}\")",
+  "    list(APPEND _cmake_targets_defined \"${_cmake_expected_target}\")",
+  "  else()",
+  "    list(APPEND _cmake_targets_not_defined \"${_cmake_expected_target}\")",
+  "  endif()",
+  "endforeach()",
+  "unset(_cmake_expected_target)",
+  "if(_cmake_targets_defined STREQUAL _cmake_expected_targets)",
+  "  unset(_cmake_targets_defined)",
+  "  unset(_cmake_targets_not_defined)",
+  "  unset(_cmake_expected_targets)",
+  "  unset(CMAKE_IMPORT_FILE_VERSION)",
+  "  cmake_policy(POP)",
+  "  return()",
+  "endif()",
+  "if(NOT _cmake_targets_defined STREQUAL \"\")",
+  "  string(REPLACE \";\" \", \" _cmake_targets_defined_text \"${_cmake_targets_defined}\")",
+  "  string(REPLACE \";\" \", \" _cmake_targets_not_defined_text \"${_cmake_targets_not_defined}\")",
+  "  message(FATAL_ERROR \"Some (but not all) targets in this export set were already defined.\\nTargets Defined: ${_cmake_targets_defined_text}\\nTargets not yet defined: ${_cmake_targets_not_defined_text}\\n\")",
+  "endif()",
+  "unset(_cmake_targets_defined)",
+  "unset(_cmake_targets_not_defined)",
+  "unset(_cmake_expected_targets)",
+  "get_filename_component(_IMPORT_PREFIX \"${CMAKE_CURRENT_LIST_FILE}\" PATH)",
+  "get_filename_component(_IMPORT_PREFIX \"${_IMPORT_PREFIX}\" PATH)",
+  "get_filename_component(_IMPORT_PREFIX \"${_IMPORT_PREFIX}\" PATH)",
+  "get_filename_component(_IMPORT_PREFIX \"${_IMPORT_PREFIX}\" PATH)",
+  "get_filename_component(_IMPORT_PREFIX \"${_IMPORT_PREFIX}\" PATH)",
+  "if(_IMPORT_PREFIX STREQUAL \"/\")",
+  "  set(_IMPORT_PREFIX \"\")",
+  "endif()",
+  "add_library(CitizenSDK::Host SHARED IMPORTED)",
+  "set_target_properties(CitizenSDK::Host PROPERTIES",
+  "  INTERFACE_COMPILE_FEATURES \"cxx_std_17\"",
+  "  INTERFACE_INCLUDE_DIRECTORIES \"${_IMPORT_PREFIX}/include\"",
+  "  INTERFACE_LINK_LIBRARIES \"CitizenSDK::Core\"",
+  ")",
+  "file(GLOB _cmake_config_files \"${CMAKE_CURRENT_LIST_DIR}/CitizenSDKTargets-*.cmake\")",
+  "foreach(_cmake_config_file IN LISTS _cmake_config_files)",
+  "  include(\"${_cmake_config_file}\")",
+  "endforeach()",
+  "unset(_cmake_config_file)",
+  "unset(_cmake_config_files)",
+  "set(_IMPORT_PREFIX)",
+  "foreach(_cmake_target IN LISTS _cmake_import_check_targets)",
+  "  if(CMAKE_VERSION VERSION_LESS \"3.28\"",
+  "      OR NOT DEFINED _cmake_import_check_xcframework_for_${_cmake_target}",
+  "      OR NOT IS_DIRECTORY \"${_cmake_import_check_xcframework_for_${_cmake_target}}\")",
+  "    foreach(_cmake_file IN LISTS \"_cmake_import_check_files_for_${_cmake_target}\")",
+  "      if(NOT EXISTS \"${_cmake_file}\")",
+  "        message(FATAL_ERROR \"The imported target \\\"${_cmake_target}\\\" references the file",
+  "   \\\"${_cmake_file}\\\"",
+  "but this file does not exist.  Possible reasons include:",
+  "* The file was deleted, renamed, or moved to another location.",
+  "* An install or uninstall procedure did not complete successfully.",
+  "* The installation package was faulty and contained",
+  "   \\\"${CMAKE_CURRENT_LIST_FILE}\\\"",
+  "but not all the files it references.",
+  "\")",
+  "      endif()",
+  "    endforeach()",
+  "  endif()",
+  "  unset(_cmake_file)",
+  "  unset(\"_cmake_import_check_files_for_${_cmake_target}\")",
+  "endforeach()",
+  "unset(_cmake_target)",
+  "unset(_cmake_import_check_targets)",
+  "set(CMAKE_IMPORT_FILE_VERSION)",
+  "cmake_policy(POP)",
+].join('\n');
+const LINUX_CMAKE_RELEASE = [
+  "set(CMAKE_IMPORT_FILE_VERSION 1)",
+  "set_property(TARGET CitizenSDK::Host APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)",
+  "set_target_properties(CitizenSDK::Host PROPERTIES",
+  "  IMPORTED_LOCATION_RELEASE \"${_IMPORT_PREFIX}/lib/@PLATFORM@/libcitizensdk_host.so\"",
+  "  IMPORTED_SONAME_RELEASE \"libcitizensdk_host.so\"",
+  "  )",
+  "list(APPEND _cmake_import_check_targets CitizenSDK::Host )",
+  "list(APPEND _cmake_import_check_files_for_CitizenSDK::Host \"${_IMPORT_PREFIX}/lib/@PLATFORM@/libcitizensdk_host.so\" )",
+  "set(CMAKE_IMPORT_FILE_VERSION)",
+].join('\n');
+
+function assertLinuxInstallClosure(prefix, platform) {
+  const paths = linuxInstallPaths(platform);
+  if (JSON.stringify(regularFiles(prefix)) !== JSON.stringify(paths)
+      || JSON.stringify(regularDirectories(prefix)) !== JSON.stringify(parentDirectories(paths))) {
+    fail(`CitizenSDK ${platform} 安装投影必须精确为 19 个普通文件及其目录`);
+  }
+}
+
+function cmakeInstructions(source) {
+  let quoted = false;
+  const lines = [];
+  for (const line of source.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    // No bracket-argument/comment syntax is emitted by these generators. Never
+    // discard a bracket comment followed by executable code on the same line,
+    // or a line that merely resembles a comment inside a quoted message.
+    if (/\[=*\[/.test(line)) fail('CitizenSDK Linux CMake 出现未登记的 bracket 语法');
+    if (!quoted && (!trimmed || trimmed.startsWith('#'))) continue;
+    for (let index = 0; index < line.length; index += 1) {
+      if (line[index] === '\\') index += 1;
+      else if (line[index] === '"') quoted = !quoted;
+    }
+    lines.push(trimmed);
+  }
+  if (quoted) fail('CitizenSDK Linux CMake 字符串未终止');
+  return lines.join('\n');
+}
+
+function linuxCmakeTargetVariants() {
+  const current = cmakeInstructions(LINUX_CMAKE_TARGETS);
+  const variants = new Set();
+  // CMake's official 3.x/4.x exporters change policy ceilings, old-consumer
+  // guards and the XCFramework existence guard. Admit those complete, safe
+  // structures only; never delete arbitrary instructions from candidate input.
+  // References: Kitware/CMake cmExport{File,CMakeConfig}Generator.cxx (3.24/3.31).
+  for (const ceiling of ['3.22', '3.23', '3.26', '3.29', '4.0']) {
+    for (const legacy of [false, true]) {
+      let expected = current.replace('2.8.12...4.0', `2.8.12...${ceiling}`);
+      if (legacy) {
+        expected = expected
+          .replace('message(FATAL_ERROR "CMake >= 2.8.12 required")', 'message(FATAL_ERROR "CMake >= 2.8.0 required")')
+          .replace('if(CMAKE_VERSION VERSION_LESS "2.8.12")', 'if(CMAKE_VERSION VERSION_LESS "2.8.3")')
+          .replace('message(FATAL_ERROR "CMake >= 2.8.12 required")', 'message(FATAL_ERROR "CMake >= 2.8.3 required")')
+          .replace(`2.8.12...${ceiling}`, `2.8.3...${ceiling}`)
+          .replace('file(GLOB _cmake_config_files', [
+            'if(CMAKE_VERSION VERSION_LESS 2.8.12)',
+            'message(FATAL_ERROR "This file relies on consumers using CMake 2.8.12 or greater.")',
+            'endif()',
+            'file(GLOB _cmake_config_files',
+          ].join('\n'));
+      }
+      variants.add(expected);
+      variants.add(expected.replace([
+        'if(CMAKE_VERSION VERSION_LESS "3.28"',
+        'OR NOT DEFINED _cmake_import_check_xcframework_for_${_cmake_target}',
+        'OR NOT IS_DIRECTORY "${_cmake_import_check_xcframework_for_${_cmake_target}}")',
+        '',
+      ].join('\n'), '').replace('endforeach()\nendif()\nunset(_cmake_file)', 'endforeach()\nunset(_cmake_file)'));
+    }
+  }
+  return variants;
+}
+
+function assertLinuxInstalledPlatform(sourceRoot, prefix, platform) {
+  const installedFile = (path) => {
+    try {
+      return nativeArtifactSource(prefix, path);
+    } catch (error) {
+      fail(`CitizenSDK ${platform} 安装件无效：${path}；${error.message}`);
+    }
+  };
+  const ordinary = (path) => readFileSync(installedFile(path));
+  const equalSource = (installed, source) => {
+    if (!ordinary(installed).equals(readFileSync(join(sourceRoot, source)))) {
+      fail(`CitizenSDK ${platform} 安装投影来源字节漂移：${installed}`);
+    }
+  };
+  for (const name of ['citizensdk.h', 'citizensdk_types.h']) equalSource(`include/${name}`, `include/${name}`);
+  for (const name of LINUX_HOST_HEADERS) equalSource(`include/citizen_sdk/${name}`, `linux/include/citizen_sdk/${name}`);
+  for (const name of ['manifest.json', 'chainspec.json', 'light_sync_state.json']) {
+    equalSource(`share/citizensdk/citizenchain/${name}`, `assets/citizenchain/${name}`);
+  }
+  const version = readFileSync(join(sourceRoot, 'pubspec.yaml'), 'utf8')
+    .match(/^version: (\d+\.\d{1,2}\.\d{1,2})$/m)?.[1];
+  if (!version) fail('CitizenSDK Linux 安装投影缺少同版包身份');
+  const configRoot = `lib/${platform}/cmake/CitizenSDK`;
+  const configs = Object.fromEntries(LINUX_CMAKE_FILES.map((name) => [name,
+    ordinary(`${configRoot}/${name}`).toString('utf8'),
+  ]));
+  const template = (name) => readFileSync(join(sourceRoot, 'linux/cmake', name), 'utf8');
+  const expectedVersion = template('CitizenSDKConfigVersion.cmake.in')
+    .replaceAll('@PROJECT_VERSION@', version)
+    .replaceAll('@PROJECT_VERSION_MAJOR@', version.split('.')[0]);
+  if (configs['CitizenSDKConfigVersion.cmake'] !== expectedVersion) {
+    fail(`CitizenSDK ${platform} CMake 版本合同漂移`);
+  }
+  if (configs['CitizenSDKDependencies.cmake'] !== template('CitizenSDKDependencies.cmake')) {
+    fail(`CitizenSDK ${platform} CMake 依赖合同漂移`);
+  }
+  const expectedBody = template('CitizenSDKConfig.cmake.in').split('@PACKAGE_INIT@')[1]
+    .replaceAll('@CITIZENSDK_PLATFORM@', platform)
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_LIBDIR@', '${PACKAGE_PREFIX_DIR}/lib')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_DATADIR@', '${PACKAGE_PREFIX_DIR}/share')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@', '${PACKAGE_PREFIX_DIR}/include');
+  const config = configs['CitizenSDKConfig.cmake'];
+  const expectedConfig = `${LINUX_CMAKE_PACKAGE_INIT}\n${expectedBody}`;
+  if (cmakeInstructions(config) !== cmakeInstructions(expectedConfig)) {
+    fail(`CitizenSDK ${platform} CMake 平台、路径或配置合同漂移`);
+  }
+  const targets = configs['CitizenSDKTargets.cmake'];
+  const release = configs['CitizenSDKTargets-release.cmake'];
+  if (!linuxCmakeTargetVariants().has(cmakeInstructions(targets))
+      || cmakeInstructions(release) !== cmakeInstructions(LINUX_CMAKE_RELEASE.replaceAll('@PLATFORM@', platform))) {
+    fail(`CitizenSDK ${platform} CMake 导入目标合同漂移`);
+  }
+  const hostHeader = readFileSync(join(sourceRoot, 'linux/include/citizen_sdk/citizensdk_host.h'), 'utf8');
+  const hostSymbols = [...new Set([...hostHeader.matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/g)]
+    .map((match) => match[1]))].sort();
+  if (hostSymbols.length !== 13) fail('CitizenSDK Linux Host 必须冻结 13 个公开 C 符号');
+  for (const [host, names] of [[false, expectedCitizenSdkSymbols(sourceRoot)], [true, hostSymbols]]) {
+    const name = host ? 'libcitizensdk_host.so' : 'libcitizensdk.so';
+    const path = installedFile(`lib/${platform}/${name}`);
+    assertLinuxElf(path, platform, host, names);
+  }
+}
+
+/** Verify the merged 26-file installation and the unchanged source closure. */
+export function assertLinuxReleaseProjection(root) {
+  const sourceRoot = resolve(root);
+  assertLinuxBindingSource(sourceRoot, { allowInjectedLinuxArtifacts: true });
+  for (const platform of LINUX_PLATFORMS) {
+    assertLinuxInstalledPlatform(sourceRoot, join(sourceRoot, 'linux'), platform);
+  }
+}
+
+// 按 Microsoft PE/COFF 格式读取真实目录表，不依赖 dumpbin 文本或文件扩展名。
+// 系统加载、实际 CRT 部署及硬件行为仍须由 Windows 原生消费者验收。
+function windowsPe(path, { headersOnly = false } = {}) {
+  const bytes = readFileSync(path);
+  const invalid = (message) => fail(`CitizenSDK Windows PE ${path}：${message}`);
+  const range = (offset, length) => {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0
+        || length < 0 || offset > bytes.length - length) invalid('结构越界');
+    return offset;
+  };
+  range(0, 64);
+  if (bytes.readUInt16LE(0) !== 0x5a4d) invalid('缺少 DOS 标识');
+  const pe = range(bytes.readUInt32LE(60), 24);
+  const count = bytes.readUInt16LE(pe + 6);
+  const optionalSize = bytes.readUInt16LE(pe + 20);
+  if (bytes.readUInt32LE(pe) !== 0x4550 || bytes.readUInt16LE(pe + 4) !== 0x8664
+      || count < 1 || count > 96 || optionalSize < 240) invalid('机器或 COFF 头漂移');
+  const optional = range(pe + 24, optionalSize);
+  if (bytes.readUInt16LE(optional) !== 0x20b || bytes.readUInt32LE(optional + 108) < 16) invalid('必须为 PE32+');
+  const sections = [];
+  for (let index = 0; index < count; index += 1) {
+    const offset = range(optional + optionalSize + index * 40, 40);
+    const section = { address: bytes.readUInt32LE(offset + 12), size: bytes.readUInt32LE(offset + 8),
+      raw: bytes.readUInt32LE(offset + 20), rawSize: bytes.readUInt32LE(offset + 16),
+      flags: bytes.readUInt32LE(offset + 36) };
+    range(section.raw, section.rawSize);
+    if (section.address === 0 || section.address + Math.max(section.size, section.rawSize) > 0x100000000
+        || sections.some((previous) => section.address < previous.address + Math.max(previous.size, previous.rawSize)
+          && previous.address < section.address + Math.max(section.size, section.rawSize))) invalid('节地址重叠或无效');
+    sections.push(section);
+  }
+  if (headersOnly) return;
+  const mapped = (address, length = 1) => {
+    const found = sections.filter((section) => address >= section.address
+      && address + length <= section.address + section.rawSize);
+    if (found.length !== 1 || length < 1) invalid('RVA 不在唯一文件节中');
+    return range(found[0].raw + address - found[0].address, length);
+  };
+  const string = (address) => {
+    const start = mapped(address);
+    const end = bytes.indexOf(0, start);
+    if (end < start || end - start > 4096) invalid('字符串未终止');
+    mapped(address, end - start + 1);
+    const value = bytes.subarray(start, end);
+    if (value.length === 0 || value.some((byte) => byte < 0x20 || byte > 0x7e)) invalid('字符串不是非空 ASCII');
+    return value.toString('ascii');
+  };
+  const directory = (index) => {
+    const offset = optional + 112 + index * 8;
+    const address = bytes.readUInt32LE(offset), size = bytes.readUInt32LE(offset + 4);
+    if ((address === 0) !== (size === 0)) invalid('目录地址与长度不一致');
+    return { address, size, offset: address ? mapped(address, size) : 0 };
+  };
+  const exports = [];
+  const exported = directory(0);
+  let dllName = null;
+  if (exported.address) {
+    if (exported.size < 40) invalid('导出目录截断');
+    const at = exported.offset;
+    dllName = string(bytes.readUInt32LE(at + 12));
+    const functions = bytes.readUInt32LE(at + 20), names = bytes.readUInt32LE(at + 24);
+    if (!names || names > 65536 || functions !== names) invalid('导出数量或 ordinal-only 项无效');
+    const addresses = mapped(bytes.readUInt32LE(at + 28), functions * 4);
+    const pointers = mapped(bytes.readUInt32LE(at + 32), names * 4);
+    const ordinals = mapped(bytes.readUInt32LE(at + 36), names * 2);
+    const seen = new Set();
+    for (let index = 0; index < names; index += 1) {
+      const ordinal = bytes.readUInt16LE(ordinals + index * 2);
+      if (ordinal >= functions || seen.has(ordinal)) invalid('导出 ordinal 重复或越界');
+      seen.add(ordinal);
+      const address = bytes.readUInt32LE(addresses + ordinal * 4);
+      if (address >= exported.address && address < exported.address + exported.size) invalid('禁止转发导出');
+      mapped(address);
+      if (!sections.some((section) => address >= section.address && address < section.address + section.rawSize
+          && (section.flags & 0x20000000))) invalid('导出地址不是可执行代码');
+      exports.push(string(bytes.readUInt32LE(pointers + index * 4)));
+    }
+    if (new Set(exports).size !== exports.length || JSON.stringify(exports) !== JSON.stringify([...exports].sort())) {
+      invalid('导出名称顺序或唯一性漂移');
+    }
+  }
+  const imports = [];
+  const thunks = (address) => {
+    const names = [];
+    for (let index = 0; index < 65536; index += 1) {
+      const value = bytes.readBigUInt64LE(mapped(address + index * 8, 8));
+      if (value === 0n) return names;
+      if (value & (1n << 63n)) {
+        if ((value & ~((1n << 63n) | 0xffffn)) !== 0n) invalid('import ordinal 位非法');
+        names.push(null);
+      } else {
+        if (value > 0xffffffffn) invalid('import thunk RVA 越界');
+        mapped(Number(value), 2);
+        names.push(string(Number(value) + 2));
+      }
+    }
+    invalid('import thunk 未终止');
+  };
+  for (const [index, width] of [[1, 20], [13, 32]]) {
+    const table = directory(index);
+    if (!table.address) continue;
+    let terminated = false;
+    for (let cursor = 0; cursor + width <= table.size; cursor += width) {
+      const at = table.offset + cursor;
+      if (bytes.subarray(at, at + width).every((byte) => byte === 0)) { terminated = true; break; }
+      if (index === 13 && bytes.readUInt32LE(at) !== 1) invalid('delay import 必须使用 RVA');
+      const name = string(bytes.readUInt32LE(at + (index === 1 ? 12 : 4))).toLowerCase();
+      if (!/^[a-z0-9_-]+\.dll$/.test(name) || imports.some((entry) => entry.name === name)) invalid('导入 DLL 路径、名称或唯一性无效');
+      const lookup = bytes.readUInt32LE(at + (index === 1 ? 0 : 16));
+      const iat = bytes.readUInt32LE(at + (index === 1 ? 16 : 12));
+      if (!iat) invalid('缺少 import address table');
+      const names = thunks(lookup || iat);
+      mapped(iat, (names.length + 1) * 8);
+      if (!names.length) invalid('空 import descriptor');
+      imports.push({ name, symbols: names });
+    }
+    if (!terminated) invalid('import descriptor 未终止');
+  }
+  return { exports, imports, dllName, dll: Boolean(bytes.readUInt16LE(pe + 22) & 0x2000) };
+}
+
+const WINDOWS_SYSTEM_IMPORTS = new Set([
+  'advapi32.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'cfgmgr32.dll', 'comctl32.dll',
+  'crypt32.dll', 'cryptbase.dll', 'dbghelp.dll', 'dnsapi.dll', 'gdi32.dll', 'imm32.dll',
+  'iphlpapi.dll', 'kernel32.dll', 'kernelbase.dll', 'ncrypt.dll', 'netapi32.dll',
+  'normaliz.dll', 'ntdll.dll', 'ole32.dll', 'oleaut32.dll', 'powrprof.dll', 'profapi.dll',
+  'psapi.dll', 'rpcrt4.dll', 'secur32.dll', 'setupapi.dll', 'shell32.dll', 'shlwapi.dll',
+  'synchronization.dll', 'tbs.dll', 'ucrtbase.dll', 'user32.dll', 'userenv.dll',
+  'version.dll', 'winhttp.dll', 'winmm.dll', 'wintrust.dll', 'ws2_32.dll', 'wtsapi32.dll',
+  'msvcrt.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+  'msvcp140_atomic_wait.dll', 'msvcp140_codecvt_ids.dll', 'vcruntime140.dll', 'vcruntime140_1.dll',
+]);
+function assertWindowsImports(image, required, coreSymbols) {
+  for (const entry of image.imports) {
+    if (!required.includes(entry.name) && !WINDOWS_SYSTEM_IMPORTS.has(entry.name)
+        && !/^(?:api|ext)-ms-win-[a-z0-9]+(?:-[a-z0-9]+)*-l\d+-\d+-\d+\.dll$/.test(entry.name)) {
+      fail(`CitizenSDK Windows 未登记的 DLL 依赖：${entry.name}`);
+    }
+    if (entry.name === 'citizensdk.dll'
+        && entry.symbols.some((symbol) => symbol === null || !coreSymbols.includes(symbol))) {
+      fail('CitizenSDK Windows Host 导入了非公开 Core 符号');
+    }
+  }
+  for (const name of required) {
+    if (!image.imports.some((entry) => entry.name === name)) fail(`CitizenSDK Windows 缺少必要依赖：${name}`);
+  }
+}
+
+function assertWindowsImportLibrary(path, dll, expectedSymbols) {
+  const bytes = readFileSync(path), symbols = [], members = [];
+  const invalid = () => fail(`CitizenSDK Windows import library 格式、机器或符号漂移：${path}`);
+  const range = (data, at, size) => {
+    if (!Number.isSafeInteger(at) || !Number.isSafeInteger(size) || at < 0 || size < 0
+        || at > data.length || size > data.length - at) invalid();
+  };
+  const ascii = (data) => {
+    if (data.some((value) => value < 32 || value > 127)) invalid();
+    return data.toString('latin1');
+  };
+  const cstring = (data, at, limit = data.length) => {
+    range(data, at, limit - at);
+    const end = data.indexOf(0, at);
+    if (end < at || end >= limit || end === at) invalid();
+    return { text: ascii(data.subarray(at, end)), next: end + 1 };
+  };
+  const zero = (data) => data.every((value) => value === 0);
+  // 官方 COFF archive 两个索引可在 payload 内补一个零字节至偶数边界；外部 padding 仍为 LF。
+  const indexEnd = (data, at) => {
+    if (at !== data.length && !(at % 2 === 1 && at + 1 === data.length && data[at] === 0)) invalid();
+  };
+  if (!bytes.subarray(0, 8).equals(Buffer.from('!<arch>\n'))) invalid();
+  let cursor = 8;
+  while (cursor < bytes.length) {
+    if (members.length >= 100000 || cursor + 60 > bytes.length
+        || bytes[cursor + 58] !== 0x60 || bytes[cursor + 59] !== 10) invalid();
+    const name = ascii(bytes.subarray(cursor, cursor + 16)).trimEnd();
+    const sizeText = ascii(bytes.subarray(cursor + 48, cursor + 58)).trim();
+    if (!/^\d+$/.test(sizeText)) invalid();
+    const size = Number(sizeText), start = cursor + 60, end = start + size;
+    range(bytes, start, size);
+    members.push({ offset: cursor, name, data: bytes.subarray(start, end) });
+    cursor = end + (size % 2);
+    if (size % 2 && bytes[end] !== 10) invalid();
+  }
+  if (cursor !== bytes.length || members.length < 5 || members[0].name !== '/' || members[1].name !== '/') invalid();
+  const longnames = new Map();
+  let objectStart = 2;
+  if (members[2].name === '//') {
+    const data = members[2].data;
+    let at = 0;
+    while (at < data.length) {
+      // LLVM 的 longnames 表允许将最终 LF 对齐字节计入 member size。
+      if (at % 2 === 1 && at + 1 === data.length && data[at] === 10) { at += 1; break; }
+      const entry = cstring(data, at);
+      longnames.set(at, entry.text);
+      at = entry.next;
+    }
+    objectStart = 3;
+  }
+  const objects = members.slice(objectStart);
+  const definitions = new Map();
+  const stem = dll.replace(/\.dll$/, '');
+  const descriptor = `__IMPORT_DESCRIPTOR_${stem}`;
+  const nullDescriptor = '__NULL_IMPORT_DESCRIPTOR';
+  const nullThunk = `\x7f${stem}_NULL_THUNK_DATA`;
+  const descriptors = new Set([descriptor, nullDescriptor, nullThunk]);
+  const define = (name, offset) => {
+    if (definitions.has(name)) invalid();
+    definitions.set(name, offset);
+  };
+  for (const member of objects) {
+    const resolved = /^\/\d+$/.test(member.name) ? longnames.get(Number(member.name.slice(1)))
+      : member.name.endsWith('/') ? member.name.slice(0, -1) : undefined;
+    // archive 文件名不是 DLL 身份；允许官方任意对象名称，但引用必须指向 longnames 串首。
+    if (!resolved || /[\x00-\x1f\x7f]/.test(resolved) || member.name === '/' || member.name === '//') invalid();
+    const object = member.data;
+    range(object, 0, 20);
+    if (object.readUInt16LE(0) === 0 && object.readUInt16LE(2) === 0xffff) {
+      if (object.readUInt16LE(4) !== 0 || object.readUInt16LE(6) !== 0x8664
+          || object.readUInt16LE(18) !== 4 || object.readUInt32LE(12) !== object.length - 20) invalid();
+      const name = cstring(object, 20), library = cstring(object, name.next);
+      if (library.next !== object.length || library.text.toLowerCase() !== dll || !expectedSymbols.includes(name.text)) invalid();
+      symbols.push(name.text);
+      define(name.text, member.offset);
+      define(`__imp_${name.text}`, member.offset);
+      continue;
+    }
+    // 只接纳官方导入描述符 COFF，而非携带 .text、.drectve 或额外外部定义的实现对象。
+    const sectionCount = object.readUInt16LE(2), table = object.readUInt32LE(8), count = object.readUInt32LE(12);
+    const headersEnd = 20 + sectionCount * 40, stringsAt = table + count * 18;
+    if (object.readUInt16LE(0) !== 0x8664 || object.readUInt16LE(16) !== 0
+        || sectionCount < 1 || sectionCount > 16 || table < headersEnd || count < 1) invalid();
+    range(object, 20, sectionCount * 40);
+    range(object, table, count * 18 + 4);
+    const stringSize = object.readUInt32LE(stringsAt);
+    if (stringSize < 4) invalid();
+    range(object, stringsAt, stringSize);
+    if (stringsAt + stringSize !== object.length) invalid();
+    const sections = [], occupied = [[0, headersEnd], [table, object.length]];
+    const occupy = (at, length) => {
+      range(object, at, length);
+      if (length === 0) return;
+      if (occupied.some(([begin, end]) => at < end && begin < at + length)) invalid();
+      occupied.push([at, at + length]);
+    };
+    for (let index = 0; index < sectionCount; index += 1) {
+      const at = 20 + index * 40;
+      const nameBytes = object.subarray(at, at + 8), nul = nameBytes.indexOf(0);
+      const name = ascii(nul < 0 ? nameBytes : nameBytes.subarray(0, nul));
+      if (nul >= 0 && !zero(nameBytes.subarray(nul))) invalid();
+      const size = object.readUInt32LE(at + 16), raw = object.readUInt32LE(at + 20);
+      const reloc = object.readUInt32LE(at + 24), relocCount = object.readUInt16LE(at + 32);
+      const flags = object.readUInt32LE(at + 36);
+      if ((!/^\.idata\$[234567]$/.test(name) && name !== '.debug$S')
+          || sections.some((section) => section.name === name)
+          || object.readUInt32LE(at + 8) !== 0 || object.readUInt32LE(at + 12) !== 0
+          || object.readUInt32LE(at + 28) !== 0 || object.readUInt16LE(at + 34) !== 0
+          || (flags & (0x20000000 | 0x01000000 | 0x00000800))) invalid();
+      occupy(raw, size);
+      occupy(reloc, relocCount * 10);
+      sections.push({ name, data: object.subarray(raw, raw + size), reloc, relocCount });
+    }
+    const coffSymbols = new Map(), external = [], undefinedExternal = new Set();
+    for (let index = 0; index < count;) {
+      const at = table + index * 18;
+      let name;
+      if (object.readUInt32LE(at) === 0) {
+        const offset = object.readUInt32LE(at + 4);
+        if (offset < 4 || offset >= stringSize) invalid();
+        name = cstring(object, stringsAt + offset, stringsAt + stringSize).text;
+      } else {
+        const field = object.subarray(at, at + 8), nul = field.indexOf(0);
+        name = ascii(nul < 0 ? field : field.subarray(0, nul));
+        if (!name || (nul >= 0 && !zero(field.subarray(nul)))) invalid();
+      }
+      const value = object.readUInt32LE(at + 8), section = object.readInt16LE(at + 12);
+      const storage = object[at + 16], auxiliary = object[at + 17];
+      if (section > sectionCount || section < -2 || index + auxiliary >= count || storage === 105) invalid();
+      const symbol = { name, value, section, storage };
+      coffSymbols.set(index, symbol);
+      if (storage === 2) {
+        if (!descriptors.has(name) || value !== 0 || object.readUInt16LE(at + 14) !== 0 || auxiliary !== 0) invalid();
+        if (section > 0) { external.push(symbol); define(name, member.offset); }
+        else if (section === 0) undefinedExternal.add(name);
+        else invalid();
+      }
+      index += auxiliary + 1;
+    }
+    if (external.length !== 1) invalid();
+    for (const section of sections) {
+      section.relocations = [];
+      for (let index = 0; index < section.relocCount; index += 1) {
+        const at = section.reloc + index * 10;
+        const offset = object.readUInt32LE(at), target = coffSymbols.get(object.readUInt32LE(at + 4));
+        const type = object.readUInt16LE(at + 8);
+        if (!target || offset >= section.data.length) invalid();
+        section.relocations.push({ offset, target, type });
+      }
+    }
+    const role = external[0].name;
+    const dataSections = sections.filter((section) => section.name !== '.debug$S');
+    const get = (name, length) => {
+      const section = dataSections.find((entry) => entry.name === name);
+      if (!section || section.data.length !== length) invalid();
+      return section;
+    };
+    const empty = (section) => { if (!zero(section.data) || section.relocCount !== 0) invalid(); };
+    if (role === descriptor) {
+      const idata = get('.idata$2', 20), library = dataSections.find((entry) => entry.name === '.idata$6');
+      if (dataSections.length !== 2 || !library || library.relocCount !== 0 || !zero(idata.data)
+          || idata.relocCount !== 3 || sections[external[0].section - 1] !== idata
+          || undefinedExternal.size !== 2 || !undefinedExternal.has(nullDescriptor) || !undefinedExternal.has(nullThunk)) invalid();
+      const dllName = cstring(library.data, 0);
+      if (dllName.text.toLowerCase() !== dll || library.data.length - dllName.next > 1
+          || !zero(library.data.subarray(dllName.next))) invalid();
+      const required = new Map([[0, '.idata$4'], [12, '.idata$6'], [16, '.idata$5']]);
+      for (const { offset, target, type } of idata.relocations) {
+        if (type !== 3 || required.get(offset) !== target.name || target.value !== 0
+            || (target.storage !== 3 && target.storage !== 104)
+            || (target.name === '.idata$6' ? sections[target.section - 1] !== library : target.section !== 0)) invalid();
+        required.delete(offset);
+      }
+      if (required.size !== 0) invalid();
+    } else if (role === nullDescriptor) {
+      const idata = get('.idata$3', 20);
+      if (dataSections.length !== 1 || undefinedExternal.size !== 0 || sections[external[0].section - 1] !== idata) invalid();
+      empty(idata);
+    } else {
+      const ilt = get('.idata$4', 8), iat = get('.idata$5', 8);
+      if (dataSections.length !== 2 || undefinedExternal.size !== 0
+          || ![ilt, iat].includes(sections[external[0].section - 1])) invalid();
+      empty(ilt); empty(iat);
+    }
+  }
+  if (objects.length !== expectedSymbols.length + 3 || [...descriptors].some((name) => !definitions.has(name))
+      || JSON.stringify(symbols.sort()) !== JSON.stringify(expectedSymbols)) invalid();
+  // Microsoft PE/COFF 两份链接索引必须共同映射至真实 object header；只有公开名字相同不能证明可链接。
+  // 格式依据：learn.microsoft.com/windows/win32/debug/pe-format；LLVM Object/{ArchiveWriter,COFFImportFile}.cpp。
+  const first = members[0].data, second = members[1].data, expectedCount = definitions.size;
+  range(first, 0, 4);
+  if (first.readUInt32BE(0) !== expectedCount) invalid();
+  range(first, 4, expectedCount * 4);
+  let at = 4 + expectedCount * 4, previous = -1;
+  const seenFirst = new Set();
+  for (let index = 0; index < expectedCount; index += 1) {
+    const offset = first.readUInt32BE(4 + index * 4), name = cstring(first, at);
+    if (offset < previous || definitions.get(name.text) !== offset || seenFirst.has(name.text)) invalid();
+    seenFirst.add(name.text); previous = offset; at = name.next;
+  }
+  indexEnd(first, at);
+  range(second, 0, 4);
+  if (second.readUInt32LE(0) !== objects.length || objects.length > 0xffff) invalid();
+  range(second, 4, objects.length * 4 + 4);
+  objects.forEach((member, index) => { if (second.readUInt32LE(4 + index * 4) !== member.offset) invalid(); });
+  const countAt = 4 + objects.length * 4, indicesAt = countAt + 4;
+  if (second.readUInt32LE(countAt) !== expectedCount) invalid();
+  range(second, indicesAt, expectedCount * 2);
+  at = indicesAt + expectedCount * 2;
+  let previousName = '';
+  for (let index = 0; index < expectedCount; index += 1) {
+    const memberIndex = second.readUInt16LE(indicesAt + index * 2), name = cstring(second, at);
+    if (memberIndex < 1 || memberIndex > objects.length || name.text <= previousName
+        || definitions.get(name.text) !== objects[memberIndex - 1].offset) invalid();
+    previousName = name.text; at = name.next;
+  }
+  indexEnd(second, at);
+}
+
+const WINDOWS_CMAKE_RELEASE = [
+  'set(CMAKE_IMPORT_FILE_VERSION 1)',
+  'set_property(TARGET CitizenSDK::Host APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)',
+  'set_target_properties(CitizenSDK::Host PROPERTIES',
+  '  IMPORTED_IMPLIB_RELEASE "${_IMPORT_PREFIX}/lib/Windows/citizensdk_host.lib"',
+  '  IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/bin/Windows/citizensdk_host.dll"',
+  '  )',
+  'list(APPEND _cmake_import_check_targets CitizenSDK::Host )',
+  'list(APPEND _cmake_import_check_files_for_CitizenSDK::Host "${_IMPORT_PREFIX}/lib/Windows/citizensdk_host.lib" "${_IMPORT_PREFIX}/bin/Windows/citizensdk_host.dll" )',
+  'set(CMAKE_IMPORT_FILE_VERSION)',
+].join('\n');
+
+function assertWindowsInstallClosure(prefix) {
+  if (JSON.stringify(regularFiles(prefix)) !== JSON.stringify(WINDOWS_RELEASE_FILES)
+      || JSON.stringify(regularDirectories(prefix)) !== JSON.stringify(parentDirectories(WINDOWS_RELEASE_FILES))) {
+    fail('CitizenSDK Windows 安装投影必须精确为 21 个普通文件及其目录');
+  }
+  for (const path of WINDOWS_RELEASE_FILES) {
+    const info = lstatSync(join(prefix, path));
+    if (info.size === 0 || info.nlink !== 1) fail(`CitizenSDK Windows 安装件为空或硬链接：${path}`);
+  }
+}
+
+function assertWindowsInstalledPlatform(sourceRoot, prefix) {
+  const file = (path) => {
+    const value = nativeArtifactSource(prefix, path), info = lstatSync(value);
+    if (info.size === 0 || info.nlink !== 1) fail(`CitizenSDK Windows 安装件为空或硬链接：${path}`);
+    return value;
+  };
+  const equal = (installed, source) => {
+    if (!readFileSync(file(installed)).equals(readFileSync(join(sourceRoot, source)))) {
+      fail(`CitizenSDK Windows 安装来源字节漂移：${installed}`);
+    }
+  };
+  for (const name of ['citizensdk.h', 'citizensdk_types.h']) equal(`include/${name}`, `include/${name}`);
+  for (const name of WINDOWS_HOST_HEADERS) equal(`include/citizen_sdk/${name}`, `windows/include/citizen_sdk/${name}`);
+  for (const name of ['manifest.json', 'chainspec.json', 'light_sync_state.json']) {
+    equal(`share/citizensdk/citizenchain/${name}`, `assets/citizenchain/${name}`);
+  }
+  const version = readFileSync(join(sourceRoot, 'pubspec.yaml'), 'utf8').match(/^version: (\d+\.\d{1,2}\.\d{1,2})$/m)?.[1];
+  if (!version || readFileSync(join(sourceRoot, 'windows/CMakeLists.txt'), 'utf8')
+    .match(/^project\(CitizenSDKHost VERSION (\d+\.\d{1,2}\.\d{1,2}) LANGUAGES C CXX\)$/m)?.[1] !== version) {
+    fail('CitizenSDK Windows 源码版本不一致');
+  }
+  const template = (name) => readFileSync(join(sourceRoot, 'windows/cmake', name), 'utf8');
+  const configs = Object.fromEntries(WINDOWS_CMAKE_FILES.map((name) => [name,
+    readFileSync(file(`lib/Windows/cmake/CitizenSDK/${name}`), 'utf8')]));
+  const body = template('CitizenSDKConfig.cmake.in').split('@PACKAGE_INIT@')[1]
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_LIBDIR@', '${PACKAGE_PREFIX_DIR}/lib')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_BINDIR@', '${PACKAGE_PREFIX_DIR}/bin')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_DATADIR@', '${PACKAGE_PREFIX_DIR}/share')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@', '${PACKAGE_PREFIX_DIR}/include');
+  if (configs['CitizenSDKConfigVersion.cmake'] !== template('CitizenSDKConfigVersion.cmake.in')
+    .replaceAll('@PROJECT_VERSION@', version).replaceAll('@PROJECT_VERSION_MAJOR@', version.split('.')[0])
+      || configs['CitizenSDKDependencies.cmake'] !== template('CitizenSDKDependencies.cmake')
+      || cmakeInstructions(configs['CitizenSDKConfig.cmake']) !== cmakeInstructions(`${LINUX_CMAKE_PACKAGE_INIT}\n${body}`)
+      || !linuxCmakeTargetVariants().has(cmakeInstructions(configs['CitizenSDKTargets.cmake']))
+      || cmakeInstructions(configs['CitizenSDKTargets-release.cmake']) !== cmakeInstructions(WINDOWS_CMAKE_RELEASE)) {
+    fail('CitizenSDK Windows CMake 版本、依赖、路径或导入目标合同漂移');
+  }
+  const coreSymbols = expectedCitizenSdkSymbols(sourceRoot);
+  const hostSymbols = [...new Set([...readFileSync(join(sourceRoot, 'windows/include/citizen_sdk/citizensdk_host.h'), 'utf8')
+    .matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]))].sort();
+  if (coreSymbols.length !== 70 || hostSymbols.length !== 13) fail('CitizenSDK Windows 公开导出基线漂移');
+  for (const [name, symbols, imports, library] of [
+    ['citizensdk.dll', coreSymbols, [], 'citizensdk.dll.lib'],
+    ['citizensdk_host.dll', hostSymbols, ['citizensdk.dll'], 'citizensdk_host.lib'],
+  ]) {
+    const image = windowsPe(file(`bin/Windows/${name}`));
+    if (!image.dll || image.dllName?.toLowerCase() !== name
+        || JSON.stringify(image.exports) !== JSON.stringify(symbols)) fail(`CitizenSDK Windows ${name} 完整导出漂移`);
+    assertWindowsImports(image, imports, coreSymbols);
+    assertWindowsImportLibrary(file(`lib/Windows/${library}`), name, symbols);
+  }
+  return version;
+}
+
+/** 唯一 Windows 安装验真入口；不要求其它平台产物存在。 */
+export function assertWindowsNativeArtifact(sourceRoot, prefix) {
+  const source = resolve(sourceRoot), installed = assertSafeTargetPath(prefix, 'Windows 安装前缀');
+  assertWindowsBindingSource(source);
+  assertPublicAbiHeaders(source);
+  assertChainAssets(source);
+  assertWindowsInstallClosure(installed);
+  return assertWindowsInstalledPlatform(source, installed);
+}
+
+/** destination 是完整 SDK 根；全部预检成功才写十四个新项，七头只比较。 */
+export function copyWindowsNativeArtifact(sourceRoot, prefix, destination) {
+  const source = resolve(sourceRoot), installed = resolve(prefix);
+  const output = assertSafeTargetPath(destination, 'Windows 候选根');
+  assertLocalTarget(output, 'Windows 候选根');
+  assertOutsideSource(installed, output, 'Windows 安装目标');
+  assertOutsideSource(output, installed, 'Windows 安装来源');
+  assertOutsideSource(source, output, 'Windows 候选根');
+  assertOutsideSource(output, source, 'Windows SDK 来源');
+  assertWindowsNativeArtifact(source, installed);
+  const root = join(output, 'windows');
+  const pending = [];
+  for (const path of WINDOWS_RELEASE_FILES) {
+    const target = assertSafeTargetPath(join(root, path), 'Windows 安装目标');
+    const bytes = readFileSync(nativeArtifactSource(installed, path));
+    if (existsSync(target)) {
+      if (WINDOWS_INJECTED_FILES.has(path) || !lstatSync(target).isFile()
+          || !bytes.equals(readFileSync(target))) fail(`CitizenSDK Windows 重叠安装件漂移或目标已存在：${path}`);
+    } else pending.push({ target, bytes });
+  }
+  if (pending.length !== WINDOWS_INJECTED_FILES.size) fail('CitizenSDK Windows 候选必须先包含七个原始 Host 头');
+  for (const { target, bytes } of pending) {
+    mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+    writeFileSync(target, bytes, { flag: 'wx', mode: 0o600 });
+  }
+}
+
+export function assertWindowsReleaseProjection(root) {
+  const source = resolve(root);
+  assertWindowsBindingSource(source, { allowInjectedWindowsArtifacts: true });
+  assertPublicAbiHeaders(source);
+  assertChainAssets(source);
+  return assertWindowsInstalledPlatform(source, join(source, 'windows'));
+}
+
+/** 构建器调用的同源 bundle 检查；app.so 是 Dart AOT ELF，不是 PE。 */
+export function assertWindowsFlutterBundle(sourceRoot, prefix, bundle) {
+  const source = resolve(sourceRoot), installed = resolve(prefix);
+  const root = assertSafeTargetPath(bundle, 'Windows Flutter bundle');
+  assertWindowsNativeArtifact(source, installed);
+  for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) {
+    if (!readFileSync(nativeArtifactSource(root, name)).equals(
+      readFileSync(nativeArtifactSource(installed, `bin/Windows/${name}`)),
+    )) fail(`CitizenSDK Windows Flutter bundle 运行库来源漂移：${name}`);
+  }
+  for (const name of ['manifest.json', 'chainspec.json', 'light_sync_state.json']) {
+    const path = `data/flutter_assets/packages/citizen_sdk/assets/citizenchain/${name}`;
+    if (!readFileSync(nativeArtifactSource(root, path)).equals(readFileSync(join(source, 'assets/citizenchain', name)))) {
+      fail(`CitizenSDK Windows Flutter bundle 链资产漂移：${name}`);
+    }
+  }
+  const plugin = windowsPe(nativeArtifactSource(root, 'citizen_sdk_plugin.dll'));
+  if (!plugin.dll || JSON.stringify(plugin.exports) !== JSON.stringify(['CitizenSdkPluginRegisterWithRegistrar'])) {
+    fail('CitizenSDK Windows Flutter 插件注册导出漂移');
+  }
+  assertWindowsImports(plugin, ['citizensdk.dll', 'citizensdk_host.dll', 'flutter_windows.dll'], expectedCitizenSdkSymbols(source));
+  // Runner/Flutter engine 的功能导出不属于 SDK；只核机器身份，不伪造其符号闭集。
+  windowsPe(nativeArtifactSource(root, 'citizensdk_consumer.exe'), { headersOnly: true });
+  windowsPe(nativeArtifactSource(root, 'flutter_windows.dll'), { headersOnly: true });
+  const aot = readFileSync(nativeArtifactSource(root, 'data/app.so'));
+  if (aot.length < 64 || !aot.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+      || aot[4] !== 2 || aot[5] !== 1 || aot.readUInt16LE(18) !== 62) {
+    fail('CitizenSDK Windows Dart AOT 必须为 x86_64 ELF64');
+  }
+}
+
+
+// 只固定中央原生依赖子合同的规范 JSON 摘要，不另存一套可选版本/下载器。
+// 收据内携带合同原文供离线复核；SDK 不需要 ../TATA 路径，也不下载任何库。
+const NATIVE_DEPENDENCY_CONTRACT_SHA256 = '7f439abc35a891616b34b03d129b51dc82eef756535dcd8fcd25ee7da512f3e6';
+const NATIVE_DEPENDENCY_PLATFORMS = ['LinuxARM', 'LinuxAMD', 'Windows'];
+const TSS2_HEADERS = ['common', 'esys', 'mu', 'rc', 'sys', 'tcti', 'tcti_device', 'tpm2_types']
+  .map((name) => 'include/tss2/tss2_' + name + '.h');
+function dependencyCheck(ok, message) { if (!ok) fail('CitizenSDK 静态依赖：' + message); }
+function dependencyHash(bytes) { return createHash('sha256').update(bytes).digest('hex'); }
+
+export function assertCitizenSdkNativeContract(value) {
+  dependencyCheck(dependencyHash(stableJson(value)) === NATIVE_DEPENDENCY_CONTRACT_SHA256,
+    '固定来源/版本/摘要/构建选项漂移');
+}
+
+/** 逐成员读真实 ar；拒绝薄归档、动态库、COFF import object、bitcode 及另一平台对象。 */
+export function assertCitizenSdkStaticArchive(bytes, platform) {
+  dependencyCheck(NATIVE_DEPENDENCY_PLATFORMS.includes(platform), '未知平台');
+  dependencyCheck(bytes.length >= 8 && bytes.subarray(0, 8).toString() === '!<arch>\n', '不是完整静态归档');
+  let offset = 8, objects = 0;
+  while (offset < bytes.length) {
+    dependencyCheck(offset + 60 <= bytes.length, 'ar header 截断');
+    const header = bytes.subarray(offset, offset + 60);
+    const name = header.subarray(0, 16).toString().trim();
+    const sizeText = header.subarray(48, 58).toString().trim();
+    dependencyCheck(header.subarray(58).toString() === '\x60\n' && /^\d+$/.test(sizeText), 'ar header 无效');
+    const size = Number(sizeText), start = offset + 60;
+    dependencyCheck(Number.isSafeInteger(size) && start + size <= bytes.length, 'ar member 截断');
+    let object = bytes.subarray(start, start + size), actualName = name;
+    if (name.startsWith('#1/')) {
+      const length = Number(name.slice(3));
+      dependencyCheck(Number.isSafeInteger(length) && length > 0 && length <= object.length, 'BSD ar 名称无效');
+      actualName = object.subarray(0, length).toString().replace(/\0+$/, '');
+      object = object.subarray(length);
+    }
+    if (!['/', '//', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED'].includes(actualName)) {
+      if (platform === 'Windows') {
+        dependencyCheck(object.length >= 20 && object.readUInt16LE(0) === 0x8664
+          && object.readUInt16LE(2) > 0 && object.readUInt16LE(16) === 0, '非 Windows MSVC 静态对象');
+        const count = object.readUInt16LE(2), tableEnd = 20 + count * 40;
+        dependencyCheck(tableEnd <= object.length, 'COFF section table 截断');
+        for (let section = 0; section < count; section += 1) {
+          const at = 20 + section * 40, size = object.readUInt32LE(at + 16), pointer = object.readUInt32LE(at + 20);
+          // 未初始化数据没有文件 payload；其余 section 必须完整位于成员内部。
+          if (size && pointer) dependencyCheck(pointer >= tableEnd && pointer + size <= object.length, 'COFF section 越界');
+          else dependencyCheck(!size || (object.readUInt32LE(at + 36) & 0x80) !== 0, 'COFF section 缺少内容');
+        }
+      } else {
+        dependencyCheck(object.length >= 64 && object.subarray(0, 4).equals(Buffer.from([127, 69, 76, 70]))
+          && object[4] === 2 && object[5] === 1 && object.readUInt16LE(16) === 1
+          && object.readUInt16LE(18) === (platform === 'LinuxARM' ? 183 : 62), '非目标 Linux ELF relocatable 对象');
+        const table = Number(object.readBigUInt64LE(40)), count = object.readUInt16LE(60);
+        dependencyCheck(object.readUInt16LE(52) === 64 && object.readUInt16LE(58) === 64
+          && Number.isSafeInteger(table) && table >= 64 && count > 0
+          && table + count * 64 <= object.length, 'ELF section table 无效');
+        for (let section = 0; section < count; section += 1) {
+          const at = table + section * 64, type = object.readUInt32LE(at + 4);
+          const pointer = Number(object.readBigUInt64LE(at + 24)), size = Number(object.readBigUInt64LE(at + 32));
+          if (type !== 8) dependencyCheck(Number.isSafeInteger(pointer) && Number.isSafeInteger(size)
+            && pointer + size <= object.length, 'ELF section 越界');
+        }
+      }
+      objects += 1;
+    }
+    offset = start + size;
+    if (offset % 2) {
+      dependencyCheck(offset < bytes.length && bytes[offset] === 10, 'ar alignment 无效');
+      offset += 1;
+    }
+  }
+  dependencyCheck(objects > 0, '静态归档没有对象');
+}
+
+function dependencyArchives(platform) {
+  return platform === 'Windows' ? ['lib/sqlite3.lib']
+    : ['lib/libsqlite3.a', 'lib/libcrypto.a',
+      ...['esys', 'mu', 'sys', 'rc', 'tcti-device'].map((name) => 'lib/libtss2-' + name + '.a')].sort();
+}
+function assertDependencyReceipt(receipt, platform) {
+  dependencyCheck(receipt && stableJson(Object.keys(receipt).sort()) === stableJson(
+    ['schema', 'platform', 'source_sha', 'software_version', 'build_mode', 'native_dependencies', 'build_tools', 'files'].sort()),
+  '准备收据字段闭集无效');
+  dependencyCheck(NATIVE_DEPENDENCY_PLATFORMS.includes(platform) && receipt.platform === platform
+    && receipt.schema === 1 && /^[0-9a-f]{40}$/.test(receipt.source_sha)
+    && /^\d+\.\d+\.\d+$/.test(receipt.software_version) && ['ci', 'release'].includes(receipt.build_mode),
+  '收据平台/身份/模式无效');
+  assertCitizenSdkNativeContract(receipt.native_dependencies);
+  const tools = platform === 'Windows' ? ['cl', 'lib', 'tar'] : ['cc', 'ar', 'perl', 'make', 'sh', 'pkg-config', 'tar', 'unzip'];
+  dependencyCheck(Array.isArray(receipt.build_tools)
+    && stableJson(receipt.build_tools.map((tool) => tool.name).sort()) === stableJson(tools.sort()),
+  '工具链闭集无效');
+  for (const tool of receipt.build_tools) {
+    dependencyCheck(/^[0-9a-f]{64}$/.test(tool.sha256)
+      && stableJson(Object.keys(tool).sort()) === stableJson((tool.name === 'cc'
+        ? ['name', 'sha256', 'target'] : ['name', 'sha256']).sort()), '工具身份无效');
+    if (tool.name === 'cc') dependencyCheck(typeof tool.target === 'string'
+      && tool.target.startsWith(platform === 'LinuxARM' ? 'aarch64-' : 'x86_64-')
+      && tool.target.endsWith('linux-gnu'), '编译器目标无效');
+  }
+  dependencyCheck(Array.isArray(receipt.files) && receipt.files.length > 0 && receipt.files.length <= 256,
+    '输入文件列表无效');
+  const paths = receipt.files.map((entry) => {
+    dependencyCheck(entry && Object.keys(entry).sort().join(',') === 'path,sha256'
+      && typeof entry.path === 'string' && /^[a-zA-Z0-9_.\/-]+$/.test(entry.path)
+      && !entry.path.split('/').includes('..') && !entry.path.startsWith('/')
+      && /^[0-9a-f]{64}$/.test(entry.sha256), '输入条目无效');
+    return entry.path;
+  });
+  const archives = dependencyArchives(platform);
+  const expected = ['include/sqlite3.h', ...archives,
+    ...(platform === 'Windows' ? [] : [...TSS2_HEADERS,
+      ...OPENSSL_DEPENDENCY_HEADERS.map((name) => 'include/openssl/' + name)])].sort();
+  dependencyCheck(stableJson(paths) === stableJson(expected), '输入头文件/静态库闭集不符');
+  return receipt;
+}
+
+/** 收据不可单独代替静态库：每个实际头/库都重新哈希，并核对所有对象的机器身份。 */
+export function assertCitizenSdkDependencyInputs(receiptPath, platform) {
+  const path = assertSafeTargetPath(receiptPath, '静态依赖证据');
+  const prefix = dirname(path);
+  const receipt = assertDependencyReceipt(JSON.parse(readFileSync(nativeArtifactSource(prefix, 'native-dependencies.json'), 'utf8')), platform);
+  dependencyCheck(path === join(prefix, 'native-dependencies.json'), '收据文件名不符');
+  const actual = treeEntries(prefix).files;
+  dependencyCheck(stableJson(actual) === stableJson([...receipt.files.map((entry) => entry.path), 'native-dependencies.json'].sort()),
+    '实际输入含未登记文件');
+  for (const entry of receipt.files) {
+    const input = nativeArtifactSource(prefix, entry.path);
+    dependencyCheck(sha256File(input) === entry.sha256, '实际输入摘要不符：' + entry.path);
+    if (dependencyArchives(platform).includes(entry.path)) assertCitizenSdkStaticArchive(readFileSync(input), platform);
+  }
+  return receipt;
+}
+
+/** 保持现有显式环境入口，仅从已经验证的同一前缀取得所有头/库，拒绝混用外部路径。 */
+export function citizenSdkDependencyEnvironment(receiptPath, platform) {
+  assertCitizenSdkDependencyInputs(receiptPath, platform);
+  const prefix = dirname(resolve(receiptPath)), at = (path) => join(prefix, path);
+  if (platform === 'Windows') return {
+    CITIZENSDK_WINDOWS_SQLITE_INCLUDE_DIR: at('include'),
+    CITIZENSDK_WINDOWS_SQLITE_ARCHIVE: at('lib/sqlite3.lib'),
+  };
+  return {
+    CITIZENSDK_HOST_SQLITE_INCLUDE_DIR: at('include'),
+    CITIZENSDK_HOST_OPENSSL_INCLUDE_DIR: at('include'),
+    CITIZENSDK_HOST_TSS2_INCLUDE_DIR: at('include'),
+    CITIZENSDK_HOST_SQLITE_ARCHIVE: at('lib/libsqlite3.a'),
+    CITIZENSDK_HOST_CRYPTO_ARCHIVE: at('lib/libcrypto.a'),
+    ...Object.fromEntries(['esys', 'mu', 'sys', 'rc', 'tcti-device'].map((name) =>
+      ['CITIZENSDK_HOST_TSS2_' + name.replaceAll('-', '_').toUpperCase() + '_ARCHIVE', at('lib/libtss2-' + name + '.a')])),
+  };
+}
+
+function dependencyLinkedPaths(platform, layout) {
+  const paths = platform === 'Windows'
+    ? ['bin/Windows/citizensdk.dll', 'bin/Windows/citizensdk_host.dll']
+    : ['lib/' + platform + '/libcitizensdk.so', 'lib/' + platform + '/libcitizensdk_host.so'];
+  return paths.map((path) => layout === 'candidate' ? (platform === 'Windows' ? 'windows/' : 'linux/') + path
+    : layout === 'native' ? (platform === 'Windows' ? 'Windows/' : 'linux/' + platform + '/') + path : path);
+}
+
+/** 只有原生门禁和消费者全部成功后，构建器才绑定该批输入与导出的最终运行库。 */
+export function writeCitizenSdkDependencyEvidence({ receiptPath, platform, nativePath, sourcePath, sourceSha }) {
+  const receipt = assertCitizenSdkDependencyInputs(receiptPath, platform);
+  dependencyCheck(receipt.source_sha === sourceSha, '构建提交与准备提交不同');
+  const source = resolve(sourcePath), native = assertSafeTargetPath(nativePath, '原生产物目录');
+  assertLicenseSources(source);
+  dependencyCheck(readFileSync(join(source, 'pubspec.yaml'), 'utf8').includes('\nversion: ' + receipt.software_version + '\n'),
+    '构建版本与准备版本不同');
+  const paths = dependencyLinkedPaths(platform, 'native');
+  const linked_artifacts = paths.map((path, index) => ({
+    path: dependencyLinkedPaths(platform, 'candidate')[index],
+    sha256: sha256File(nativeArtifactSource(native, path)),
+  }));
+  const evidence = { dependency_inputs: receipt, linked_artifacts,
+    files: ['LICENSE', 'THIRD_PARTY_NOTICES.md'].map((path) => ({ path, sha256: sha256File(join(source, path)) })) };
+  const directory = join(native, 'dependencies');
+  if (!existsSync(directory)) mkdirSync(directory, { mode: 0o700 });
+  nativeArtifactSource(native, 'dependencies', 'directory');
+  writeFileSync(join(directory, platform + '.json'), prettyStableJson(evidence), { flag: 'wx', mode: 0o600 });
+  return evidence;
+}
+
+export function assertCitizenSdkDependencyEvidence(evidence, platform, root, layout, source, sourceSha, softwareVersion) {
+  dependencyCheck(evidence && Object.keys(evidence).sort().join(',') === 'dependency_inputs,files,linked_artifacts',
+    '链接证据字段闭集无效');
+  const receipt = assertDependencyReceipt(evidence.dependency_inputs, platform);
+  dependencyCheck(receipt.source_sha === sourceSha && receipt.software_version === softwareVersion, '链接证据不同提交/版本');
+  const expected = dependencyLinkedPaths(platform, 'candidate');
+  dependencyCheck(Array.isArray(evidence.linked_artifacts)
+    && stableJson(evidence.linked_artifacts.map((entry) => entry.path)) === stableJson(expected),
+  '最终运行库闭集无效');
+  for (const [index, entry] of evidence.linked_artifacts.entries()) {
+    dependencyCheck(Object.keys(entry).sort().join(',') === 'path,sha256'
+      && entry.sha256 === sha256File(nativeArtifactSource(root, dependencyLinkedPaths(platform, layout)[index])),
+    '最终链接字节不符');
+  }
+  const legal = ['LICENSE', 'THIRD_PARTY_NOTICES.md'].map((path) => ({ path, sha256: sha256File(join(source, path)) }));
+  dependencyCheck(stableJson(evidence.files) === stableJson(legal), '许可证/归属来源不符');
+  return evidence;
+}
+
+function collectDependencyEvidence(native, source, sourceSha, softwareVersion) {
+  const directory = nativeArtifactSource(native, 'dependencies', 'directory');
+  dependencyCheck(stableJson(treeEntries(directory).files) === stableJson(
+    NATIVE_DEPENDENCY_PLATFORMS.map((platform) => platform + '.json').sort()), '链接证据平台闭集不符');
+  return NATIVE_DEPENDENCY_PLATFORMS.map((platform) => assertCitizenSdkDependencyEvidence(
+    JSON.parse(readFileSync(join(directory, platform + '.json'), 'utf8')),
+    platform, native, 'native', source, sourceSha, softwareVersion));
+}
+
+const OPENSSL_DEPENDENCY_HEADERS = [
+  "aes.h",
+  "asn1.h",
+  "asn1err.h",
+  "asn1t.h",
+  "async.h",
+  "asyncerr.h",
+  "bio.h",
+  "bioerr.h",
+  "blowfish.h",
+  "bn.h",
+  "bnerr.h",
+  "buffer.h",
+  "buffererr.h",
+  "byteorder.h",
+  "camellia.h",
+  "cast.h",
+  "cmac.h",
+  "cmp.h",
+  "cmp_util.h",
+  "cmperr.h",
+  "cms.h",
+  "cmserr.h",
+  "comp.h",
+  "comperr.h",
+  "conf.h",
+  "conf_api.h",
+  "conferr.h",
+  "configuration.h",
+  "conftypes.h",
+  "core.h",
+  "core_dispatch.h",
+  "core_names.h",
+  "core_object.h",
+  "crmf.h",
+  "crmferr.h",
+  "crypto.h",
+  "cryptoerr.h",
+  "cryptoerr_legacy.h",
+  "ct.h",
+  "cterr.h",
+  "decoder.h",
+  "decodererr.h",
+  "des.h",
+  "dh.h",
+  "dherr.h",
+  "dsa.h",
+  "dsaerr.h",
+  "dtls1.h",
+  "e_os2.h",
+  "e_ostime.h",
+  "ebcdic.h",
+  "ec.h",
+  "ecdh.h",
+  "ecdsa.h",
+  "ecerr.h",
+  "encoder.h",
+  "encodererr.h",
+  "engine.h",
+  "engineerr.h",
+  "err.h",
+  "ess.h",
+  "esserr.h",
+  "evp.h",
+  "evperr.h",
+  "fips_names.h",
+  "fipskey.h",
+  "hmac.h",
+  "hpke.h",
+  "http.h",
+  "httperr.h",
+  "idea.h",
+  "indicator.h",
+  "kdf.h",
+  "kdferr.h",
+  "lhash.h",
+  "macros.h",
+  "md2.h",
+  "md4.h",
+  "md5.h",
+  "mdc2.h",
+  "ml_kem.h",
+  "modes.h",
+  "obj_mac.h",
+  "objects.h",
+  "objectserr.h",
+  "ocsp.h",
+  "ocsperr.h",
+  "opensslconf.h",
+  "opensslv.h",
+  "ossl_typ.h",
+  "param_build.h",
+  "params.h",
+  "pem.h",
+  "pem2.h",
+  "pemerr.h",
+  "pkcs12.h",
+  "pkcs12err.h",
+  "pkcs7.h",
+  "pkcs7err.h",
+  "prov_ssl.h",
+  "proverr.h",
+  "provider.h",
+  "quic.h",
+  "rand.h",
+  "randerr.h",
+  "rc2.h",
+  "rc4.h",
+  "rc5.h",
+  "ripemd.h",
+  "rsa.h",
+  "rsaerr.h",
+  "safestack.h",
+  "seed.h",
+  "self_test.h",
+  "sha.h",
+  "srp.h",
+  "srtp.h",
+  "ssl.h",
+  "ssl2.h",
+  "ssl3.h",
+  "sslerr.h",
+  "sslerr_legacy.h",
+  "stack.h",
+  "store.h",
+  "storeerr.h",
+  "symhacks.h",
+  "thread.h",
+  "tls1.h",
+  "trace.h",
+  "ts.h",
+  "tserr.h",
+  "txt_db.h",
+  "types.h",
+  "ui.h",
+  "uierr.h",
+  "whrlpool.h",
+  "x509.h",
+  "x509_acert.h",
+  "x509_vfy.h",
+  "x509err.h",
+  "x509v3.h",
+  "x509v3err.h"
+];
+
+
 export function assertNativeArtifactSources(nativeRoot) {
   const root = assertSafeTargetPath(nativeRoot, '原生产物目录');
   if (!existsSync(root) || lstatSync(root).isSymbolicLink() || !lstatSync(root).isDirectory()) {
@@ -2291,10 +4046,23 @@ export function assertNativeArtifactSources(nativeRoot) {
       return [destinationPath, source];
     }),
   );
-  return { directories, files };
+  const linux = Object.fromEntries(LINUX_PLATFORMS.map((platform) => {
+    const prefix = nativeArtifactSource(root, `linux/${platform}`, 'directory');
+    assertLinuxInstallClosure(prefix, platform);
+    return [platform, prefix];
+  }));
+  const [first, second] = LINUX_PLATFORMS;
+  for (const path of linuxInstallPaths(first).filter((path) => !path.startsWith('lib/'))) {
+    if (!readFileSync(join(linux[first], path)).equals(readFileSync(join(linux[second], path)))) {
+      fail(`CitizenSDK Linux 共享安装件字节不一致：${path}`);
+    }
+  }
+  const windows = nativeArtifactSource(root, 'Windows', 'directory');
+  assertWindowsInstallClosure(windows);
+  return { directories, files, linux, windows };
 }
 
-function copyNativeFiles(nativeRoot, output) {
+function copyNativeFiles(nativeRoot, output, sourceRoot) {
   const sources = assertNativeArtifactSources(nativeRoot);
   for (const [destinationPath, source] of Object.entries(sources.files)) {
     const destination = join(output, ...destinationPath.split('/'));
@@ -2322,6 +4090,22 @@ function copyNativeFiles(nativeRoot, output) {
       );
     }
   }
+  for (const [platform, prefix] of Object.entries(sources.linux)) {
+    for (const path of linuxInstallPaths(platform)) {
+      const source = join(prefix, path);
+      const destination = join(output, 'linux', path);
+      if (existsSync(destination)) {
+        if (lstatSync(destination).isSymbolicLink() || !lstatSync(destination).isFile()
+            || !readFileSync(source).equals(readFileSync(destination))) {
+          fail(`CitizenSDK Linux 安装件与来源重叠漂移，拒绝覆盖：${path}`);
+        }
+      } else {
+        mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+        copyFileSync(source, destination);
+      }
+    }
+  }
+  copyWindowsNativeArtifact(sourceRoot, sources.windows, output);
 }
 
 function zipEntries(bytes, label) {
@@ -3118,16 +4902,22 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   assertSignerSource(candidate);
   assertPublicAbiHeaders(candidate);
   assertMobileBindingSource(candidate, { allowAppleReleaseProjection: true });
-  assertLinuxBindingSource(candidate);
+  assertLinuxBindingSource(candidate, { allowInjectedLinuxArtifacts: true });
+  assertWindowsBindingSource(candidate, { allowInjectedWindowsArtifacts: true });
+  assertFlutterBindingContract(candidate);
   assertChainAssets(candidate);
   assertSourceFixtures(candidate);
   assertLicenseSources(candidate);
   assertDocumentationSource(candidate, { allowAppleReleaseProjection: true });
-  const hostedSoftwareVersion = assertHostedPackageSource(candidate);
+  const hostedSoftwareVersion = assertHostedPackageSource(candidate, {
+    allowInjectedLinuxArtifacts: true, allowInjectedWindowsArtifacts: true,
+  });
   assertSdkTestContracts(candidate);
   assertSdkScriptSource(candidate);
   assertAndroidReleaseProjection(candidate);
   assertAppleReleaseProjection(candidate);
+  assertLinuxReleaseProjection(candidate);
+  assertWindowsReleaseProjection(candidate);
   const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
   const keys = Object.keys(manifest).sort();
   const expectedKeys = ['files', 'git_commit_sha', 'package_name', 'platforms', 'product_id', 'software_version'];
@@ -3137,7 +4927,15 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
   if (manifest.software_version !== hostedSoftwareVersion) fail('CitizenSDK 候选 manifest 与包版本不一致');
   if (!/^[0-9a-f]{40}$/.test(manifest.git_commit_sha)) fail('CitizenSDK 候选 Git SHA 无效');
   if (expectedGitSha !== null && manifest.git_commit_sha !== expectedGitSha) fail('CitizenSDK 候选 Git SHA 不匹配');
-  const expectedPlatforms = ['Android', 'iOS', 'macOS'];
+  const dependencyEvidence = JSON.parse(readFileSync(nativeArtifactSource(candidate, 'native-dependencies.json'), 'utf8'));
+  dependencyCheck(Array.isArray(dependencyEvidence) && dependencyEvidence.length === 3, '候选依赖平台证据不完整');
+  for (const [index, platform] of NATIVE_DEPENDENCY_PLATFORMS.entries()) {
+    assertCitizenSdkDependencyEvidence(dependencyEvidence[index], platform, candidate, 'candidate', candidate,
+      manifest.git_commit_sha, manifest.software_version);
+  }
+  dependencyCheck(new Set(dependencyEvidence.map((item) => item.dependency_inputs.build_mode)).size === 1,
+    '候选混用了 CI 与 Release 输入');
+  const expectedPlatforms = RELEASE_PLATFORMS;
   if (stableJson(manifest.platforms) !== stableJson(expectedPlatforms)) fail('CitizenSDK 候选平台集合不正确');
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) fail('CitizenSDK 候选文件清单为空');
   const paths = [];
@@ -3159,12 +4957,15 @@ function verifyCandidatePayload(candidatePath, expectedGitSha = null, expectExte
     fail('CitizenSDK 候选文件顺序或唯一性无效');
   }
   for (const required of [
+    'native-dependencies.json',
     '.pubignore',
     'CHANGELOG.md',
     'LICENSE',
     'pubspec.yaml',
     ...Object.keys(NATIVE_FILES),
     `${APPLE_XCFRAMEWORK_PATH}/Info.plist`,
+    ...LINUX_RELEASE_FILES.map((path) => `linux/${path}`),
+    ...WINDOWS_RELEASE_FILES.map((path) => `windows/${path}`),
   ]) {
     if (!paths.includes(required)) fail(`CitizenSDK 候选缺少必需文件：${required}`);
   }
@@ -3226,6 +5027,8 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertPublicAbiHeaders(source);
   assertMobileBindingSource(source);
   assertLinuxBindingSource(source);
+  assertWindowsBindingSource(source);
+  assertFlutterBindingContract(source);
   assertChainAssets(source);
   assertSourceFixtures(source);
   assertLicenseSources(source);
@@ -3246,18 +5049,32 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   assertOutsideSource(native, output, '候选目录');
   assertOutsideSource(output, archive, '归档');
   if (existsSync(archive)) fail(`归档已存在，拒绝覆盖：${archive}`);
+  // Validate both full native prefixes and every shared/source byte before
+  // creating a candidate. Missing or mixed Linux input must not publish output.
+  const nativeSources = assertNativeArtifactSources(native);
+  for (const [platform, prefix] of Object.entries(nativeSources.linux)) {
+    assertLinuxInstalledPlatform(source, prefix, platform);
+  }
+  assertWindowsNativeArtifact(source, nativeSources.windows);
+  // 来源缺件/混版必须在首次创建候选前失败，不留下貌似完整的半成品。
+  const dependencyEvidence = collectDependencyEvidence(native, source, gitCommitSha, softwareVersion);
+  dependencyCheck(new Set(dependencyEvidence.map((item) => item.dependency_inputs.build_mode)).size === 1,
+    '候选混用了 CI 与 Release 输入');
   ensureNewDirectory(output, source, '候选目录');
   for (const path of ROOT_FILES) copySourceTree(source, output, path);
   for (const path of ROOT_DIRECTORIES) copySourceTree(source, output, path);
   applySoftwareVersion(output, softwareVersion);
-  copyNativeFiles(native, output);
+  copyNativeFiles(native, output, source);
+  writeFileSync(join(output, 'native-dependencies.json'),
+    prettyStableJson(dependencyEvidence),
+    { flag: 'wx', mode: 0o600 });
   const payloadPaths = releaseCandidateEntries(output).files;
   const manifest = {
     product_id: PRODUCT_ID,
     package_name: PACKAGE_NAME,
     software_version: softwareVersion,
     git_commit_sha: gitCommitSha,
-    platforms: ['Android', 'iOS', 'macOS'],
+    platforms: [...RELEASE_PLATFORMS],
     files: fileEntries(output, payloadPaths),
   };
   const manifestPath = join(output, 'citizensdk-release.json');
@@ -3278,12 +5095,557 @@ export function buildCitizenSdkRelease({ sourcePath, nativePath, outputPath, arc
   return manifest;
 }
 
+// 本步只固定 Pub 官方打包行为，不增加发布账号、上传协议或另一套产品版本。
+const HOSTED_DART_VERSION = '3.12.2';
+
+/** 完整候选的 Hosted 投影；只能从已经验真的审计候选取得预期，不能从待验归档反推。 */
+export function hostedPackageEntries(candidatePath) {
+  const candidate = assertSafeTargetPath(candidatePath, 'Hosted 来源');
+  const rootEntries = [...ROOT_FILES, ...ROOT_DIRECTORIES, 'native-dependencies.json', 'citizensdk-release.json', 'SHA256SUMS'].sort();
+  if (JSON.stringify(readdirSync(candidate).sort()) !== JSON.stringify(rootEntries)) {
+    fail('CitizenSDK Hosted 来源根闭集漂移');
+  }
+  // 先检查全树的五个准入链接；展开后的间接路径也只能解析到该候选内部。
+  releaseCandidateEntries(candidate);
+  const rules = hostedPubignoreRules(candidate);
+  const entries = new Map();
+  const names = new Set();
+  let size = 0;
+  const visit = (directory, depth = 0) => {
+    if (depth > 128) fail('CitizenSDK Hosted 来源目录过深');
+    for (const name of readdirSync(join(candidate, directory)).sort()) {
+      const path = directory ? `${directory}/${name}` : name;
+      // Pub 默认排除隐藏输入和 lock；此 SDK 没有任何嵌套 ignore 文件或隐藏运行资产。
+      if (name.startsWith('.') || name === 'pubspec.lock' || path === 'pubspec_overrides.yaml') continue;
+      const source = join(candidate, path);
+      const resolved = realpathSync(source);
+      if (!resolved.startsWith(`${candidate}${sep}`)) fail(`CitizenSDK Hosted 来源越界：${path}`);
+      const info = statSync(source);
+      const directoryEntry = info.isDirectory();
+      if (isHostedIgnored(directoryEntry ? `${path}/` : path, rules)) continue;
+      if (!directoryEntry && !info.isFile()) fail(`CitizenSDK Hosted 来源类型无效：${path}`);
+      const key = path.normalize('NFC').toLowerCase();
+      if (names.has(key) || Buffer.byteLength(path) > 4096 || entries.size >= 16384) {
+        fail('CitizenSDK Hosted 来源路径冲突或超过上限');
+      }
+      names.add(key);
+      size += directoryEntry ? 0 : info.size;
+      if (size > 256 * 1024 * 1024) fail('CitizenSDK Hosted 展开内容超过 256 MiB 安全上限');
+      entries.set(path, {
+        type: directoryEntry ? 'directory' : 'file',
+        mode: directoryEntry ? 0o755 : 0o644 | (info.mode & 0o111),
+        data: directoryEntry ? Buffer.alloc(0) : readFileSync(source),
+      });
+      if (directoryEntry) visit(path, depth + 1);
+    }
+  };
+  visit('');
+  // 既有局部合同仍独立成立；这里再覆盖全部包根、法律、资产和平台输入。
+  for (const path of ['pubspec.yaml', 'README.md', 'CHANGELOG.md', 'LICENSE', 'LICENSE-GPL-3.0',
+    'LICENSE-MIT', 'THIRD_PARTY_NOTICES.md', ...HOSTED_RUNTIME_DART_FILES]) {
+    if (entries.get(path)?.type !== 'file') fail(`CitizenSDK Hosted 缺少必要文件：${path}`);
+  }
+  return entries;
+}
+
+function compareHostedEntries(actual, expected) {
+  const missing = [...expected.keys()].filter((path) => !actual.has(path));
+  const extra = [...actual.keys()].filter((path) => !expected.has(path));
+  if (missing.length || extra.length) {
+    fail(`CitizenSDK Hosted 完整闭集漂移；缺失=${missing.join(',') || '无'}；额外=${extra.join(',') || '无'}`);
+  }
+  for (const [path, entry] of expected) {
+    const other = actual.get(path);
+    if (other.type !== entry.type || other.mode !== entry.mode || !other.data.equals(entry.data)) {
+      fail(`CitizenSDK Hosted 类型、权限或字节不一致：${path}`);
+    }
+  }
+}
+
+function removeOwnedDirectory(path, identity) {
+  const info = lstatSync(path);
+  if (!info.isDirectory() || info.isSymbolicLink() || info.ino !== identity.ino
+      || info.dev !== identity.dev || info.uid !== identity.uid) {
+    fail('CitizenSDK Hosted 失败目录身份改变，保留现场');
+  }
+  rmSync(path, { recursive: true });
+}
+
+function readHostedArchive(path) {
+  assertSafeTargetPath(path, 'Hosted 归档');
+  // 非阻塞打开避免 FIFO 在 fstat 类型拒绝前等待写端；普通归档仍按同一 fd 读取。
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const info = fstatSync(descriptor);
+    if (!info.isFile() || info.size < 20 || info.size > 100 * 1024 * 1024) {
+      fail('CitizenSDK Hosted 归档类型或长度无效');
+    }
+    // 在读取前限定分配量；增长、截断或替换不能让 readFileSync 先读入无界内容。
+    const bytes = Buffer.allocUnsafe(info.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const count = readSync(descriptor, bytes, offset, bytes.length - offset, offset);
+      if (count === 0) fail('CitizenSDK Hosted 归档读取期间截断');
+      offset += count;
+    }
+    if (readSync(descriptor, Buffer.alloc(1), 0, 1, offset) !== 0
+        || fstatSync(descriptor).mtimeMs !== info.mtimeMs) {
+      fail('CitizenSDK Hosted 归档读取期间改变');
+    }
+    return parseHostedArchive(bytes);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/** 全部验证通过才落盘；不执行系统 tar，不覆盖或复用任何既有输出。 */
+export function verifyCitizenSdkHosted({
+  candidatePath, archivePath, hostedArchivePath, outputPath, expectedGitSha = null,
+}) {
+  const candidate = assertSafeTargetPath(candidatePath, 'Hosted 来源');
+  const audit = assertSafeTargetPath(archivePath, '审计归档');
+  const hosted = assertSafeTargetPath(hostedArchivePath, 'Hosted 归档');
+  const output = assertLocalTarget(outputPath, 'Hosted 解包');
+  for (const input of [candidate, audit, hosted]) {
+    assertOutsideSource(input, output, 'Hosted 解包');
+    assertOutsideSource(output, input, 'Hosted 输入');
+  }
+  if (lstatExists(output)) fail('CitizenSDK Hosted 解包目录已存在，拒绝覆盖');
+  const manifest = verifyCitizenSdkRelease(candidate, audit, expectedGitSha);
+  const expected = hostedPackageEntries(candidate);
+  const entries = readHostedArchive(hosted);
+  compareHostedEntries(entries, expected);
+  // 归档已解析成有界内存值，写入期间不重新读不可信 tar 或跟随其路径。
+  ensureNewDirectory(output, candidate, 'Hosted 解包');
+  const identity = lstatSync(output);
+  try {
+    for (const [path, entry] of [...entries].sort(([left], [right]) => left.localeCompare(right))) {
+      const destination = assertSafeTargetPath(join(output, path), 'Hosted 解包条目');
+      if (entry.type === 'directory') mkdirSync(destination, { recursive: true, mode: 0o755 });
+      else {
+        mkdirSync(dirname(destination), { recursive: true, mode: 0o755 });
+        writeFileSync(destination, entry.data, { flag: 'wx', mode: entry.mode });
+      }
+      // 只调整本轮新建节点；调用者的严格 umask 不应改变已验证的 Pub 模式。
+      chmodSync(destination, entry.mode);
+    }
+    const actual = new Map();
+    const read = (directory) => {
+      for (const name of readdirSync(join(output, directory))) {
+        const path = directory ? `${directory}/${name}` : name;
+        const file = join(output, path);
+        const info = lstatSync(file);
+        if (info.isSymbolicLink() || (!info.isDirectory() && !info.isFile())) {
+          fail(`CitizenSDK Hosted 解包含非法节点：${path}`);
+        }
+        actual.set(path, { type: info.isDirectory() ? 'directory' : 'file', mode: info.mode & 0o777,
+          data: info.isDirectory() ? Buffer.alloc(0) : readFileSync(file) });
+        if (info.isDirectory()) read(path);
+      }
+    };
+    read('');
+    compareHostedEntries(actual, expected);
+    verifyCitizenSdkRelease(candidate, audit, expectedGitSha);
+    return manifest;
+  } catch (error) {
+    removeOwnedDirectory(output, identity);
+    throw error;
+  }
+}
+
+function runHostedDart(dart, args, cwd, env, signal) {
+  signal?.throwIfAborted();
+  // Hosted 归档由既定 macOS 作业执行；没有 POSIX 进程组就不能证明 Dart 后代已退出。
+  // 此限制只属于归档工具监督，不限制 Windows SDK 或同步解包/安装验真。
+  if (process.platform === 'win32') fail('CitizenSDK Hosted 归档需要 POSIX 进程组监督');
+  return new Promise((resolveRun, rejectRun) => {
+    const child = spawn(dart, ['--suppress-analytics', ...args], {
+      cwd, env, stdio: ['ignore', 'pipe', 'pipe'], shell: false, detached: true,
+    });
+    let text = '', bytes = 0, failed = null, settled = false, stopping = false;
+    let exited = false, closed = false, code = null, exitSignal = null;
+    let timer, escalation, deadline, poll, orphan;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      for (const handle of [timer, escalation, deadline, poll, orphan]) clearTimeout(handle);
+      signal?.removeEventListener('abort', abort);
+      if (error?.preserveHostedOutput) {
+        // 无法确认退出时绝不清理目录；断开管道/引用使监督失败能有界返回。
+        child.stdout.destroy(); child.stderr.destroy(); child.unref();
+      }
+      if (error) rejectRun(error); else resolveRun(text);
+    };
+    const preserve = (cause) => {
+      const error = new Error('CitizenSDK Hosted 子进程未确认退出，保留工作目录', { cause });
+      error.preserveHostedOutput = true;
+      finish(error);
+    };
+    const alive = () => {
+      if (!child.pid) return false;
+      try { process.kill(-child.pid, 0); return true; }
+      catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+    };
+    const terminate = (name) => {
+      if (!child.pid) return;
+      try { process.kill(-child.pid, name); }
+      catch (error) { if (error.code !== 'ESRCH') throw error; }
+    };
+    const stop = (error) => {
+      if (settled) return;
+      failed ||= error;
+      if (stopping) return;
+      stopping = true;
+      try { terminate('SIGTERM'); } catch (cause) { preserve(cause); return; }
+      escalation = setTimeout(() => {
+        try { if (alive()) terminate('SIGKILL'); } catch (cause) { preserve(cause); }
+      }, 5000);
+      deadline = setTimeout(() => preserve(failed), 10000);
+    };
+    const abort = () => stop(new Error('CitizenSDK Hosted 操作已取消', { cause: signal.reason }));
+    const inspect = () => {
+      clearTimeout(poll);
+      if (settled) return;
+      try {
+        const pending = alive();
+        if (closed && !pending) {
+          finish(failed || (code !== 0 || exitSignal
+            ? new Error(`CitizenSDK Hosted 官方工具失败 (${code ?? exitSignal})：\n${text}`) : null));
+          return;
+        }
+        // exit 不等于 close：后代可能仍持有管道。不能只在 close 中检查进程组。
+        if (exited && !stopping && !orphan) {
+          orphan = setTimeout(() => stop(new Error('CitizenSDK Hosted 官方工具遗留子进程或管道')), 200);
+        }
+        poll = setTimeout(inspect, 50);
+      } catch (cause) { preserve(cause); }
+    };
+    timer = setTimeout(() => stop(new Error('CitizenSDK Hosted 官方工具超时')), 120000);
+    const collect = (chunk) => {
+      if (settled || stopping) return;
+      bytes += chunk.length;
+      if (bytes > 4 * 1024 * 1024) stop(new Error('CitizenSDK Hosted 官方工具输出超过上限'));
+      else text += chunk.toString('utf8');
+    };
+    child.stdout.on('data', collect);
+    child.stderr.on('data', collect);
+    child.stdout.on('error', stop); child.stderr.on('error', stop);
+    child.on('error', (error) => { stop(error); });
+    child.on('exit', (value, name) => {
+      exited = true; code = value; exitSignal = name; inspect();
+    });
+    child.on('close', (value, name) => {
+      closed = true; exited = true; code = value; exitSignal = name; inspect();
+    });
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) abort();
+  });
+}
+
+/** 只调用固定 Pub 的本地归档分支，绝不提供上传、跳过校验或自选参数入口。 */
+export async function buildCitizenSdkHosted({
+  candidatePath, archivePath, outputPath, dartPath, flutterRoot, pubCachePath, expectedGitSha = null,
+  signal,
+}) {
+  signal?.throwIfAborted();
+  if (process.platform === 'win32') fail('CitizenSDK Hosted 归档需要 POSIX 进程组监督');
+  const candidate = assertSafeTargetPath(candidatePath, 'Hosted 来源');
+  const audit = assertSafeTargetPath(archivePath, '审计归档');
+  const output = assertLocalTarget(outputPath, 'Hosted 工作目录');
+  const dart = assertSafeTargetPath(dartPath, '官方 Dart');
+  const flutter = assertSafeTargetPath(flutterRoot, 'Flutter SDK');
+  const cache = assertLocalTarget(pubCachePath, '隔离 Pub cache');
+  for (const input of [candidate, audit, dart, flutter, cache]) {
+    assertOutsideSource(input, output, 'Hosted 工作目录');
+    assertOutsideSource(output, input, 'Hosted 输入');
+  }
+  for (const input of [candidate, audit, dart, flutter]) {
+    assertOutsideSource(input, cache, '隔离 Pub cache');
+    assertOutsideSource(cache, input, 'Hosted 只读输入');
+  }
+  if (lstatExists(output)) fail('CitizenSDK Hosted 工作目录已存在，拒绝覆盖');
+  if (!lstatExists(dart) || !lstatSync(dart).isFile()
+      || !lstatExists(flutter) || !lstatSync(flutter).isDirectory()
+      || !lstatExists(cache) || !lstatSync(cache).isDirectory()
+      || readFileSync(assertSafeTargetPath(resolve(dirname(dart), '..', 'version'), 'Dart 版本'), 'utf8')
+        .trim() !== HOSTED_DART_VERSION) {
+    fail('CitizenSDK Hosted 官方工具版本或隔离缓存无效');
+  }
+  for (const name of ['git', 'git.exe', 'git.cmd']) {
+    if (lstatExists(join(dirname(dart), name))) fail('CitizenSDK Hosted 工具 PATH 禁止包含 Git');
+  }
+  const manifest = verifyCitizenSdkRelease(candidate, audit, expectedGitSha);
+  const pubspec = readFileSync(join(candidate, 'pubspec.yaml'), 'utf8');
+  if (/^publish_to:/m.test(pubspec) && !/^publish_to: ["']?https:\/\/pub\.dev["']?\s*$/m.test(pubspec)) {
+    fail('CitizenSDK Hosted 本地验证仅允许默认官方 HTTPS 服务');
+  }
+  const expected = hostedPackageEntries(candidate);
+  const auditSha = sha256File(audit);
+  const manifestSha = sha256File(join(candidate, 'citizensdk-release.json'));
+  ensureNewDirectory(output, candidate, 'Hosted 工作目录');
+  const identity = lstatSync(output);
+  try {
+    const input = join(output, 'input');
+    cpSync(candidate, input, { recursive: true, dereference: false, verbatimSymlinks: true,
+      force: false, errorOnExist: true });
+    const temporary = join(output, 'tmp');
+    mkdirSync(temporary, { mode: 0o700 });
+    // 不传用户 HOME/APPDATA/XDG、令牌或任意继承环境；Pub 的 token store 因无配置根为空。
+    // PATH 仅含正式 Dart bin，Git 探测无法执行；analyze 子进程同样关闭遥测。
+    const env = { PATH: dirname(dart), FLUTTER_ROOT: flutter, PUB_CACHE: cache, TMPDIR: temporary,
+      TEMP: temporary, TMP: temporary, LANG: 'C.UTF-8', DASH__SUPPRESS_ANALYTICS: 'true', CI: 'true' };
+    const version = await runHostedDart(dart, ['--version'], input, env, signal);
+    signal?.throwIfAborted();
+    if (!version.startsWith(`Dart SDK version: ${HOSTED_DART_VERSION} `)) {
+      fail('CitizenSDK Hosted Dart 实际版本漂移');
+    }
+    const preview = await runHostedDart(dart, ['pub', 'publish', '--dry-run'], input, env, signal);
+    signal?.throwIfAborted();
+    if (!/Package has 0 warnings(?: and \d+ hints?)?\./u.test(preview)) {
+      fail(`CitizenSDK Hosted dry-run 未明确报告零 warnings：\n${preview}`);
+    }
+    // dry-run 会提前返回，必须独立运行 --to-archive；官方实现不会进入上传分支。
+    const hosted = join(output, `${PACKAGE_NAME}-${manifest.software_version}.tar.gz`);
+    const generated = await runHostedDart(dart, ['pub', 'publish', `--to-archive=${hosted}`], input, env, signal);
+    signal?.throwIfAborted();
+    if (!generated.includes(`Wrote package archive at ${hosted}`)) {
+      fail('CitizenSDK Hosted 官方工具未确认归档生成');
+    }
+    const log = `${version}\n${preview}\n${generated}`;
+    writeFileSync(join(output, 'pub.log'), log, { flag: 'wx', mode: 0o600 });
+    // Pub 可在隔离副本生成 lock/.dart_tool，但全部可发布输入必须与原候选一致。
+    compareHostedEntries(readHostedArchive(hosted), expected);
+    const result = verifyCitizenSdkHosted({ candidatePath: candidate, archivePath: audit,
+      hostedArchivePath: hosted, outputPath: join(output, 'package'), expectedGitSha });
+    if (sha256File(audit) !== auditSha || sha256File(join(candidate, 'citizensdk-release.json')) !== manifestSha) {
+      fail('CitizenSDK Hosted 打包改动了审计输入');
+    }
+    return result;
+  } catch (error) {
+    if (!error?.preserveHostedOutput) removeOwnedDirectory(output, identity);
+    else error.message += `：${output}`;
+    throw error;
+  }
+}
+
+/**
+ * 仅解析 Hosted 官方归档；完整验证后由调用方写盘，不执行 tar 或跟随链接。
+ * 这些资源上限是本地安全边界，不表示 Hosted 服务端一定接收同样大小的包。
+ */
+export function parseHostedArchive(bytes) {
+  const reject = (reason) => fail(`CitizenSDK Hosted 归档无效：${reason}`);
+  const compressedLimit = 100 * 1024 * 1024;
+  const expandedLimit = 256 * 1024 * 1024;
+  const pathLimit = 4096;
+  if (!Buffer.isBuffer(bytes) || bytes.length < 20 || bytes.length > compressedLimit) {
+    reject('gzip 长度越界');
+  }
+  const crcTable = new Uint32Array(256);
+  for (let index = 0; index < crcTable.length; index += 1) {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    }
+    crcTable[index] = value >>> 0;
+  }
+  const crc32 = (data) => {
+    let value = 0xffffffff;
+    for (const byte of data) value = crcTable[(value ^ byte) & 0xff] ^ (value >>> 8);
+    return (value ^ 0xffffffff) >>> 0;
+  };
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b || bytes[2] !== 8 || (bytes[3] & 0xe0)) {
+    reject('gzip 头或保留标志错误');
+  }
+  const flags = bytes[3];
+  let compressedStart = 10;
+  const requireHeader = (length) => {
+    if (compressedStart + length > bytes.length - 8 || compressedStart + length > 65536) {
+      reject('gzip 附加头截断或过长');
+    }
+  };
+  if (flags & 4) {
+    requireHeader(2);
+    const length = bytes.readUInt16LE(compressedStart);
+    compressedStart += 2;
+    requireHeader(length);
+    compressedStart += length;
+  }
+  for (const flag of [8, 16]) {
+    if (!(flags & flag)) continue;
+    const end = bytes.indexOf(0, compressedStart);
+    if (end < compressedStart || end - compressedStart > pathLimit) {
+      reject('gzip 名称或注释未终止或过长');
+    }
+    requireHeader(end - compressedStart + 1);
+    compressedStart = end + 1;
+  }
+  if (flags & 2) {
+    requireHeader(2);
+    if (bytes.readUInt16LE(compressedStart) !== (crc32(bytes.subarray(0, compressedStart)) & 0xffff)) {
+      reject('gzip 头 CRC 错误');
+    }
+    compressedStart += 2;
+  }
+  if (compressedStart >= bytes.length - 8 || bytes.readUInt32LE(bytes.length - 4) > expandedLimit) {
+    reject('gzip 正文截断或展开长度越界');
+  }
+  let inflated;
+  try {
+    inflated = inflateRawSync(bytes.subarray(compressedStart, bytes.length - 8), {
+      info: true,
+      maxOutputLength: expandedLimit,
+    });
+  } catch {
+    reject('DEFLATE 损坏、截断或超过展开上限');
+  }
+  // 原始 DEFLATE 报告实际消费长度，不能把第二个 member 或尾随数据吞掉。
+  const tar = inflated.buffer;
+  if (compressedStart + inflated.engine.bytesWritten + 8 !== bytes.length
+      || tar.length !== bytes.readUInt32LE(bytes.length - 4)
+      || crc32(tar) !== bytes.readUInt32LE(bytes.length - 8)) {
+    reject('gzip member、CRC 或 ISIZE 不一致');
+  }
+  if (tar.length < 1024 || tar.length % 512 !== 0) reject('tar 长度或结束块不完整');
+  const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+  const decode = (data) => {
+    try { return decoder.decode(data); } catch { reject('tar 路径不是有效 UTF-8'); }
+  };
+  const empty = (data) => data.every((byte) => byte === 0);
+  const stringBytes = (header, offset, length) => {
+    const field = header.subarray(offset, offset + length);
+    const end = field.indexOf(0);
+    if (end < 0) return field;
+    if (!empty(field.subarray(end))) reject('tar 字符串终止符后含数据');
+    return field.subarray(0, end);
+  };
+  const octal = (header, offset, length) => {
+    const field = header.subarray(offset, offset + length);
+    if (!field.every((byte) => byte === 0 || byte === 32 || (byte >= 48 && byte <= 55))) {
+      reject('tar 数值字段不是八进制');
+    }
+    const text = field.toString('ascii');
+    if (!/^[ \0]*[0-7]+[ \0]*$/.test(text)) reject('tar 数值字段为空或嵌入分隔符');
+    const value = Number.parseInt(text.replace(/^[ \0]+|[ \0]+$/g, ''), 8);
+    if (!Number.isSafeInteger(value)) reject('tar 数值溢出');
+    return value;
+  };
+  const safePath = (name, directory) => {
+    if (directory && name.endsWith('/')) name = name.slice(0, -1);
+    const parts = name.split('/');
+    if (!name || Buffer.byteLength(name) > pathLimit
+        || /[\x00-\x1f\x7f\\:*?"<>|]/.test(name)
+        || parts.some((part) => !part || part === '.' || part === '..'
+          || /[ .]$/.test(part) || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part))) {
+      reject('tar 路径越界或存在跨平台歧义');
+    }
+    return name;
+  };
+  const entries = new Map();
+  const paths = new Map();
+  let pathCount = 0;
+  let pendingName = null;
+  let offset = 0;
+  let count = 0;
+  while (offset < tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (empty(header)) {
+      // 固定官方 writer 恰好输出两个零块，不接受结束后的记录或隐蔽附加数据。
+      if (pendingName !== null || offset + 1024 !== tar.length || !empty(tar.subarray(offset))) {
+        reject('tar 结束块、悬空长文件名或尾随数据错误');
+      }
+      return entries;
+    }
+    count += 1;
+    if (count > 16384) reject('tar 条目数超过上限');
+    let checksum = 0;
+    for (let index = 0; index < 512; index += 1) {
+      checksum += index >= 148 && index < 156 ? 32 : header[index];
+    }
+    if (checksum !== octal(header, 148, 8)) reject('tar 头校验和错误');
+    // package:tar 2.0.0 把 version 写为 "0 "，普通 USTAR 则写为 "00"。
+    if (!header.subarray(257, 263).equals(Buffer.from('ustar\0'))
+        || !['0 ', '00'].includes(header.subarray(263, 265).toString('ascii'))
+        || !empty(header.subarray(500)) || !empty(header.subarray(157, 257))
+        || !empty(header.subarray(329, 345))) {
+      reject('tar 格式、链接或扩展字段不符合合同');
+    }
+    const mode = octal(header, 100, 8);
+    const size = octal(header, 124, 12);
+    const userId = octal(header, 108, 8);
+    const groupId = octal(header, 116, 8);
+    const modified = octal(header, 136, 12);
+    if (mode > 0o777 || size > expandedLimit) reject('tar 权限或文件长度越界');
+    const user = stringBytes(header, 265, 32);
+    const group = stringBytes(header, 297, 32);
+    decode(user);
+    decode(group);
+    const shortName = stringBytes(header, 0, 100);
+    const prefix = stringBytes(header, 345, 155);
+    const type = header[156];
+    if (![48, 53, 76].includes(type)) reject('tar 含非普通文件、目录或官方长文件名记录');
+    const start = offset + 512;
+    const end = start + size;
+    const paddedEnd = start + Math.ceil(size / 512) * 512;
+    if (paddedEnd > tar.length || !empty(tar.subarray(end, paddedEnd))) {
+      reject('tar 正文截断或补齐区含数据');
+    }
+    const data = tar.subarray(start, end);
+    offset = paddedEnd;
+    if (type === 76) {
+      // 官方 GNU L 正文没有末尾 NUL；后继短名只取前 99 字节，可能截断多字节字符。
+      if (pendingName !== null || decode(shortName) !== '././@LongLink'
+          || prefix.length || mode || userId || groupId || modified || user.length || group.length
+          || size <= 99 || size > pathLimit) reject('GNU 长文件名记录不符合官方格式');
+      safePath(decode(data), true);
+      pendingName = data;
+      continue;
+    }
+    let name;
+    if (pendingName !== null) {
+      if (prefix.length || !shortName.equals(pendingName.subarray(0, 99))) {
+        reject('GNU 长文件名与后继短名不一致');
+      }
+      name = decode(pendingName);
+      pendingName = null;
+    } else {
+      name = `${prefix.length ? `${decode(prefix)}/` : ''}${decode(shortName)}`;
+    }
+    const directory = type === 53;
+    if (directory && size !== 0) reject('tar 目录携带正文');
+    name = safePath(name, directory);
+    if (entries.has(name)) reject('tar 目标重复');
+    const parts = name.split('/');
+    let children = paths;
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      const key = part.normalize('NFC').toLowerCase();
+      const pathType = index < parts.length - 1 || directory ? 'directory' : 'file';
+      let node = children.get(key);
+      if (node && node.name !== part) reject('tar 大小写或 Unicode 目标冲突');
+      if (node && node.type !== pathType) reject('tar 父子路径类型冲突');
+      if (!node) {
+        // 隐含父目录同样占用解包资源；树结构避免深路径的平方级前缀复制。
+        pathCount += 1;
+        if (pathCount > 16384) reject('tar 文件及隐含目录数超过上限');
+        node = { name: part, type: pathType, children: new Map() };
+        children.set(key, node);
+      }
+      children = node.children;
+    }
+    // 用视图避免给已受上限约束的正文再做整包复制，返回值始终只包含文件和目录。
+    entries.set(name, { type: directory ? 'directory' : 'file', mode, data });
+  }
+  reject('tar 缺少两个结束零块');
+}
+
 function parseArguments(argumentsList) {
   const values = {};
   for (let index = 0; index < argumentsList.length; index += 2) {
     const key = argumentsList[index];
     const value = argumentsList[index + 1];
-    if (!key?.startsWith('--') || value === undefined) fail(`参数格式无效：${key || ''}`);
+    if (typeof key !== 'string' || !/^--[a-z-]+$/u.test(key)
+        || typeof value !== 'string' || !value || value.startsWith('--')
+        || Object.hasOwn(values, key.slice(2))) fail(`参数格式无效或重复：${key || ''}`);
     values[key.slice(2)] = value;
   }
   return values;
@@ -3293,7 +5655,36 @@ const isMain = process.argv[1] && resolve(process.argv[1]) === resolve(fileURLTo
 if (isMain) {
   try {
     const values = parseArguments(process.argv.slice(2));
-    if (values.verify) {
+    if (values.hosted || values['verify-hosted']) {
+      const build = Boolean(values.hosted);
+      const allowed = build
+        ? ['hosted', 'archive', 'output', 'dart', 'flutter', 'pub-cache', 'expected-git-sha']
+        : ['verify-hosted', 'archive', 'hosted-archive', 'output', 'expected-git-sha'];
+      if (Object.keys(values).some((key) => !allowed.includes(key))) {
+        fail('CitizenSDK Hosted 参数包含未允许的选项');
+      }
+      for (const key of allowed.filter((key) => key !== 'expected-git-sha')) {
+        if (!values[key]) fail(`CitizenSDK Hosted 缺少参数 --${key}`);
+      }
+      const options = { candidatePath: values.hosted || values['verify-hosted'],
+        archivePath: values.archive, outputPath: values.output,
+        expectedGitSha: values['expected-git-sha'] || null };
+      let manifest;
+      if (build) {
+        // CLI 只转交标准 AbortSignal；内部拥有 Dart 组与目录，外层不得先杀监督器。
+        const controller = new AbortController();
+        const interrupt = () => { process.exitCode ||= 130; controller.abort(); };
+        const stop = () => { process.exitCode ||= 143; controller.abort(); };
+        process.on('SIGINT', interrupt); process.on('SIGTERM', stop);
+        try {
+          manifest = await buildCitizenSdkHosted({ ...options, dartPath: values.dart,
+            flutterRoot: values.flutter, pubCachePath: values['pub-cache'], signal: controller.signal });
+        } finally {
+          process.off('SIGINT', interrupt); process.off('SIGTERM', stop);
+        }
+      } else manifest = verifyCitizenSdkHosted({ ...options, hostedArchivePath: values['hosted-archive'] });
+      process.stdout.write(`CitizenSDK Hosted 本地归档验真通过：${manifest.software_version}\n`);
+    } else if (values.verify) {
       if (!values.archive) fail('候选校验缺少参数 --archive');
       const manifest = verifyCitizenSdkRelease(
         values.verify,
@@ -3317,6 +5708,6 @@ if (isMain) {
     }
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
+    process.exitCode ||= 1;
   }
 }

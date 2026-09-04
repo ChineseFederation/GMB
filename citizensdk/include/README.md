@@ -194,3 +194,9 @@ Vault, and wallet-UI leases; callback and parent-window updates share that
 linearization boundary. Teardown must not hold a lock needed by a callback that
 re-enters the Host API. A synchronous completion burst while a private route is
 being installed remains lossless beyond 64 events and under concurrency.
+
+## Windows 平台 Host 头
+
+`../windows/include/citizen_sdk/citizensdk_host.h` 提供 13 项资源装配 API，并不替代
+本目录 70 项 Core ABI。C++ Host 为 header-only 所有权包装，不导出 STL ABI。HWND
+仅作 UI owner 配置，设备口令、CNG 句柄及秘密不进入公开头。Windows 运行验收尚未执行。

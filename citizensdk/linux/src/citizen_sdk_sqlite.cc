@@ -887,7 +887,10 @@ void SQLiteStore::Statement::bind(int index, const std::string &value) {
 }
 
 void SQLiteStore::Statement::bind(int index, const Bytes &value) {
-  const void *bytes = value.empty() ? "" : value.data();
+  // A non-null zero-length view denotes an empty BLOB, not SQL NULL. Keep
+  // both conditional operands the same pointer type for strict C++ builds.
+  static constexpr uint8_t empty_blob = 0;
+  const void *bytes = value.empty() ? &empty_blob : value.data();
   if (value.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()) ||
       sqlite3_bind_blob(statement_, index, bytes, static_cast<int>(value.size()),
                         SQLITE_TRANSIENT) != SQLITE_OK) {
@@ -1014,10 +1017,11 @@ void expect_no_second_row(SQLiteStore::Statement &statement,
 
 void verify_schema(sqlite3 *database,
                    const std::vector<std::string> &schema) {
+  // GLOB 中 '_' 为字面字符；LIKE 会把 sqlitex_* 表/触发器错误排除在闭集之外。
   SQLiteStore::Statement count(
       database,
       "SELECT count(*) FROM sqlite_master "
-      "WHERE name NOT LIKE 'sqlite_%'");
+      "WHERE name NOT GLOB 'sqlite_*'");
   expect_single_row(count, "CitizenSDK SQLite schema count is unavailable");
   (void)count.integer(0, static_cast<int64_t>(schema.size()),
                       static_cast<int64_t>(schema.size()));
@@ -1092,7 +1096,7 @@ void configure_and_verify_database(
   {
     SQLiteStore::Statement object_count(
         database,
-        "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'");
+        "SELECT count(*) FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'");
     expect_single_row(object_count,
                       "CitizenSDK SQLite object count is unavailable");
     objects = object_count.integer(

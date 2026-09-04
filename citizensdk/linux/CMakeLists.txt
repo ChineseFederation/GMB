@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.24)
 
 project(CitizenSDKHost VERSION 1.0.0 LANGUAGES C CXX)
 
+# 使用标准 C++，避免 GNU 扩展模式预定义的 linux 宏改写内部命名空间；
+# 同时约束 Host 与下级测试目标，不依赖调用方的默认编译方言。
+set(CMAKE_CXX_EXTENSIONS OFF)
+
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
@@ -23,6 +27,13 @@ set(CITIZENSDK_TSS2_TCTI_DEVICE_ARCHIVE "" CACHE FILEPATH "Pinned libtss2-tcti-d
 option(CITIZENSDK_BUILD_TESTS "Build Linux Host contract tests" OFF)
 option(CITIZENSDK_ENABLE_WALLET_UI "Build the SDK-owned GTK3 wallet and authentication UI" ON)
 option(CITIZENSDK_WARNINGS_AS_ERRORS "Treat CitizenSDK Linux Host warnings as errors" ON)
+
+# Flutter 只编译适配层，消费同版已安装 Host/Core；不得在插件构建中
+# 再编译一份 Host 或要求宿主重新取得 SQLite/TPM/OpenSSL 源码依赖。
+if(TARGET flutter)
+  include(cmake/CitizenSDKFlutter.cmake)
+  return()
+endif()
 
 if(NOT CITIZENSDK_PLATFORM STREQUAL "LinuxARM" AND NOT CITIZENSDK_PLATFORM STREQUAL "LinuxAMD")
   message(FATAL_ERROR "CITIZENSDK_PLATFORM must be exactly LinuxARM or LinuxAMD")
@@ -165,7 +176,10 @@ install(FILES
   "${CITIZENSDK_CORE_INCLUDE_DIR}/citizensdk_types.h"
   DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
 )
-install(DIRECTORY include/citizen_sdk DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
+# 注册头仅由 Flutter generated registrant 使用，原生 C/C++ 安装不依赖 Flutter。
+install(DIRECTORY include/citizen_sdk DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+  PATTERN "citizen_sdk_plugin.h" EXCLUDE
+)
 install(FILES
   "${CITIZENSDK_ASSET_DIR}/manifest.json"
   "${CITIZENSDK_ASSET_DIR}/chainspec.json"

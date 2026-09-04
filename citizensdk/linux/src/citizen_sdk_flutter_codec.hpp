@@ -1,0 +1,134 @@
+#ifndef CITIZENSDK_LINUX_FLUTTER_CODEC_HPP
+#define CITIZENSDK_LINUX_FLUTTER_CODEC_HPP
+
+#include <flutter_linux/flutter_linux.h>
+
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include "citizensdk.h"
+
+namespace citizen_sdk::flutter {
+
+inline constexpr const char *kMethodChannel = "citizen/sdk/core/v1";
+inline constexpr const char *kEventChannel = "citizen/sdk/events/v1";
+inline constexpr int64_t kProtocolVersion = 1;
+
+// Flutter 只接收固定 tuple 的公开值；禁止把秘密、裸句柄或指针混入该值树。
+// Only these public values may cross the Flutter boundary. No native handle,
+// pointer, prepared-wallet token or secret-bearing alternative exists here.
+// Value owns its entire tree and can be moved from a Core callback to the UI
+// thread; FlValue and the Flutter messenger stay on the UI thread.
+struct Value final {
+  using Bytes = std::vector<uint8_t>;
+  using List = std::vector<Value>;
+  std::variant<std::monostate, bool, int64_t, std::string, Bytes, List> data;
+
+  static Value null() { return {}; }
+  static Value boolean(bool value) { return Value{value}; }
+  static Value integer(int64_t value) { return Value{value}; }
+  static Value string(std::string value) { return Value{std::move(value)}; }
+  static Value bytes(Bytes value) { return Value{std::move(value)}; }
+  static Value list(List value) { return Value{std::move(value)}; }
+};
+
+enum class Method {
+  open, start, stop, close, get_capabilities, get_finalized_head,
+  get_account_balance, get_account_nonce, get_fee_snapshot, get_wallet_profile,
+  create_wallet, import_wallet, add_wallet_accounts, set_active_wallet_account,
+  rename_wallet_account, delete_wallet_account, delete_wallet,
+  reconcile_wallet_cleanup, sign_wallet_payload, transfer_with_remark,
+  initialize_finalized_history, sync_finalized_history,
+};
+
+const char *method_name(Method method) noexcept;
+
+// Fields are copied from a validated fixed-position tuple. Signing payload and
+// transfer remark are public messages, never secret material. Unused fields
+// remain empty; method is the closed discriminant used by sessions.
+struct DecodedRequest final {
+  Method method{Method::open};
+  std::string session;
+  int64_t sequence{};
+  citizensdk_account_id_t account_id{};
+  citizensdk_account_id_t destination{};
+  uint32_t word_count{};
+  std::vector<uint32_t> indices;
+  std::string name;
+  std::vector<uint8_t> payload;
+  std::vector<uint8_t> remark;
+  citizensdk_u128_t amount{};
+  std::vector<citizensdk_account_id_t> account_ids;
+};
+
+class ContractFailure final : public std::runtime_error {
+ public:
+  ContractFailure(citizensdk_error_code_t code, std::string message,
+                  std::optional<std::string> session = {},
+                  std::optional<int64_t> sequence = {});
+  citizensdk_error_code_t code;
+  std::optional<std::string> session;
+  std::optional<int64_t> sequence;
+};
+
+struct FlValueDeleter {
+  void operator()(FlValue *value) const noexcept {
+    if (value != nullptr) fl_value_unref(value);
+  }
+};
+using FlValuePtr = std::unique_ptr<FlValue, FlValueDeleter>;
+
+// 线协议仍是标准 tag 7；内部有长度的字符串只修复 Linux 对嵌入 NUL 的截断。
+// The wire is the existing Flutter StandardMethodCodec, not a new protocol.
+// Its official message-codec extension preserves embedded NUL in standard
+// string tag 7; stock Linux FlValue strings otherwise silently truncate it.
+// Returned GObject has one owned reference; caller must g_object_unref it.
+FlStandardMethodCodec *new_method_codec();
+FlValuePtr to_fl_value(const Value &value);
+Value from_fl_value(FlValue *value);
+DecodedRequest decode_request(const std::string &method, FlValue *arguments);
+bool decode_subscription(FlValue *arguments);
+
+Value response(const std::string &session, int64_t sequence, Value value);
+Value event(const std::string &session, int64_t sequence,
+            const std::string &type, Value payload);
+Value error_details(citizensdk_error_code_t code, const std::string &message,
+                    std::optional<std::string> session = {},
+                    std::optional<int64_t> sequence = {});
+const char *error_name(citizensdk_error_code_t code) noexcept;
+
+Value lifecycle(citizensdk_lifecycle_t value);
+Value block(const citizensdk_block_ref_t &value);
+Value capabilities(const citizensdk_capability_snapshot_t &value);
+
+// Synchronously copy only public result data while the observer's borrowed
+// result is alive. These functions never retain/release or publish its handle.
+// sessions supplies lifecycle after start/stop and fetches a profile after the
+// private native wallet UI completes; those operations do not expose tokens.
+Value copy_public_result(Method method, citizensdk_result_handle_t result);
+Value watch_payload(citizensdk_result_handle_t result,
+                    int64_t request_sequence);
+
+// 生产复制路径先运行语义后置校验，再交付 Dart；测试仅注入公开夹具，不伪造 Core 句柄。
+// Production result projections invoke these semantic validators before a
+// value can reach Dart. They are exposed only from the private src header so
+// contract tests can inject malformed public fixtures without forging Core
+// result handles.
+void validate_public_value(Method method, const Value &value);
+void validate_watch_value(const Value &value);
+
+// Decimal strings preserve u64/u128 exactly across Dart/StandardMessageCodec.
+// Parsing rejects signs, leading zeroes, whitespace and arithmetic overflow.
+citizensdk_u128_t parse_u128(const std::string &text);
+std::string decimal_u128(citizensdk_u128_t value);
+bool valid_utf8(const std::string &text) noexcept;
+
+}  // namespace citizen_sdk::flutter
+
+#endif

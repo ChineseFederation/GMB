@@ -1,33 +1,60 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
+  closeSync,
   cpSync,
   copyFileSync,
   existsSync,
+  ftruncateSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   rmSync,
+  statSync,
   symlinkSync,
+  unlinkSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs';
-import { spawnSync } from 'node:child_process';
-import { gunzipSync } from 'node:zlib';
-import { basename, dirname, join, resolve } from 'node:path';
+import { spawn, spawnSync } from 'node:child_process';
+import { EventEmitter, getEventListeners } from 'node:events';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import { basename, dirname, join, posix, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { runInNewContext } from 'node:vm';
 
 import {
   assertAndroidReleaseProjection,
+  assertCitizenSdkNativeContract,
+  assertCitizenSdkStaticArchive,
+  assertCitizenSdkDependencyInputs,
+  citizenSdkDependencyEnvironment,
+  writeCitizenSdkDependencyEvidence,
+  assertCitizenSdkDependencyEvidence,
   assertAppleReleaseProjection,
   assertChainAssets,
   assertCoreRustSource,
   assertDocumentationSource,
+  assertFlutterBindingContract,
   assertHostedPackageSource,
   assertHostedRuntimeDartProjection,
+  assertHostedRuntimeLinuxProjection,
   assertLicenseSources,
   assertLinuxBindingSource,
+  assertWindowsBindingSource,
+  assertWindowsNativeArtifact,
+  assertWindowsReleaseProjection,
+  assertWindowsFlutterBundle,
+  assertHostedRuntimeWindowsProjection,
+  copyWindowsNativeArtifact,
+  assertLinuxReleaseProjection,
   assertMobileBindingSource,
   assertNativeArtifactSources,
   assertNoSecrets,
@@ -42,6 +69,10 @@ import {
   assertSmoldotRustSource,
   assertSourceFixtures,
   buildCitizenSdkRelease,
+  buildCitizenSdkHosted,
+  hostedPackageEntries,
+  parseHostedArchive,
+  verifyCitizenSdkHosted,
   verifyCitizenSdkRelease,
 } from './release.mjs';
 
@@ -52,6 +83,696 @@ if (!workRoot) {
 mkdirSync(workRoot, { recursive: true });
 
 const citizenSdkRoot = fileURLToPath(new URL('../', import.meta.url));
+
+// 直接执行构建器中的唯一函数体；不 source 整个构建器，避免合同测试触发
+// mkdir、依赖解析或编译，也不维护第二份 ELF/安装验收算法。
+function nativeShellFunctions(names) {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts', 'build-native.sh'), 'utf8');
+  return names.map((name) => {
+    assert.match(name, /^[a-z_]+$/u);
+    const matches = [...source.matchAll(new RegExp(
+      `^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'gm',
+    ))];
+    assert.equal(matches.length, 1, `唯一生产函数：${name}`);
+    return matches[0][0];
+  }).join('\n');
+}
+
+function linuxInstallFixturePaths(platform) {
+  return [
+    'include/citizensdk.h',
+    'include/citizensdk_types.h',
+    ...[
+      'citizen_sdk.hpp', 'citizen_sdk_config.hpp', 'citizen_sdk_error.hpp',
+      'citizen_sdk_events.hpp', 'citizen_sdk_models.hpp',
+      'citizen_sdk_wallet_flow.hpp', 'citizensdk_host.h',
+    ].map((name) => `include/citizen_sdk/${name}`),
+    `lib/${platform}/libcitizensdk.so`,
+    `lib/${platform}/libcitizensdk_host.so`,
+    ...[
+      'CitizenSDKConfig.cmake', 'CitizenSDKConfigVersion.cmake',
+      'CitizenSDKDependencies.cmake', 'CitizenSDKTargets.cmake',
+      'CitizenSDKTargets-release.cmake',
+    ].map((name) => `lib/${platform}/cmake/CitizenSDK/${name}`),
+    ...['manifest.json', 'chainspec.json', 'light_sync_state.json']
+      .map((name) => `share/citizensdk/citizenchain/${name}`),
+  ].sort();
+}
+
+const linuxPlatforms = ['LinuxARM', 'LinuxAMD'];
+
+function windowsInstallFixturePaths() {
+  return [
+    'include/citizensdk.h', 'include/citizensdk_types.h',
+    ...[
+      'citizen_sdk.hpp', 'citizen_sdk_config.hpp', 'citizen_sdk_error.hpp',
+      'citizen_sdk_events.hpp', 'citizen_sdk_models.hpp',
+      'citizen_sdk_wallet_flow.hpp', 'citizensdk_host.h',
+    ].map((name) => `include/citizen_sdk/${name}`),
+    'bin/Windows/citizensdk.dll', 'bin/Windows/citizensdk_host.dll',
+    'lib/Windows/citizensdk.dll.lib', 'lib/Windows/citizensdk_host.lib',
+    ...[
+      'CitizenSDKConfig.cmake', 'CitizenSDKConfigVersion.cmake',
+      'CitizenSDKDependencies.cmake', 'CitizenSDKTargets.cmake',
+      'CitizenSDKTargets-release.cmake',
+    ].map((name) => `lib/Windows/cmake/CitizenSDK/${name}`),
+    ...['manifest.json', 'chainspec.json', 'light_sync_state.json']
+      .map((name) => `share/citizensdk/citizenchain/${name}`),
+  ].sort();
+}
+
+// Microsoft PE/COFF 格式夹具：真实 DOS/COFF/PE32+、节和导出表结构，不执行函数。
+// 只证明生产解析器的接受/拒绝路径，不能冒充 MSVC 构建或 Windows 消费者实测。
+function windowsPeFixture(names, library, machine = 0x8664, imports = library === 'citizensdk_host.dll'
+  ? [{ name: 'citizensdk.dll', symbols: ['citizensdk_get_lifecycle'] }]
+  : [{ name: 'kernel32.dll', symbols: ['GetLastError'] }]) {
+  assert.ok(names.length > 0 && names.length <= 512);
+  assert.deepEqual(names, [...new Set(names)].sort());
+  const strings = [library, ...names].map((name) => Buffer.from(`${name}\0`, 'ascii'));
+  const addresses = 40;
+  const pointers = addresses + names.length * 4;
+  const ordinals = pointers + names.length * 4;
+  const textOffset = ordinals + names.length * 2;
+  const exportSize = textOffset + strings.reduce((sum, text) => sum + text.length, 0);
+  const exportRawSize = Math.ceil(exportSize / 512) * 512;
+  const importOffset = 1024 + exportRawSize;
+  const importRva = 0x2000 + Math.ceil(exportSize / 4096) * 4096;
+  const importData = Buffer.alloc(16384);
+  let importCursor = (imports.length + 1) * 20;
+  imports.forEach((entry, index) => {
+    const descriptor = index * 20;
+    const dllName = Buffer.from(`${entry.name}\0`);
+    importData.writeUInt32LE(importRva + importCursor, descriptor + 12);
+    dllName.copy(importData, importCursor);
+    importCursor += dllName.length;
+    importCursor = Math.ceil(importCursor / 8) * 8;
+    const lookup = importCursor;
+    importCursor += (entry.symbols.length + 1) * 8;
+    const iat = importCursor;
+    importCursor += (entry.symbols.length + 1) * 8;
+    importData.writeUInt32LE(importRva + lookup, descriptor);
+    importData.writeUInt32LE(importRva + iat, descriptor + 16);
+    entry.symbols.forEach((name, item) => {
+      const value = typeof name === 'number' ? (1n << 63n) | BigInt(name) : BigInt(importRva + importCursor);
+      importData.writeBigUInt64LE(value, lookup + item * 8);
+      importData.writeBigUInt64LE(value, iat + item * 8);
+      if (typeof name !== 'number') {
+        const symbol = Buffer.from(`${name}\0`);
+        symbol.copy(importData, importCursor + 2);
+        importCursor += 2 + symbol.length;
+        importCursor = Math.ceil(importCursor / 2) * 2;
+      }
+    });
+  });
+  const importRawSize = Math.ceil(importCursor / 512) * 512;
+  const bytes = Buffer.alloc(importOffset + importRawSize);
+  importData.copy(bytes, importOffset, 0, importCursor);
+  bytes.writeUInt16LE(0x5a4d, 0);
+  bytes.writeUInt32LE(128, 60);
+  bytes.writeUInt32LE(0x4550, 128);
+  bytes.writeUInt16LE(machine, 132);
+  bytes.writeUInt16LE(3, 134);
+  bytes.writeUInt16LE(240, 148);
+  bytes.writeUInt16LE(0x2022, 150);
+  const optional = 152;
+  bytes.writeUInt16LE(0x20b, optional);
+  bytes[optional + 2] = 14;
+  bytes.writeUInt32LE(512, optional + 4);
+  bytes.writeUInt32LE(exportRawSize + importRawSize, optional + 8);
+  bytes.writeUInt32LE(0x1000, optional + 20);
+  bytes.writeBigUInt64LE(0x180000000n, optional + 24);
+  bytes.writeUInt32LE(4096, optional + 32);
+  bytes.writeUInt32LE(512, optional + 36);
+  bytes.writeUInt16LE(6, optional + 40);
+  bytes.writeUInt16LE(1, optional + 44);
+  bytes.writeUInt16LE(6, optional + 48);
+  bytes.writeUInt32LE(importRva + Math.ceil(importCursor / 4096) * 4096, optional + 56);
+  bytes.writeUInt32LE(512, optional + 60);
+  bytes.writeUInt16LE(3, optional + 68);
+  bytes.writeUInt16LE(0x8100, optional + 70);
+  for (const offset of [72, 88]) bytes.writeBigUInt64LE(0x100000n, optional + offset);
+  for (const offset of [80, 96]) bytes.writeBigUInt64LE(0x1000n, optional + offset);
+  bytes.writeUInt32LE(16, optional + 108);
+  bytes.writeUInt32LE(0x2000, optional + 112);
+  bytes.writeUInt32LE(exportSize, optional + 116);
+  if (imports.length) {
+    bytes.writeUInt32LE(importRva, optional + 120);
+    bytes.writeUInt32LE((imports.length + 1) * 20, optional + 124);
+  }
+  for (const [index, name, size, rva, rawSize, raw, flags] of [
+    [0, '.text', names.length, 0x1000, 512, 512, 0x60000020],
+    [1, '.edata', exportSize, 0x2000, exportRawSize, 1024, 0x40000040],
+    [2, '.idata', importCursor, importRva, importRawSize, importOffset, 0xc0000040],
+  ]) {
+    const section = optional + 240 + index * 40;
+    bytes.write(name, section, 'ascii');
+    for (const [offset, value] of [[8, size], [12, rva], [16, rawSize], [20, raw], [36, flags]]) {
+      bytes.writeUInt32LE(value, section + offset);
+    }
+  }
+  bytes.fill(0xc3, 512, 512 + names.length);
+  bytes.writeUInt32LE(0x2000 + textOffset, 1024 + 12);
+  bytes.writeUInt32LE(1, 1024 + 16);
+  for (const offset of [20, 24]) bytes.writeUInt32LE(names.length, 1024 + offset);
+  for (const [offset, value] of [[28, addresses], [32, pointers], [36, ordinals]]) {
+    bytes.writeUInt32LE(0x2000 + value, 1024 + offset);
+  }
+  let cursor = textOffset;
+  strings[0].copy(bytes, 1024 + cursor);
+  cursor += strings[0].length;
+  names.forEach((name, index) => {
+    bytes.writeUInt32LE(0x1000 + index, 1024 + addresses + index * 4);
+    bytes.writeUInt32LE(0x2000 + cursor, 1024 + pointers + index * 4);
+    bytes.writeUInt16LE(index, 1024 + ordinals + index * 2);
+    strings[index + 1].copy(bytes, 1024 + cursor);
+    cursor += strings[index + 1].length;
+  });
+  return bytes;
+}
+
+function windowsImportLibraryFixture(names, library, { longnames = false, internalPadding = true } = {}) {
+  const member = (name, data) => {
+    const header = Buffer.from(`${name.padEnd(16)}${'0'.padEnd(12)}${''.padEnd(6)}${''.padEnd(6)}${'0'.padEnd(8)}${String(data.length).padEnd(10)}\x60\n`);
+    assert.equal(header.length, 60);
+    return Buffer.concat([header, data, ...(data.length % 2 ? [Buffer.from('\n')] : [])]);
+  };
+  // PE/COFF 官方结构夹具：三个描述符真实携带 section/symbol/relocation；不是 Windows 编译证据。
+  // 对照 LLVM COFFImportFile.cpp，保留两个官方索引，不能用仅有 short import 的残缺库冒充正例。
+  const stem = library.replace(/\.dll$/, '');
+  const descriptor = `__IMPORT_DESCRIPTOR_${stem}`, nullDescriptor = '__NULL_IMPORT_DESCRIPTOR';
+  const nullThunk = `\x7f${stem}_NULL_THUNK_DATA`;
+  const coff = (sections, symbols) => {
+    const strings = [], offsets = new Map();
+    let stringSize = 4;
+    for (const [name] of symbols) {
+      if (name.length > 8 && !offsets.has(name)) {
+        offsets.set(name, stringSize);
+        const text = Buffer.from(`${name}\0`);
+        strings.push(text); stringSize += text.length;
+      }
+    }
+    let end = 20 + sections.length * 40;
+    const locations = sections.map((section) => {
+      const raw = end;
+      end += section.data.length;
+      const reloc = section.relocations?.length ? end : 0;
+      end += (section.relocations?.length ?? 0) * 10;
+      return { raw, reloc };
+    });
+    const table = end;
+    const bytes = Buffer.alloc(table + symbols.length * 18 + stringSize);
+    bytes.writeUInt16LE(0x8664, 0);
+    bytes.writeUInt16LE(sections.length, 2);
+    bytes.writeUInt32LE(table, 8);
+    bytes.writeUInt32LE(symbols.length, 12);
+    sections.forEach((section, index) => {
+      const at = 20 + index * 40, location = locations[index];
+      bytes.write(section.name, at);
+      bytes.writeUInt32LE(section.data.length, at + 16);
+      bytes.writeUInt32LE(location.raw, at + 20);
+      bytes.writeUInt32LE(location.reloc, at + 24);
+      bytes.writeUInt16LE(section.relocations?.length ?? 0, at + 32);
+      bytes.writeUInt32LE(section.flags ?? 0xc0300040, at + 36);
+      section.data.copy(bytes, location.raw);
+      (section.relocations ?? []).forEach(([offset, target], item) => {
+        bytes.writeUInt32LE(offset, location.reloc + item * 10);
+        bytes.writeUInt32LE(target, location.reloc + item * 10 + 4);
+        bytes.writeUInt16LE(3, location.reloc + item * 10 + 8); // IMAGE_REL_AMD64_ADDR32NB
+      });
+    });
+    symbols.forEach(([name, section, storage], index) => {
+      const at = table + index * 18;
+      if (offsets.has(name)) bytes.writeUInt32LE(offsets.get(name), at + 4);
+      else bytes.write(name, at);
+      bytes.writeInt16LE(section, at + 12);
+      bytes[at + 16] = storage;
+    });
+    const stringsAt = table + symbols.length * 18;
+    bytes.writeUInt32LE(stringSize, stringsAt);
+    Buffer.concat(strings).copy(bytes, stringsAt + 4);
+    return bytes;
+  };
+  const objects = [
+    coff([
+      { name: '.idata$2', data: Buffer.alloc(20), relocations: [[12, 2], [0, 3], [16, 4]] },
+      { name: '.idata$6', data: Buffer.from(`${library}\0`), flags: 0xc0200040 },
+    ], [[descriptor, 1, 2], ['.idata$2', 1, 104], ['.idata$6', 2, 3],
+      ['.idata$4', 0, 104], ['.idata$5', 0, 104], [nullDescriptor, 0, 2], [nullThunk, 0, 2]]),
+    coff([{ name: '.idata$3', data: Buffer.alloc(20) }], [[nullDescriptor, 1, 2]]),
+    coff([{ name: '.idata$5', data: Buffer.alloc(8), flags: 0xc0400040 },
+      { name: '.idata$4', data: Buffer.alloc(8), flags: 0xc0400040 }], [[nullThunk, 1, 2]]),
+  ];
+  names.forEach((name, index) => {
+    const strings = Buffer.from(`${name}\0${library}\0`);
+    const object = Buffer.alloc(20 + strings.length);
+    object.writeUInt16LE(0xffff, 2);
+    object.writeUInt16LE(0x8664, 6);
+    object.writeUInt32LE(strings.length, 12);
+    object.writeUInt16LE(index, 16);
+    object.writeUInt16LE(4, 18);
+    strings.copy(object, 20);
+    objects.push(object);
+  });
+  const longname = Buffer.from('citizensdk-official-object-name.obj\0');
+  const longMember = longnames ? member('//', Buffer.concat([longname,
+    ...(longname.length % 2 ? [Buffer.from('\n')] : [])])) : Buffer.alloc(0);
+  const members = objects.map((object, index) => member(longnames ? '/0' : `${index}.obj/`, object));
+  const symbols = [[descriptor, 0], [nullDescriptor, 1], [nullThunk, 2],
+    ...names.flatMap((name, index) => [[name, index + 3], [`__imp_${name}`, index + 3]])];
+  const textSize = symbols.reduce((sum, [name]) => sum + name.length + 1, 0);
+  const padded = (size) => size + (internalPadding ? size % 2 : 0);
+  const first = Buffer.alloc(padded(4 + symbols.length * 4 + textSize));
+  const second = Buffer.alloc(padded(8 + members.length * 4 + symbols.length * 2 + textSize));
+  let next = 8 + 60 + first.length + first.length % 2 + 60 + second.length + second.length % 2 + longMember.length;
+  const offsets = members.map((bytes) => { const value = next; next += bytes.length; return value; });
+  first.writeUInt32BE(symbols.length);
+  let cursor = 4 + symbols.length * 4;
+  symbols.forEach(([name, index], item) => {
+    first.writeUInt32BE(offsets[index], 4 + item * 4);
+    first.write(`${name}\0`, cursor);
+    cursor += name.length + 1;
+  });
+  second.writeUInt32LE(members.length);
+  offsets.forEach((offset, index) => second.writeUInt32LE(offset, 4 + index * 4));
+  second.writeUInt32LE(symbols.length, 4 + members.length * 4);
+  cursor = 8 + members.length * 4 + symbols.length * 2;
+  [...symbols].sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)
+    .forEach(([name, index], item) => {
+      second.writeUInt16LE(index + 1, 8 + members.length * 4 + item * 2);
+      second.write(`${name}\0`, cursor);
+      cursor += name.length + 1;
+    });
+  return Buffer.concat([Buffer.from('!<arch>\n'), member('/', first), member('/', second), longMember, ...members]);
+}
+
+function windowsInstallFixture(root) {
+  const prefix = join(root, 'install');
+  const core = join(root, 'core');
+  const build = join(root, 'cmake');
+  const references = new Map();
+  const exports = new Map();
+  const write = (path, bytes) => {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, bytes);
+  };
+  const { packageInit, targets } = writeLinuxInstallFixture(null, 'LinuxARM', { cmakeOnly: true });
+  const config = readFileSync(join(citizenSdkRoot, 'windows/cmake/CitizenSDKConfig.cmake.in'), 'utf8')
+    .replace('@PACKAGE_INIT@', packageInit)
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_LIBDIR@', '${PACKAGE_PREFIX_DIR}/lib')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_BINDIR@', '${PACKAGE_PREFIX_DIR}/bin')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@', '${PACKAGE_PREFIX_DIR}/include')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_DATADIR@', '${PACKAGE_PREFIX_DIR}/share');
+  const version = readFileSync(join(citizenSdkRoot, 'windows/cmake/CitizenSDKConfigVersion.cmake.in'), 'utf8')
+    .replaceAll('@PROJECT_VERSION@', '1.0.0').replaceAll('@PROJECT_VERSION_MAJOR@', '1');
+  // 这里只构造安装/本轮构建的对拍输入；不运行 CMake、不声称来自 MSVC。
+  const releaseTargets = [
+    'set(CMAKE_IMPORT_FILE_VERSION 1)',
+    'set_property(TARGET CitizenSDK::Host APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)',
+    'set_target_properties(CitizenSDK::Host PROPERTIES',
+    '  IMPORTED_IMPLIB_RELEASE "${_IMPORT_PREFIX}/lib/Windows/citizensdk_host.lib"',
+    '  IMPORTED_LOCATION_RELEASE "${_IMPORT_PREFIX}/bin/Windows/citizensdk_host.dll"',
+    '  )',
+    'list(APPEND _cmake_import_check_targets CitizenSDK::Host )',
+    'list(APPEND _cmake_import_check_files_for_CitizenSDK::Host "${_IMPORT_PREFIX}/lib/Windows/citizensdk_host.lib" "${_IMPORT_PREFIX}/bin/Windows/citizensdk_host.dll" )',
+    'set(CMAKE_IMPORT_FILE_VERSION)', '',
+  ].join('\n');
+  const configs = { 'CitizenSDKConfig.cmake': config, 'CitizenSDKConfigVersion.cmake': version,
+    'CitizenSDKTargets.cmake': targets, 'CitizenSDKTargets-release.cmake': releaseTargets };
+  for (const relative of windowsInstallFixturePaths()) {
+    let reference;
+    let bytes;
+    const name = basename(relative);
+    if (relative.startsWith('include/citizen_sdk/')) {
+      reference = join(citizenSdkRoot, 'windows', relative);
+    } else if (relative.startsWith('include/')) {
+      reference = join(citizenSdkRoot, relative);
+    } else if (relative.startsWith('share/')) {
+      reference = join(citizenSdkRoot, 'assets/citizenchain', name);
+    } else if (name === 'CitizenSDKDependencies.cmake') {
+      reference = join(citizenSdkRoot, 'windows/cmake', name);
+    } else if (name.endsWith('.cmake')) {
+      reference = name.startsWith('CitizenSDKTargets')
+        ? join(build, 'CMakeFiles/Export/fixture', name) : join(build, name);
+      bytes = configs[name];
+    } else {
+      const host = name.startsWith('citizensdk_host.');
+      reference = join(host ? join(build, 'Release') : core, name);
+      const header = join(citizenSdkRoot, host
+        ? 'windows/include/citizen_sdk/citizensdk_host.h' : 'include/citizensdk.h');
+      const names = [...new Set([...readFileSync(header, 'utf8')
+        .matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/gu)].map((m) => m[1]))].sort();
+      assert.equal(names.length, host ? 13 : 70);
+      if (name.endsWith('.dll')) {
+        bytes = windowsPeFixture(names, name);
+        exports.set(name, `Dump of file ${name}\n\n    ordinal hint RVA      name\n${names.map((symbol, index) =>
+          `          ${index + 1} ${index.toString(16)} ${(0x1000 + index).toString(16)} ${symbol}`).join('\n')}\n`);
+      } else {
+        bytes = windowsImportLibraryFixture(names, host ? 'citizensdk_host.dll' : 'citizensdk.dll');
+      }
+    }
+    if (bytes !== undefined) write(reference, bytes);
+    references.set(relative, reference);
+    write(join(prefix, relative), readFileSync(reference));
+  }
+  write(join(build, 'install_manifest.txt'), `${windowsInstallFixturePaths()
+    .map((relative) => join(prefix, relative)).join('\n')}\n`);
+  for (const [name, output] of exports) write(join(root, `${name}.exports`), output);
+  return { prefix, core, build, references, exports };
+}
+
+function linuxHostSymbols() {
+  const header = readFileSync(
+    join(citizenSdkRoot, 'linux/include/citizen_sdk/citizensdk_host.h'),
+    'utf8',
+  );
+  const symbols = [...new Set([...header.matchAll(
+    /\b(citizensdk_[a-z0-9_]+)\s*\(/g,
+  )].map((match) => match[1]))].sort();
+  assert.equal(symbols.length, 13);
+  return symbols;
+}
+
+function writeWindowsProjectionFixture(root, prefix) {
+  for (const directory of ['windows', 'include', 'assets']) {
+    cpSync(join(citizenSdkRoot, directory), join(root, directory), { recursive: true });
+  }
+  for (const file of ['pubspec.yaml', '.pubignore']) copyFileSync(join(citizenSdkRoot, file), join(root, file));
+  copyWindowsNativeArtifact(citizenSdkRoot, prefix, root);
+}
+
+// 这是供生产解析器读取的 ELF64 格式夹具，不是可执行运行库，也不构成
+// Linux 编译/TPM/消费者实测证据。段、节、动态表、符号表和版本链均写真实结构。
+function linuxElfFixture({
+  platform = 'LinuxARM',
+  host = false,
+  machine = platform === 'LinuxARM' ? 183 : 62,
+  soname = host ? 'libcitizensdk_host.so' : 'libcitizensdk.so',
+  needed = host ? ['libcitizensdk.so', 'libc.so.6'] : ['libc.so.6'],
+  runpath = host ? '$ORIGIN' : null,
+  rpath = null,
+  symbols = host ? linuxHostSymbols() : citizenSdkSymbols(),
+  versions = ['GLIBC_2.31'],
+} = {}) {
+  const align = (value, width = 8) => Math.ceil(value / width) * width;
+  const elfHash = (value) => {
+    let hash = 0;
+    for (const byte of Buffer.from(value)) {
+      hash = ((hash << 4) + byte) >>> 0;
+      const high = hash & 0xf0000000;
+      if (high) hash ^= high >>> 24;
+      hash = (hash & ~high) >>> 0;
+    }
+    return hash;
+  };
+  const strings = [''];
+  const offsets = new Map([['', 0]]);
+  let stringLength = 1;
+  const intern = (value) => {
+    if (!offsets.has(value)) {
+      offsets.set(value, stringLength);
+      strings.push(value);
+      stringLength += Buffer.byteLength(value) + 1;
+    }
+    return offsets.get(value);
+  };
+  for (const value of [soname, ...needed, ...symbols, ...versions, 'puts', 'libc.so.6']) intern(value);
+  if (runpath !== null) intern(runpath);
+  if (rpath !== null) intern(rpath);
+  const dynstr = Buffer.from(`${strings.join('\0')}\0`);
+  const count = symbols.length + 2;
+  const dynsym = Buffer.alloc(count * 24);
+  // 索引 0 保留为空；索引 1 是版本化的未定义 libc 符号，不混入公开导出集合。
+  dynsym.writeUInt32LE(intern('puts'), 24);
+  dynsym[28] = 0x12;
+  for (const [index, symbol] of symbols.entries()) {
+    const offset = (index + 2) * 24;
+    dynsym.writeUInt32LE(intern(symbol), offset);
+    dynsym[offset + 4] = 0x12;
+    dynsym.writeUInt16LE(1, offset + 6);
+    dynsym.writeBigUInt64LE(1n, offset + 16);
+  }
+  const hash = Buffer.alloc((3 + count) * 4);
+  hash.writeUInt32LE(1, 0);
+  hash.writeUInt32LE(count, 4);
+  hash.writeUInt32LE(1, 8);
+  for (let index = 1; index < count - 1; index += 1) hash.writeUInt32LE(index + 1, 12 + index * 4);
+  const versym = Buffer.alloc(count * 2);
+  for (let index = 1; index < count; index += 1) versym.writeUInt16LE(index === 1 ? 2 : 1, index * 2);
+  const verneed = Buffer.alloc(16 + versions.length * 16);
+  verneed.writeUInt16LE(1, 0);
+  verneed.writeUInt16LE(versions.length, 2);
+  verneed.writeUInt32LE(intern('libc.so.6'), 4);
+  verneed.writeUInt32LE(16, 8);
+  for (const [index, version] of versions.entries()) {
+    const offset = 16 + index * 16;
+    verneed.writeUInt32LE(elfHash(version), offset);
+    verneed.writeUInt16LE(index + 2, offset + 6);
+    verneed.writeUInt32LE(intern(version), offset + 8);
+    verneed.writeUInt32LE(index + 1 < versions.length ? 16 : 0, offset + 12);
+  }
+  const dynamicTags = [
+    [14, intern(soname)], ...needed.map((value) => [1, intern(value)]),
+    ...(rpath === null ? [] : [[15, intern(rpath)]]),
+    ...(runpath === null ? [] : [[29, intern(runpath)]]),
+    [5, 0], [10, dynstr.length], [6, 0], [11, 24], [4, 0],
+    [0x6ffffff0, 0], [0x6ffffffe, 0], [0x6fffffff, 1], [0, 0],
+  ];
+  const names = ['.text', '.dynstr', '.dynsym', '.hash', '.gnu.version', '.gnu.version_r', '.dynamic', '.shstrtab'];
+  const shstrtab = Buffer.from(`\0${names.join('\0')}\0`);
+  const sections = [
+    { name: '.text', type: 1, flags: 6, bytes: Buffer.from([0, 0, 0, 0]), alignment: 4 },
+    { name: '.dynstr', type: 3, flags: 2, bytes: dynstr, alignment: 1 },
+    { name: '.dynsym', type: 11, flags: 2, bytes: dynsym, alignment: 8, link: 2, info: 1, entry: 24 },
+    { name: '.hash', type: 5, flags: 2, bytes: hash, alignment: 4, link: 3, entry: 4 },
+    { name: '.gnu.version', type: 0x6fffffff, flags: 2, bytes: versym, alignment: 2, link: 3, entry: 2 },
+    { name: '.gnu.version_r', type: 0x6ffffffe, flags: 2, bytes: verneed, alignment: 4, link: 2, info: 1 },
+    { name: '.dynamic', type: 6, flags: 3, bytes: Buffer.alloc(dynamicTags.length * 16), alignment: 8, link: 2, entry: 16 },
+    { name: '.shstrtab', type: 3, flags: 0, bytes: shstrtab, alignment: 1 },
+  ];
+  let cursor = 64 + 2 * 56;
+  for (const section of sections) {
+    section.offset = align(cursor, section.alignment);
+    cursor = section.offset + section.bytes.length;
+  }
+  const sectionOffset = align(cursor);
+  const bytes = Buffer.alloc(sectionOffset + (sections.length + 1) * 64);
+  bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1, 1]);
+  bytes.writeUInt16LE(3, 16);
+  bytes.writeUInt16LE(machine, 18);
+  bytes.writeUInt32LE(1, 20);
+  bytes.writeBigUInt64LE(64n, 32);
+  bytes.writeBigUInt64LE(BigInt(sectionOffset), 40);
+  bytes.writeUInt16LE(64, 52);
+  bytes.writeUInt16LE(56, 54);
+  bytes.writeUInt16LE(2, 56);
+  bytes.writeUInt16LE(64, 58);
+  bytes.writeUInt16LE(sections.length + 1, 60);
+  bytes.writeUInt16LE(sections.length, 62);
+  const dynamic = sections[6];
+  const program = (offset, type, flags, fileOffset, size, alignment) => {
+    bytes.writeUInt32LE(type, offset);
+    bytes.writeUInt32LE(flags, offset + 4);
+    for (const field of [8, 16, 24]) bytes.writeBigUInt64LE(BigInt(fileOffset), offset + field);
+    for (const field of [32, 40]) bytes.writeBigUInt64LE(BigInt(size), offset + field);
+    bytes.writeBigUInt64LE(BigInt(alignment), offset + 48);
+  };
+  program(64, 1, 7, 0, bytes.length, 0x1000);
+  program(120, 2, 6, dynamic.offset, dynamic.bytes.length, 8);
+  const pointers = new Map([[5, 1], [6, 2], [4, 3], [0x6ffffff0, 4], [0x6ffffffe, 5]]);
+  for (const [index, [tag, value]] of dynamicTags.entries()) {
+    dynamic.bytes.writeBigInt64LE(BigInt(tag), index * 16);
+    dynamic.bytes.writeBigUInt64LE(BigInt(pointers.has(tag) ? sections[pointers.get(tag)].offset : value), index * 16 + 8);
+  }
+  for (let index = 2; index < count; index += 1) dynsym.writeBigUInt64LE(BigInt(sections[0].offset), index * 24 + 8);
+  for (const [index, section] of sections.entries()) {
+    section.bytes.copy(bytes, section.offset);
+    const offset = sectionOffset + (index + 1) * 64;
+    bytes.writeUInt32LE(shstrtab.indexOf(Buffer.from(`${section.name}\0`)), offset);
+    bytes.writeUInt32LE(section.type, offset + 4);
+    bytes.writeBigUInt64LE(BigInt(section.flags), offset + 8);
+    bytes.writeBigUInt64LE(BigInt(section.flags ? section.offset : 0), offset + 16);
+    bytes.writeBigUInt64LE(BigInt(section.offset), offset + 24);
+    bytes.writeBigUInt64LE(BigInt(section.bytes.length), offset + 32);
+    bytes.writeUInt32LE(section.link ?? 0, offset + 40);
+    bytes.writeUInt32LE(section.info ?? 0, offset + 44);
+    bytes.writeBigUInt64LE(BigInt(section.alignment), offset + 48);
+    bytes.writeBigUInt64LE(BigInt(section.entry ?? 0), offset + 56);
+  }
+  return bytes;
+}
+
+function writeLinuxInstallFixture(prefix, platform, options = {}) {
+  const version = options.version ?? '1.0.0';
+  const packageInit = [
+    'get_filename_component(PACKAGE_PREFIX_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../" ABSOLUTE)',
+    'macro(set_and_check _var _file)',
+    '  set(${_var} "${_file}")',
+    '  if(NOT EXISTS "${_file}")',
+    '    message(FATAL_ERROR "File or directory ${_file} referenced by variable ${_var} does not exist !")',
+    '  endif()',
+    'endmacro()',
+    'macro(check_required_components _NAME)',
+    '  foreach(comp ${${_NAME}_FIND_COMPONENTS})',
+    '    if(NOT ${_NAME}_${comp}_FOUND)',
+    '      if(${_NAME}_FIND_REQUIRED_${comp})',
+    '        set(${_NAME}_FOUND FALSE)',
+    '      endif()',
+    '    endif()',
+    '  endforeach()',
+    'endmacro()',
+  ].join('\n');
+  const config = readFileSync(join(citizenSdkRoot, 'linux/cmake/CitizenSDKConfig.cmake.in'), 'utf8')
+    .replaceAll('@PACKAGE_INIT@', packageInit)
+    .replaceAll('@CITIZENSDK_PLATFORM@', platform)
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_LIBDIR@', '${PACKAGE_PREFIX_DIR}/lib')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_DATADIR@', '${PACKAGE_PREFIX_DIR}/share')
+    .replaceAll('@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@', '${PACKAGE_PREFIX_DIR}/include');
+  const configVersion = readFileSync(join(citizenSdkRoot, 'linux/cmake/CitizenSDKConfigVersion.cmake.in'), 'utf8')
+    .replaceAll('@PROJECT_VERSION@', version)
+    .replaceAll('@PROJECT_VERSION_MAJOR@', version.split('.')[0]);
+  // 以下指令来自本机官方 CMake 4.2.3 configure/export 的完整输出；只省略
+  // 生成器注释与空行，不省略任何保护、路径推导、目标属性或导入文件检查。
+  const targets = [
+    'if("${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}" LESS 2.8)',
+    '   message(FATAL_ERROR "CMake >= 2.8.12 required")',
+    'endif()',
+    'if(CMAKE_VERSION VERSION_LESS "2.8.12")',
+    '   message(FATAL_ERROR "CMake >= 2.8.12 required")',
+    'endif()',
+    'cmake_policy(PUSH)',
+    'cmake_policy(VERSION 2.8.12...4.0)',
+    'set(CMAKE_IMPORT_FILE_VERSION 1)',
+    'set(_cmake_targets_defined "")',
+    'set(_cmake_targets_not_defined "")',
+    'set(_cmake_expected_targets "")',
+    'foreach(_cmake_expected_target IN ITEMS CitizenSDK::Host)',
+    '  list(APPEND _cmake_expected_targets "${_cmake_expected_target}")',
+    '  if(TARGET "${_cmake_expected_target}")',
+    '    list(APPEND _cmake_targets_defined "${_cmake_expected_target}")',
+    '  else()',
+    '    list(APPEND _cmake_targets_not_defined "${_cmake_expected_target}")',
+    '  endif()',
+    'endforeach()',
+    'unset(_cmake_expected_target)',
+    'if(_cmake_targets_defined STREQUAL _cmake_expected_targets)',
+    '  unset(_cmake_targets_defined)',
+    '  unset(_cmake_targets_not_defined)',
+    '  unset(_cmake_expected_targets)',
+    '  unset(CMAKE_IMPORT_FILE_VERSION)',
+    '  cmake_policy(POP)',
+    '  return()',
+    'endif()',
+    'if(NOT _cmake_targets_defined STREQUAL "")',
+    '  string(REPLACE ";" ", " _cmake_targets_defined_text "${_cmake_targets_defined}")',
+    '  string(REPLACE ";" ", " _cmake_targets_not_defined_text "${_cmake_targets_not_defined}")',
+    '  message(FATAL_ERROR "Some (but not all) targets in this export set were already defined.\\nTargets Defined: ${_cmake_targets_defined_text}\\nTargets not yet defined: ${_cmake_targets_not_defined_text}\\n")',
+    'endif()',
+    'unset(_cmake_targets_defined)',
+    'unset(_cmake_targets_not_defined)',
+    'unset(_cmake_expected_targets)',
+    'get_filename_component(_IMPORT_PREFIX "${CMAKE_CURRENT_LIST_FILE}" PATH)',
+    'get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)',
+    'get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)',
+    'get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)',
+    'get_filename_component(_IMPORT_PREFIX "${_IMPORT_PREFIX}" PATH)',
+    'if(_IMPORT_PREFIX STREQUAL "/")',
+    '  set(_IMPORT_PREFIX "")',
+    'endif()',
+    'add_library(CitizenSDK::Host SHARED IMPORTED)',
+    'set_target_properties(CitizenSDK::Host PROPERTIES',
+    '  INTERFACE_COMPILE_FEATURES "cxx_std_17"',
+    '  INTERFACE_INCLUDE_DIRECTORIES "${_IMPORT_PREFIX}/include"',
+    '  INTERFACE_LINK_LIBRARIES "CitizenSDK::Core"',
+    ')',
+    'file(GLOB _cmake_config_files "${CMAKE_CURRENT_LIST_DIR}/CitizenSDKTargets-*.cmake")',
+    'foreach(_cmake_config_file IN LISTS _cmake_config_files)',
+    '  include("${_cmake_config_file}")',
+    'endforeach()',
+    'unset(_cmake_config_file)',
+    'unset(_cmake_config_files)',
+    'set(_IMPORT_PREFIX)',
+    'foreach(_cmake_target IN LISTS _cmake_import_check_targets)',
+    '  if(CMAKE_VERSION VERSION_LESS "3.28"',
+    '      OR NOT DEFINED _cmake_import_check_xcframework_for_${_cmake_target}',
+    '      OR NOT IS_DIRECTORY "${_cmake_import_check_xcframework_for_${_cmake_target}}")',
+    '    foreach(_cmake_file IN LISTS "_cmake_import_check_files_for_${_cmake_target}")',
+    '      if(NOT EXISTS "${_cmake_file}")',
+    '        message(FATAL_ERROR "The imported target \\"${_cmake_target}\\" references the file',
+    '   \\"${_cmake_file}\\"',
+    'but this file does not exist.  Possible reasons include:',
+    '* The file was deleted, renamed, or moved to another location.',
+    '* An install or uninstall procedure did not complete successfully.',
+    '* The installation package was faulty and contained',
+    '   \\"${CMAKE_CURRENT_LIST_FILE}\\"',
+    'but not all the files it references.',
+    '")',
+    '      endif()',
+    '    endforeach()',
+    '  endif()',
+    '  unset(_cmake_file)',
+    '  unset("_cmake_import_check_files_for_${_cmake_target}")',
+    'endforeach()',
+    'unset(_cmake_target)',
+    'unset(_cmake_import_check_targets)',
+    'set(CMAKE_IMPORT_FILE_VERSION)',
+    'cmake_policy(POP)', '',
+  ].join('\n');
+  const releaseTargets = [
+    'set(CMAKE_IMPORT_FILE_VERSION 1)',
+    'set_property(TARGET CitizenSDK::Host APPEND PROPERTY IMPORTED_CONFIGURATIONS RELEASE)',
+    'set_target_properties(CitizenSDK::Host PROPERTIES',
+    `  IMPORTED_LOCATION_RELEASE "\${_IMPORT_PREFIX}/lib/${platform}/libcitizensdk_host.so"`,
+    '  IMPORTED_SONAME_RELEASE "libcitizensdk_host.so"',
+    '  )',
+    'list(APPEND _cmake_import_check_targets CitizenSDK::Host )',
+    `list(APPEND _cmake_import_check_files_for_CitizenSDK::Host "\${_IMPORT_PREFIX}/lib/${platform}/libcitizensdk_host.so" )`,
+    'set(CMAKE_IMPORT_FILE_VERSION)', '',
+  ].join('\n');
+  const generated = {
+    'CitizenSDKConfig.cmake': config,
+    'CitizenSDKConfigVersion.cmake': configVersion,
+    'CitizenSDKTargets.cmake': targets,
+    'CitizenSDKTargets-release.cmake': releaseTargets,
+  };
+  if (options.cmakeOnly) return { packageInit, targets };
+  for (const relative of linuxInstallFixturePaths(platform)) {
+    let bytes;
+    if (relative.startsWith('include/citizen_sdk/')) {
+      bytes = readFileSync(join(citizenSdkRoot, 'linux', relative));
+    } else if (relative.startsWith('include/')) {
+      bytes = readFileSync(join(citizenSdkRoot, relative));
+    } else if (relative.startsWith('share/')) {
+      bytes = readFileSync(join(citizenSdkRoot, 'assets/citizenchain', basename(relative)));
+    } else if (relative.endsWith('/CitizenSDKDependencies.cmake')) {
+      bytes = readFileSync(join(citizenSdkRoot, 'linux/cmake', basename(relative)));
+    } else if (relative.endsWith('/libcitizensdk.so')) {
+      bytes = linuxElfFixture({ platform, ...options.core });
+    } else if (relative.endsWith('/libcitizensdk_host.so')) {
+      bytes = linuxElfFixture({ platform, host: true, ...options.host });
+    } else {
+      bytes = Buffer.from(generated[basename(relative)]);
+    }
+    const destination = join(prefix, relative);
+    mkdirSync(dirname(destination), { recursive: true });
+    // 两平台共享的七个 Host 头、两个 Core 头和三个链资产只能原字节合并。
+    if (existsSync(destination)) assert.deepEqual(readFileSync(destination), bytes);
+    else writeFileSync(destination, bytes);
+  }
+}
+
+function writeLinuxProjectionFixture(root) {
+  cpSync(join(citizenSdkRoot, 'linux'), join(root, 'linux'), { recursive: true });
+  for (const relative of [
+    'pubspec.yaml', '.pubignore', 'include/citizensdk.h', 'include/citizensdk_types.h',
+    ...chainAssetPaths,
+  ]) {
+    const destination = join(root, relative);
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(join(citizenSdkRoot, relative), destination);
+  }
+  for (const platform of linuxPlatforms) writeLinuxInstallFixture(join(root, 'linux'), platform);
+}
+
 const chainAssetPaths = [
   'assets/README.md',
   'assets/citizenchain/README.md',
@@ -180,6 +901,58 @@ function archivedSymlinks(gzipBytes) {
     offset += 512 + Math.ceil(size / 512) * 512;
   }
   return links;
+}
+
+// 独立编码 GNU tar 格式夹具，不调用生产归档器生成自己的预期结果。
+// 跨平台运行件仍复用既有格式夹具；这些字节不代表真实平台构建。
+function hostedTarHeader(path, { type = '0', mode = 0o644, size = 0, link = '' } = {}) {
+  const header = Buffer.alloc(512);
+  Buffer.from(path).copy(header, 0, 0, 99);
+  const octal = (value, offset, length) => {
+    header.write(`${value.toString(8).padStart(length - 1, '0')}\0`, offset, length, 'ascii');
+  };
+  octal(mode, 100, 8);
+  octal(0, 108, 8);
+  octal(0, 116, 8);
+  octal(size, 124, 12);
+  octal(0, 136, 12);
+  header[156] = type.charCodeAt(0);
+  Buffer.from(link).copy(header, 157, 0, 100);
+  header.write('ustar\0', 257, 'ascii');
+  header.write('0 ', 263, 'ascii');
+  return hostedTarChecksum(header);
+}
+
+function hostedTarChecksum(header) {
+  header.fill(0x20, 148, 156);
+  const checksum = header.reduce((sum, byte) => sum + byte, 0);
+  header.write(`${checksum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'ascii');
+  return header;
+}
+
+function hostedTarEntry(path, { data = Buffer.alloc(0), type = '0', mode = 0o644, ...options } = {}) {
+  const bytes = Buffer.from(data);
+  return Buffer.concat([
+    hostedTarHeader(path, { type, mode, size: bytes.length, ...options }),
+    bytes,
+    Buffer.alloc((512 - (bytes.length % 512)) % 512),
+  ]);
+}
+
+function hostedTar(entries, { trailer = Buffer.alloc(1024) } = {}) {
+  const blocks = [];
+  for (const [path, entry] of entries) {
+    // 固定 Pub 所用 tar 的 GNU 长名称正文无终止 NUL，随后是普通条目。
+    if (Buffer.byteLength(path) > 99) {
+      blocks.push(hostedTarEntry('././@LongLink', { type: 'L', mode: 0, data: Buffer.from(path) }));
+    }
+    blocks.push(hostedTarEntry(path, {
+      data: entry.data,
+      type: entry.type === 'directory' ? '5' : '0',
+      mode: entry.mode,
+    }));
+  }
+  return Buffer.concat([...blocks, trailer]);
 }
 
 function machOVersion(version) {
@@ -486,7 +1259,243 @@ function androidAarFixture(core, jni, {
   });
 }
 
-function writeNativeFixture(root) {
+
+// 第10.5步：只用于格式/拒绝测试的固定合同金标，绝非另一套生产来源入口。
+const dependencyContractFixture = {
+  "schema": 1,
+  "sources": {
+    "sqlite": {
+      "version": "3.53.4",
+      "url": "https://www.sqlite.org/2026/sqlite-amalgamation-3530400.zip",
+      "size": 2946650,
+      "sha256": "1e71ddf93849c6a6ecf58b827c0692073d2dd7ee40196158068f7b29f422e87d",
+      "sha3_256": "628a44cfe82c66aed1ccbbe85a562d2e33ebe64b3288981ed76285612227934e",
+      "archive_root": "sqlite-amalgamation-3530400"
+    },
+    "openssl": {
+      "version": "3.5.8",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.8/openssl-3.5.8.tar.gz",
+      "size": 53213818,
+      "sha256": "a8f84a39918ec6415ce765d9b429d313ba97b8143169c172e734b9514464f5b2",
+      "archive_root": "openssl-3.5.8",
+      "license": "LICENSE.txt",
+      "license_sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+    },
+    "tpm2-tss": {
+      "version": "4.2.0",
+      "url": "https://github.com/tpm2-software/tpm2-tss/releases/download/4.2.0/tpm2-tss-4.2.0.tar.gz",
+      "size": 2023505,
+      "sha256": "b53f0c5c8c4ce17f05701a410ca9688f725ca380c9bc4640eacd0eadb1fea124",
+      "archive_root": "tpm2-tss-4.2.0",
+      "license": "LICENSE",
+      "license_sha256": "18c1bf4b1ba1fb2c4ffa7398c234d83c0d55475298e470ae1e5e3a8a8bd2e448"
+    }
+  },
+  "sqlite_defines": [
+    "SQLITE_THREADSAFE=1"
+  ],
+  "openssl_options": [
+    "no-shared",
+    "no-module",
+    "no-dso",
+    "no-tests",
+    "-fPIC"
+  ],
+  "tss2_options": [
+    "--enable-option-checking=fatal",
+    "--disable-shared",
+    "--enable-static",
+    "--with-pic",
+    "--with-crypto=ossl",
+    "--disable-fapi",
+    "--disable-policy",
+    "--enable-esys",
+    "--enable-util-io",
+    "--enable-tcti-device",
+    "--disable-tcti-mssim",
+    "--disable-tcti-swtpm",
+    "--disable-tcti-pcap",
+    "--disable-tcti-null",
+    "--disable-tcti-libtpms",
+    "--disable-tcti-cmd",
+    "--disable-tcti-spi-helper",
+    "--disable-tcti-spi-ltt2go",
+    "--disable-tcti-spidev",
+    "--disable-tcti-spi-ftdi",
+    "--disable-tcti-i2c-helper",
+    "--disable-tcti-i2c-ftdi",
+    "--disable-tcti-fuzzing",
+    "--enable-nodl",
+    "--disable-unit",
+    "--disable-integration",
+    "--disable-log-file",
+    "--with-maxloglevel=none",
+    "--with-sysusersdir=no",
+    "--with-tmpfilesdir=no",
+    "--disable-doxygen-doc",
+    "--disable-doxygen-man",
+    "--disable-doxygen-html"
+  ],
+  "platforms": {
+    "LinuxARM": {
+      "target": "aarch64-unknown-linux-gnu",
+      "machine": 183,
+      "openssl_target": "linux-aarch64",
+      "glibc": "2.31"
+    },
+    "LinuxAMD": {
+      "target": "x86_64-unknown-linux-gnu",
+      "machine": 62,
+      "openssl_target": "linux-x86_64",
+      "glibc": "2.31"
+    },
+    "Windows": {
+      "target": "x86_64-pc-windows-msvc",
+      "machine": 34404,
+      "msvc_runtime": "/MD"
+    }
+  }
+};
+const opensslHeaderFixture = ["aes.h","asn1.h","asn1err.h","asn1t.h","async.h","asyncerr.h","bio.h","bioerr.h","blowfish.h","bn.h","bnerr.h","buffer.h","buffererr.h","byteorder.h","camellia.h","cast.h","cmac.h","cmp.h","cmp_util.h","cmperr.h","cms.h","cmserr.h","comp.h","comperr.h","conf.h","conf_api.h","conferr.h","configuration.h","conftypes.h","core.h","core_dispatch.h","core_names.h","core_object.h","crmf.h","crmferr.h","crypto.h","cryptoerr.h","cryptoerr_legacy.h","ct.h","cterr.h","decoder.h","decodererr.h","des.h","dh.h","dherr.h","dsa.h","dsaerr.h","dtls1.h","e_os2.h","e_ostime.h","ebcdic.h","ec.h","ecdh.h","ecdsa.h","ecerr.h","encoder.h","encodererr.h","engine.h","engineerr.h","err.h","ess.h","esserr.h","evp.h","evperr.h","fips_names.h","fipskey.h","hmac.h","hpke.h","http.h","httperr.h","idea.h","indicator.h","kdf.h","kdferr.h","lhash.h","macros.h","md2.h","md4.h","md5.h","mdc2.h","ml_kem.h","modes.h","obj_mac.h","objects.h","objectserr.h","ocsp.h","ocsperr.h","opensslconf.h","opensslv.h","ossl_typ.h","param_build.h","params.h","pem.h","pem2.h","pemerr.h","pkcs12.h","pkcs12err.h","pkcs7.h","pkcs7err.h","prov_ssl.h","proverr.h","provider.h","quic.h","rand.h","randerr.h","rc2.h","rc4.h","rc5.h","ripemd.h","rsa.h","rsaerr.h","safestack.h","seed.h","self_test.h","sha.h","srp.h","srtp.h","ssl.h","ssl2.h","ssl3.h","sslerr.h","sslerr_legacy.h","stack.h","store.h","storeerr.h","symhacks.h","thread.h","tls1.h","trace.h","ts.h","tserr.h","txt_db.h","types.h","ui.h","uierr.h","whrlpool.h","x509.h","x509_acert.h","x509_vfy.h","x509err.h","x509v3.h","x509v3err.h"];
+const dependencyFixtureHash = (bytes) => createHash('sha256').update(bytes).digest('hex');
+function dependencyArchiveFixture(platform) {
+  const object = Buffer.alloc(platform === 'Windows' ? 60 : 128);
+  if (platform === 'Windows') { object.writeUInt16LE(0x8664); object.writeUInt16LE(1, 2); }
+  else {
+    object.set([127, 69, 76, 70, 2, 1, 1]);
+    object.writeUInt16LE(1, 16); object.writeUInt16LE(platform === 'LinuxARM' ? 183 : 62, 18);
+    object.writeBigUInt64LE(64n, 40); object.writeUInt16LE(64, 52);
+    object.writeUInt16LE(64, 58); object.writeUInt16LE(1, 60);
+  }
+  const header = 'fixture.o/'.padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6)
+    + '100644'.padEnd(8) + String(object.length).padEnd(10) + '\x60\n';
+  return Buffer.concat([Buffer.from('!<arch>\n' + header), object]);
+}
+function dependencyInputsFixture(root, platform) {
+  const files = { 'include/sqlite3.h': Buffer.from('format-only SQLite header') };
+  const archives = platform === 'Windows' ? ['sqlite3.lib'] : ['libsqlite3.a', 'libcrypto.a',
+    ...['esys', 'sys', 'mu', 'rc', 'tcti-device'].map((name) => 'libtss2-' + name + '.a')];
+  for (const name of archives) files['lib/' + name] = dependencyArchiveFixture(platform);
+  if (platform !== 'Windows') {
+    for (const name of opensslHeaderFixture) files['include/openssl/' + name] = Buffer.from('format-only OpenSSL header');
+    for (const name of ['common', 'esys', 'mu', 'rc', 'sys', 'tcti', 'tcti_device', 'tpm2_types'])
+      files['include/tss2/tss2_' + name + '.h'] = Buffer.from('format-only TSS header');
+  }
+  for (const [path, bytes] of Object.entries(files)) {
+    mkdirSync(dirname(join(root, path)), { recursive: true });
+    writeFileSync(join(root, path), bytes);
+  }
+  const tools = platform === 'Windows' ? ['cl', 'lib', 'tar'] : ['cc', 'ar', 'perl', 'make', 'sh', 'pkg-config', 'tar', 'unzip'];
+  const receipt = { schema: 1, platform, source_sha: '0'.repeat(40), software_version: '1.0.0', build_mode: 'ci',
+    native_dependencies: structuredClone(dependencyContractFixture),
+    build_tools: tools.map((name) => ({ name, sha256: dependencyFixtureHash(Buffer.from('fake-tool-' + name)),
+      ...(name === 'cc' ? { target: platform === 'LinuxARM' ? 'aarch64-linux-gnu' : 'x86_64-linux-gnu' } : {}) })),
+    files: Object.keys(files).sort().map((path) => ({ path, sha256: dependencyFixtureHash(files[path]) })) };
+  const path = join(root, 'native-dependencies.json');
+  writeFileSync(path, JSON.stringify(receipt));
+  return { receipt, path };
+}
+
+test('第10.5步固定官方版本来源及摘要不能混用', () => {
+  assert.doesNotThrow(() => assertCitizenSdkNativeContract(dependencyContractFixture));
+  for (const edit of [
+    (c) => { c.sources.sqlite.version = '3.53.3'; },
+    (c) => { c.sources.sqlite.sha3_256 = c.sources.sqlite.sha256; },
+    (c) => { c.sources.openssl.url = 'https://example.invalid/openssl.tar.gz'; },
+    (c) => { c.sources['tpm2-tss'].license_sha256 = '0'.repeat(64); },
+    (c) => { c.platforms.Windows.msvc_runtime = '/MT'; },
+    (c) => { c.openssl_options.push('-static'); },
+  ]) {
+    const changed = structuredClone(dependencyContractFixture); edit(changed);
+    assert.throws(() => assertCitizenSdkNativeContract(changed), /固定来源/);
+  }
+});
+
+test('第10.5步静态归档逐成员拒绝错误架构薄归档及动态输入', () => {
+  for (const platform of ['LinuxARM', 'LinuxAMD', 'Windows']) {
+    const bytes = dependencyArchiveFixture(platform);
+    assert.doesNotThrow(() => assertCitizenSdkStaticArchive(bytes, platform));
+    const malformed = Buffer.from(bytes);
+    if (platform === 'Windows') malformed.writeUInt16LE(99, 68 + 2);
+    else malformed.writeBigUInt64LE(999999n, 68 + 40);
+    assert.throws(() => assertCitizenSdkStaticArchive(malformed, platform), /section table/);
+    for (const other of ['LinuxARM', 'LinuxAMD', 'Windows'].filter((x) => x !== platform))
+      assert.throws(() => assertCitizenSdkStaticArchive(bytes, other), /静态|对象/);
+    for (const bad of [Buffer.from('!<thin>\n'), bytes.subarray(0, -1),
+      Buffer.from('dynamic shared library'), Buffer.from('!<arch>\n')])
+      assert.throws(() => assertCitizenSdkStaticArchive(bad, platform), /静态依赖/);
+  }
+});
+
+test('第10.5步准备输入拒绝缺件额外头篡改收据及路径链接', () => {
+  const root = mkdtempSync(join(workRoot, 'static-input-test-'));
+  try {
+    for (const platform of ['LinuxARM', 'LinuxAMD', 'Windows']) {
+      const prefix = join(root, platform), fixture = dependencyInputsFixture(prefix, platform);
+      assert.doesNotThrow(() => assertCitizenSdkDependencyInputs(fixture.path, platform));
+      const env = citizenSdkDependencyEnvironment(fixture.path, platform);
+      assert.equal(Object.keys(env).length, platform === 'Windows' ? 2 : 10);
+      const file = join(prefix, 'include/sqlite3.h'), bytes = readFileSync(file);
+      writeFileSync(file, 'tampered');
+      assert.throws(() => assertCitizenSdkDependencyInputs(fixture.path, platform), /摘要不符/);
+      writeFileSync(file, bytes);
+      writeFileSync(join(prefix, 'include/extra.h'), 'extra');
+      assert.throws(() => assertCitizenSdkDependencyInputs(fixture.path, platform), /未登记文件/);
+      unlinkSync(join(prefix, 'include/extra.h'));
+      unlinkSync(file);
+      assert.throws(() => assertCitizenSdkDependencyInputs(fixture.path, platform), /未登记文件/);
+      writeFileSync(file, bytes);
+      const original = readFileSync(fixture.path);
+      fixture.receipt.platform = platform === 'Windows' ? 'LinuxAMD' : 'Windows';
+      writeFileSync(fixture.path, JSON.stringify(fixture.receipt));
+      assert.throws(() => assertCitizenSdkDependencyInputs(fixture.path, platform), /身份|平台/);
+      writeFileSync(fixture.path, original);
+      unlinkSync(file); symlinkSync(fixture.path, file);
+      assert.throws(() => assertCitizenSdkDependencyInputs(fixture.path, platform), /链接|symlink/i);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('第10.5步链接证据绑定真实输出版本提交和法律材料', () => {
+  const root = mkdtempSync(join(workRoot, 'static-linked-test-'));
+  try {
+    const native = writeNativeFixture(root);
+    for (const platform of ['LinuxARM', 'LinuxAMD', 'Windows']) {
+      const path = join(native, 'dependencies', platform + '.json');
+      const evidence = JSON.parse(readFileSync(path));
+      const verify = (value) => assertCitizenSdkDependencyEvidence(value, platform, native, 'native',
+        citizenSdkRoot, '0'.repeat(40), '1.0.0');
+      assert.doesNotThrow(() => verify(evidence));
+      for (const edit of [
+        (e) => { e.dependency_inputs.source_sha = '1'.repeat(40); },
+        (e) => { e.dependency_inputs.software_version = '1.0.1'; },
+        (e) => { e.linked_artifacts[0].sha256 = '1'.repeat(64); },
+        (e) => { e.files[0].sha256 = '1'.repeat(64); },
+        (e) => { e.files.pop(); },
+      ]) { const changed = structuredClone(evidence); edit(changed); assert.throws(() => verify(changed), /静态依赖/); }
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('第10.5步缺少或混版证据在创建候选目录之前失败', () => {
+  const root = mkdtempSync(join(workRoot, 'static-candidate-preflight-'));
+  try {
+    const native = writeNativeFixture(root), output = join(root, 'candidate');
+    const path = join(native, 'dependencies/Windows.json'), original = readFileSync(path);
+    unlinkSync(path);
+    const build = () => buildCitizenSdkRelease({ sourcePath: citizenSdkRoot, nativePath: native,
+      outputPath: output, archivePath: join(root, 'citizensdk.tgz'), gitCommitSha: '0'.repeat(40), softwareVersion: '1.0.0' });
+    assert.throws(build, /证据平台闭集/);
+    assert.equal(existsSync(output), false);
+    const changed = JSON.parse(original); changed.dependency_inputs.build_mode = 'release';
+    writeFileSync(path, JSON.stringify(changed));
+    assert.throws(build, /混用了 CI 与 Release/);
+    assert.equal(existsSync(output), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+
+function writeNativeFixture(root, { appleNative = null } = {}) {
   const native = join(root, 'native-output');
   const core = Buffer.from('android-core');
   const jni = Buffer.from('android-jni');
@@ -508,7 +1517,29 @@ function writeNativeFixture(root) {
     mkdirSync(dirname(destination), { recursive: true });
     writeFileSync(destination, value);
   }
-  writeAppleXcframework(join(native, 'apple', 'CitizenSDK.xcframework'));
+  const apple = join(native, 'apple', 'CitizenSDK.xcframework');
+  if (appleNative === null) {
+    writeAppleXcframework(apple);
+  } else {
+    // 只在显式真实 macOS 安装验收中换入本轮 Apple 产物；其它平台继续标为
+    // 格式夹具，生产发布器没有跳过验证或用夹具替代正式运行件的开关。
+    assert.equal(lstatSync(appleNative).isSymbolicLink(), false);
+    assert.equal(lstatSync(appleNative).isDirectory(), true);
+    cpSync(appleNative, apple, {
+      recursive: true, dereference: false, verbatimSymlinks: true,
+      force: false, errorOnExist: true,
+    });
+  }
+  for (const platform of linuxPlatforms) {
+    writeLinuxInstallFixture(join(native, 'linux', platform), platform);
+  }
+  const windows = windowsInstallFixture(join(root, 'windows-input'));
+  cpSync(windows.prefix, join(native, 'Windows'), { recursive: true });
+  for (const platform of ['LinuxARM', 'LinuxAMD', 'Windows']) {
+    const inputs = dependencyInputsFixture(join(root, 'dependency-inputs', platform), platform);
+    writeCitizenSdkDependencyEvidence({ receiptPath: inputs.path, platform, nativePath: native,
+      sourcePath: citizenSdkRoot, sourceSha: '0'.repeat(40) });
+  }
   return native;
 }
 
@@ -873,6 +1904,62 @@ test('Release 原生产物只允许版本化 macOS framework 五链接并拒绝�
       () => assertNativeArtifactSources(danglingNative),
       /原生产物路径禁止符号链接：apple\/CitizenSDK\.xcframework/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux 原生产物输入逐平台封闭 19 项，合并不得覆盖共享字节漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-native-input-test-'));
+  try {
+    const native = writeNativeFixture(root);
+    const input = assertNativeArtifactSources(native);
+    assert.deepEqual(input.linux, Object.fromEntries(linuxPlatforms.map((platform) => [
+      platform, join(native, 'linux', platform),
+    ])));
+    const prefix = join(native, 'linux/LinuxAMD');
+    const library = join(prefix, 'lib/LinuxAMD/libcitizensdk_host.so');
+    const original = readFileSync(library);
+    rmSync(library);
+    assert.throws(() => assertNativeArtifactSources(native), /Linux/u);
+    writeFileSync(library, original);
+
+    const extra = join(prefix, 'unregistered');
+    writeFileSync(extra, 'unregistered');
+    assert.throws(() => assertNativeArtifactSources(native), /Linux/u);
+    rmSync(extra);
+    mkdirSync(extra);
+    assert.throws(() => assertNativeArtifactSources(native), /Linux/u);
+    rmSync(extra, { recursive: true });
+    rmSync(library);
+    symlinkSync('../../../LinuxARM/lib/LinuxARM/libcitizensdk_host.so', library);
+    assert.throws(() => assertNativeArtifactSources(native), /符号链接/u);
+    rmSync(library);
+    writeFileSync(library, original);
+
+    // 完整打包入口必须在共享项漂移时失败，不能由后复制的平台悄悄覆盖。
+    for (const [index, relative] of [
+      'include/citizensdk.h',
+      'include/citizen_sdk/citizen_sdk.hpp',
+      'share/citizensdk/citizenchain/manifest.json',
+    ].entries()) {
+      const path = join(prefix, relative);
+      const bytes = readFileSync(path);
+      try {
+        writeFileSync(path, Buffer.concat([bytes, Buffer.from('\n')]));
+        assert.throws(() => buildCitizenSdkRelease({
+          sourcePath: citizenSdkRoot,
+          nativePath: native,
+          outputPath: join(root, `candidate-${index}`),
+          archivePath: join(root, `candidate-${index}.tgz`),
+          gitCommitSha: '0'.repeat(40),
+          softwareVersion: '1.0.0',
+        }), /Linux/u);
+      } finally {
+        writeFileSync(path, bytes);
+      }
+    }
+    assert.doesNotThrow(() => assertNativeArtifactSources(native));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -1575,7 +2662,872 @@ test('Dart、Android 与 Apple 生产绑定以固定哈希和反向闭集进入 
   }
 });
 
-test('Linux Host 源码固定哈希、目录拓扑且不提前接纳生成状态', () => {
+test('Windows 原生来源闭集拒绝改字节、额外文件、链接和生成目录', () => {
+  const root = mkdtempSync(join(workRoot, 'release-windows-source-test-'));
+  try {
+    cpSync(join(citizenSdkRoot, 'windows'), join(root, 'windows'), { recursive: true });
+    assert.equal(assertWindowsBindingSource(root), '1.0.0');
+    const source = join(root, 'windows/src/citizen_sdk_assets.cc');
+    const original = readFileSync(source);
+    writeFileSync(source, Buffer.concat([original, Buffer.from('\n')]));
+    assert.throws(() => assertWindowsBindingSource(root), /Windows Host 来源文件哈希漂移/u);
+    writeFileSync(source, original);
+    for (const name of ['unexpected.cc', 'citizensdk.dll', 'citizensdk_host.lib']) {
+      const extra = join(root, 'windows', name);
+      writeFileSync(extra, 'fixture');
+      assert.throws(() => assertWindowsBindingSource(root), /Windows Host 文件闭集漂移/u);
+      rmSync(extra);
+    }
+    const linked = join(root, 'windows/src/linked.cc');
+    symlinkSync('citizen_sdk_assets.cc', linked);
+    assert.throws(() => assertWindowsBindingSource(root), /禁止未声明符号链接/u);
+    rmSync(linked);
+    const generated = join(root, 'windows/CMakeFiles');
+    mkdirSync(generated);
+    assert.throws(() => assertWindowsBindingSource(root), /Windows Host 目录闭集漂移/u);
+    rmSync(generated, { recursive: true });
+    const missing = join(root, 'windows/src/citizen_sdk_lifecycle.hpp');
+    rmSync(missing);
+    assert.throws(() => assertWindowsBindingSource(root), /Windows Host 文件闭集漂移/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 薄 Host 与正式 Flutter 适配保持唯一 Core 和官方注册', () => {
+  const header = readFileSync(join(citizenSdkRoot, 'windows/include/citizen_sdk/citizensdk_host.h'), 'utf8');
+  const exported = readFileSync(join(citizenSdkRoot, 'windows/cmake/citizensdk_host.def'), 'utf8')
+    .split(/\r?\n/u).map((line) => line.trim()).filter((line) => line && line !== 'EXPORTS' && !line.startsWith('LIBRARY ')).sort();
+  const functions = [...new Set([...header.matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/gu)].map((m) => m[1]))].sort();
+  assert.equal(exported.length, 13);
+  assert.deepEqual(exported, functions);
+  assert.equal(citizenSdkSymbols().length, 70);
+  assert.match(header, /void \*hwnd;/u);
+  assert.doesNotMatch(header, /gtk_parent|private_key|plaintext_dek|mnemonic_utf8/u);
+  const cmake = readFileSync(join(citizenSdkRoot, 'windows/CMakeLists.txt'), 'utf8');
+  assert.match(cmake, /NOT WIN32 OR NOT MSVC/u);
+  assert.match(cmake, /CitizenSDK::Core/u);
+  assert.doesNotMatch(cmake, /find_package\(Flutter|Software KSP|tss2/u);
+  assert.match(cmake, /if\(TARGET flutter\)\s+include\(cmake\/CitizenSDKFlutter\.cmake\)\s+return\(\)/u);
+  assert.match(cmake, /PATTERN "citizen_sdk_plugin\.h" EXCLUDE/u);
+  const adapter = readFileSync(join(citizenSdkRoot, 'windows/cmake/CitizenSDKFlutter.cmake'), 'utf8');
+  assert.match(adapter, /find_package\(CitizenSDK \$\{PROJECT_VERSION\} EXACT CONFIG REQUIRED/u);
+  assert.match(adapter, /NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH/u);
+  assert.match(adapter, /IMPORTED_\$\{_property\}_\$\{_upper\}/u);
+  assert.match(adapter, /INTERFACE_INCLUDE_DIRECTORIES/u);
+  assert.match(adapter, /INTERFACE_LINK_LIBRARIES/u);
+  assert.match(adapter, /target_compile_definitions\(\$\{target\} PRIVATE/u);
+  assert.match(adapter, /_HAS_EXCEPTIONS=1 FLUTTER_PLUGIN_IMPL/u);
+  assert.match(adapter, /flutter flutter_wrapper_plugin CitizenSDK::Host/u);
+  assert.doesNotMatch(adapter, /apply_standard_settings\(|add_subdirectory\([^\n]*(?:native|src)|FetchContent|ExternalProject/u);
+  const contractCmake = readFileSync(join(citizenSdkRoot, 'windows/test/CMakeLists.txt'), 'utf8');
+  const adapterTests = contractCmake.match(/set\(CITIZENSDK_WINDOWS_FLUTTER_CONTRACT_TESTS([\s\S]*?)\)/u)?.[1].trim().split(/\s+/u);
+  assert.deepEqual(adapterTests, [
+    'citizen_sdk_flutter_codec_test', 'citizen_sdk_flutter_environment_test',
+    'citizen_sdk_flutter_sessions_test', 'citizen_sdk_flutter_wallet_flow_test',
+    'citizen_sdk_flutter_plugin_test', 'citizen_sdk_flutter_secret_boundary_test',
+  ]);
+  assert.match(contractCmake, /target_compile_options\(\$\{test_name\} PRIVATE \/UNDEBUG\)/u);
+  assert.match(contractCmake, /target_link_libraries\(citizensdk_windows_flutter_test_support PUBLIC advapi32\)/u);
+  assert.ok(contractCmake.indexOf('return()') < contractCmake.indexOf('set(_host_sources)'));
+  const plugin = readFileSync(join(citizenSdkRoot, 'windows/src/citizen_sdk_plugin.cc'), 'utf8');
+  assert.equal([...plugin.matchAll(/decode_method_call\(message, size\)/gu)].length, 2);
+  assert.doesNotMatch(plugin, /DecodeMethodCall\(/u);
+  const codec = readFileSync(join(citizenSdkRoot, 'windows/src/citizen_sdk_flutter_codec.cc'), 'utf8');
+  assert.match(codec, /WirePreflight\(message, size\)\.check\(\);\s+auto result = ::flutter::StandardMethodCodec::GetInstance\(\)\.DecodeMethodCall\(message, size\)/u);
+  const build = nativeShellFunctions(['build_windows', 'verify_windows_exports', 'windows_path_preflight']);
+  assert.match(build, /x86_64-pc-windows-msvc/u);
+  assert.match(build, /--release --locked --offline/u);
+  assert.match(build, /ctest --test-dir/u);
+  assert.match(build, /0x8664/u);
+  assert.match(build, /Windows output is inside source/u);
+  const script = readFileSync(join(citizenSdkRoot, 'scripts/build-native.sh'), 'utf8');
+  assert.ok(script.indexOf('if [[ "$target_name" == Windows ]]') < script.indexOf('work_dir="$(canonical_directory'));
+  assert.doesNotMatch(readFileSync(join(citizenSdkRoot, '.pubignore'), 'utf8'), /^\/windows\/$/mu);
+  assert.match(readFileSync(join(citizenSdkRoot, 'pubspec.yaml'), 'utf8'), /^      windows:\n        pluginClass: CitizenSdkPlugin$/mu);
+});
+
+test('Windows 身份声明执行生产 CMake 校验，缺失、非法或越界均拒绝', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-identity-contract-'));
+  try {
+    const source = readFileSync(join(citizenSdkRoot, 'windows/cmake/CitizenSDKFlutter.cmake'), 'utf8');
+    const start = source.indexOf('if(NOT DEFINED CITIZENSDK_APPLICATION_ID)');
+    const end = source.indexOf('get_filename_component(_citizensdk_windows_root');
+    assert.ok(start >= 0 && end > start);
+    // 只执行生产身份校验段；不伪装 WIN32、不创建库目标、不配置 Windows 编译器。
+    const script = join(root, 'identity.cmake');
+    writeFileSync(script, source.slice(start, end));
+    const invoke = (value) => spawnSync('cmake', [
+      ...(value === undefined ? [] : [`-DCITIZENSDK_APPLICATION_ID=${value}`]), '-P', script,
+    ], { encoding: 'utf8', cwd: root, timeout: 10000 });
+    for (const value of ['a.b', 'org.example.application', 'org.example-data.app', `a.${'b'.repeat(251)}`]) {
+      const result = invoke(value);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, 0, result.stderr);
+    }
+    for (const value of [undefined, '', 'org', 'Org.example', 'org..app', 'org.app.',
+      'org._app', 'org.-app', 'org.app-', 'org.app;other', 'org.app\n', 'org.应用',
+      `a.${'b'.repeat(252)}`, 'org.app";message(FATAL_ERROR injected)']) {
+      const result = invoke(value);
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /CITIZENSDK_APPLICATION_ID/u);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 安装执行 21 项闭集、来源字节、版本和 PE 完整导出验收', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-install-contract-'));
+  try {
+    const fixture = windowsInstallFixture(root);
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'assert_safe_directory_path', 'windows_install_files',
+        'verify_windows_install', 'verify_windows_exports']),
+      'cygpath() { [[ "$1" == -m ]]; printf "%s\\n" "$2"; }',
+      'dumpbin() { [[ "${WINDOWS_FIXTURE_DUMPBIN_FAIL:-0}" == 0 ]] || return 19; /bin/cat "$fixture_root/${3##*/}.exports"; }',
+      'sdk_dir="$1"; fixture_root="$2"; product_header="$sdk_dir/include/citizensdk.h"',
+      'windows_source_root="$sdk_dir/windows"; apple_asset_root="$sdk_dir/assets/citizenchain"',
+      'if [[ "$3" == list ]]; then windows_install_files; else verify_windows_install "$2/install" "$3" "$2/core" "$2/cmake"; fi',
+    ].join('\n');
+    const run = (version = '1.0.0', environment = {}) => spawnSync('/bin/bash',
+      ['-c', shell, 'windows-install-contract', citizenSdkRoot, root, version], {
+        encoding: 'utf8', timeout: 15000, env: { ...process.env, ...environment },
+      });
+    const listed = run('list');
+    assert.equal(listed.status, 0, listed.stderr);
+    assert.deepEqual(listed.stdout.trim().split('\n'), windowsInstallFixturePaths());
+    assert.equal(windowsInstallFixturePaths().length, 21);
+    const accepted = run();
+    assert.equal(accepted.error, undefined);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    const reject = (message = /Windows|install|PE|export/u) => {
+      const result = run();
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0, '不完整或漂移安装不得通过');
+      assert.match(result.stderr, message);
+    };
+    const changed = (paths, bytes, message) => {
+      const originals = paths.map((path) => readFileSync(path));
+      try {
+        paths.forEach((path) => writeFileSync(path, bytes));
+        reject(message);
+      } finally { paths.forEach((path, index) => writeFileSync(path, originals[index])); }
+    };
+    // 每一安装项都单独缺失、漂移一次，不能以数量相等替代逐项来源对拍。
+    for (const relative of windowsInstallFixturePaths()) {
+      const path = join(fixture.prefix, relative);
+      const bytes = readFileSync(path);
+      unlinkSync(path);
+      try { reject(/closure drift/u); } finally { writeFileSync(path, bytes); }
+      changed([path], Buffer.concat([bytes, Buffer.from('\ndrift')]), /installed bytes differ/u);
+    }
+    const extra = join(fixture.prefix, 'unregistered');
+    writeFileSync(extra, 'extra');
+    reject(/closure drift/u);
+    unlinkSync(extra);
+    mkdirSync(extra);
+    reject(/closure drift/u);
+    rmSync(extra, { recursive: true });
+    const header = join(fixture.prefix, 'include/citizensdk.h');
+    unlinkSync(header);
+    symlinkSync(join(citizenSdkRoot, 'include/citizensdk.h'), header);
+    reject(/reparse|alias/u);
+    unlinkSync(header);
+    copyFileSync(join(citizenSdkRoot, 'include/citizensdk.h'), header);
+    const include = join(fixture.prefix, 'include/citizen_sdk');
+    rmSync(include, { recursive: true });
+    symlinkSync(join(citizenSdkRoot, 'windows/include/citizen_sdk'), include, 'dir');
+    reject(/reparse|alias/u);
+    unlinkSync(include);
+    mkdirSync(include);
+    for (const relative of windowsInstallFixturePaths().filter((path) => path.startsWith('include/citizen_sdk/'))) {
+      copyFileSync(fixture.references.get(relative), join(fixture.prefix, relative));
+    }
+    const manifest = join(fixture.build, 'install_manifest.txt');
+    const entries = readFileSync(manifest, 'utf8').trim().split('\n');
+    // 不经过 join/resolve 规范化；首项按闭集排序可能是 bin，而不是 include。
+    const nonCanonical = `${fixture.prefix}/./${windowsInstallFixturePaths()[0]}`;
+    assert.notEqual(nonCanonical, entries[0], '拒绝用未发生变化的输入冒充路径反例');
+    for (const invalid of [entries.slice(1), [...entries, entries[0]],
+      [join(root, 'foreign.h'), ...entries.slice(1)],
+      [nonCanonical, ...entries.slice(1)]]) {
+      assert.notDeepEqual(invalid, entries, '每个清单反例必须确实改变输入');
+      changed([manifest], `${invalid.join('\n')}\n`, /install_manifest/u);
+    }
+    assert.notEqual(run('1.0.1').status, 0, '版本参数必须匹配实际 SDK 源码');
+    assert.notEqual(run('1.0.0+fixture').status, 0, '版本格式不能放宽');
+    const versionRelative = 'lib/Windows/cmake/CitizenSDK/CitizenSDKConfigVersion.cmake';
+    changed([join(fixture.prefix, versionRelative), fixture.references.get(versionRelative)],
+      'set(PACKAGE_VERSION "1.0.1")\n', /version template drift/u);
+    const targetRelative = 'lib/Windows/cmake/CitizenSDK/CitizenSDKTargets.cmake';
+    changed([join(fixture.prefix, targetRelative), fixture.references.get(targetRelative)],
+      `set(leaked "${fixture.core}/citizensdk.dll")\n`, /absolute build path/u);
+    const duplicate = join(fixture.build, 'CMakeFiles/Export/other/CitizenSDKTargets.cmake');
+    mkdirSync(dirname(duplicate));
+    copyFileSync(fixture.references.get(targetRelative), duplicate);
+    reject(/missing or ambiguous/u);
+    rmSync(dirname(duplicate), { recursive: true });
+    // 同时改变安装件与本轮原件，确保失败来自真实 PE/导出门禁，而非前置字节比较。
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) {
+      const relative = `bin/Windows/${name}`;
+      const installed = join(fixture.prefix, relative);
+      const original = readFileSync(installed);
+      const invalidPe = [Buffer.alloc(63), Buffer.from(original), Buffer.from(original), Buffer.from(original)];
+      invalidPe[1].writeUInt16LE(0xaa64, 132);
+      invalidPe[2].writeUInt16LE(0x10b, 152);
+      invalidPe[3].writeUInt32LE(0xffffffff, 60);
+      for (const invalid of invalidPe) {
+        changed([installed, fixture.references.get(relative)], invalid, /PE|machine/u);
+      }
+      const output = join(root, `${name}.exports`);
+      const lines = fixture.exports.get(name).trimEnd().split('\n');
+      const last = lines.at(-1);
+      for (const invalid of [lines.slice(0, -1).join('\n'), `${lines.join('\n')}\n${last}\n`,
+        `${lines.join('\n')}\n  999 3E7 1999 unregistered_export\n`,
+        `${lines.slice(0, -1).join('\n')}\n${last} = foreign.symbol\n`]) {
+        changed([output], invalid, /export/u);
+      }
+    }
+    assert.notEqual(run('1.0.0', { WINDOWS_FIXTURE_DUMPBIN_FAIL: '1' }).status, 0);
+    const final = run();
+    assert.equal(final.status, 0, final.stderr);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 消费者执行准确两项 CTest、DLL 来源与退出码和成功行双重门禁', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-consumer-contract-'));
+  try {
+    const fixture = windowsInstallFixture(root);
+    const build = join(root, 'consumer');
+    const runtime = join(build, 'Release');
+    const state = join(root, 'consumer-state');
+    const inventoryPath = join(root, 'inventory.json');
+    const outputPath = join(root, 'ctest.txt');
+    mkdirSync(runtime, { recursive: true });
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) {
+      copyFileSync(join(fixture.prefix, 'bin/Windows', name), join(runtime, name));
+    }
+    const definitions = [
+      ['CitizenSDK.Windows.CConsumer', 'citizen_sdk_c_consumer.exe'],
+      ['CitizenSDK.Windows.CppConsumer', 'citizen_sdk_cpp_consumer.exe'],
+    ];
+    const inventory = () => ({ tests: definitions.map(([name, executable]) => ({
+      name,
+      command: [join(runtime, executable), state,
+        join(fixture.prefix, 'share/citizensdk/citizenchain'), runtime],
+      properties: [{ name: 'TIMEOUT', value: 180 }, { name: 'RUN_SERIAL', value: true }],
+    })) });
+    // CTest 外部工具输出为有限夹具；这些程序占位件绝不被执行。
+    for (const [, executable] of definitions) writeFileSync(join(runtime, executable), 'inventory-only fixture\n');
+    const success = '1: CitizenSDK C consumer passed\n2: CitizenSDK C++ consumer passed\n';
+    writeFileSync(inventoryPath, JSON.stringify(inventory()));
+    writeFileSync(outputPath, success);
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'verify_windows_consumer_inventory', 'run_windows_consumers']),
+      'cygpath() { [[ "$1" == -m ]]; printf "%s\\n" "$2"; }',
+      'fixture_root="$1"',
+      'ctest() {',
+      '  if [[ "$*" == *--show-only=json-v1* ]]; then',
+      '    [[ "${WINDOWS_FIXTURE_INVENTORY_FAIL:-0}" == 0 ]] || return 23',
+      '    /bin/cat "$fixture_root/inventory.json"',
+      '  else /bin/cat "$fixture_root/ctest.txt"; return "${WINDOWS_FIXTURE_CTEST_STATUS:-0}"; fi',
+      '}',
+      'run_windows_consumers "$1/consumer" "$1/install" "$1/consumer-state"',
+    ].join('\n');
+    const run = (environment = {}) => spawnSync('/bin/bash',
+      ['-c', shell, 'windows-consumer-contract', root], {
+        encoding: 'utf8', timeout: 10000, env: { ...process.env, ...environment },
+      });
+    const accepted = run();
+    assert.equal(accepted.error, undefined);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    const badInventory = (mutate) => {
+      const value = inventory();
+      mutate(value);
+      writeFileSync(inventoryPath, JSON.stringify(value));
+      const result = run();
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0, 'CTest 清单漂移必须失败');
+      writeFileSync(inventoryPath, JSON.stringify(inventory()));
+    };
+    for (const mutate of [
+      (value) => { value.tests = []; },
+      (value) => { value.tests.pop(); },
+      (value) => { value.tests.push(value.tests[0]); },
+      (value) => { value.tests[1].name = value.tests[0].name; },
+      (value) => { value.tests[1].name = 'CitizenSDK.Windows.Unregistered'; },
+      (value) => { value.tests[0].command.pop(); },
+      (value) => { value.tests[0].command[0] = join(root, 'other.exe'); },
+      (value) => { value.tests[0].command[1] = join(root, 'foreign-state'); },
+      (value) => { value.tests[0].command[2] = join(root, 'foreign-assets'); },
+      (value) => { value.tests[0].command[3] = fixture.prefix; },
+      (value) => { value.tests[0].properties[0].value = 0; },
+      (value) => { value.tests[0].properties[0].value = '180'; },
+      (value) => { value.tests[0].properties[1].value = false; },
+      (value) => { value.tests[0].properties.push(value.tests[0].properties[0]); },
+    ]) badInventory(mutate);
+    for (const name of ['PASS_REGULAR_EXPRESSION', 'SKIP_REGULAR_EXPRESSION',
+      'SKIP_RETURN_CODE', 'WILL_FAIL', 'DISABLED']) {
+      badInventory((value) => { value.tests[0].properties.push({ name, value: false }); });
+    }
+    for (const text of ['', success.split('\n')[0], `${success}1: CitizenSDK C consumer passed\n`,
+      success.replaceAll(/^\d+: /gmu, ''), success.replace('C++ consumer passed', 'C++ consumer skipped')]) {
+      writeFileSync(outputPath, text);
+      const result = run();
+      assert.notEqual(result.status, 0, '成功行必须各自精确出现一次');
+      assert.match(result.stderr, /成功标记/u);
+    }
+    writeFileSync(outputPath, success);
+    assert.notEqual(run({ WINDOWS_FIXTURE_CTEST_STATUS: '17' }).status, 0,
+      '即使两行成功标记齐全，也不能覆盖 CTest 非零退出');
+    assert.notEqual(run({ WINDOWS_FIXTURE_INVENTORY_FAIL: '1' }).status, 0);
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll', ...definitions.map(([, file]) => file)]) {
+      const file = join(runtime, name);
+      const original = readFileSync(file);
+      unlinkSync(file);
+      assert.notEqual(run().status, 0, `缺少 ${name} 不能运行`);
+      const source = name.endsWith('.dll') ? join(fixture.prefix, 'bin/Windows', name)
+        : join(root, `${name}.fixture`);
+      if (!name.endsWith('.dll')) writeFileSync(source, original);
+      symlinkSync(source, file);
+      assert.notEqual(run().status, 0, '不得通过链接加载测试程序或运行库');
+      unlinkSync(file);
+      writeFileSync(file, original);
+      if (name.endsWith('.dll')) {
+        writeFileSync(file, Buffer.concat([original, Buffer.from('foreign-library')]));
+        assert.notEqual(run().status, 0, '运行 DLL 必须来自准确安装原件');
+        writeFileSync(file, original);
+      }
+    }
+    const linkedRuntime = join(root, 'linked-runtime');
+    cpSync(runtime, linkedRuntime, { recursive: true });
+    rmSync(runtime, { recursive: true });
+    symlinkSync(linkedRuntime, runtime, 'dir');
+    assert.notEqual(run().status, 0, '普通最终项不能掩盖运行目录的链接祖先');
+    unlinkSync(runtime);
+    cpSync(linkedRuntime, runtime, { recursive: true });
+    const final = run();
+    assert.equal(final.status, 0, final.stderr);
+    assert.equal(existsSync(state), false, '清单验收不得抢先创建 Host 私有状态目录');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 已验证安装执行同卷导出且拒绝覆盖、越界与链接', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-export-contract-'));
+  try {
+    const work = join(root, 'work');
+    const output = join(root, 'output');
+    mkdirSync(work);
+    mkdirSync(output);
+    const source = (name) => {
+      const path = join(work, name);
+      mkdirSync(path);
+      writeFileSync(join(path, 'verified.txt'), `verified:${name}\n`);
+      return path;
+    };
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path', 'export_windows_install']),
+      'cygpath() { [[ "$1" == -m ]]; printf "%s\\n" "$2"; }',
+      'work_dir="$1"; output_dir="$2"',
+      'export_windows_install "$3" "$4"',
+    ].join('\n');
+    const run = (from, to) => spawnSync('/bin/bash',
+      ['-c', shell, 'windows-export-contract', work, output, from, to], {
+        encoding: 'utf8', timeout: 10000,
+      });
+    const installed = source('install');
+    const destination = join(output, 'Windows');
+    const accepted = run(installed, destination);
+    assert.equal(accepted.error, undefined);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    assert.equal(existsSync(installed), false);
+    assert.equal(readFileSync(join(destination, 'verified.txt'), 'utf8'), 'verified:install\n');
+    const pending = source('pending');
+    for (const target of [destination, output, join(root, 'outside')]) {
+      const result = run(pending, target);
+      assert.notEqual(result.status, 0);
+      assert.equal(readFileSync(join(pending, 'verified.txt'), 'utf8'), 'verified:pending\n');
+      assert.equal(readFileSync(join(destination, 'verified.txt'), 'utf8'), 'verified:install\n');
+    }
+    const dangling = join(output, 'dangling');
+    symlinkSync(join(root, 'absent'), dangling);
+    assert.notEqual(run(pending, dangling).status, 0);
+    assert.equal(readlinkSync(dangling), join(root, 'absent'));
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    const linkedParent = join(output, 'linked');
+    symlinkSync(outside, linkedParent, 'dir');
+    assert.notEqual(run(pending, join(linkedParent, 'Windows')).status, 0);
+    assert.deepEqual(readdirSync(outside), []);
+    const linkedSource = join(work, 'linked-source');
+    symlinkSync(pending, linkedSource, 'dir');
+    assert.notEqual(run(linkedSource, join(output, 'new')).status, 0);
+    assert.notEqual(run(outside, join(output, 'new')).status, 0);
+    assert.equal(existsSync(pending), true);
+    // 只向原生产 Node 段注入 EXDEV 文件系统故障；不依赖测试机器恰有第二块卷，
+    // 也不改写/复刻导出算法。失败后必须传播原错误，不得开始跨卷复制或删除。
+    const production = nativeShellFunctions(['export_windows_install']);
+    const fragments = [...production.matchAll(/node -e '([\s\S]*?)' "\$\(cygpath/gu)];
+    assert.equal(fragments.length, 1);
+    const calls = [];
+    const from = '/work/install';
+    const to = '/output/Windows';
+    assert.throws(() => runInNewContext(fragments[0][1], {
+      process: { argv: ['node', from, to], platform: 'linux' },
+      require: (name) => {
+        if (name === 'path') return posix;
+        assert.equal(name, 'fs');
+        return {
+          lstatSync: (path) => {
+            if (path === to) throw Object.assign(new Error('absent'), { code: 'ENOENT' });
+            assert.ok(path === from || path === '/output');
+            return { isDirectory: () => true, isSymbolicLink: () => false };
+          },
+          realpathSync: (path) => path,
+          renameSync: (a, b) => {
+            calls.push([a, b]);
+            throw Object.assign(new Error('cross-device EXDEV fixture'), { code: 'EXDEV' });
+          },
+        };
+      },
+    }), /cross-device EXDEV fixture/u);
+    assert.deepEqual(calls, [[from, to]]);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 唯一构建器严格在原生、安装和消费者全部成功后才导出', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-build-order-contract-'));
+  try {
+    const hostTests = ['api_contract', 'assets', 'host_operation', 'lifecycle', 'directory',
+      'public_store', 'record_key', 'secure_store', 'sensitive_buffer', 'secret_vault',
+      'secret_boundary', 'cng', 'user_auth', 'wallet_flow'];
+    const inventory = join(root, 'host-tests.json');
+    writeFileSync(inventory, JSON.stringify({ tests: hostTests.map((name) => ({
+      name: `CitizenSDK.Windows.citizen_sdk_${name}_test`,
+    })) }));
+    // 保留 build_windows 原函数控制流与真实导出，只用有界工具/阶段结果替身；
+    // 不调用 Cargo/MSVC/CMake 构建，不把阶段模拟当成 Windows 运行验收。
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path',
+        'prepare_safe_directory', 'assert_readonly_dependency_directory', 'build_windows', 'export_windows_install']),
+      'sdk_dir="$1"; fixture_root="$2"; case_root="$3"; fail_at="$4"',
+      'work_dir="$case_root/work"; output_dir="$case_root/output"; cargo_target_dir="$work_dir/cargo"',
+      'windows_source_root="$sdk_dir/windows"; product_ffi_manifest="$sdk_dir/native/ffi/Cargo.toml"',
+      'CITIZENSDK_WINDOWS_SQLITE_INCLUDE_DIR="$case_root/sqlite"',
+      'CITIZENSDK_WINDOWS_SQLITE_ARCHIVE="$case_root/sqlite/sqlite3.lib"',
+      'stage() { printf "%s\\n" "$1" >> "$case_root/trace"; [[ "$1" != "$fail_at" ]]; }',
+      'cygpath() { [[ "$1" == -m ]]; printf "%s\\n" "$2"; }',
+      'windows_path_preflight() { stage preflight; }',
+      'load_native_dependencies() { [[ "$1" == Windows ]]; stage dependencies; }',
+      'record_native_dependencies() { [[ "$1" == Windows && -f "$output_dir/Windows/verified.txt" ]]; stage evidence; }',
+      'require_rust_target() { [[ "$1" == x86_64-pc-windows-msvc ]]; }',
+      'cl() { return 99; }; dumpbin() { return 99; }',
+      'cargo() { [[ "$*" == *"--release --locked --offline"* ]]; stage cargo; }',
+      'cmake() {',
+      '  case "$1" in',
+      '    -S) if [[ "$2" == "$windows_source_root/test" ]]; then',
+      '      [[ "$*" == *"-DCITIZENSDK_CONSUMER_PREFIX=$work_dir/Windows/install"* ]]',
+      '      stage consumer_configure',
+      '    else [[ "$*" == *"-DCMAKE_INSTALL_PREFIX=$work_dir/Windows/install"* ]]; stage host_configure; fi ;;',
+      '    --build) if [[ "$2" == "$work_dir/Windows/consumer" ]]; then stage consumer_build; else stage host_build; fi ;;',
+      '    --install) stage install; printf "verified installation\\n" > "$work_dir/Windows/install/verified.txt" ;;',
+      '    *) return 98 ;;',
+      '  esac',
+      '}',
+      'ctest() {',
+      '  if [[ "$*" == *--show-only=json-v1* ]]; then stage host_inventory || return 55; /bin/cat "$fixture_root/host-tests.json";',
+      '  else stage host_tests; fi',
+      '}',
+      'verification_count=0',
+      'verify_windows_install() {',
+      '  [[ "$1" == "$work_dir/Windows/install" && "$2" == 1.0.0 && -f "$1/verified.txt" ]]',
+      '  verification_count=$((verification_count + 1)); stage "verify$verification_count"',
+      '}',
+      'run_windows_consumers() { [[ "$1" == "$work_dir/Windows/consumer" ]]; stage consumers; }',
+      'build_windows_flutter_consumer() { [[ "$1" == "$work_dir/Windows" && "$2" == "$work_dir/Windows/install" && "$3" == 1.0.0 ]]; stage flutter; }',
+      'build_windows',
+    ].join('\n');
+    const stages = ['preflight', 'dependencies', 'cargo', 'host_configure', 'host_build', 'host_inventory',
+      'host_tests', 'install', 'verify1', 'consumer_configure', 'consumer_build', 'consumers', 'flutter', 'verify2', 'evidence'];
+    const run = (failAt) => {
+      const path = join(root, failAt || 'success');
+      mkdirSync(join(path, 'work/cargo/x86_64-pc-windows-msvc/release'), { recursive: true });
+      mkdirSync(join(path, 'output'));
+      mkdirSync(join(path, 'sqlite'));
+      writeFileSync(join(path, 'sqlite/sqlite3.lib'), 'dependency path fixture');
+      for (const name of ['citizensdk.dll', 'citizensdk.dll.lib']) {
+        writeFileSync(join(path, 'work/cargo/x86_64-pc-windows-msvc/release', name), 'stage-only fixture');
+      }
+      const result = spawnSync('/bin/bash', ['-c', shell, 'windows-build-order',
+        citizenSdkRoot, root, path, failAt], { encoding: 'utf8', timeout: 15000 });
+      assert.equal(result.error, undefined);
+      const trace = readFileSync(join(path, 'trace'), 'utf8').trim().split('\n');
+      return { path, result, trace };
+    };
+    const success = run('');
+    assert.equal(success.result.status, 0, success.result.stderr);
+    assert.deepEqual(success.trace, stages);
+    assert.equal(existsSync(join(success.path, 'work/Windows/install')), false);
+    assert.equal(readFileSync(join(success.path, 'output/Windows/verified.txt'), 'utf8'), 'verified installation\n');
+    for (const stage of stages) {
+      const failed = run(stage);
+      assert.notEqual(failed.result.status, 0, `${stage} 失败必须结束本轮`);
+      assert.deepEqual(failed.trace, stages.slice(0, stages.indexOf(stage) + 1));
+      // 所有原生/消费者门禁完成后才导出；若最后证据写入失败，保留已导出现场但不得报成功。
+      assert.deepEqual(readdirSync(join(failed.path, 'output')), stage === 'evidence' ? ['Windows'] : [],
+        `${stage} 失败不得提前导出或伪造证据`);
+    }
+    const source = (path) => readFileSync(join(citizenSdkRoot, path), 'utf8');
+    const cmake = source('windows/test/CitizenSDKConsumer.cmake');
+    assert.match(cmake, /find_package\(CitizenSDK \$\{CITIZENSDK_CONSUMER_VERSION\} EXACT CONFIG REQUIRED/u);
+    assert.match(cmake, /NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH/u);
+    assert.match(cmake, /get_target_property\(_imported CitizenSDK::\$\{_kind\} IMPORTED\)/u);
+    assert.match(cmake, /MAP_IMPORTED_CONFIG_\$\{_upper\}/u);
+    assert.equal([...cmake.matchAll(/-E compare_files/gu)].length, 2);
+    assert.match(cmake, /\/UNDEBUG \/W4 \/WX/u);
+    assert.doesNotMatch(cmake, /add_subdirectory\(|FetchContent|ExternalProject/u);
+    assert.doesNotMatch(cmake, /PROPERTIES[^\n]*(?:PASS_REGULAR_EXPRESSION|SKIP_RETURN_CODE|WILL_FAIL)/u);
+    for (const file of ['windows/test/citizen_sdk_c_consumer.c', 'windows/test/citizen_sdk_cpp_consumer.cc']) {
+      const consumer = source(file);
+      assert.match(consumer, /#ifdef NDEBUG/u);
+      assert.match(consumer, /GetModuleHandleW\(name\)/u);
+      assert.match(consumer, /GetModuleFileNameW\(/u);
+      assert.match(consumer, /config\.enable_wallet = (?:0|false);/u);
+      assert.match(consumer, /config\.hwnd = (?:NULL|nullptr);/u);
+      assert.match(consumer, /CITIZENSDK_ERROR_BUSY/u);
+      assert.match(consumer, /CITIZENSDK_ERROR_INVALID_HANDLE/u);
+      assert.match(consumer, /CITIZENSDK_ERROR_NOT_READY/u);
+      assert.doesNotMatch(consumer, /^#include\s*[<"][^>"\n]*(?:src\/|test_support|_bridge|_secret_vault)/mu);
+      assert.doesNotMatch(consumer, /\bassert\s*\(|citizensdk_(?:sign|submit|transfer|create_wallet|import_wallet)\s*\(/u);
+    }
+    assert.match(source('windows/test/citizen_sdk_c_consumer.c'), /citizensdk_result_release\(result\) == CITIZENSDK_OK/u);
+    assert.doesNotMatch(source('windows/test/citizen_sdk_cpp_consumer.cc'), /citizensdk_result_release\s*\(/u);
+    assert.match(source('windows/test/citizen_sdk_cpp_consumer.cc'), /host\.set_event_observer\(\{\}\)/u);
+    // 链-only 的公开示例与生产 WindowRef 一致，不能引导宿主传入钱包窗口。
+    const example = source('windows/README.md').match(/```cpp\n([\s\S]*?)\n```/u)?.[1];
+    assert.ok(example);
+    assert.match(example, /config\.enable_wallet = false;/u);
+    assert.match(example, /config\.hwnd = nullptr;/u);
+    assert.doesNotMatch(example, /parent_window/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows 候选复用唯一 21 项验真并逐项拒绝 PE、COFF、依赖和 CMake 漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-release-projection-'));
+  try {
+    const fixture = windowsInstallFixture(join(root, 'native'));
+    assert.equal(assertWindowsNativeArtifact(citizenSdkRoot, fixture.prefix), '1.0.0');
+    const changed = (relative, mutate) => {
+      const path = join(fixture.prefix, relative);
+      const original = readFileSync(path);
+      const bytes = mutate(Buffer.from(original));
+      assert.notDeepEqual(bytes, original, '反向夹具必须改变原字节');
+      try {
+        writeFileSync(path, bytes);
+        assert.throws(() => assertWindowsNativeArtifact(citizenSdkRoot, fixture.prefix));
+      } finally { writeFileSync(path, original); }
+    };
+    for (const relative of windowsInstallFixturePaths()) {
+      const path = join(fixture.prefix, relative), original = readFileSync(path);
+      unlinkSync(path);
+      try { assert.throws(() => assertWindowsNativeArtifact(citizenSdkRoot, fixture.prefix)); }
+      finally { writeFileSync(path, original); }
+    }
+    for (const relative of windowsInstallFixturePaths().filter((path) => /^(?:include|share)\//u.test(path))) {
+      changed(relative, (bytes) => Buffer.concat([bytes, Buffer.from('\n')]));
+    }
+    const coreNames = citizenSdkSymbols();
+    const hostNames = [...new Set([...readFileSync(join(citizenSdkRoot, 'windows/include/citizen_sdk/citizensdk_host.h'), 'utf8')
+      .matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/gu)].map((match) => match[1]))].sort();
+    for (const [name, names] of [['citizensdk.dll', coreNames], ['citizensdk_host.dll', hostNames]]) {
+      const path = `bin/Windows/${name}`;
+      changed(path, (bytes) => { bytes.writeUInt16LE(0xaa64, 132); return bytes; });
+      changed(path, (bytes) => { bytes.writeUInt16LE(0x10b, 152); return bytes; });
+      changed(path, (bytes) => { bytes.writeUInt32LE(0xffffffff, 60); return bytes; });
+      changed(path, (bytes) => { bytes.writeUInt32LE(0x2000, 1024 + 40); return bytes; });
+      changed(path, () => windowsPeFixture(names.slice(1), name));
+      changed(path, () => windowsPeFixture([...names, 'unregistered_export'].sort(), name));
+      for (const imports of [
+        [{ name: 'foreign.dll', symbols: ['unregistered'] }],
+        [{ name: '../kernel32.dll', symbols: ['GetLastError'] }],
+        [{ name: 'C:\\Windows\\kernel32.dll', symbols: ['GetLastError'] }],
+        [{ name: 'vcruntime140d.dll', symbols: ['unregistered'] }],
+        [{ name: 'api-ms-win-core.dll', symbols: ['unregistered'] }],
+      ]) changed(path, () => windowsPeFixture(names, name, 0x8664, imports));
+    }
+    changed('bin/Windows/citizensdk.dll', () => windowsPeFixture(coreNames, 'citizensdk.dll', 0x8664,
+      [{ name: 'citizensdk_host.dll', symbols: [hostNames[0]] }]));
+    changed('bin/Windows/citizensdk_host.dll', () => windowsPeFixture(hostNames, 'citizensdk_host.dll', 0x8664, []));
+    changed('bin/Windows/citizensdk_host.dll', () => windowsPeFixture(hostNames, 'citizensdk_host.dll', 0x8664,
+      [{ name: 'citizensdk.dll', symbols: ['citizensdk_unregistered'] }]));
+    changed('bin/Windows/citizensdk_host.dll', () => windowsPeFixture(hostNames, 'citizensdk_host.dll', 0x8664,
+      [{ name: 'citizensdk.dll', symbols: [7] }]));
+    // 按 archive header 和 COFF section table 定位真实描述符，不猜测对象的字节位置。
+    const descriptorSection = (bytes, name) => {
+      for (let at = 8; at < bytes.length;) {
+        const size = Number(bytes.toString('ascii', at + 48, at + 58).trim());
+        const object = at + 60;
+        if (size >= 20 && bytes.readUInt16LE(object) === 0x8664) {
+          const count = bytes.readUInt16LE(object + 2);
+          for (let index = 0; index < count; index += 1) {
+            const header = object + 20 + index * 40;
+            const field = bytes.subarray(header, header + 8).toString('ascii').replace(/\0.*$/u, '');
+            if (field === name) return { object, header };
+          }
+        }
+        at += 60 + size + size % 2;
+      }
+      assert.fail(`缺少 COFF 描述符节 ${name}`);
+    };
+    for (const relative of ['lib/Windows/citizensdk.dll.lib', 'lib/Windows/citizensdk_host.lib']) {
+      const path = join(fixture.prefix, relative), original = readFileSync(path);
+      const host = relative.endsWith('citizensdk_host.lib');
+      try {
+        for (const longnames of [false, true]) for (const internalPadding of [false, true]) {
+          writeFileSync(path, windowsImportLibraryFixture(host ? hostNames : coreNames,
+            host ? 'citizensdk_host.dll' : 'citizensdk.dll', { longnames, internalPadding }));
+          assert.equal(assertWindowsNativeArtifact(citizenSdkRoot, fixture.prefix), '1.0.0');
+        }
+      } finally { writeFileSync(path, original); }
+      changed(relative, () => Buffer.from('!<arch>\n'));
+      changed(relative, (bytes) => { bytes.writeUInt32BE(0xffffffff, 68); return bytes; });
+      changed(relative, (bytes) => { bytes.writeUInt32BE(1, 72); return bytes; });
+      changed(relative, (bytes) => {
+        const length = Number(bytes.toString('ascii', 56, 66).trim());
+        const second = 68 + length + length % 2;
+        bytes.writeUInt32LE(0xffffffff, second + 60 + 4);
+        return bytes;
+      });
+      changed(relative, (bytes) => {
+        const length = Number(bytes.toString('ascii', 56, 66).trim());
+        const second = 68 + length + length % 2;
+        const count = bytes.readUInt32LE(second + 60);
+        bytes.writeUInt16LE(0, second + 60 + 8 + count * 4);
+        return bytes;
+      });
+      changed(relative, (bytes) => {
+        const { object, header } = descriptorSection(bytes, '.idata$6');
+        bytes[object + bytes.readUInt32LE(header + 20)] ^= 1;
+        return bytes;
+      });
+      changed(relative, (bytes) => {
+        const { object, header } = descriptorSection(bytes, '.idata$2');
+        bytes.writeUInt16LE(0, object + bytes.readUInt32LE(header + 24) + 8);
+        return bytes;
+      });
+      for (const name of ['.idata$3', '.idata$4']) changed(relative, (bytes) => {
+        const { object, header } = descriptorSection(bytes, name);
+        bytes[object + bytes.readUInt32LE(header + 20)] = 1;
+        return bytes;
+      });
+    }
+    for (const file of ['CitizenSDKConfig.cmake', 'CitizenSDKConfigVersion.cmake',
+      'CitizenSDKDependencies.cmake', 'CitizenSDKTargets.cmake', 'CitizenSDKTargets-release.cmake']) {
+      changed(`lib/Windows/cmake/CitizenSDK/${file}`, (bytes) => Buffer.concat([bytes,
+        Buffer.from('\ninclude("/outside/foreign.cmake")\n')]));
+    }
+    changed('lib/Windows/cmake/CitizenSDK/CitizenSDKConfigVersion.cmake',
+      (bytes) => Buffer.from(bytes.toString().replaceAll('1.0.0', '1.0.1')));
+    changed('lib/Windows/cmake/CitizenSDK/CitizenSDKTargets-release.cmake',
+      (bytes) => Buffer.from(bytes.toString().replaceAll('citizensdk_host.dll', 'foreign.dll')));
+    changed('lib/Windows/cmake/CitizenSDK/CitizenSDKConfig.cmake',
+      (bytes) => Buffer.from(`${bytes}\n#[[]] include("/outside/injected.cmake")\n`));
+    const extra = join(fixture.prefix, 'unregistered');
+    for (const directory of [false, true]) {
+      if (directory) mkdirSync(extra); else writeFileSync(extra, 'extra');
+      assert.throws(() => assertWindowsNativeArtifact(citizenSdkRoot, fixture.prefix), /21/u);
+      rmSync(extra, { recursive: directory });
+    }
+    const projected = join(root, 'candidate');
+    writeWindowsProjectionFixture(projected, fixture.prefix);
+    assert.equal(assertWindowsReleaseProjection(projected), '1.0.0');
+    assert.throws(() => assertWindowsBindingSource(projected), /Windows/u,
+      '源码模式仍必须拒绝注入后的十四个产物');
+    assert.equal(assertWindowsBindingSource(projected, { allowInjectedWindowsArtifacts: true }), '1.0.0');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows Hosted 19/33 闭集与全部复制预检保持七头原字节及本机路径边界', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-hosted-contract-'));
+  try {
+    const fixture = windowsInstallFixture(join(root, 'native'));
+    const source = join(root, 'source');
+    cpSync(join(citizenSdkRoot, 'windows'), join(source, 'windows'), { recursive: true });
+    copyFileSync(join(citizenSdkRoot, '.pubignore'), join(source, '.pubignore'));
+    assert.doesNotThrow(() => assertHostedRuntimeWindowsProjection(source));
+    const projected = join(root, 'candidate');
+    writeWindowsProjectionFixture(projected, fixture.prefix);
+    assert.doesNotThrow(() => assertHostedRuntimeWindowsProjection(projected, { allowInjectedWindowsArtifacts: true }));
+    const ignore = join(projected, '.pubignore'), original = readFileSync(ignore, 'utf8');
+    for (const rule of ['/windows/', '/windows/bin/Windows/citizensdk.dll',
+      '/windows/lib/Windows/citizensdk_host.lib', '/windows/src/citizen_sdk_flutter_codec.cc',
+      '!/windows/src/citizen_sdk_secret_vault.cc', '!/windows/test/citizen_sdk_c_consumer.c']) {
+      writeFileSync(ignore, `${original}\n${rule}\n`);
+      assert.throws(() => assertHostedRuntimeWindowsProjection(projected, { allowInjectedWindowsArtifacts: true }), /Hosted Windows/u);
+    }
+    writeFileSync(ignore, original);
+    const rejected = join(root, 'rejected');
+    cpSync(join(citizenSdkRoot, 'windows'), join(rejected, 'windows'), { recursive: true });
+    const header = join(rejected, 'windows/include/citizen_sdk/citizen_sdk.hpp');
+    const bytes = readFileSync(header);
+    writeFileSync(header, Buffer.concat([bytes, Buffer.from('\ndrift')]));
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected), /重叠/u);
+    assert.equal(existsSync(join(rejected, 'windows/bin')), false, '较早的新项不能在七头全部对拍前写入');
+    writeFileSync(header, bytes);
+    const bin = join(rejected, 'windows/bin'), linked = join(root, 'linked');
+    mkdirSync(linked);
+    symlinkSync(linked, bin, 'dir');
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected), /链接/u);
+    assert.deepEqual(readdirSync(linked), []);
+    unlinkSync(bin);
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, fixture.prefix), /来源|目标/u);
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, join(fixture.prefix, 'nested')), /来源|目标/u);
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, dirname(fixture.prefix)), /来源|目标/u);
+    assert.throws(() => copyWindowsNativeArtifact(rejected, fixture.prefix, rejected), /来源|目标|源码/u);
+    assert.throws(() => copyWindowsNativeArtifact(join(rejected, 'nested-source'), fixture.prefix, rejected), /来源|目标|源码/u);
+    // 不创建越界路径；调用必须在任何 mkdir/write 之前被本机双根门禁拒绝。
+    if (process.env.GITHUB_ACTIONS !== 'true') {
+      assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix,
+        '/Users/rhett/TATA/tataconsole/target/GMB/unregistered/SDK/candidate'), /目录|路径/u);
+    }
+    copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected);
+    assert.deepEqual(readFileSync(header), bytes);
+    assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected), /目标已存在/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows Flutter bundle 验同版双库、官方注册、链资产与 PE/ELF 机器', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-flutter-bundle-'));
+  try {
+    const fixture = windowsInstallFixture(join(root, 'native'));
+    const bundle = join(root, 'bundle');
+    mkdirSync(bundle);
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) {
+      copyFileSync(join(fixture.prefix, 'bin/Windows', name), join(bundle, name));
+    }
+    const imports = [
+      { name: 'citizensdk.dll', symbols: ['citizensdk_get_lifecycle'] },
+      { name: 'citizensdk_host.dll', symbols: ['citizensdk_host_create'] },
+      { name: 'flutter_windows.dll', symbols: ['FlutterDesktopMessengerSend'] },
+    ];
+    const plugin = windowsPeFixture(['CitizenSdkPluginRegisterWithRegistrar'], 'citizen_sdk_plugin.dll', 0x8664, imports);
+    writeFileSync(join(bundle, 'citizen_sdk_plugin.dll'), plugin);
+    for (const name of ['citizensdk_consumer.exe', 'flutter_windows.dll']) {
+      writeFileSync(join(bundle, name), windowsPeFixture(['fixture_export'], name));
+    }
+    const assets = join(bundle, 'data/flutter_assets/packages/citizen_sdk/assets/citizenchain');
+    mkdirSync(assets, { recursive: true });
+    for (const name of ['manifest.json', 'chainspec.json', 'light_sync_state.json']) {
+      copyFileSync(join(citizenSdkRoot, 'assets/citizenchain', name), join(assets, name));
+    }
+    const aot = linuxElfFixture({ platform: 'LinuxAMD' });
+    writeFileSync(join(bundle, 'data/app.so'), aot);
+    const run = () => assertWindowsFlutterBundle(citizenSdkRoot, fixture.prefix, bundle);
+    assert.doesNotThrow(run);
+    const changed = (path, bytes) => {
+      const original = readFileSync(path);
+      try { writeFileSync(path, bytes); assert.throws(run); }
+      finally { writeFileSync(path, original); }
+    };
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) changed(join(bundle, name), Buffer.from('foreign'));
+    for (const name of ['manifest.json', 'chainspec.json', 'light_sync_state.json']) changed(join(assets, name), Buffer.from('{}'));
+    for (const missing of imports) {
+      changed(join(bundle, 'citizen_sdk_plugin.dll'), windowsPeFixture(['CitizenSdkPluginRegisterWithRegistrar'],
+        'citizen_sdk_plugin.dll', 0x8664, imports.filter((entry) => entry !== missing)));
+    }
+    changed(join(bundle, 'citizen_sdk_plugin.dll'), windowsPeFixture(['Unregistered'], 'citizen_sdk_plugin.dll', 0x8664, imports));
+    for (const name of ['citizensdk_consumer.exe', 'flutter_windows.dll']) {
+      changed(join(bundle, name), windowsPeFixture(['fixture_export'], name, 0xaa64));
+    }
+    changed(join(bundle, 'data/app.so'), plugin);
+    changed(join(bundle, 'data/app.so'), linuxElfFixture({ platform: 'LinuxARM' }));
+    const original = join(bundle, 'citizensdk_host.dll');
+    unlinkSync(original);
+    symlinkSync(join(fixture.prefix, 'bin/Windows/citizensdk_host.dll'), original);
+    assert.throws(run, /符号链接/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Windows Flutter 执行六项生产 CTest 清单门禁并拒绝状态、属性和 DLL 漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'windows-flutter-inventory-'));
+  try {
+    const fixture = windowsInstallFixture(join(root, 'native'));
+    const build = join(root, 'build'), state = join(root, 'state');
+    const runtime = join(build, 'plugins/citizen_sdk/test/Release');
+    mkdirSync(runtime, { recursive: true });
+    const kinds = ['codec', 'environment', 'sessions', 'wallet_flow', 'plugin', 'secret_boundary'];
+    for (const kind of kinds) writeFileSync(join(runtime, `citizen_sdk_flutter_${kind}_test.exe`), 'inventory-only fixture');
+    for (const name of ['citizensdk.dll', 'citizensdk_host.dll']) {
+      copyFileSync(join(fixture.prefix, 'bin/Windows', name), join(runtime, name));
+    }
+    const inventory = () => ({ tests: kinds.map((kind) => ({
+      name: `CitizenSDK.Windows.citizen_sdk_flutter_${kind}_test`,
+      command: [join(runtime, `citizen_sdk_flutter_${kind}_test.exe`)],
+      properties: [{ name: 'TIMEOUT', value: 60 },
+        { name: 'ENVIRONMENT', value: [`CITIZENSDK_TEST_WORK_DIR=${state}`] },
+        { name: 'LABELS', value: ['CitizenSDK', 'Contract', 'WindowsFlutter'] }],
+    })) });
+    const input = join(root, 'inventory.json');
+    writeFileSync(input, JSON.stringify(inventory()));
+    // 此函数含官方 Node heredoc；以准确结束标记提取，不能在内部 JS 的 } 处截断。
+    const source = readFileSync(join(citizenSdkRoot, 'scripts/build-native.sh'), 'utf8');
+    const functions = [...source.matchAll(/^verify_windows_flutter_inventory\(\) \{[\s\S]*?\nNODE\n\}\n/gmu)];
+    assert.equal(functions.length, 1);
+    const shell = ['set -euo pipefail', nativeShellFunctions(['fail']), functions[0][0],
+      'cygpath() { [[ "$1" == -m ]]; printf "%s\\n" "$2"; }',
+      'input="$1"; ctest() { [[ "${WINDOWS_FIXTURE_CTEST_FAIL:-0}" == 0 ]] || return 31; /bin/cat "$input"; }',
+      'verify_windows_flutter_inventory "$2" "$3" "$4"',
+    ].join('\n');
+    const run = (environment = {}) => spawnSync('/bin/bash', ['-c', shell, 'windows-flutter-inventory',
+      input, build, state, fixture.prefix], { encoding: 'utf8', timeout: 10000,
+      env: { ...process.env, ...environment } });
+    assert.equal(run().status, 0);
+    const invalid = (change) => {
+      const value = inventory(); change(value); writeFileSync(input, JSON.stringify(value));
+      const result = run();
+      assert.equal(result.error, undefined);
+      assert.notEqual(result.status, 0);
+      writeFileSync(input, JSON.stringify(inventory()));
+    };
+    for (const change of [
+      (value) => { value.tests.pop(); },
+      (value) => { value.tests.push(value.tests[0]); },
+      (value) => { value.tests[0].name = value.tests[1].name; },
+      (value) => { value.tests[0].command[0] = join(root, 'unregistered.exe'); },
+      (value) => { value.tests[0].properties[0].value = 0; },
+      (value) => { value.tests[0].properties[1].value = ['CITIZENSDK_TEST_WORK_DIR=/outside']; },
+      (value) => { value.tests[0].properties[1].value.push('OTHER_STATE=unregistered'); },
+      (value) => { value.tests[0].properties[2].value.pop(); },
+      (value) => { value.tests[0].properties.push(value.tests[0].properties[0]); },
+    ]) invalid(change);
+    for (const name of ['PASS_REGULAR_EXPRESSION', 'SKIP_REGULAR_EXPRESSION', 'SKIP_RETURN_CODE', 'WILL_FAIL', 'DISABLED']) {
+      invalid((value) => { value.tests[0].properties.push({ name, value: false }); });
+    }
+    const dll = join(runtime, 'citizensdk_host.dll'), bytes = readFileSync(dll);
+    writeFileSync(dll, 'different build');
+    assert.notEqual(run().status, 0);
+    unlinkSync(dll);
+    symlinkSync(join(fixture.prefix, 'bin/Windows/citizensdk_host.dll'), dll);
+    assert.notEqual(run().status, 0);
+    unlinkSync(dll);
+    writeFileSync(dll, bytes);
+    assert.notEqual(run({ WINDOWS_FIXTURE_CTEST_FAIL: '1' }).status, 0);
+    assert.equal(run().status, 0);
+    const consumer = readFileSync(join(citizenSdkRoot, 'windows/test/citizen_sdk_flutter_consumer.dart'), 'utf8');
+    assert.match(consumer, /CitizenSdk\.open\(\)/u);
+    assert.doesNotMatch(consumer, /package:citizen_sdk\/src\/|FlutterCitizenSdkPlatform|setMockMethodCallHandler|\bassert\s*\(/u);
+    assert.match(consumer, /stdout\.flush\(\)/u);
+    assert.match(consumer, /exit\(1\)/u);
+    assert.match(source, /copyWindowsNativeArtifact\(source,prefix,stage\)/u);
+    assert.match(source, /assertWindowsFlutterBundle\(source,prefix,bundle\)/u);
+    assert.match(source, /WaitForExit/u);
+    assert.equal(existsSync(state), false, '清单检查不能代替 Host 创建安全状态');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Linux Host 与 Flutter 源码固定哈希、目录拓扑且不提前接纳生成状态', () => {
   const root = mkdtempSync(join(workRoot, 'release-linux-binding-test-'));
   try {
     cpSync(join(citizenSdkRoot, 'linux'), join(root, 'linux'), {
@@ -1622,6 +3574,357 @@ test('Linux Host 源码固定哈希、目录拓扑且不提前接纳生成状态
       () => assertLinuxBindingSource(root),
       /Linux Host 文件闭集漂移.*libcitizensdk_host\.so/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux 候选仅接纳双平台 26 项安装投影，纯源码门禁仍拒绝产物', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-projection-test-'));
+  try {
+    writeLinuxProjectionFixture(root);
+    const installation = [...new Set(linuxPlatforms.flatMap(linuxInstallFixturePaths))].sort();
+    assert.equal(installation.length, 26);
+    assert.doesNotThrow(() => assertLinuxReleaseProjection(root));
+    assert.equal(assertLinuxBindingSource(root, { allowInjectedLinuxArtifacts: true }), '1.0.0');
+    assert.throws(() => assertLinuxBindingSource(root), /Linux/u);
+
+    for (const relative of installation) {
+      const path = join(root, 'linux', relative);
+      const bytes = readFileSync(path);
+      rmSync(path);
+      assert.throws(() => assertLinuxReleaseProjection(root), /Linux/u, `缺失 ${relative}`);
+      writeFileSync(path, bytes);
+    }
+    for (const path of [
+      'linux/lib/LinuxARM/unexpected.so',
+      'linux/lib/LinuxAMD/cmake/CitizenSDK/unexpected.cmake',
+      'linux/share/citizensdk/citizenchain/unexpected.json',
+    ]) {
+      writeFileSync(join(root, path), 'unexpected\n');
+      assert.throws(() => assertLinuxReleaseProjection(root), /Linux/u);
+      rmSync(join(root, path));
+    }
+    const emptyDirectory = join(root, 'linux/lib/LinuxARM/empty');
+    mkdirSync(emptyDirectory);
+    assert.throws(() => assertLinuxReleaseProjection(root), /Linux/u);
+    rmSync(emptyDirectory, { recursive: true });
+
+    const library = join(root, 'linux/lib/LinuxARM/libcitizensdk.so');
+    const libraryBytes = readFileSync(library);
+    rmSync(library);
+    symlinkSync('../LinuxAMD/libcitizensdk.so', library);
+    assert.throws(() => assertLinuxReleaseProjection(root), /符号链接/u);
+    rmSync(library);
+    writeFileSync(library, libraryBytes);
+
+    const directory = join(root, 'linux/lib/LinuxAMD/cmake');
+    const configBytes = new Map(linuxInstallFixturePaths('LinuxAMD')
+      .filter((path) => path.includes('/cmake/'))
+      .map((path) => [path, readFileSync(join(root, 'linux', path))]));
+    rmSync(directory, { recursive: true });
+    symlinkSync('../LinuxARM/cmake', directory, 'dir');
+    assert.throws(() => assertLinuxReleaseProjection(root), /符号链接/u);
+    unlinkSync(directory);
+    for (const [relative, bytes] of configBytes) {
+      const destination = join(root, 'linux', relative);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, bytes);
+    }
+    assert.doesNotThrow(() => assertLinuxReleaseProjection(root));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux ELF 格式夹具逐项拒绝错误架构、动态边界、导出、依赖和版本', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-elf-test-'));
+  try {
+    writeLinuxProjectionFixture(root);
+    const rejected = (path, bytes, label) => {
+      const original = readFileSync(path);
+      try {
+        writeFileSync(path, bytes);
+        assert.throws(() => assertLinuxReleaseProjection(root), /Linux|ELF/u, label);
+      } finally {
+        writeFileSync(path, original);
+      }
+    };
+    for (const platform of linuxPlatforms) {
+      for (const host of [false, true]) {
+        const path = join(root, 'linux/lib', platform, host ? 'libcitizensdk_host.so' : 'libcitizensdk.so');
+        const symbols = host ? linuxHostSymbols() : citizenSdkSymbols();
+        const fixture = (options = {}) => linuxElfFixture({ platform, host, ...options });
+        for (const options of [
+          { machine: platform === 'LinuxARM' ? 62 : 183 },
+          { soname: 'unregistered.so' },
+          { symbols: symbols.slice(1) },
+          { symbols: [...symbols, 'unregistered_export'] },
+          { versions: ['GLIBC_2.32'] },
+          { versions: ['GLIBC_2.31', 'GLIBCXX_3.4'] },
+          { versions: ['GLIBC_2.31', 'CXXABI_1.3'] },
+          { rpath: '$ORIGIN' },
+          { needed: [...(host ? ['libcitizensdk.so'] : []), '/build/libc.so.6'] },
+          ...['libstdc++.so.6', 'libgcc_s.so.1', 'libsqlite3.so.0', 'libtss2-esys.so.0', 'libcrypto.so.3', 'libssl.so.3', 'libsmoldot.so']
+            .map((dependency) => ({ needed: [...(host ? ['libcitizensdk.so'] : []), dependency] })),
+        ]) rejected(path, fixture(options), `${platform} ${host ? 'Host' : 'Core'} ${JSON.stringify(options)}`);
+        if (host) {
+          rejected(path, fixture({ needed: ['libc.so.6'] }), 'Host 缺少唯一 Core');
+          rejected(path, fixture({ needed: ['libcitizensdk.so', 'libcitizensdk.so'] }), 'Host 重复 Core');
+          for (const runpath of [null, '', '/build', '$ORIGIN:/build']) {
+            rejected(path, fixture({ runpath }), 'Host RUNPATH 只能是 $ORIGIN');
+          }
+        } else {
+          rejected(path, fixture({ runpath: '$ORIGIN' }), 'Core 不允许 RUNPATH');
+        }
+        for (const [label, mutate] of [
+          ['魔数', (bytes) => { bytes[0] = 0; }],
+          ['ELF32', (bytes) => { bytes[4] = 1; }],
+          ['大端', (bytes) => { bytes[5] = 2; }],
+          ['非共享库', (bytes) => { bytes.writeUInt16LE(2, 16); }],
+          ['程序头越界', (bytes) => { bytes.writeBigUInt64LE(BigInt(bytes.length), 32); }],
+          ['节头越界', (bytes) => { bytes.writeBigUInt64LE(BigInt(bytes.length), 40); }],
+          ['动态段越界', (bytes) => { bytes.writeBigUInt64LE(BigInt(bytes.length), 128); }],
+          ['动态表缺少终止', (bytes) => {
+            const offset = Number(bytes.readBigUInt64LE(128));
+            const length = Number(bytes.readBigUInt64LE(152));
+            bytes.writeBigInt64LE(1n, offset + length - 16);
+          }],
+          ['动态字符串地址漂移', (bytes) => {
+            const offset = Number(bytes.readBigUInt64LE(128));
+            const length = Number(bytes.readBigUInt64LE(152));
+            for (let index = offset; index < offset + length; index += 16) {
+              if (bytes.readBigInt64LE(index) === 5n) bytes.writeBigUInt64LE(0xffffffffffffffffn, index + 8);
+            }
+          }],
+          ['符号表元素长度漂移', (bytes) => {
+            const sectionOffset = Number(bytes.readBigUInt64LE(40));
+            bytes.writeBigUInt64LE(8n, sectionOffset + 3 * 64 + 56);
+          }],
+          ['版本链越界', (bytes) => {
+            const sectionOffset = Number(bytes.readBigUInt64LE(40));
+            const versionOffset = Number(bytes.readBigUInt64LE(sectionOffset + 6 * 64 + 24));
+            bytes.writeUInt32LE(0xffffffff, versionOffset + 8);
+          }],
+        ]) {
+          const bytes = fixture();
+          mutate(bytes);
+          rejected(path, bytes, label);
+        }
+        // 同样位于已映射段内的假地址也必须失败，不能只验证是否越界。
+        for (const tag of [5n, 6n, 0x6ffffffen]) {
+          const bytes = fixture();
+          const offset = Number(bytes.readBigUInt64LE(128));
+          const length = Number(bytes.readBigUInt64LE(152));
+          let changed = false;
+          for (let index = offset; index < offset + length; index += 16) {
+            if (bytes.readBigInt64LE(index) !== tag) continue;
+            bytes.writeBigUInt64LE(bytes.readBigUInt64LE(index + 8) + 1n, index + 8);
+            changed = true;
+          }
+          assert.equal(changed, true);
+          rejected(path, bytes, `动态字段 ${tag} 与对应节地址不一致`);
+        }
+        for (const tag of [5n, 6n, 0x6ffffffen, 0x6fffffffn]) {
+          const bytes = fixture();
+          const offset = Number(bytes.readBigUInt64LE(128));
+          const length = Number(bytes.readBigUInt64LE(152));
+          let changed = false;
+          for (let index = offset; index < offset + length; index += 16) {
+            if (bytes.readBigInt64LE(index) !== tag) continue;
+            bytes.writeBigInt64LE(21n, index); // DT_DEBUG 不得替代必需的版本/符号字段。
+            changed = true;
+          }
+          assert.equal(changed, true);
+          rejected(path, bytes, `动态字段 ${tag} 缺失`);
+        }
+        rejected(path, fixture().subarray(0, 40), '截断 ELF 头');
+      }
+    }
+    assert.doesNotThrow(() => assertLinuxReleaseProjection(root));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux 安装 CMake、共享头和链资产必须同版、可重定位且原字节一致', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-identity-test-'));
+  try {
+    writeLinuxProjectionFixture(root);
+    const changed = (relative, mutate) => {
+      const path = join(root, 'linux', relative);
+      const original = readFileSync(path);
+      try {
+        writeFileSync(path, mutate(original.toString('utf8')));
+        assert.throws(() => assertLinuxReleaseProjection(root), /Linux/u, relative);
+      } finally {
+        writeFileSync(path, original);
+      }
+    };
+    for (const relative of linuxInstallFixturePaths('LinuxARM').filter((path) => /^(?:include|share)\//u.test(path))) {
+      changed(relative, (text) => `${text}\n`);
+    }
+    for (const platform of linuxPlatforms) {
+      const prefix = `lib/${platform}/cmake/CitizenSDK/`;
+      const targetsPath = join(root, 'linux', `${prefix}CitizenSDKTargets.cmake`);
+      const targets = readFileSync(targetsPath, 'utf8');
+      // Kitware 官方 3.31/3.24 exporter 的整结构仍保留目标与文件存在性检查；
+      // 这里只验证已知生成器输出，任何追加指令仍必须被拒绝。
+      const cmake331 = targets.replace('2.8.12...4.0', '2.8.12...3.29');
+      const cmake324 = targets
+        .replace('message(FATAL_ERROR "CMake >= 2.8.12 required")', 'message(FATAL_ERROR "CMake >= 2.8.0 required")')
+        .replace('if(CMAKE_VERSION VERSION_LESS "2.8.12")', 'if(CMAKE_VERSION VERSION_LESS "2.8.3")')
+        .replace('message(FATAL_ERROR "CMake >= 2.8.12 required")', 'message(FATAL_ERROR "CMake >= 2.8.3 required")')
+        .replace('2.8.12...4.0', '2.8.3...3.22')
+        .replace('file(GLOB _cmake_config_files', [
+          'if(CMAKE_VERSION VERSION_LESS 2.8.12)',
+          '  message(FATAL_ERROR "This file relies on consumers using CMake 2.8.12 or greater.")',
+          'endif()',
+          'file(GLOB _cmake_config_files',
+        ].join('\n'))
+        .replace([
+          '  if(CMAKE_VERSION VERSION_LESS "3.28"',
+          '      OR NOT DEFINED _cmake_import_check_xcframework_for_${_cmake_target}',
+          '      OR NOT IS_DIRECTORY "${_cmake_import_check_xcframework_for_${_cmake_target}}")',
+          '',
+        ].join('\n'), '')
+        .replace('    endforeach()\n  endif()\n  unset(_cmake_file)', '    endforeach()\n  unset(_cmake_file)');
+      try {
+        for (const variant of [cmake331, cmake324]) {
+          writeFileSync(targetsPath, variant);
+          assert.doesNotThrow(() => assertLinuxReleaseProjection(root));
+          writeFileSync(targetsPath, `${variant}\ninclude("/var/cache/unregistered.cmake")\n`);
+          assert.throws(() => assertLinuxReleaseProjection(root), /Linux/u);
+        }
+      } finally {
+        writeFileSync(targetsPath, targets);
+      }
+      changed(`${prefix}CitizenSDKConfigVersion.cmake`, (text) => text.replace('"1.0.0"', '"1.0.1"'));
+      changed(`${prefix}CitizenSDKConfig.cmake`, (text) => text.replace(`"${platform}"`, '"Windows"'));
+      changed(`${prefix}CitizenSDKConfig.cmake`, (text) => text.replace('${PACKAGE_PREFIX_DIR}/lib', '/build/lib'));
+      changed(`${prefix}CitizenSDKDependencies.cmake`, (text) => `${text}\n`);
+      changed(`${prefix}CitizenSDKTargets.cmake`, (text) => text.replace('CitizenSDK::Core', 'Unregistered::Core'));
+      changed(`${prefix}CitizenSDKTargets-release.cmake`, (text) => text.replace('libcitizensdk_host.so', 'libunregistered.so'));
+      changed(`${prefix}CitizenSDKTargets-release.cmake`, (text) => text.replace('${_IMPORT_PREFIX}', '/build'));
+      changed(`${prefix}CitizenSDKTargets-release.cmake`, (text) => `${text}\nset(unregistered "${citizenSdkRoot}")\n`);
+      changed(`${prefix}CitizenSDKTargets-release.cmake`, (text) => `${text}\nset_property(TARGET CitizenSDK::Host PROPERTY IMPORTED_LOCATION_RELEASE "/var/cache/other.so")\n`);
+      changed(`${prefix}CitizenSDKTargets.cmake`, (text) => `${text}\ninclude("/var/cache/unregistered.cmake")\n`);
+      changed(`${prefix}CitizenSDKTargets.cmake`, (text) => `${text}\n#[[]] include("/var/cache/unregistered.cmake")\n`);
+    }
+    assert.doesNotThrow(() => assertLinuxReleaseProjection(root));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux Hosted 保留唯一插件和双库运行闭集，拒绝漏包或泄漏 Host 私有实现', () => {
+  const root = mkdtempSync(join(workRoot, 'release-linux-hosted-test-'));
+  try {
+    cpSync(join(citizenSdkRoot, 'linux'), join(root, 'linux'), { recursive: true });
+    copyFileSync(join(citizenSdkRoot, '.pubignore'), join(root, '.pubignore'));
+    assert.doesNotThrow(() => assertHostedRuntimeLinuxProjection(root));
+    writeLinuxProjectionFixture(root);
+    assert.doesNotThrow(() => assertHostedRuntimeLinuxProjection(root, { allowInjectedLinuxArtifacts: true }));
+    assert.throws(() => assertHostedRuntimeLinuxProjection(root), /Linux/u);
+    const ignorePath = join(root, '.pubignore');
+    const original = readFileSync(ignorePath, 'utf8');
+    for (const rule of [
+      '/linux/CMakeLists.txt',
+      '/linux/cmake/CitizenSDKFlutter.cmake',
+      '/linux/src/citizen_sdk_plugin.cc',
+      '/linux/include/citizen_sdk/citizen_sdk_plugin.h',
+      '/linux/include/citizensdk.h',
+      '/linux/include/citizen_sdk/citizensdk_host.h',
+      '/linux/lib/LinuxARM/libcitizensdk.so',
+      '/linux/lib/LinuxAMD/libcitizensdk_host.so',
+      '/linux/share/citizensdk/citizenchain/manifest.json',
+      '!/linux/src/citizen_sdk_host_api.cc',
+      '!/linux/cmake/CitizenSDKConfig.cmake.in',
+      '!/linux/test/citizen_sdk_c_consumer.c',
+    ]) {
+      writeFileSync(ignorePath, `${original}\n${rule}\n`);
+      assert.throws(
+        () => assertHostedRuntimeLinuxProjection(root, { allowInjectedLinuxArtifacts: true }),
+        /Linux/u,
+        rule,
+      );
+    }
+    writeFileSync(ignorePath, original);
+    assert.doesNotThrow(() => assertHostedRuntimeLinuxProjection(root, { allowInjectedLinuxArtifacts: true }));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Dart、Android、Darwin、Linux、Windows 固定同一 Flutter 双通道和 22 方法合同', () => {
+  const root = mkdtempSync(join(workRoot, 'release-flutter-contract-test-'));
+  const sources = [
+    'lib/src/platform/citizen_sdk_flutter_codec.dart',
+    'lib/src/platform/flutter_citizen_sdk_platform.dart',
+    'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt',
+    'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift',
+    'linux/src/citizen_sdk_flutter_codec.cc',
+    'linux/src/citizen_sdk_flutter_codec.hpp',
+    'windows/src/citizen_sdk_flutter_codec.cc',
+    'windows/src/citizen_sdk_flutter_codec.hpp',
+  ];
+  try {
+    for (const relativePath of sources) {
+      const destination = join(root, ...relativePath.split('/'));
+      mkdirSync(dirname(destination), { recursive: true });
+      copyFileSync(join(citizenSdkRoot, ...relativePath.split('/')), destination);
+    }
+    assert.doesNotThrow(() => assertFlutterBindingContract(root));
+
+    const linuxMethods = join(root, 'linux', 'src', 'citizen_sdk_flutter_codec.cc');
+    const methodSource = readFileSync(linuxMethods, 'utf8');
+    writeFileSync(
+      linuxMethods,
+      methodSource.replace('"syncFinalizedHistory",', '"syncFinalizedHistorY",'),
+    );
+    assert.throws(
+      () => assertFlutterBindingContract(root),
+      /Linux Flutter 方法合同漂移：必须精确为固定 22 项/,
+    );
+
+    writeFileSync(
+      linuxMethods,
+      methodSource.replace('    "initializeFinalizedHistory", "syncFinalizedHistory",\n',
+                           '    "initializeFinalizedHistory",\n'),
+    );
+    assert.throws(
+      () => assertFlutterBindingContract(root),
+      /Linux Flutter 方法合同漂移：必须精确为固定 22 项/,
+    );
+    writeFileSync(linuxMethods, methodSource);
+
+    const linuxChannels = join(root, 'linux', 'src', 'citizen_sdk_flutter_codec.hpp');
+    const channelSource = readFileSync(linuxChannels, 'utf8');
+    writeFileSync(
+      linuxChannels,
+      channelSource.replace('citizen/sdk/events/v1', 'citizen/sdk/events/v2'),
+    );
+    assert.throws(
+      () => assertFlutterBindingContract(root),
+      /Linux Flutter EventChannel 合同漂移/,
+    );
+    writeFileSync(linuxChannels, channelSource);
+    const windowsMethods = join(root, 'windows/src/citizen_sdk_flutter_codec.cc');
+    const windowsMethodSource = readFileSync(windowsMethods, 'utf8');
+    for (const replacement of ['"syncFinalizedHistorY",', '']) {
+      writeFileSync(windowsMethods, windowsMethodSource.replace('"syncFinalizedHistory",', replacement));
+      assert.throws(() => assertFlutterBindingContract(root), /Windows Flutter 方法合同漂移/u);
+    }
+    writeFileSync(windowsMethods, windowsMethodSource);
+    const windowsChannels = join(root, 'windows/src/citizen_sdk_flutter_codec.hpp');
+    const windowsChannelSource = readFileSync(windowsChannels, 'utf8');
+    for (const channel of ['core', 'events']) {
+      writeFileSync(windowsChannels, windowsChannelSource.replace(`citizen/sdk/${channel}/v1`, `citizen/sdk/${channel}/invalid`));
+      assert.throws(() => assertFlutterBindingContract(root), /Windows Flutter (?:Method|Event)Channel 合同漂移/u);
+    }
+    writeFileSync(windowsChannels, windowsChannelSource);
+    rmSync(windowsMethods);
+    assert.throws(() => assertFlutterBindingContract(root), /Windows method/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -2093,7 +4396,7 @@ test('产品文档固定根说明、架构与平台模块的完整反向闭集',
   const root = mkdtempSync(join(workRoot, 'release-documentation-test-'));
   try {
     copyFileSync(join(citizenSdkRoot, 'README.md'), join(root, 'README.md'));
-    for (const relativeRoot of ['docs', 'android', 'darwin', 'lib/src', 'linux']) {
+    for (const relativeRoot of ['docs', 'android', 'darwin', 'lib/src', 'linux', 'windows']) {
       const destination = join(root, ...relativeRoot.split('/'));
       mkdirSync(dirname(destination), { recursive: true });
       cpSync(join(citizenSdkRoot, ...relativeRoot.split('/')), destination, {
@@ -2132,6 +4435,9 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
   const root = mkdtempSync(join(workRoot, 'release-hosted-package-test-'));
   try {
     cpSync(join(citizenSdkRoot, 'lib'), join(root, 'lib'), { recursive: true });
+    cpSync(join(citizenSdkRoot, 'linux'), join(root, 'linux'), { recursive: true });
+    // 总包合同与平台专属合同使用同一完整源码集合，不能遗漏 Windows 后只测旧平台。
+    cpSync(join(citizenSdkRoot, 'windows'), join(root, 'windows'), { recursive: true });
     for (const path of [
       '.pubignore',
       'CHANGELOG.md',
@@ -2225,6 +4531,18 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
       join(citizenSdkRoot, 'linux', 'CMakeLists.txt'),
       linuxVersionPath,
     );
+
+    const windowsVersionPath = join(root, 'windows', 'CMakeLists.txt');
+    const windowsVersionSource = readFileSync(windowsVersionPath, 'utf8');
+    writeFileSync(windowsVersionPath, windowsVersionSource.replace(
+      'project(CitizenSDKHost VERSION 1.0.0 LANGUAGES C CXX)',
+      'project(CitizenSDKHost VERSION 1.0.1 LANGUAGES C CXX)',
+    ));
+    assert.throws(
+      () => assertHostedPackageSource(root),
+      /包版本不一致：pubspec\.yaml=1\.0\.0；windows\/CMakeLists\.txt=1\.0\.1/,
+    );
+    writeFileSync(windowsVersionPath, windowsVersionSource);
 
     writeFileSync(pubignorePath, 'drift\n');
     assert.throws(
@@ -2328,6 +4646,7 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
       'android/src/test',
       'darwin/Tests',
       'linux/test',
+      'windows/test',
     ]) {
       const destination = join(root, ...relativeRoot.split('/'));
       mkdirSync(dirname(destination), { recursive: true });
@@ -2654,6 +4973,132 @@ test('私钥扫描器不误报自身且仍拒绝真实 PEM 标记', () => {
   }
 });
 
+test('本机打包路径执行唯一门禁，只接受两固定根的严格后代并拒绝越界及链接', () => {
+  const source = readFileSync(new URL('./release.mjs', import.meta.url), 'utf8');
+  const constantNames = ['TATA_CONSOLE_TARGET_ROOT', 'TATA_CONSOLE_WORK_ROOT'];
+  const constants = constantNames.map((name) => {
+    const matches = [...source.matchAll(new RegExp(`^const ${name} = '[^'\\r\\n]*';$`, 'gm'))];
+    assert.equal(matches.length, 1, `唯一生产常量：${name}`);
+    return matches[0][0];
+  });
+  const functionNames = ['fail', 'assertSafeTargetPath', 'assertLocalTarget'];
+  const functions = functionNames.map((name) => {
+    const matches = [...source.matchAll(new RegExp(
+      `^function ${name}\\([^\\n]*\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'gm',
+    ))];
+    assert.equal(matches.length, 1, `唯一生产函数：${name}`);
+    return matches[0][0];
+  });
+  // GitHub 分支仍在通用路径检查之后；不把本机进程伪装成 GitHub 来绕过门禁。
+  assert.match(functions[2], /const target = assertSafeTargetPath\(path, label\);\n  if \(process\.env\.GITHUB_ACTIONS === 'true'\) return target;/u);
+  const expectedRoots = [
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK',
+  ];
+
+  // 仅替换文件系统事实，不复制路径算法，也不在其它 OS 创建真实 /Users 目录。
+  // 两个根的金标独立于生产常量；VM 执行提取到的完整原文，不修改真实 process.env。
+  const entries = new Map();
+  for (const root of expectedRoots) {
+    let current = root;
+    for (;;) {
+      entries.set(current, 'directory');
+      if (current === '/') break;
+      current = posix.dirname(current);
+    }
+  }
+  const contract = runInNewContext([
+    ...constants,
+    ...functions,
+    '({ assertLocalTarget, roots: [TATA_CONSOLE_TARGET_ROOT, TATA_CONSOLE_WORK_ROOT] })',
+  ].join('\n'), {
+    resolve: posix.resolve,
+    join: posix.join,
+    sep: posix.sep,
+    process: Object.freeze({ env: Object.freeze({}) }),
+    existsSync: (path) => entries.has(path) && entries.get(path) !== 'dangling',
+    lstatSync: (path) => {
+      const kind = entries.get(path);
+      if (kind === undefined) throw Object.assign(new Error('fixture path is absent'), { code: 'ENOENT' });
+      return {
+        isDirectory: () => kind === 'directory',
+        isSymbolicLink: () => kind === 'link' || kind === 'dangling',
+      };
+    },
+  }, { timeout: 1000 });
+  assert.deepEqual(Array.from(contract.roots), expectedRoots);
+  const check = (path) => contract.assertLocalTarget(path, '路径夹具');
+  const withEntry = (path, kind, action) => {
+    const previous = entries.get(path);
+    if (kind === undefined) entries.delete(path);
+    else entries.set(path, kind);
+    try { action(); }
+    finally {
+      if (previous === undefined) entries.delete(path);
+      else entries.set(path, previous);
+    }
+  };
+
+  for (const root of expectedRoots) {
+    for (const suffix of ['/candidate', '/nested/native-output', '/archive/citizensdk.tgz']) {
+      assert.equal(check(`${root}${suffix}`), `${root}${suffix}`);
+    }
+    for (const path of [root, `${root}-other/candidate`, `${root}x/candidate`]) {
+      assert.throws(() => check(path), /本地路径/u);
+    }
+    for (const path of [
+      `${root}/../candidate`, `${root}/nested/../../candidate`, `${root}/./candidate`,
+      `${root}//candidate`, `${root}/candidate/`,
+    ]) {
+      assert.throws(() => check(path), /绝对规范路径/u);
+    }
+    withEntry(root, undefined, () => {
+      assert.throws(() => check(`${root}/candidate`), /中央目录不存在/u);
+    });
+    withEntry(root, 'file', () => {
+      assert.throws(() => check(`${root}/candidate`), /祖先不是目录/u);
+    });
+    const otherRoot = expectedRoots.find((value) => value !== root);
+    withEntry(otherRoot, undefined, () => {
+      assert.equal(check(`${root}/candidate`), `${root}/candidate`);
+    });
+    for (const path of [posix.dirname(root), root, `${root}/middle`]) {
+      const descendant = path === `${root}/middle` ? `${path}/missing/leaf` : `${root}/candidate`;
+      for (const kind of ['link', 'dangling']) {
+        withEntry(path, kind, () => {
+          assert.throws(() => check(descendant), /符号链接/u);
+        });
+      }
+      withEntry(path, 'file', () => {
+        assert.throws(() => check(descendant), /祖先不是目录/u);
+      });
+    }
+    const leaf = `${root}/candidate`;
+    for (const kind of ['link', 'dangling']) {
+      withEntry(leaf, kind, () => { assert.throws(() => check(leaf), /符号链接/u); });
+    }
+    // 路径级门禁允许最终普通文件；是否已存在/能否覆盖由原有打包入口单独拒绝。
+    withEntry(leaf, 'file', () => { assert.equal(check(leaf), leaf); });
+  }
+  for (const path of [
+    '/Users/rhett/TATA/tataconsole/target/citizensdk/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/citizensdk/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/TUYU/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/TATA/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/macOS/candidate',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/Windows/candidate',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk',
+  ]) {
+    assert.throws(() => check(path), /本地路径/u);
+  }
+  for (const path of ['', 'relative/candidate', '.', '..']) {
+    assert.throws(() => check(path), /绝对规范路径/u);
+  }
+});
+
 test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', () => {
   const root = mkdtempSync(join(workRoot, 'release-path-guard-test-'));
   try {
@@ -2698,7 +5143,6 @@ test('Release 在创建目录前拒绝路径穿越与既存符号链接祖先', 
 
 test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir 前拒绝穿越和中间符号链接', () => {
   const root = mkdtempSync(join(workRoot, 'native-path-guard-test-'));
-  const hostTask = `/Users/rhett/TATA/tataconsole/target/.work/citizensdk-host-path-${process.pid}`;
   try {
     const nativeBuildScript = readFileSync(
       join(citizenSdkRoot, 'scripts', 'build-native.sh'),
@@ -2788,8 +5232,8 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
       CITIZENSDK_NATIVE_OUTPUT_DIR: join(root, 'native-output'),
       GITHUB_ACTIONS: 'false',
     };
-    const traversalResult = spawnSync('/bin/bash', ['scripts/build-native.sh', 'android'], {
-      cwd: citizenSdkRoot,
+    const traversalResult = spawnSync('/bin/bash', [join(citizenSdkRoot, 'scripts/build-native.sh'), 'android'], {
+      cwd: workRoot,
       encoding: 'utf8',
       env: { ...baseEnvironment, CITIZENSDK_WORK_DIR: traversal },
     });
@@ -2801,8 +5245,8 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
     const redirect = join(root, 'source-link');
     assert.equal(existsSync(sourceProbe), false);
     symlinkSync(citizenSdkRoot, redirect, 'dir');
-    const symlinkResult = spawnSync('/bin/bash', ['scripts/build-native.sh', 'android'], {
-      cwd: citizenSdkRoot,
+    const symlinkResult = spawnSync('/bin/bash', [join(citizenSdkRoot, 'scripts/build-native.sh'), 'android'], {
+      cwd: workRoot,
       encoding: 'utf8',
       env: {
         ...baseEnvironment,
@@ -2813,36 +5257,65 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
     assert.match(symlinkResult.stderr, /符号链接/);
     assert.equal(existsSync(sourceProbe), false);
 
+    // Extract the production predicate verbatim. Unlike the real traversal
+    // and symlink rejection probes above, an accepted host path would reach
+    // canonical_directory and mkdir in the full script. This read-only seam
+    // verifies both host branches without writing outside this test workRoot.
+    const predicateFunctions = [
+      'fail', 'assert_safe_directory_path', 'local_build_path_is_allowed',
+    ].map((name) => {
+      const declarations = [...nativeBuildScript.matchAll(new RegExp(
+        `^${name}\\(\\) \\{\\n[\\s\\S]*?^\\}\\n`, 'gm',
+      ))];
+      assert.equal(declarations.length, 1, `唯一生产函数：${name}`);
+      return declarations[0][0];
+    });
+    const predicateRoots = [
+      'tata_console_target_root', 'citizensdk_target_root', 'tata_console_work_root',
+    ].map((name) => {
+      const declarations = [...nativeBuildScript.matchAll(new RegExp(
+        `^${name}="[^"\\n]+"$`, 'gm',
+      ))];
+      assert.equal(declarations.length, 1, `唯一生产路径常量：${name}`);
+      return declarations[0][0];
+    });
+    const hostPredicate = [
+      'set -euo pipefail',
+      ...predicateRoots,
+      ...predicateFunctions,
+      'assert_safe_directory_path "$1" "宿主路径合同"',
+      'local_build_path_is_allowed "$1"',
+    ].join('\n');
+    assert.doesNotMatch(hostPredicate, /canonical_directory|\bmkdir\b/u);
+    const virtualHostTask = `/Users/rhett/TATA/tataconsole/target/.work/citizensdk-host-path-${process.pid}`;
     const hostEnvironment = {
       ...process.env,
       GITHUB_ACTIONS: 'false',
-      TATA_CONSOLE_WORK_DIR: hostTask,
-      CITIZENSDK_WORK_DIR: join(hostTask, 'citizensdk/work'),
-      CITIZENSDK_NATIVE_OUTPUT_DIR: join(hostTask, 'citizensdk/output'),
+      TATA_CONSOLE_WORK_DIR: virtualHostTask,
     };
     const acceptedHostResult = spawnSync(
-      '/bin/bash', ['scripts/build-native.sh', 'invalid-target'], {
-        cwd: citizenSdkRoot,
+      '/bin/bash', ['-c', hostPredicate, 'citizensdk-host-path-contract',
+        join(virtualHostTask, 'citizensdk/output')], {
+        cwd: workRoot,
         encoding: 'utf8',
         env: hostEnvironment,
       },
     );
-    assert.notEqual(acceptedHostResult.status, 0);
-    assert.match(acceptedHostResult.stderr, /用法：/u);
-    assert.doesNotMatch(acceptedHostResult.stderr, /本机构建目录必须|真实路径越出/u);
+    assert.equal(acceptedHostResult.status, 0, acceptedHostResult.stderr);
+    assert.equal(acceptedHostResult.stdout, '');
+    assert.equal(acceptedHostResult.stderr, '');
 
     const escapedHostResult = spawnSync(
-      '/bin/bash', ['scripts/build-native.sh', 'invalid-target'], {
-        cwd: citizenSdkRoot,
+      '/bin/bash', ['-c', hostPredicate, 'citizensdk-host-path-contract',
+        join(virtualHostTask, 'other-output')], {
+        cwd: workRoot,
         encoding: 'utf8',
-        env: {
-          ...hostEnvironment,
-          CITIZENSDK_NATIVE_OUTPUT_DIR: join(hostTask, 'other-output'),
-        },
+        env: hostEnvironment,
       },
     );
-    assert.notEqual(escapedHostResult.status, 0);
-    assert.match(escapedHostResult.stderr, /本机构建目录必须/u);
+    assert.equal(escapedHostResult.status, 1, escapedHostResult.stderr);
+    assert.equal(escapedHostResult.stdout, '');
+    assert.equal(escapedHostResult.stderr, '');
 
     const androidPlugin = readFileSync(join(citizenSdkRoot, 'android', 'build.gradle'), 'utf8');
     const androidNative = readFileSync(
@@ -2856,7 +5329,6 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
     }
   } finally {
     rmSync(root, { recursive: true, force: true });
-    rmSync(hostTask, { recursive: true, force: true });
   }
 });
 
@@ -2896,9 +5368,9 @@ test('Android JNI 导出闭集要求唯一版本化 JNI_OnLoad', () => {
       );
       return spawnSync(
         '/bin/bash',
-        ['scripts/build-native.sh', '__test-jni-symbols'],
+        [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-jni-symbols'],
         {
-          cwd: citizenSdkRoot,
+          cwd: workRoot,
           encoding: 'utf8',
           env: {
             ...process.env,
@@ -2941,9 +5413,9 @@ test('Android ELF 固定双库 SONAME 并拒绝 DT_NEEDED 构建机路径', () =
       writeFileSync(jni, jniDynamic);
       return spawnSync(
         '/bin/bash',
-        ['scripts/build-native.sh', '__test-android-elf-identity'],
+        [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-android-elf-identity'],
         {
-          cwd: citizenSdkRoot,
+          cwd: workRoot,
           encoding: 'utf8',
           env: {
             ...process.env,
@@ -2982,6 +5454,548 @@ test('Android ELF 固定双库 SONAME 并拒绝 DT_NEEDED 构建机路径', () =
   }
 });
 
+test('Linux 安装闭集固定公开头、同平台双库、CMake 和三项链资产', () => {
+  const shell = [
+    'set -euo pipefail',
+    nativeShellFunctions(['fail', 'linux_install_files']),
+    'linux_install_files "$1"',
+  ].join('\n');
+  for (const platform of ['LinuxARM', 'LinuxAMD']) {
+    const result = spawnSync('/bin/bash', ['-c', shell, 'linux-install-files', platform], {
+      encoding: 'utf8',
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const expected = linuxInstallFixturePaths(platform);
+    const actual = result.stdout.trim().split('\n').sort();
+    assert.equal(actual.length, 19);
+    assert.equal(new Set(actual).size, 19);
+    assert.deepEqual(actual, expected);
+    assert.equal(actual.some((path) => /plugin|src\/|test\//u.test(path)), false);
+  }
+  const rejected = spawnSync('/bin/bash', ['-c', shell, 'linux-install-files', 'unregistered'], {
+    encoding: 'utf8',
+  });
+  assert.notEqual(rejected.status, 0);
+});
+
+test('Linux 安装复制执行唯一生产函数，完整预检后才写入且不覆盖既有七头', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-install-copy-test-'));
+  try {
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions([
+        'fail', 'assert_safe_directory_path', 'assert_descendant_path',
+        'prepare_safe_directory', 'assert_new_file', 'prepare_safe_output_file',
+        'linux_install_files', 'copy_linux_install',
+      ]),
+      'copy_linux_install "$1" "$2" "$3" "$4"',
+    ].join('\n');
+    const run = (source, destination, platform) => spawnSync('/bin/bash', [
+      '-c', shell, 'linux-install-copy', source, destination, platform, root,
+    ], { encoding: 'utf8' });
+    // 不跟随链接；连空目录也纳入快照，确保失败路径没有留下半份投影。
+    const snapshot = (directory) => {
+      const entries = [];
+      const visit = (current, prefix) => {
+        for (const item of readdirSync(current, { withFileTypes: true })
+          .sort((left, right) => left.name.localeCompare(right.name))) {
+          const relative = prefix ? `${prefix}/${item.name}` : item.name;
+          const path = join(current, item.name);
+          if (item.isDirectory()) {
+            entries.push([relative, 'directory']);
+            visit(path, relative);
+          } else if (item.isFile()) {
+            entries.push([relative, 'file', readFileSync(path)]);
+          } else if (item.isSymbolicLink()) {
+            entries.push([relative, 'link', readlinkSync(path)]);
+          } else {
+            assert.fail(`复制夹具出现特殊节点：${relative}`);
+          }
+        }
+      };
+      visit(directory, '');
+      return entries;
+    };
+    for (const platform of linuxPlatforms) {
+      const platformRoot = join(root, platform);
+      const source = join(platformRoot, 'input');
+      writeLinuxInstallFixture(source, platform);
+      const paths = linuxInstallFixturePaths(platform);
+      const fresh = join(platformRoot, 'fresh');
+      const first = run(source, fresh, platform);
+      assert.equal(first.status, 0, first.stderr);
+      assert.deepEqual(snapshot(fresh).filter((entry) => entry[1] === 'file')
+        .map((entry) => entry[0]).sort(), paths);
+      for (const path of paths) {
+        assert.deepEqual(readFileSync(join(fresh, path)), readFileSync(join(source, path)));
+      }
+
+      const merged = join(platformRoot, 'merged');
+      const headers = paths.filter((path) => path.startsWith('include/citizen_sdk/'));
+      assert.equal(headers.length, 7);
+      const retained = new Map();
+      for (const path of headers) {
+        const destination = join(merged, path);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(join(source, path), destination);
+        utimesSync(destination, 946684800, 946684800);
+        const state = statSync(destination);
+        retained.set(path, { ino: state.ino, mtimeMs: state.mtimeMs, mode: state.mode });
+      }
+      const second = run(source, merged, platform);
+      assert.equal(second.status, 0, second.stderr);
+      assert.deepEqual(snapshot(merged).filter((entry) => entry[1] === 'file')
+        .map((entry) => entry[0]).sort(), paths);
+      for (const [path, retainedState] of retained) {
+        const state = statSync(join(merged, path));
+        assert.deepEqual({ ino: state.ino, mtimeMs: state.mtimeMs, mode: state.mode }, retainedState);
+        assert.deepEqual(readFileSync(join(merged, path)), readFileSync(join(source, path)));
+      }
+
+      // 故意破坏排在最后的资产：即使前面十八项都有效，也不能先写任何文件。
+      const last = paths.at(-1);
+      const missingSource = join(source, last);
+      const missingBytes = readFileSync(missingSource);
+      const missingDestination = join(platformRoot, 'missing');
+      rmSync(missingSource);
+      try {
+        const missing = run(source, missingDestination, platform);
+        assert.notEqual(missing.status, 0);
+        assert.match(missing.stderr, /安装投影缺少普通文件/u);
+        assert.equal(existsSync(missingDestination), false);
+      } finally {
+        writeFileSync(missingSource, missingBytes);
+      }
+
+      const driftDestination = join(platformRoot, 'drift');
+      const drift = join(driftDestination, last);
+      mkdirSync(dirname(drift), { recursive: true });
+      writeFileSync(drift, 'different public asset\n');
+      const beforeDrift = snapshot(driftDestination);
+      const rejected = run(source, driftDestination, platform);
+      assert.notEqual(rejected.status, 0);
+      assert.match(rejected.stderr, /重叠安装文件字节漂移/u);
+      assert.deepEqual(snapshot(driftDestination), beforeDrift);
+
+      const outside = join(platformRoot, 'outside');
+      mkdirSync(outside);
+      const linkedDestination = join(platformRoot, 'linked-destination');
+      mkdirSync(join(linkedDestination, 'lib'), { recursive: true });
+      symlinkSync(outside, join(linkedDestination, 'lib', platform), 'dir');
+      const beforeLink = snapshot(linkedDestination);
+      const linked = run(source, linkedDestination, platform);
+      assert.notEqual(linked.status, 0);
+      assert.match(linked.stderr, /符号链接/u);
+      assert.deepEqual(snapshot(linkedDestination), beforeLink);
+      assert.deepEqual(snapshot(outside), []);
+
+      const linkedSource = join(platformRoot, 'linked-source');
+      symlinkSync(source, linkedSource, 'dir');
+      const linkedOutput = join(platformRoot, 'linked-source-output');
+      const sourceRejected = run(linkedSource, linkedOutput, platform);
+      assert.notEqual(sourceRejected.status, 0);
+      assert.match(sourceRejected.stderr, /符号链接/u);
+      assert.equal(existsSync(linkedOutput), false);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux 安装验收执行真实文件闭集、字节、版本、平台和 ELF 失败路径', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-install-projection-test-'));
+  try {
+    const platform = 'LinuxARM';
+    const prefix = join(root, 'install');
+    const coreSource = join(root, 'core-input.so');
+    const packageDir = join(prefix, 'lib', platform, 'cmake', 'CitizenSDK');
+    writeFileSync(coreSource, 'core-fixture');
+    for (const relative of linuxInstallFixturePaths(platform)) {
+      const destination = join(prefix, relative);
+      mkdirSync(dirname(destination), { recursive: true });
+      let source;
+      if (relative.startsWith('include/citizen_sdk/')) source = join(citizenSdkRoot, 'linux', relative);
+      else if (relative.startsWith('include/')) source = join(citizenSdkRoot, relative);
+      else if (relative.startsWith('share/')) source = join(citizenSdkRoot, 'assets', 'citizenchain', basename(relative));
+      else if (relative.endsWith('/CitizenSDKDependencies.cmake')) {
+        source = join(citizenSdkRoot, 'linux', 'cmake', basename(relative));
+      }
+      if (source) copyFileSync(source, destination);
+      else writeFileSync(destination, relative.endsWith('/libcitizensdk.so') ? 'core-fixture' : 'fixture\n');
+    }
+    writeFileSync(join(packageDir, 'CitizenSDKConfig.cmake'), `set(_CITIZENSDK_PACKAGE_PLATFORM "${platform}")\n`);
+    writeFileSync(join(packageDir, 'CitizenSDKConfigVersion.cmake'), 'set(PACKAGE_VERSION "1.0.0")\n');
+
+    // 只替换外部 readelf/nm 的文本输出，目录枚举、原文比对、版本及全部
+    // 生产 ELF 验收仍执行真实构建器函数；不是模拟“已编译”的运行库。
+    const readelf = join(root, 'readelf.sh');
+    const nm = join(root, 'nm.sh');
+    writeFileSync(readelf, [
+      '#!/bin/bash', 'set -euo pipefail', 'here="$(dirname "$0")"',
+      'case "$1" in -h) /bin/cat "$here/header.txt" ;;',
+      '  --version-info) /bin/cat "$here/versions.txt" ;;',
+      '  -d) case "$2" in */libcitizensdk.so) /bin/cat "$here/core-dynamic.txt" ;;',
+      '    */libcitizensdk_host.so) /bin/cat "$here/host-dynamic.txt" ;; *) exit 9 ;; esac ;;',
+      '  *) exit 8 ;; esac', '',
+    ].join('\n'));
+    writeFileSync(nm, [
+      '#!/bin/bash', 'set -euo pipefail', 'here="$(dirname "$0")"',
+      'case "${!#}" in */libcitizensdk.so) /bin/cat "$here/core-symbols.txt" ;;',
+      '  */libcitizensdk_host.so) /bin/cat "$here/host-symbols.txt" ;; *) exit 7 ;; esac', '',
+    ].join('\n'));
+    chmodSync(readelf, 0o700);
+    chmodSync(nm, 0o700);
+    writeFileSync(join(root, 'header.txt'), "Class: ELF64\nData: 2's complement, little endian\nType: DYN\nMachine: AArch64\n");
+    writeFileSync(join(root, 'versions.txt'), 'Name: GLIBC_2.31\n');
+    writeFileSync(join(root, 'core-dynamic.txt'), '0 (SONAME) [libcitizensdk.so]\n0 (NEEDED) [libc.so.6]\n');
+    writeFileSync(join(root, 'host-dynamic.txt'), '0 (SONAME) [libcitizensdk_host.so]\n0 (NEEDED) [libcitizensdk.so]\n0 (RUNPATH) [$ORIGIN]\n');
+    for (const [kind, header] of [
+      ['core', join(citizenSdkRoot, 'include', 'citizensdk.h')],
+      ['host', join(citizenSdkRoot, 'linux', 'include', 'citizen_sdk', 'citizensdk_host.h')],
+    ]) {
+      const names = [...new Set([...readFileSync(header, 'utf8')
+        .matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]))].sort();
+      assert.equal(names.length, kind === 'core' ? 70 : 13);
+      writeFileSync(join(root, `${kind}-symbols.txt`), `${names.map((name) => `0 T ${name}`).join('\n')}\n`);
+    }
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions([
+        'fail', 'assert_safe_directory_path', 'linux_install_files', 'verify_linux_install',
+        'product_header_symbols', 'product_library_symbols', 'verify_product_abi_symbols',
+        'linux_host_header_symbols', 'linux_elf_dynamic_values', 'version_is_greater',
+        'verify_linux_glibc_contract', 'verify_linux_machine',
+        'verify_linux_host_symbols', 'verify_linux_elf_identity',
+      ]),
+      'sdk_dir="$1"', 'work_dir="$2"', 'linux_source_root="$sdk_dir/linux"',
+      'apple_asset_root="$sdk_dir/assets/citizenchain"', 'product_header="$sdk_dir/include/citizensdk.h"',
+      'linux_glibc_baseline=2.31',
+      'verify_linux_install "$3" "$4" 1.0.0 "$5" "$6" "$7"',
+    ].join('\n');
+    const run = () => spawnSync('/bin/bash', ['-c', shell, 'linux-install-contract',
+      citizenSdkRoot, root, prefix, platform, coreSource, readelf, nm], { encoding: 'utf8' });
+    const positive = run();
+    assert.equal(positive.status, 0, positive.stderr);
+    const changed = (path, text, message) => {
+      const original = readFileSync(path);
+      try {
+        writeFileSync(path, text);
+        const result = run();
+        assert.notEqual(result.status, 0);
+        assert.match(result.stderr, message);
+      } finally { writeFileSync(path, original); }
+    };
+    changed(join(prefix, 'include', 'citizensdk.h'), 'drift', /头字节漂移/u);
+    changed(join(prefix, 'share/citizensdk/citizenchain/manifest.json'), '{}', /资产字节漂移/u);
+    changed(join(prefix, `lib/${platform}/libcitizensdk.so`), 'drift', /Core 字节漂移/u);
+    changed(join(packageDir, 'CitizenSDKDependencies.cmake'), '# drift', /依赖合同漂移/u);
+    changed(join(packageDir, 'CitizenSDKConfigVersion.cmake'), 'set(PACKAGE_VERSION "1.0.1")\n', /版本不一致/u);
+    changed(join(packageDir, 'CitizenSDKConfig.cmake'), 'set(_CITIZENSDK_PACKAGE_PLATFORM "LinuxAMD")\n', /平台不一致/u);
+    changed(join(packageDir, 'CitizenSDKTargets.cmake'), `# ${citizenSdkRoot}/linux\n`, /绝对路径/u);
+    changed(join(root, 'host-symbols.txt'), `${readFileSync(join(root, 'host-symbols.txt'), 'utf8')}0 T foreign_probe\n`, /额外=foreign_probe/u);
+    changed(join(root, 'host-dynamic.txt'), '0 (SONAME) [libcitizensdk_host.so]\n0 (RUNPATH) [$ORIGIN]\n', /精确依赖一次/u);
+    changed(join(root, 'host-dynamic.txt'), '0 (SONAME) [libcitizensdk_host.so]\n0 (NEEDED) [/outside/libcitizensdk.so]\n0 (RUNPATH) [$ORIGIN]\n', /DT_NEEDED/u);
+    changed(join(root, 'versions.txt'), 'Name: GLIBC_2.32\n', /超过固定基线/u);
+
+    const extra = join(prefix, 'unexpected');
+    writeFileSync(extra, 'extra');
+    assert.match(run().stderr, /安装文件闭集/u);
+    rmSync(extra);
+    mkdirSync(extra);
+    assert.match(run().stderr, /安装目录闭集/u);
+    rmSync(extra, { recursive: true });
+    const header = join(prefix, 'include', 'citizensdk.h');
+    rmSync(header);
+    assert.match(run().stderr, /安装文件闭集/u);
+    symlinkSync(join(citizenSdkRoot, 'include', 'citizensdk.h'), header);
+    assert.match(run().stderr, /符号链接/u);
+    rmSync(header);
+    copyFileSync(join(citizenSdkRoot, 'include', 'citizensdk.h'), header);
+    const final = run();
+    assert.equal(final.status, 0, final.stderr);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux ELF 机器字段逐项验证两种官方目标并拒绝错误头', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-elf-machine-test-'));
+  try {
+    const readelf = join(root, 'readelf.sh');
+    const library = join(root, 'elf-header.txt');
+    writeFileSync(readelf, '#!/bin/bash\nset -euo pipefail\n/bin/cat "$2"\n');
+    chmodSync(readelf, 0o700);
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'verify_linux_machine']),
+      'verify_linux_machine "$1" "$2" "$3" "Linux fixture"',
+    ].join('\n');
+    const header = (machine) => [
+      '  Class: ELF64',
+      "  Data: 2's complement, little endian",
+      '  Type: DYN (Shared object file)',
+      `  Machine: ${machine}`,
+      '',
+    ].join('\n');
+    const run = (text, machine) => {
+      writeFileSync(library, text);
+      return spawnSync('/bin/bash', ['-c', shell, 'linux-machine-contract',
+        library, readelf, machine], { encoding: 'utf8' });
+    };
+    for (const machine of ['AArch64', 'Advanced Micro Devices X86-64']) {
+      const result = run(header(machine), machine);
+      assert.equal(result.status, 0, result.stderr);
+    }
+    for (const text of [
+      header('AArch64').replace('ELF64', 'ELF32'),
+      header('AArch64').replace('little endian', 'big endian'),
+      header('AArch64').replace('DYN', 'EXEC'),
+      header('Advanced Micro Devices X86-64'),
+      '',
+    ]) {
+      const result = run(text, 'AArch64');
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /ELF64|little-endian|ET_DYN|机器类型漂移/u);
+    }
+    writeFileSync(readelf, '#!/bin/bash\nexit 19\n');
+    const unreadable = run(header('AArch64'), 'AArch64');
+    assert.notEqual(unreadable.status, 0);
+    assert.match(unreadable.stderr, /无法读取/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux GLIBC 验收拒绝超基线、动态 C++ ABI 和 readelf 失败', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-glibc-test-'));
+  try {
+    const readelf = join(root, 'readelf.sh');
+    const library = join(root, 'elf-versions.txt');
+    writeFileSync(readelf, '#!/bin/bash\nset -euo pipefail\n/bin/cat "$2"\n');
+    chmodSync(readelf, 0o700);
+    const shell = [
+      'set -euo pipefail',
+      'linux_glibc_baseline=2.31',
+      nativeShellFunctions(['fail', 'version_is_greater', 'verify_linux_glibc_contract']),
+      'verify_linux_glibc_contract "$1" "$2" "Linux fixture"',
+    ].join('\n');
+    const run = (text) => {
+      writeFileSync(library, text);
+      return spawnSync('/bin/bash', ['-c', shell, 'linux-glibc-contract',
+        library, readelf], { encoding: 'utf8' });
+    };
+    const valid = run('Name: GLIBC_2.2.5\nName: GLIBC_2.17\nName: GLIBC_2.31\n');
+    assert.equal(valid.status, 0, valid.stderr);
+    for (const text of [
+      'Name: GLIBC_2.32\n', 'Name: GLIBC_2.100\n',
+      'Name: GLIBCXX_3.4\n', 'Name: CXXABI_1.3\n',
+    ]) {
+      const result = run(text);
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /GLIBC|C\+\+|ABI/u);
+    }
+    writeFileSync(readelf, '#!/bin/bash\nexit 23\n');
+    const unreadable = run('');
+    assert.notEqual(unreadable.status, 0, '工具失败不得冒充没有版本依赖');
+    assert.match(unreadable.stderr, /无法读取|version|版本/u);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux CTest 必须命中完整名称闭集而非仅测试数量', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-ctest-inventory-test-'));
+  try {
+    const command = join(root, 'ctest.sh');
+    const inventory = join(root, 'inventory.txt');
+    writeFileSync(command, '#!/bin/bash\nset -euo pipefail\n/bin/cat "$(dirname "$0")/inventory.txt"\n');
+    chmodSync(command, 0o700);
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'verify_linux_ctest_inventory']),
+      'linux_source_root="$5/linux"',
+      'verify_linux_ctest_inventory "$1" "$2" "$3" "$4"',
+    ].join('\n');
+    const run = (label, names, count = names.length) => {
+      writeFileSync(inventory, `${names.map((name, index) => `  Test #${index + 1}: CitizenSDK.Linux.${name}`).join('\n')}\nTotal Tests: ${count}\n`);
+      return spawnSync('/bin/bash', ['-c', shell, 'linux-ctest-inventory',
+        command, root, label, String(count), citizenSdkRoot], { encoding: 'utf8' });
+    };
+    const cases = {
+      LinuxHost: [
+        'api_contract', 'assets', 'host_operation', 'lifecycle', 'public_store',
+        'record_key', 'secure_store', 'sensitive_buffer', 'secret_vault',
+        'secret_boundary', 'tpm2', 'wallet_flow',
+      ].map((name) => `citizen_sdk_${name}_test`),
+      LinuxFlutter: [
+        'codec', 'sessions', 'wallet_flow', 'environment', 'plugin', 'secret_boundary',
+      ].map((name) => `citizen_sdk_flutter_${name}_test`),
+      LinuxConsumer: ['CConsumer', 'CppConsumer'],
+    };
+    for (const [label, names] of Object.entries(cases)) {
+      const valid = run(label, names);
+      assert.equal(valid.status, 0, valid.stderr);
+      for (const rejected of [[], names.slice(1), [...names, names[0]],
+        ['unregistered', ...names.slice(1)], [names[1], ...names.slice(1)]]) {
+        const result = run(label, rejected, names.length);
+        assert.notEqual(result.status, 0, `${label} 不得以同数量替换或遗漏测试`);
+        assert.match(result.stderr, /CTest|合同|闭集/u);
+      }
+    }
+    assert.notEqual(run('Unregistered', cases.LinuxConsumer).status, 0);
+    writeFileSync(command, '#!/bin/bash\nexit 9\n');
+    const failed = run('LinuxConsumer', cases.LinuxConsumer);
+    assert.notEqual(failed.status, 0);
+    assert.match(failed.stderr, /无法枚举/u);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Linux 消费者依赖必须解析到本轮唯一安装双库', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-consumer-resolution-test-'));
+  try {
+    const command = join(root, 'ldd');
+    const output = join(root, 'resolution.txt');
+    const prefix = join(root, 'installed');
+    writeFileSync(command, '#!/bin/bash\nset -euo pipefail\n/bin/cat "$(dirname "$0")/resolution.txt"\n');
+    chmodSync(command, 0o700);
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'verify_linux_runtime_resolution']),
+      'verify_linux_runtime_resolution "$1" "$2"',
+    ].join('\n');
+    const run = (text) => {
+      writeFileSync(output, text);
+      return spawnSync('/bin/bash', ['-c', shell, 'linux-consumer-resolution',
+        join(root, 'fixture'), prefix], {
+        encoding: 'utf8', env: { ...process.env, PATH: `${root}:${process.env.PATH}` },
+      });
+    };
+    const valid = [
+      `libcitizensdk.so => ${prefix}/libcitizensdk.so (0x0)`,
+      `libcitizensdk_host.so => ${prefix}/libcitizensdk_host.so (0x1)`,
+    ].join('\n');
+    const accepted = run(valid);
+    assert.equal(accepted.status, 0, accepted.stderr);
+    for (const rejected of ['', valid.replaceAll(prefix, '/unrelated'),
+      `${valid}\nlibextra.so => not found`, `${valid}\n${valid}`]) {
+      assert.notEqual(run(rejected).status, 0);
+    }
+    writeFileSync(command, '#!/bin/bash\nexit 17\n');
+    assert.notEqual(run(valid).status, 0);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Linux Flutter 缓存预检遵循通用 ICU 布局并拒绝缺项与版本漂移', () => {
+  const root = mkdtempSync(join(workRoot, 'linux-flutter-cache-test-'));
+  try {
+    const shell = [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'assert_safe_directory_path',
+        'assert_readonly_dependency_directory', 'verify_linux_tool_tree',
+        'verify_linux_flutter_cache']),
+      'verify_linux_flutter_cache "$1" "$2"',
+    ].join('\n');
+    for (const [platform, arch] of [['LinuxARM', 'arm64'], ['LinuxAMD', 'x64']]) {
+      const tool = join(root, platform);
+      const revision = '1'.repeat(40);
+      const framework = '2'.repeat(40);
+      const write = (path, text = 'fixture\n') => {
+        const destination = join(tool, path);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, text);
+      };
+      // 只建布局/版本夹具，不运行其中任何文件，也不把它当作真实 Flutter SDK。
+      mkdirSync(join(tool, '.git'), { recursive: true });
+      for (const path of [
+        'bin/cache/flutter_tools.snapshot', 'packages/flutter_tools/pubspec.yaml',
+        'packages/flutter_tools/pubspec.lock', 'bin/cache/dart-sdk/bin/dart',
+        'bin/cache/pkg/sky_engine/pubspec.yaml', 'bin/cache/pkg/flutter_gpu/pubspec.yaml',
+        'bin/cache/artifacts/engine/common/flutter_patched_sdk/platform_strong.dill',
+        'bin/cache/artifacts/engine/common/flutter_patched_sdk_product/platform_strong.dill',
+        `bin/cache/artifacts/engine/linux-${arch}/font-subset`,
+        `bin/cache/artifacts/engine/linux-${arch}/icudtl.dat`,
+      ]) write(path);
+      for (const mode of ['', '-profile', '-release']) {
+        for (const file of ['libflutter_linux_gtk.so', 'flutter_linux/flutter_linux.h', 'gen_snapshot']) {
+          write(`bin/cache/artifacts/engine/linux-${arch}${mode}/${file}`);
+        }
+      }
+      for (const path of ['bin/cache/engine.stamp', 'bin/internal/engine.version',
+        'bin/cache/flutter_sdk.stamp', 'bin/cache/linux-sdk.stamp', 'bin/cache/font-subset.stamp']) write(path, revision);
+      write('bin/cache/flutter_tools.stamp', `${framework}:\n`);
+      write('bin/cache/flutter.version.json', JSON.stringify({ engineRevision: revision, frameworkRevision: framework }));
+      for (const name of ['material_fonts', 'gradle_wrapper']) {
+        write(`bin/internal/${name}.version`, 'fixture-version');
+        write(`bin/cache/${name}.stamp`, 'fixture-version');
+        mkdirSync(join(tool, `bin/cache/artifacts/${name}`), { recursive: true });
+      }
+      const run = () => spawnSync('/bin/bash', ['-c', shell, 'linux-flutter-cache', tool, platform], { encoding: 'utf8' });
+      const valid = run();
+      assert.equal(valid.status, 0, valid.stderr);
+      assert.equal(existsSync(join(tool, `bin/cache/artifacts/engine/linux-${arch}-release/icudtl.dat`)), false);
+      const icu = join(tool, `bin/cache/artifacts/engine/linux-${arch}/icudtl.dat`);
+      rmSync(icu);
+      const missing = run();
+      assert.notEqual(missing.status, 0);
+      assert.match(missing.stderr, /icudtl\.dat.*禁止自动下载/u);
+      write(`bin/cache/artifacts/engine/linux-${arch}/icudtl.dat`);
+      write('bin/internal/engine.version', '3'.repeat(40));
+      assert.notEqual(run().status, 0);
+      write('bin/internal/engine.version', revision);
+      write('bin/cache/flutter_tools.stamp', `${'4'.repeat(40)}:\n`);
+      const drift = run();
+      assert.notEqual(drift.status, 0);
+      assert.match(drift.stderr, /snapshot.*不一致/u);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('Linux 消费者保持安装边界和 Release 真实运行判定', () => {
+  const source = (path) => readFileSync(join(citizenSdkRoot, path), 'utf8');
+  const cmake = source('linux/test/CitizenSDKConsumer.cmake');
+  assert.match(cmake, /find_package\(CitizenSDK \$\{CITIZENSDK_CONSUMER_VERSION\} EXACT CONFIG REQUIRED/u);
+  assert.match(cmake, /NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH/u);
+  assert.match(cmake, /get_target_property\(_imported CitizenSDK::\$\{_kind\} IMPORTED\)/u);
+  assert.match(cmake, /-UNDEBUG/u);
+  assert.doesNotMatch(cmake, /add_subdirectory\(|FetchContent|ExternalProject/u);
+  for (const path of ['linux/test/citizen_sdk_c_consumer.c', 'linux/test/citizen_sdk_cpp_consumer.cc']) {
+    const consumer = source(path);
+    assert.doesNotMatch(consumer, /^#include\s*[<"][^>"\n]*(?:src\/|test_support|_bridge|_secret_vault)/mu);
+    assert.match(consumer, /#ifdef NDEBUG/u);
+    assert.match(consumer, /CITIZENSDK_ERROR_BUSY/u);
+    assert.match(consumer, /CITIZENSDK_ERROR_INVALID_HANDLE/u);
+  }
+  const flutter = source('linux/test/citizen_sdk_flutter_consumer.dart');
+  assert.match(flutter, /CitizenSdk\.open\(\)/u);
+  assert.doesNotMatch(flutter, /package:citizen_sdk\/src\/|FlutterCitizenSdkPlatform|MethodChannelCitizenSdkPlatform/u);
+  assert.doesNotMatch(flutter, /\bassert\s*\(|setMockMethodCallHandler|MockClient/u);
+  assert.match(flutter, /await subscription\.cancel\(\);[\s\S]*?_require\(!eventFailed\)/u);
+  assert.match(flutter, /await stdout\.flush\(\);[\s\S]*?exit\(0\)/u);
+  assert.match(flutter, /CitizenSDK Flutter consumer passed/u);
+  assert.match(flutter, /CitizenSDK Flutter consumer failed/u);
+  const build = source('scripts/build-native.sh');
+  assert.match(build, /--install "\$cmake_build" --config Release --prefix "\$install_prefix"/u);
+  assert.match(build, /verify_linux_install "\$install_prefix"/u);
+  assert.match(build, /verify_linux_ctest_inventory "\$ctest_bin" "\$cmake_build" LinuxHost 12/u);
+  assert.match(build, /verify_linux_ctest_inventory "\$ctest_bin" "\$flutter_build" LinuxFlutter 6/u);
+  assert.match(build, /verify_linux_ctest_inventory "\$ctest_bin" "\$consumer_build" LinuxConsumer 2/u);
+  assert.match(build, /--no-tests=error/u);
+  assert.match(build, /build linux --release --no-pub/u);
+  assert.match(build, /org\.citizensdk\.flutterconsumer/u);
+  assert.match(build, /timeout --signal=TERM --kill-after=10s 200s/u);
+  assert.match(build, /\[\[ "\$status" == 0 \]\]/u);
+  assert.match(build, /grep -Fxc 'CitizenSDK Flutter consumer passed'/u);
+  assert.match(source('pubspec.yaml'), /^      linux:\n        pluginClass: CitizenSdkPlugin$/mu);
+  assert.match(build, /copy_linux_install "\$prefix" "\$sdk_stage\/linux" "\$platform" "\$work_dir"/u);
+  assert.match(build, /destination="\$output_dir\/linux\/\$platform"/u);
+  assert.match(build, /copy_linux_install "\$install_prefix" "\$destination" "\$platform" "\$output_dir"/u);
+  assert.doesNotMatch(build, /CITIZENSDK_FLUTTER_HOST_PREFIX|CMAKE_BUILD_WITH_INSTALL_RPATH/u);
+  const plugin = source('linux/cmake/CitizenSDKFlutter.cmake');
+  assert.match(plugin, /set\(_citizensdk_host_prefix "\$\{_citizensdk_linux_root\}"\)/u);
+  assert.match(plugin, /BUILD_WITH_INSTALL_RPATH TRUE\s+INSTALL_RPATH "\$ORIGIN"/u);
+  assert.doesNotMatch(plugin, /CITIZENSDK_FLUTTER_HOST_PREFIX/u);
+});
+
 test('产品 ABI 从完整 nm 导出集合与头文件精确对拍并拒绝任意额外符号', () => {
   const root = mkdtempSync(join(workRoot, 'product-abi-symbol-gate-test-'));
   try {
@@ -3007,9 +6021,9 @@ test('产品 ABI 从完整 nm 导出集合与头文件精确对拍并拒绝任�
       );
       return spawnSync(
         '/bin/bash',
-        ['scripts/build-native.sh', '__test-product-abi-symbols'],
+        [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-product-abi-symbols'],
         {
-          cwd: citizenSdkRoot,
+          cwd: workRoot,
           encoding: 'utf8',
           env: {
             ...process.env,
@@ -3052,9 +6066,9 @@ test('原生共用写路径拒绝移动端、产品 ABI、dangling 目标及 Car
     prepare({ output, work });
     return spawnSync(
       '/bin/bash',
-      ['scripts/build-native.sh', '__test-safe-output-file'],
+      [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-safe-output-file'],
       {
-        cwd: citizenSdkRoot,
+        cwd: workRoot,
         encoding: 'utf8',
         env: {
           ...process.env,
@@ -3148,8 +6162,8 @@ test('Android 原生构建固定 NDK 版本并可从宿主标准 SDK 目录自�
 
     const resolved = spawnSync(
       '/bin/bash',
-      ['scripts/build-native.sh', '__test-android-toolchain'],
-      { cwd: citizenSdkRoot, encoding: 'utf8', env: environment },
+      [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-android-toolchain'],
+      { cwd: workRoot, encoding: 'utf8', env: environment },
     );
     assert.equal(resolved.status, 0, resolved.stderr);
     assert.equal(resolved.stdout.trim(), toolchain);
@@ -3158,9 +6172,9 @@ test('Android 原生构建固定 NDK 版本并可从宿主标准 SDK 目录自�
     mkdirSync(wrongNdk, { recursive: true });
     const wrongVersion = spawnSync(
       '/bin/bash',
-      ['scripts/build-native.sh', '__test-android-toolchain'],
+      [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-android-toolchain'],
       {
-        cwd: citizenSdkRoot,
+        cwd: workRoot,
         encoding: 'utf8',
         env: { ...environment, ANDROID_NDK_HOME: wrongNdk },
       },
@@ -3172,9 +6186,9 @@ test('Android 原生构建固定 NDK 版本并可从宿主标准 SDK 目录自�
     mkdirSync(divergentSdk, { recursive: true });
     const divergentRoots = spawnSync(
       '/bin/bash',
-      ['scripts/build-native.sh', '__test-android-toolchain'],
+      [join(citizenSdkRoot, 'scripts/build-native.sh'), '__test-android-toolchain'],
       {
-        cwd: citizenSdkRoot,
+        cwd: workRoot,
         encoding: 'utf8',
         env: {
           ...environment,
@@ -3204,11 +6218,11 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
       gitCommitSha: '0'.repeat(40),
       softwareVersion: '1.0.0',
     });
-    assert.deepEqual(manifest.platforms, ['Android', 'iOS', 'macOS']);
+    assert.deepEqual(manifest.platforms, ['Android', 'iOS', 'macOS', 'LinuxARM', 'LinuxAMD', 'Windows']);
     assert.deepEqual(
       manifest.files
         .map((entry) => entry.path)
-        .filter((path) => /\.(?:aar|so)$/.test(path)
+        .filter((path) => /\.(?:aar|so|dll|lib)$/.test(path)
           || (path.startsWith('darwin/CitizenSDK.xcframework/')
             && path.endsWith('/CitizenSDK'))),
       [
@@ -3218,6 +6232,14 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
         `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.iosDevice}/CitizenSDK.framework/CitizenSDK`,
         `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.iosSimulator}/CitizenSDK.framework/CitizenSDK`,
         `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.macOS}/CitizenSDK.framework/Versions/A/CitizenSDK`,
+        'linux/lib/LinuxAMD/libcitizensdk.so',
+        'linux/lib/LinuxAMD/libcitizensdk_host.so',
+        'linux/lib/LinuxARM/libcitizensdk.so',
+        'linux/lib/LinuxARM/libcitizensdk_host.so',
+        'windows/bin/Windows/citizensdk.dll',
+        'windows/bin/Windows/citizensdk_host.dll',
+        'windows/lib/Windows/citizensdk.dll.lib',
+        'windows/lib/Windows/citizensdk_host.lib',
       ],
     );
     const expectedArchivedLinks = Object.fromEntries(
@@ -3245,3 +6267,1121 @@ test('最终 tgz、外层 SHA256SUMS 与候选闭集双向一致', () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('Hosted GNU tar 保留普通目录、文件、执行位与长 UTF-8 名称', () => {
+  const directory = `lib/${'archive_'.repeat(16)}`;
+  const path = `${directory}/说明.dart`;
+  const expected = new Map([
+    ['lib', { type: 'directory', mode: 0o755, data: Buffer.alloc(0) }],
+    [directory, { type: 'directory', mode: 0o755, data: Buffer.alloc(0) }],
+    [path, { type: 'file', mode: 0o644, data: Buffer.from('public source\n') }],
+    [`${'a'.repeat(98)}文.dart`, { type: 'file', mode: 0o644, data: Buffer.from('UTF-8 boundary\n') }],
+    ['entry.sh', { type: 'file', mode: 0o755, data: Buffer.from('exit 0\n') }],
+    ['empty', { type: 'file', mode: 0o644, data: Buffer.alloc(0) }],
+  ]);
+  assert.deepEqual(parseHostedArchive(gzipSync(hostedTar(expected))), expected);
+});
+
+test('Hosted gzip 拒绝损坏、截断、CRC、ISIZE、多 member 与尾随垃圾', () => {
+  const valid = gzipSync(hostedTar(new Map([
+    ['source', { type: 'file', mode: 0o644, data: Buffer.from('source bytes') }],
+  ])));
+  const crc = Buffer.from(valid);
+  crc[crc.length - 8] ^= 1;
+  const size = Buffer.from(valid);
+  size[size.length - 4] ^= 1;
+  const tooLarge = Buffer.from(valid);
+  tooLarge.writeUInt32LE(256 * 1024 * 1024 + 1, tooLarge.length - 4);
+  const body = Buffer.from(valid);
+  body[10] ^= 0xff;
+  const method = Buffer.from(valid);
+  method[2] = 0;
+  const flags = Buffer.from(valid);
+  flags[3] |= 0x20;
+  const extra = Buffer.concat([valid.subarray(0, 10), Buffer.from([0xff, 0xff]), valid.subarray(10)]);
+  extra[3] |= 4;
+  const headerCrc = Buffer.concat([valid.subarray(0, 10), Buffer.alloc(2), valid.subarray(10)]);
+  headerCrc[3] |= 2;
+  for (const [label, bytes] of [
+    ['empty', Buffer.alloc(0)],
+    ['header-only', valid.subarray(0, 10)],
+    ['truncated', valid.subarray(0, valid.length - 1)],
+    ['crc', crc], ['isize', size], ['declared-size-limit', tooLarge],
+    ['deflate', body], ['compression-method', method], ['reserved-flags', flags],
+    ['truncated-extra', extra], ['header-crc', headerCrc],
+    ['second-member', Buffer.concat([valid, valid])],
+    ['trailing-text', Buffer.concat([valid, Buffer.from('trailer')])],
+    ['trailing-zero', Buffer.concat([valid, Buffer.alloc(1)])],
+  ]) {
+    assert.throws(() => parseHostedArchive(bytes), Error, label);
+  }
+});
+
+test('Hosted tar 拒绝越界路径、链接、重复条目、父子类型冲突和危险权限', () => {
+  const regular = (path) => hostedTarEntry(path, { data: Buffer.from('x') });
+  const archive = (blocks) => gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+  for (const path of ['/escape', '../escape', 'a/../escape', './source', 'a//b', 'a\\b', 'C:/escape']) {
+    assert.throws(() => parseHostedArchive(archive([regular(path)])), Error, path);
+  }
+  for (const type of ['1', '2', '3', '4', '6', '7', 'x', 'g', 'K', 'S', '?']) {
+    assert.throws(() => parseHostedArchive(archive([
+      hostedTarEntry('entry', { type }),
+    ])), Error, `不允许 tar 类型 ${type}`);
+  }
+  for (const [label, blocks] of [
+    ['duplicate-file', [regular('source'), regular('source')]],
+    ['duplicate-directory', [hostedTarEntry('dir', { type: '5', mode: 0o755 }), hostedTarEntry('dir', { type: '5', mode: 0o755 })]],
+    ['file-then-directory', [regular('source'), hostedTarEntry('source', { type: '5', mode: 0o755 })]],
+    ['directory-then-file', [hostedTarEntry('source', { type: '5', mode: 0o755 }), regular('source')]],
+    ['file-parent-first', [regular('a'), regular('a/b')]],
+    ['file-parent-last', [regular('a/b'), regular('a')]],
+    ['directory-data', [hostedTarEntry('dir', { type: '5', mode: 0o755, data: Buffer.from('x') })]],
+    ['file-link-field', [hostedTarEntry('source', { link: 'target' })]],
+    ['setuid', [hostedTarEntry('source', { mode: 0o4644 })]],
+    ['case-file', [regular('source'), regular('Source')]],
+    ['case-parent', [regular('dir/a'), regular('DIR/b')]],
+    ['unicode-normalization', [regular('é'), regular('e\u0301')]],
+  ]) {
+    assert.throws(() => parseHostedArchive(archive(blocks)), Error, label);
+  }
+});
+
+test('Hosted tar 拒绝头部漂移、padding、截断、未识别扩展与资源上限', () => {
+  const base = hostedTarEntry('source', { data: Buffer.from('x') });
+  const archive = (blocks) => gzipSync(Buffer.concat([...blocks, Buffer.alloc(1024)]));
+  const checksum = Buffer.from(base);
+  checksum[0] ^= 1;
+  const padding = Buffer.from(base);
+  padding[513] = 1;
+  const invalidMagic = Buffer.from(base);
+  invalidMagic[257] = 0x3f;
+  hostedTarChecksum(invalidMagic.subarray(0, 512));
+  const invalidOctal = Buffer.from(base);
+  invalidOctal[124] = 0x39;
+  hostedTarChecksum(invalidOctal.subarray(0, 512));
+  const embeddedNul = Buffer.from(base);
+  embeddedNul[7] = 0x78;
+  hostedTarChecksum(embeddedNul.subarray(0, 512));
+  const tooLarge = hostedTarHeader('huge', { size: 256 * 1024 * 1024 + 1 });
+  const longName = (value) => hostedTarEntry('././@LongLink', { type: 'L', mode: 0, data: value });
+  for (const [label, bytes] of [
+    ['checksum', archive([checksum])], ['padding', archive([padding])],
+    ['magic', archive([invalidMagic])], ['octal', archive([invalidOctal])],
+    ['hidden-name', archive([embeddedNul])], ['declared-file-limit', archive([tooLarge])],
+    ['missing-end-records', gzipSync(base)],
+    ['one-end-record', gzipSync(Buffer.concat([base, Buffer.alloc(512)]))],
+    ['truncated-header', gzipSync(base.subarray(0, 511))],
+    ['truncated-data', gzipSync(base.subarray(0, 512))],
+    ['nonzero-trailer', gzipSync(Buffer.concat([base, Buffer.alloc(1024), Buffer.from('x')]))],
+    ['entry-after-end', gzipSync(Buffer.concat([base, Buffer.alloc(1024), base]))],
+    ['orphan-longname', archive([longName(Buffer.from('a'.repeat(101)))])],
+    ['two-longnames', archive([longName(Buffer.from('a'.repeat(101))), longName(Buffer.from('b'.repeat(101))), base])],
+    ['longname-traversal', archive([longName(Buffer.from(`../${'a'.repeat(101)}`)), base])],
+    ['longname-nul', archive([longName(Buffer.from(`a\0${'b'.repeat(101)}`)), base])],
+    ['longname-invalid-utf8', archive([longName(Buffer.concat([Buffer.alloc(100, 0x61), Buffer.from([0xc3, 0x28])])), base])],
+    ['longname-limit', archive([longName(Buffer.from('a'.repeat(4097))), base])],
+  ]) {
+    assert.throws(() => parseHostedArchive(bytes), Error, label);
+  }
+  // 条目上限只分配约 8 MiB 头部，不构造真实解压炸弹或巨大文件正文。
+  const entries = Array.from({ length: 16385 }, (_, index) => hostedTarHeader(`f${index}`));
+  assert.throws(() => parseHostedArchive(archive(entries)), Error, 'entry-count-limit');
+  const deep = Array.from({ length: 2049 }, (_, index) => hostedTarHeader(`d${index}/a/b/c/d/e/f/g/file`));
+  assert.throws(() => parseHostedArchive(archive(deep)), Error, 'implicit-directory-count-limit');
+});
+
+test('Hosted Pub glob 的双星匹配零层，单星子项不排除父目录', () => {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts', 'release.mjs'), 'utf8');
+  const start = source.indexOf('function compileRootedPubignoreRule(');
+  const end = source.indexOf('\n}\n', start);
+  assert.ok(start >= 0 && end > start);
+  const compile = runInNewContext(`(${source.slice(start, end + 2)})`, {
+    fail(message) { throw new Error(message); },
+  });
+  const readme = compile('/lib/**/README.md').pattern;
+  assert.equal(readme.test('lib/README.md'), true);
+  assert.equal(readme.test('lib/src/api/README.md'), true);
+  assert.equal(readme.test('lib/src/api/citizen_sdk.dart'), false);
+  const cmake = compile('/linux/cmake/*').pattern;
+  assert.equal(cmake.test('linux/cmake/'), false);
+  assert.equal(cmake.test('linux/cmake'), false);
+  assert.equal(cmake.test('linux/cmake/CitizenSDKFlutter.cmake'), true);
+});
+
+test('macOS Hosted 消费者只用公开入口并在 Release 显式验收生命周期和有序事件', () => {
+  const source = readFileSync(join(citizenSdkRoot, 'darwin/Tests/citizen_sdk_flutter_consumer.dart'), 'utf8');
+  assert.match(source, /import 'package:citizen_sdk\/citizen_sdk\.dart';/u);
+  assert.equal([...source.matchAll(/CitizenSdk\.open\(\)/gu)].length, 2, '真实打开与关闭后重开');
+  assert.match(source, /Platform\.isMacOS && kReleaseMode/u);
+  assert.doesNotMatch(source, /package:citizen_sdk\/src\/|FlutterCitizenSdkPlatform|MethodChannelCitizenSdkPlatform|setMockMethodCallHandler|\bassert\s*\(/u);
+  assert.doesNotMatch(source, /\.wallet\.(?:create|import|sign|transfer)|\.transaction\.(?:submit|transfer)|\.invokeMethod\(/u);
+  assert.match(source, /opened\.wallet\.getProfile\(\)[\s\S]*?== null/u);
+  assert.match(source, /CitizenSdkErrorCode\.notReady/u);
+  assert.match(source, /CitizenSdkErrorCode\.invalidState/u);
+  assert.match(source, /event\.sequence <= eventSequence/u);
+  assert.match(source, /case CitizenSdkTransferProgress\(\):[\s\S]*?eventFailed = true/u);
+  assert.match(source, /await opened\.start\(\)[\s\S]*?await opened\.stop\(\)/u);
+  assert.match(source, /await opened\.close\(\)[\s\S]*?await opened\.close\(\)/u);
+  assert.match(source, /await _until\(\(\) => eventsDone\);[\s\S]*?await subscription\.cancel\(\)[\s\S]*?_require\(!eventFailed\)/u);
+  assert.match(source, /FlutterError\.onError = [\s\S]*?exit\(1\)/u);
+  assert.match(source, /platformDispatcher\.onError = [\s\S]*?exit\(1\)/u);
+  assert.match(source, /Timer\(const Duration\(seconds: 180\)/u);
+  assert.match(source, /await binding\.endOfFrame\.timeout\(_timeout\)/u);
+  assert.match(source, /CitizenSDK Flutter consumer passed[\s\S]*?await stdout\.flush\(\)[\s\S]*?exit\(0\)/u);
+  assert.match(source, /CitizenSDK Flutter consumer failed[\s\S]*?await stderr\.flush\(\)[\s\S]*?exit\(1\)/u);
+});
+
+test('macOS Hosted 唯一构建入口先验三件输入并保留官方插件装配和运行隔离门禁', () => {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts/build-native.sh'), 'utf8');
+  const start = source.indexOf('build_macos_flutter_consumer() (\n');
+  const end = source.indexOf('\ncompile_apple_flutter_adapter() {', start);
+  assert.ok(start >= 0 && end > start);
+  const build = source.slice(start, end);
+  assert.match(source, /macOS\) shift; build_macos_flutter_consumer "\$@" ;;/u);
+  const containerStart = source.indexOf('if [[ "$target_name" == macOS ]]; then');
+  const containerEnd = source.indexOf('\nelse\n', containerStart);
+  assert.ok(containerStart >= 0 && containerEnd > containerStart);
+  assert.doesNotMatch(source.slice(containerStart, containerEnd), /\bmkdir\b|canonical_directory\s|prepare_safe_directory\s/u);
+  assert.match(source, /if \[\[ "\$target_name" != macOS \]\]; then\n  prepare_safe_directory "\$work_dir" "\$cargo_target_dir"/u);
+  assert.match(build, /macos_hosted_preflight "\$@"/u);
+  assert.ok(build.indexOf('macos_hosted_preflight "$@"') < build.indexOf('prepare_safe_directory'));
+  const preflight = nativeShellFunctions(['macos_hosted_root', 'macos_hosted_preflight']);
+  assert.doesNotMatch(preflight.replace(/^\s*#.*$/gmu, ''), /\bmkdir\b|canonical_directory\s|prepare_safe_directory\s/u);
+  assert.match(build, /--verify-hosted "\$candidate" --archive "\$audit" --hosted-archive "\$hosted" --output "\$package"/u);
+  assert.ok(build.indexOf('--verify-hosted') < build.indexOf('create --offline --no-pub --platforms=macos'));
+  assert.match(build, /path: \.\.\/package/u);
+  assert.match(build, /fs\.copyFileSync\(path\.join\(candidate, 'darwin\/Tests\/citizen_sdk_flutter_consumer\.dart'\)/u);
+  assert.match(build, /Consumer does not depend on verified Hosted package/u);
+  assert.match(build, /Official macOS CitizenSDK plugin registration is not unique/u);
+  const directoryIdentity = /const sameDirectory = \([\s\S]+?\n\};/u.exec(build)?.[0];
+  assert.ok(directoryIdentity);
+  const directories = new Map([
+    ['SDK/package', { dev: 1, ino: 42, isDirectory: () => true }],
+    ['sdk/package', { dev: 1, ino: 42, isDirectory: () => true }],
+    ['other/package', { dev: 1, ino: 43, isDirectory: () => true }],
+    ['other-volume/package', { dev: 2, ino: 42, isDirectory: () => true }],
+    ['file', { dev: 1, ino: 42, isDirectory: () => false }],
+  ]);
+  const sameDirectory = runInNewContext(`${directoryIdentity}\nsameDirectory`, {
+    fs: { statSync: (path) => directories.get(path) },
+  });
+  assert.equal(sameDirectory('SDK/package', 'sdk/package'), true);
+  for (const path of ['other/package', 'other-volume/package', 'file']) {
+    assert.equal(sameDirectory('SDK/package', path), false);
+  }
+  assert.match(build, /pub get --offline/u);
+  assert.match(build, /build macos --release --no-pub/u);
+  assert.doesNotMatch(build, /--(?:no-)?enable-swift-package-manager|\bHOME=|DYLD_FRAMEWORK_PATH=|codesign\s|\.podspec['"]\)[\s\S]*?writeFileSync/u);
+  assert.match(build, /FileManager\.default\.urls\(for: \.applicationSupportDirectory, in: \.userDomainMask\)/u);
+  assert.match(build, /state\.resolvingSymlinksInPath\(\)\.path == state\.path/u);
+  assert.match(build, /text\.replace\('import Cocoa', 'import Cocoa\\nimport MachO'\)\.replace\(start, start \+ preflight\)/u);
+  assert.match(build, /RegisterGeneratedPlugins\(registry: flutterViewController\)/u);
+  assert.match(build, /_dyld_image_count\(\)/u);
+  assert.match(build, /frameworkCount == 1/u);
+  assert.match(build, /\(deny network\*\)/u);
+  assert.match(build, /\(deny file-write\*\)/u);
+  assert.match(build, /Library\/Application Support\/citizensdk/u);
+  assert.match(build, /fs\.writeFileSync\(path\.join\(root, 'tool\.sb'\), policy/u);
+  assert.match(build, /const executable = label === 'consumer' \? command : '\/usr\/bin\/sandbox-exec'/u);
+  assert.match(build, /const argumentsList = label === 'consumer' \? args : \['-f', path\.join\(root, 'tool\.sb'\), command, \.\.\.args\]/u);
+  assert.match(build, /path\.join\(flutter, '\.git'\)/u);
+  assert.doesNotMatch(build, /child = spawn\(command, args/u);
+  assert.match(build, /\/usr\/bin\/sandbox-exec -f "\$root\/runtime\.sb" "\$executable"/u);
+  assert.match(build, /dwarfdump --uuid/u);
+  assert.match(build, /source_uuid" == "\$installed_uuid/u);
+  assert.match(build, /CitizenSDK Foundation isolation passed/u);
+  assert.match(build, /CitizenSDK Flutter consumer passed/u);
+  assert.match(build, /process\.on\('SIGTERM', stop\)/u);
+  assert.match(build, /detached: true/u);
+  assert.match(build, /process\.kill\(-child\.pid, 0\)/u);
+  const tests = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+  const hostedStart = tests.lastIndexOf("\nif (process.env.CITIZENSDK_APPLE_NATIVE) {");
+  const hosted = tests.slice(hostedStart);
+  assert.ok(hostedStart >= 0);
+  assert.match(hosted, /spawn\('\/usr\/bin\/sandbox-exec', \[/u);
+  assert.match(hosted, /'-p', policy, process\.execPath, '--input-type=module', '-e', worker, payload/u);
+  assert.match(hosted, /const \{ buildCitizenSdkHosted \} = await import\(moduleUrl\)/u);
+  assert.match(hosted, /const result = await buildCitizenSdkHosted\(\{ \.\.\.options, signal: controller\.signal \}\)/u);
+  assert.match(hosted, /process\.on\('SIGTERM', \(\) => \{ interrupted = true; controller\.abort\(\); \}\)/u);
+  assert.match(hosted, /process\.stdout\.write\(JSON\.stringify\(result\)/u);
+  assert.match(hosted, /\(deny process-exec \(regex #"\/git\$"\)\)/u);
+  assert.match(hosted, /Library\/Application Support\/dart/u);
+  assert.match(hosted, /assert\.deepEqual\(hostedManifest, manifest\)/u);
+  assert.match(hosted, /nativeShellFunctions\(\[[\s\S]*?'macos_hosted_root'/u);
+  assert.ok(hosted.indexOf('const checkedRoot =') < hosted.indexOf('const root = mkdtempSync('));
+  assert.match(hosted, /GITHUB_ACTIONS: process\.env\.GITHUB_ACTIONS/u);
+  assert.match(hosted, /RUNNER_TEMP: process\.env\.RUNNER_TEMP/u);
+  assert.match(hosted, /GITHUB_WORKSPACE: process\.env\.GITHUB_WORKSPACE/u);
+  for (const name of ['GITHUB_ACTIONS', 'RUNNER_TEMP', 'GITHUB_WORKSPACE']) {
+    assert.equal(hosted.split(`${name}: process.env.${name}`).length - 1, 3,
+      `${name} 必须传给根预检、Hosted 归档监督器及原生构建器，不能只接最后一层`);
+  }
+  assert.doesNotMatch(hosted, /assert\.deepEqual\(await buildCitizenSdkHosted/u);
+  const pubPolicy = hosted.slice(hosted.indexOf('const policy ='), hosted.indexOf('const payload ='));
+  assert.match(pubPolicy, /\[root, options\.pubCachePath\]/u);
+  assert.match(pubPolicy, /\(deny file-write\*\)/u);
+  assert.doesNotMatch(pubPolicy, /deny network/u);
+});
+
+for (const github of process.platform === 'darwin' ? [false, true] : []) {
+  test(`macOS Hosted ${github ? 'GitHub Runner' : '本机'}只读预检拒绝源码、越界、链接、输入交叠和不完整工具`, () => {
+    const root = mkdtempSync(join(workRoot, 'macos-hosted-preflight-test-'));
+    try {
+      const runnerTemp = join(root, 'runner');
+      const checkout = join(root, 'checkout');
+      const sdk = join(checkout, 'citizensdk');
+      const central = github ? join(runnerTemp, 'citizensdk') : join(root, 'GMB/citizensdk/SDK/citizensdk');
+      const input = {
+        candidate: join(central, 'candidate'), audit: join(central, 'audit.tgz'),
+        hosted: join(central, 'hosted.tar.gz'), flutter: join(central, 'flutter'),
+        cache: join(central, 'cache'), tools: join(root, 'tools'), work: join(central, 'work'),
+        output: join(central, 'output'),
+      };
+      for (const directory of [sdk, runnerTemp, input.candidate, input.flutter, input.cache, input.tools, input.work, input.output]) {
+        mkdirSync(directory, { recursive: true });
+      }
+      for (const path of [input.audit, input.hosted]) writeFileSync(path, 'preflight-only fixture');
+      const components = [
+        'bin/cache/dart-sdk/bin/dart', 'bin/cache/flutter_tools.snapshot',
+        'bin/cache/flutter.version.json', 'packages/flutter_tools/.dart_tool/package_config.json',
+      ];
+      for (const path of components) {
+        const file = join(input.flutter, path);
+        mkdirSync(dirname(file), { recursive: true });
+        writeFileSync(file, 'preflight-only fixture', { mode: path.endsWith('/dart') ? 0o755 : 0o644 });
+      }
+      const shell = [
+        'set -euo pipefail',
+        nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path', 'assert_readonly_dependency_directory', 'macos_hosted_root', 'macos_hosted_preflight']),
+        'tata_console_work_root="$1"; work_dir="$2"; output_dir="$3"; sdk_dir="$4"; shift 4',
+        'uname() { if [[ "$1" == -s ]]; then printf "%s\\n" "${HOSTED_FIXTURE_OS:-Darwin}"; else printf "%s\\n" "${HOSTED_FIXTURE_ARCH:-arm64}"; fi; }',
+        'macos_hosted_preflight "$@"',
+      ].join('\n');
+      const argumentsList = [input.candidate, input.audit, input.hosted, input.flutter, input.cache, input.tools];
+      const snapshot = () => {
+        const entries = [];
+        const walk = (directory) => {
+          for (const name of readdirSync(directory).sort()) {
+            const path = join(directory, name), stat = lstatSync(path);
+            entries.push([path, stat.ino, stat.mode, stat.isSymbolicLink() ? readlinkSync(path) :
+              stat.isDirectory() ? 'directory' : readFileSync(path).toString('hex')]);
+            if (stat.isDirectory()) walk(path);
+          }
+        };
+        walk(root);
+        return entries;
+      };
+      const run = (values = argumentsList, options = {}) => {
+        const before = snapshot();
+        const result = spawnSync('/bin/bash', [
+          '-c', shell, 'macos-hosted-preflight', root, options.work ?? input.work,
+          options.output ?? input.output, options.sdk ?? sdk, ...values,
+        ], { encoding: 'utf8', cwd: root, timeout: 10000,
+          env: { ...process.env, GITHUB_ACTIONS: github ? 'true' : '',
+            RUNNER_TEMP: options.runnerTemp ?? runnerTemp,
+            GITHUB_WORKSPACE: options.checkout ?? checkout,
+            HOSTED_FIXTURE_OS: options.os ?? 'Darwin', HOSTED_FIXTURE_ARCH: options.arch ?? 'arm64' } });
+        assert.deepEqual(snapshot(), before, '无论成功或失败，预检不得创建或改写任何夹具节点');
+        return result;
+      };
+      const success = run();
+      assert.equal(success.error, undefined);
+      assert.equal(success.status, 0, success.stderr);
+      const rejects = (values, options) => {
+        const result = run(values, options);
+        assert.equal(result.error, undefined);
+        assert.notEqual(result.status, 0);
+        assert.equal(existsSync(join(input.work, 'macOS')), false, '只读预检不能生成消费目录');
+      };
+      rejects(argumentsList.slice(0, -1));
+      rejects([citizenSdkRoot, ...argumentsList.slice(1)]);
+      rejects([root, ...argumentsList.slice(1)]);
+      rejects(argumentsList, { os: 'Linux' });
+      rejects(argumentsList, { arch: 'x86_64' });
+      for (const field of ['work', 'output']) {
+        for (const path of ['', 'relative', '/', central, runnerTemp, root, `${central}/missing/../work`,
+          `${central}//work`, `${central}/./work`, join(central, 'missing'), input.candidate, input.cache]) {
+          rejects(argumentsList, { [field]: path });
+        }
+      }
+      rejects(argumentsList, { output: input.work });
+      rejects(argumentsList, { output: join(input.flutter, 'bin') });
+      const candidateAlias = join(central, 'CANDIDATE');
+      if (existsSync(candidateAlias)) {
+        rejects([candidateAlias, ...argumentsList.slice(1)]);
+        rejects([...argumentsList.slice(0, 4), candidateAlias, input.tools]);
+      }
+      // 工作根与 checkout/SDK 在任一方向交叠都拒绝，包括源码嵌入受控根的情况。
+      rejects(argumentsList, { sdk: input.candidate, checkout: central });
+      if (github) {
+        rejects(argumentsList, { checkout: root });
+        rejects(argumentsList, { sdk: checkout });
+        rejects(argumentsList, { sdk: resolve(citizenSdkRoot) });
+        for (const field of ['runnerTemp', 'checkout']) {
+          for (const path of ['', 'relative', '/', `${root}/missing/../runner`, `${root}//runner`,
+            `${root}/./runner`, join(root, 'missing'), input.audit]) {
+            rejects(argumentsList, { [field]: path });
+          }
+          const linked = join(root, `linked-${field}`);
+          symlinkSync(field === 'runnerTemp' ? runnerTemp : checkout, linked);
+          rejects(argumentsList, { [field]: linked });
+          unlinkSync(linked);
+        }
+        // Runner 根不能再次嵌套取另一个 citizensdk；更不能使用任意 temp 根。
+        rejects(argumentsList, { runnerTemp: central });
+        rejects(argumentsList, { runnerTemp: root });
+        const checkoutAlias = join(root, 'RUNNER');
+        if (existsSync(checkoutAlias)) {
+          rejects(argumentsList, { checkout: checkoutAlias, sdk: join(checkoutAlias, 'citizensdk/candidate') });
+        }
+        const linkedRoot = join(root, 'linked-root');
+        mkdirSync(linkedRoot);
+        symlinkSync(central, join(linkedRoot, 'citizensdk'));
+        rejects(argumentsList, { runnerTemp: linkedRoot });
+        rmSync(linkedRoot, { recursive: true });
+        const nestedCheckout = join(central, 'checkout');
+        mkdirSync(join(nestedCheckout, 'citizensdk'), { recursive: true });
+        rejects(argumentsList, { checkout: nestedCheckout, sdk: join(nestedCheckout, 'citizensdk') });
+        rmSync(nestedCheckout, { recursive: true });
+      } else {
+        // 非 GitHub 执行不允许 Runner 环境变量替换已批准的本机根。
+        assert.equal(run(argumentsList, { runnerTemp: '', checkout: '' }).status, 0);
+      }
+      rejects([input.work, ...argumentsList.slice(1)]);
+      for (const cache of [input.candidate, input.flutter]) {
+        rejects([...argumentsList.slice(0, 4), cache, input.tools]);
+      }
+      const nestedCache = join(input.candidate, 'cache');
+      mkdirSync(nestedCache);
+      rejects([...argumentsList.slice(0, 4), nestedCache, input.tools]);
+      rmSync(nestedCache, { recursive: true });
+      const cachedCandidate = join(input.cache, 'candidate');
+      mkdirSync(cachedCandidate);
+      rejects([cachedCandidate, ...argumentsList.slice(1)]);
+      rmSync(cachedCandidate, { recursive: true });
+      for (const index of [1, 2]) {
+        const cachedArchive = join(input.cache, index === 1 ? 'audit.tgz' : 'hosted.tar.gz');
+        writeFileSync(cachedArchive, 'preflight-only fixture');
+        const values = [...argumentsList]; values[index] = cachedArchive;
+        rejects(values);
+        unlinkSync(cachedArchive);
+      }
+      const nested = join(input.work, 'macOS', 'input');
+      mkdirSync(nested, { recursive: true });
+      const nestedResult = run([nested, ...argumentsList.slice(1)]);
+      assert.equal(nestedResult.error, undefined);
+      assert.notEqual(nestedResult.status, 0);
+      rmSync(join(input.work, 'macOS'), { recursive: true });
+      const linked = join(central, 'linked');
+      symlinkSync(input.candidate, linked);
+      rejects([linked, ...argumentsList.slice(1)]);
+      for (const field of ['work', 'output']) rejects(argumentsList, { [field]: linked });
+      const linkedCentral = `${central}-link`;
+      symlinkSync(central, linkedCentral);
+      rejects([join(linkedCentral, 'candidate'), ...argumentsList.slice(1)]);
+      unlinkSync(linkedCentral);
+      const linkedTools = join(central, 'linked-tools');
+      symlinkSync(input.tools, linkedTools);
+      rejects([...argumentsList.slice(0, -1), linkedTools]);
+      for (const tools of ['', `:${input.tools}`, `${input.tools}:`, `${input.tools}::${input.tools}`, join(root, 'missing-tools')]) {
+        rejects([...argumentsList.slice(0, -1), tools]);
+      }
+      for (const tools of [input.work, central]) {
+        rejects([...argumentsList.slice(0, -1), tools]);
+      }
+      for (const path of components) {
+        const file = join(input.flutter, path), bytes = readFileSync(file), mode = statSync(file).mode & 0o777;
+        unlinkSync(file);
+        rejects(argumentsList);
+        writeFileSync(file, bytes, { mode });
+      }
+      chmodSync(join(input.flutter, components[0]), 0o644);
+      rejects(argumentsList);
+      chmodSync(join(input.flutter, components[0]), 0o755);
+      const audit = readFileSync(input.audit);
+      unlinkSync(input.audit); symlinkSync(input.hosted, input.audit);
+      rejects(argumentsList);
+      unlinkSync(input.audit); writeFileSync(input.audit, audit);
+      assert.equal(run().status, 0);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  });
+}
+
+test('Hosted 完整归档绑定审计候选和 Apple 展开字节，验真成功后才写入新目录', () => {
+  const root = mkdtempSync(join(workRoot, 'release-hosted-archive-test-'));
+  try {
+    const native = writeNativeFixture(root);
+    const candidate = join(root, 'candidate');
+    const audit = join(root, 'citizensdk.tgz');
+    buildCitizenSdkRelease({
+      sourcePath: citizenSdkRoot, nativePath: native, outputPath: candidate,
+      archivePath: audit, gitCommitSha: '0'.repeat(40), softwareVersion: '1.0.0',
+    });
+    const entries = hostedPackageEntries(candidate);
+    const framework = `darwin/CitizenSDK.xcframework/${appleFixtureSliceIdentifiers.macOS}/CitizenSDK.framework`;
+    // 明确对照磁盘上已验真的真实目标，不只把生产投影再交回生产验证器。
+    for (const [path, target] of [
+      [`${framework}/CitizenSDK`, `${framework}/Versions/A/CitizenSDK`],
+      [`${framework}/Versions/Current/CitizenSDK`, `${framework}/Versions/A/CitizenSDK`],
+      [`${framework}/Headers/citizensdk.h`, `${framework}/Versions/A/Headers/citizensdk.h`],
+      [`${framework}/Resources/Info.plist`, `${framework}/Versions/A/Resources/Info.plist`],
+    ]) {
+      assert.equal(entries.get(path)?.type, 'file', path);
+      assert.deepEqual(entries.get(path).data, readFileSync(join(candidate, target)), path);
+    }
+    for (const path of [
+      'pubspec.yaml', 'README.md', 'CHANGELOG.md', 'LICENSE',
+      'lib/citizen_sdk.dart', 'assets/citizenchain/manifest.json',
+      'android/src/main/jniLibs/arm64-v8a/libcitizensdk.so', 'darwin/citizen_sdk.podspec',
+      'linux/lib/LinuxARM/libcitizensdk.so', 'linux/lib/LinuxAMD/libcitizensdk.so',
+      'linux/cmake/CitizenSDKFlutter.cmake', 'linux/src/citizen_sdk_plugin.cc',
+      'windows/bin/Windows/citizensdk.dll', 'windows/cmake/CitizenSDKFlutter.cmake',
+      'windows/src/citizen_sdk_plugin.cc',
+    ]) {
+      assert.equal(entries.get(path)?.type, 'file', path);
+      assert.deepEqual(entries.get(path).data, readFileSync(join(candidate, path)), path);
+    }
+    for (const path of ['.pubignore', 'scripts/release.mjs', 'native/Cargo.toml', 'android/citizensdk.aar', 'citizensdk-release.json', 'SHA256SUMS']) {
+      assert.equal(entries.has(path), false, path);
+    }
+    assert.equal(entries.has(''), false, '包根不作为归档条目');
+    for (const [path, entry] of entries) {
+      const source = statSync(join(candidate, path));
+      assert.equal(entry.mode, entry.type === 'directory' ? 0o755 : 0o644 | (source.mode & 0o111), path);
+    }
+    const hosted = join(root, 'hosted.tar.gz');
+    const original = readFileSync(audit);
+    writeFileSync(hosted, gzipSync(hostedTar(entries)));
+    const output = join(root, 'extracted');
+    // 权限由固定 Pub 合同决定，不受调用进程的私有 umask 改写。
+    const previousUmask = process.umask(0o077);
+    try {
+      assert.doesNotThrow(() => verifyCitizenSdkHosted({
+        candidatePath: candidate, archivePath: audit, hostedArchivePath: hosted,
+        outputPath: output, expectedGitSha: '0'.repeat(40),
+      }));
+    } finally {
+      process.umask(previousUmask);
+    }
+    for (const [path, entry] of entries) {
+      const destination = join(output, path);
+      const info = lstatSync(destination);
+      assert.equal(info.isSymbolicLink(), false, path);
+      assert.equal(info.isDirectory(), entry.type === 'directory', path);
+      assert.equal(info.mode & 0o777, entry.mode, path);
+      if (entry.type === 'file') assert.deepEqual(readFileSync(destination), entry.data, path);
+    }
+    assert.deepEqual(readFileSync(audit), original, '验真不改原审计归档');
+    assert.doesNotThrow(() => verifyCitizenSdkRelease(candidate, audit, '0'.repeat(40)));
+    const verify = (destination) => verifyCitizenSdkHosted({
+      candidatePath: candidate, archivePath: audit, hostedArchivePath: hosted,
+      outputPath: destination, expectedGitSha: '0'.repeat(40),
+    });
+    for (const destination of [output, candidate, join(candidate, 'nested'), root]) {
+      assert.throws(() => verify(destination), Error, '禁止覆盖或重叠');
+    }
+    const outside = join(root, 'outside');
+    mkdirSync(outside);
+    const link = join(root, 'linked');
+    symlinkSync(outside, link);
+    assert.throws(() => verify(join(link, 'extracted')), Error, '禁止符号链接祖先');
+    assert.deepEqual(readdirSync(outside), [], '拒绝前不得经链接写入');
+    const missing = new Map(entries);
+    missing.delete('lib/citizen_sdk.dart');
+    const extra = new Map(entries);
+    extra.set('unexpected.dart', { type: 'file', mode: 0o644, data: Buffer.from('unexpected') });
+    const changed = new Map(entries);
+    changed.set('pubspec.yaml', { ...entries.get('pubspec.yaml'), data: Buffer.from('tampered') });
+    const apple = new Map(entries);
+    apple.set(`${framework}/CitizenSDK`, { ...entries.get(`${framework}/CitizenSDK`), data: Buffer.from('tampered framework') });
+    const wrongMode = new Map(entries);
+    wrongMode.set('lib/citizen_sdk.dart', { ...entries.get('lib/citizen_sdk.dart'), mode: 0o755 });
+    for (const [label, changedEntries] of [['missing', missing], ['extra', extra], ['bytes', changed], ['apple', apple], ['mode', wrongMode]]) {
+      writeFileSync(hosted, gzipSync(hostedTar(changedEntries)));
+      const destination = join(root, `reject-${label}`);
+      assert.throws(() => verify(destination), Error, label);
+      assert.equal(existsSync(destination), false, `${label} 必须在写目录前失败`);
+      assert.deepEqual(readFileSync(audit), original, label);
+    }
+    // 复用既有 Hosted 夹具为稀疏超限文件，验证磁盘读取前的长度门禁；
+    // 不生成 100 MiB 正文或分配同量 Buffer，也不增加新的夹具路径。
+    const descriptor = openSync(hosted, 'r+');
+    try {
+      ftruncateSync(descriptor, 100 * 1024 * 1024 + 1);
+    } finally {
+      closeSync(descriptor);
+    }
+    const oversizedOutput = join(root, 'reject-oversized');
+    assert.throws(() => verify(oversizedOutput), /Hosted 归档类型或长度无效/u);
+    assert.equal(existsSync(oversizedOutput), false, '超限必须在创建输出前拒绝');
+    assert.deepEqual(readFileSync(audit), original, '超限拒绝不改审计输入');
+    if (process.platform !== 'win32') {
+      // 无写端 FIFO 不得阻塞在 open；在有超时的独立进程验证真实生产读取入口。
+      unlinkSync(hosted);
+      const fifo = spawnSync('/usr/bin/mkfifo', [hosted], { encoding: 'utf8', timeout: 5000 });
+      assert.equal(fifo.status, 0, fifo.stderr || fifo.error?.message);
+      const destination = join(root, 'reject-fifo');
+      const script = `import assert from 'node:assert/strict';\n`
+        + `import {verifyCitizenSdkHosted} from ${JSON.stringify(new URL('./release.mjs', import.meta.url).href)};\n`
+        + `assert.throws(() => verifyCitizenSdkHosted(${JSON.stringify({
+          candidatePath: candidate, archivePath: audit, hostedArchivePath: hosted,
+          outputPath: destination, expectedGitSha: '0'.repeat(40),
+        })}), /Hosted 归档类型或长度无效/u);`;
+      const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+        encoding: 'utf8', cwd: root, timeout: 15000,
+      });
+      assert.equal(result.status, 0, result.stderr || result.error?.message);
+      assert.equal(existsSync(destination), false, 'FIFO 必须在创建输出前拒绝');
+      assert.deepEqual(readFileSync(audit), original, 'FIFO 拒绝不改审计输入');
+      unlinkSync(hosted);
+    }
+    writeFileSync(hosted, gzipSync(hostedTar(entries)));
+    const corrupt = Buffer.from(original);
+    corrupt[10] ^= 1;
+    writeFileSync(audit, corrupt);
+    const rejected = join(root, 'reject-audit');
+    assert.throws(() => verify(rejected), Error, '先验证原审计归档');
+    assert.equal(existsSync(rejected), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 直接执行唯一发布器的函数体；只替换操作系统和时钟，不增加生产用测试开关。
+function hostedSupervisor(options = {}) {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts/release.mjs'), 'utf8');
+  const start = source.indexOf('function runHostedDart(');
+  const end = source.indexOf('\n/** 只调用固定 Pub', start);
+  assert.ok(start > 0 && end > start);
+  const child = new EventEmitter();
+  child.pid = options.noPid ? undefined : 4321;
+  child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  let destroyed = 0, unreferenced = 0, pending = true, timerID = 0, spawned;
+  child.stdout.destroy = child.stderr.destroy = () => { destroyed += 1; };
+  child.unref = () => { unreferenced += 1; };
+  const timers = new Map(), calls = [], controller = new AbortController();
+  if (options.aborted) controller.abort();
+  const result = runInNewContext(`${source.slice(start, end)}\nrunHostedDart('/dart', ['--version'], '/work', {CI:'true'}, signal)`, {
+    process: { platform: options.platform ?? 'darwin', kill(pid, name) {
+      calls.push([pid, name]);
+      if ((options.inspectError && name === 0) || (options.killError && name !== 0)) {
+        throw Object.assign(new Error('OS denied'), { code: 'EPERM' });
+      }
+      if (name === 0 && !pending) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    } },
+    spawn: (...args) => { spawned = args; return child; }, signal: controller.signal,
+    fail: (message) => { throw new Error(message); },
+    setTimeout: (callback, duration) => { const id = ++timerID; timers.set(id, { callback, duration }); return id; },
+    clearTimeout: (id) => timers.delete(id),
+  });
+  return {
+    child, controller, result, calls, timers, spawned,
+    set pending(value) { pending = value; },
+    fire(duration) {
+      const row = [...timers].find(([, timer]) => timer.duration === duration);
+      assert.ok(row, `缺少 ${duration} ms 定时器`);
+      timers.delete(row[0]); row[1].callback();
+    },
+    close(code = 0, name = null) { child.emit('exit', code, name); child.emit('close', code, name); },
+    assertClean(preserved = false) {
+      assert.equal(timers.size, 0);
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+      assert.equal(destroyed, preserved ? 2 : 0);
+      assert.equal(unreferenced, preserved ? 1 : 0);
+    },
+  };
+}
+
+test('Hosted 监督在预取消或缺少POSIX组时不启动工具', () => {
+  assert.throws(() => hostedSupervisor({ aborted: true }), { name: 'AbortError' });
+  assert.throws(() => hostedSupervisor({ platform: 'win32' }), /POSIX/u);
+});
+
+test('Hosted 监督正常退出非零错误和启动失败都清理监听器与定时器', async () => {
+  const good = hostedSupervisor();
+  assert.deepEqual(Array.from(good.spawned[1]), ['--suppress-analytics', '--version']);
+  assert.equal(good.spawned[2].detached, true);
+  assert.equal(good.spawned[2].shell, false);
+  good.child.stdout.emit('data', Buffer.from('version'));
+  good.pending = false; good.close();
+  assert.equal(await good.result, 'version'); good.assertClean();
+  for (const [code, signal] of [[3, null], [null, 'SIGTERM']]) {
+    const bad = hostedSupervisor(); bad.pending = false; bad.close(code, signal);
+    await assert.rejects(bad.result, /官方工具失败/u); bad.assertClean();
+  }
+  const missing = hostedSupervisor({ noPid: true });
+  missing.child.emit('error', new Error('spawn ENOENT')); missing.close(null);
+  await assert.rejects(missing.result, /ENOENT/u); missing.assertClean();
+});
+
+test('Hosted 监督取消超时和超量输出保持失败并由内部终止工具组', async () => {
+  for (const reason of ['abort', 'timeout', 'stdout', 'stderr', 'pipe-error']) {
+    const run = hostedSupervisor();
+    if (reason === 'abort') run.controller.abort();
+    else if (reason === 'timeout') run.fire(120000);
+    else if (reason === 'pipe-error') run.child.stdout.emit('error', new Error('pipe error'));
+    else run.child[reason].emit('data', Buffer.alloc(4 * 1024 * 1024 + 1));
+    assert.deepEqual(run.calls, [[-4321, 'SIGTERM']]);
+    run.controller.abort(); // 重复取消不能重置收尾期限。
+    run.fire(5000);
+    assert.deepEqual(run.calls.slice(-2), [[-4321, 0], [-4321, 'SIGKILL']]);
+    run.pending = false; run.close(0);
+    await assert.rejects(run.result, /取消|超时|超过上限|pipe error/u);
+    run.assertClean();
+  }
+});
+
+test('Hosted 监督从exit检查管道后代且无法确认退出时必须保留目录', async () => {
+  const orphan = hostedSupervisor();
+  orphan.child.emit('exit', 0, null); // 没有 close：后代仍持有继承管道。
+  orphan.fire(200);
+  assert.ok(orphan.calls.some(([, name]) => name === 'SIGTERM'));
+  orphan.pending = false; orphan.child.emit('close', 0, null);
+  await assert.rejects(orphan.result, /遗留子进程或管道/u); orphan.assertClean();
+  for (const options of [{}, { inspectError: true }, { killError: true }]) {
+    const run = hostedSupervisor(options);
+    if (options.inspectError) run.close();
+    else { run.controller.abort(); if (!options.killError) run.fire(10000); }
+    await assert.rejects(run.result, (error) => error.preserveHostedOutput === true);
+    run.assertClean(true);
+    run.child.emit('close', 0, null); run.controller.abort(); run.assertClean(true);
+  }
+});
+
+test('Hosted 工具调度固定版本和两次独立命令，失败不上传且按退出证据清理或保留', async (context) => {
+  if (process.platform === 'win32') {
+    await assert.rejects(buildCitizenSdkHosted({}), /POSIX 进程组监督/u);
+    return;
+  }
+  const root = mkdtempSync(join(workRoot, 'release-hosted-dispatch-test-'));
+  const orphanPidPath = join(root, 'orphan.pid');
+  const orphanAlive = () => {
+    if (!existsSync(orphanPidPath)) return false;
+    const pid = Number(readFileSync(orphanPidPath, 'utf8'));
+    assert.ok(Number.isInteger(pid) && pid > 0, '只检查本夹具记录的后代 PID');
+    try { process.kill(pid, 0); return true; } catch (error) {
+      if (error.code === 'ESRCH') return false;
+      throw error;
+    }
+  };
+  try {
+    const native = writeNativeFixture(root);
+    const candidate = join(root, 'candidate');
+    const audit = join(root, 'citizensdk.tgz');
+    const manifest = buildCitizenSdkRelease({
+      sourcePath: citizenSdkRoot, nativePath: native, outputPath: candidate,
+      archivePath: audit, gitCommitSha: '0'.repeat(40), softwareVersion: '1.0.0',
+    });
+    const archive = join(root, 'expected.tar.gz');
+    writeFileSync(archive, gzipSync(hostedTar(hostedPackageEntries(candidate))));
+    const tool = join(root, 'tool');
+    const dart = join(tool, 'bin', 'dart');
+    const flutter = join(root, 'flutter');
+    const cache = join(root, 'cache');
+    const calls = join(root, 'calls.jsonl');
+    const scenario = join(root, 'scenario');
+    mkdirSync(dirname(dart), { recursive: true });
+    mkdirSync(flutter);
+    mkdirSync(cache);
+    writeFileSync(join(tool, 'version'), '3.12.2\n');
+    // 显式伪工具只证明生产调度边界；真实官方 Pub 由下一项独立往返验证。
+    // 使用固定 Node 绝对解释器，不通过 shell、PATH 或 Git 执行任意参数。
+    writeFileSync(dart, `#!${process.execPath}\n`
+      + "import {appendFileSync,copyFileSync,readFileSync,writeFileSync} from 'node:fs';\n"
+      + "import {spawn} from 'node:child_process';\n"
+      + `const args=process.argv.slice(2), scenario=readFileSync(${JSON.stringify(scenario)},'utf8');\n`
+      + `appendFileSync(${JSON.stringify(calls)},JSON.stringify({args,env:Object.keys(process.env).sort()})+'\\n');\n`
+      + "if(args.shift()!=='--suppress-analytics')process.exit(10);\n"
+      // 在三个阶段分别挂起；只运行有上限的 Node 夹具，证明取消不会启动下一阶段。
+      + "const stage=args[0]==='--version'?'version':args[2]==='--dry-run'?'preview':'archive';\n"
+      + `if(scenario==='hold-'+stage){const child=spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),10000)'],{stdio:'inherit',detached:false});writeFileSync(${JSON.stringify(orphanPidPath)},String(child.pid));setTimeout(()=>process.exit(0),10000);}else {\n`
+      // 让入口正常退出但同组后代仍存活，证明生产逻辑会检查、终止并等待整组。
+      // 后代自身有 10 秒上限；测试只做存活检查，绝不按猜测 PID 发送终止信号。
+      + `if(scenario==='orphan'&&args[0]==='--version'){const child=spawn(process.execPath,['-e','setTimeout(()=>process.exit(0),10000)'],{stdio:'ignore',detached:false});writeFileSync(${JSON.stringify(orphanPidPath)},String(child.pid));child.unref();console.log('Dart SDK version: 3.12.2 (stable)');process.exit(0);}\n`
+      + "if(args.length===1&&args[0]==='--version'){console.log('Dart SDK version: '+(scenario==='version'?'3.12.1':'3.12.2')+' (stable)');process.exit(0);}\n"
+      + "if(args.length!==3||args[0]!=='pub'||args[1]!=='publish')process.exit(11);\n"
+      + "if(args[2]==='--dry-run'){if(scenario==='dry-run-error')process.exit(12);console.log('Package has '+(scenario==='warnings'?'1':'0')+' warnings.');process.exit(0);}\n"
+      + "if(!args[2].startsWith('--to-archive='))process.exit(13);\n"
+      + "if(scenario==='archive-error')process.exit(14);\n"
+      + "const output=args[2].slice('--to-archive='.length);\n"
+      + `if(scenario==='invalid-archive')writeFileSync(output,'invalid archive');else if(scenario!=='missing-archive')copyFileSync(${JSON.stringify(archive)},output);\n`
+      + "console.log(scenario==='unconfirmed'?'No archive confirmation':'Wrote package archive at '+output);\n}\n",
+    { mode: 0o755 });
+    const original = readFileSync(audit);
+    writeFileSync(calls, '');
+    for (const [index, overlapping] of [
+      candidate, join(candidate, 'cache'), audit, dart, dirname(dart), flutter, root,
+    ].entries()) {
+      const output = join(root, `reject-cache-${index}`);
+      await assert.rejects(() => buildCitizenSdkHosted({
+        candidatePath: candidate, archivePath: audit, outputPath: output,
+        dartPath: dart, flutterRoot: flutter, pubCachePath: overlapping, expectedGitSha: '0'.repeat(40),
+      }), Error, '缓存与只读输入双向互斥');
+      assert.equal(existsSync(output), false);
+      assert.equal(readFileSync(calls, 'utf8'), '', '路径拒绝不能执行工具');
+    }
+    for (const [name, expectedCalls] of [
+      ['valid', 3], ['version', 1], ['warnings', 2], ['dry-run-error', 2],
+      ['archive-error', 3], ['unconfirmed', 3], ['invalid-archive', 3], ['missing-archive', 3],
+      ...(process.platform === 'win32' ? [] : [['orphan', 1]]),
+    ]) {
+      writeFileSync(scenario, name);
+      writeFileSync(calls, '');
+      const output = join(root, `hosted-${name}`);
+      const invoke = () => buildCitizenSdkHosted({
+        candidatePath: candidate, archivePath: audit, outputPath: output,
+        dartPath: dart, flutterRoot: flutter, pubCachePath: cache, expectedGitSha: '0'.repeat(40),
+      });
+      if (name === 'valid') assert.deepEqual(await invoke(), manifest);
+      else {
+        let failure;
+        await assert.rejects(invoke, (error) => { failure = error; return error instanceof Error; }, name);
+        // macOS 沙箱可能拒绝已孤立组的 kill(..., 0)。EPERM 不是 ESRCH，生产入口
+        // 必须保留现场；测试也不能要求在未确认退出时删除。其余失败仍要求精确清理。
+        const denied = name === 'orphan' && failure.preserveHostedOutput === true && failure.cause?.code === 'EPERM';
+        assert.equal(existsSync(output), denied, `${name} 按证据清理或保留：${failure.message}; ${failure.cause?.stack || ''}`);
+        if (name === 'orphan') {
+          assert.equal(existsSync(orphanPidPath), true, '确实创建过同组后代');
+          if (denied) {
+            context.diagnostic('沙箱拒绝孤立进程组探测：已断言发布器失败且保留现场，不计作确认工具组退出');
+            // 只等待本夹具准确 PID；后代自身有 10 秒期限，不向猜测 PID 发送信号。
+            const deadline = Date.now() + 15000;
+            while (orphanAlive() && Date.now() < deadline) await new Promise((resume) => setTimeout(resume, 25));
+            assert.equal(existsSync(output), true, '等待期间发布器仍不得删除保留现场');
+          }
+          assert.equal(orphanAlive(), false, denied ? '清理夹具前必须确认准确后代退出' : '发布器返回失败前必须确认准确后代退出');
+        }
+      }
+      const records = readFileSync(calls, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+      assert.equal(records.length, expectedCalls, name);
+      assert.deepEqual(records[0].args, ['--suppress-analytics', '--version'], name);
+      if (records.length > 1) {
+        assert.deepEqual(records[1].args, ['--suppress-analytics', 'pub', 'publish', '--dry-run'], name);
+      }
+      if (records.length > 2) {
+        assert.deepEqual(records[2].args, [
+          '--suppress-analytics', 'pub', 'publish', `--to-archive=${join(output, 'citizen_sdk-1.0.0.tar.gz')}`,
+        ], name);
+      }
+      for (const record of records) {
+        assert.equal(record.env.some((key) => /^(?:HOME|APPDATA|LOCALAPPDATA|XDG_|PUB_TOKEN|GITHUB_TOKEN)/u.test(key)), false, name);
+        assert.equal(record.args.some((arg) => /^--(?:force|skip-validation|from-archive)(?:=|$)/u.test(arg)), false, name);
+      }
+      assert.deepEqual(readFileSync(audit), original, name);
+      assert.doesNotThrow(() => verifyCitizenSdkRelease(candidate, audit, '0'.repeat(40)), name);
+    }
+    const ready = async () => {
+      const deadline = Date.now() + 10000;
+      while (!existsSync(orphanPidPath)) {
+        if (Date.now() >= deadline) throw new Error('受控工具没有及时启动');
+        await new Promise((resume) => setTimeout(resume, 25));
+      }
+    };
+    for (const [stage, expectedCalls] of [['version', 1], ['preview', 2], ['archive', 3]]) {
+      if (existsSync(orphanPidPath)) unlinkSync(orphanPidPath);
+      writeFileSync(scenario, `hold-${stage}`); writeFileSync(calls, '');
+      const controller = new AbortController(), output = join(root, `abort-${stage}`);
+      const result = buildCitizenSdkHosted({ candidatePath: candidate, archivePath: audit, outputPath: output,
+        dartPath: dart, flutterRoot: flutter, pubCachePath: cache, expectedGitSha: '0'.repeat(40), signal: controller.signal });
+      const rejected = assert.rejects(result, /取消/u);
+      try { await ready(); } finally { controller.abort(); await rejected; }
+      assert.equal(orphanAlive(), false, `${stage} 返回前整组后代退出`);
+      assert.equal(existsSync(output), false, `${stage} 仅清理自己的新建目录`);
+      assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, expectedCalls);
+      assert.equal(getEventListeners(controller.signal, 'abort').length, 0);
+      assert.deepEqual(readFileSync(audit), original);
+    }
+    // 真实 CLI 接收信号；监督器不被提前强杀，最终保留 130/143 而不是伪装为成功。
+    for (const [signal, expectedCode] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+      unlinkSync(orphanPidPath);
+      writeFileSync(scenario, 'hold-preview'); writeFileSync(calls, '');
+      const output = join(root, `cli-${signal}`);
+      const child = spawn(process.execPath, [join(citizenSdkRoot, 'scripts/release.mjs'),
+        '--hosted', candidate, '--archive', audit, '--output', output, '--dart', dart,
+        '--flutter', flutter, '--pub-cache', cache, '--expected-git-sha', '0'.repeat(40)],
+      { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], shell: false });
+      let stderr = '';
+      child.stdout.resume(); child.stderr.on('data', (data) => { stderr += data; });
+      const done = new Promise((resolveChild, rejectChild) => {
+        child.on('error', rejectChild); child.on('close', (code, name) => resolveChild({ code, name }));
+      });
+      try { await ready(); } finally { child.kill(signal); }
+      const result = await done;
+      assert.deepEqual(result, { code: expectedCode, name: null }, stderr);
+      assert.equal(orphanAlive(), false); assert.equal(existsSync(output), false);
+      assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 2);
+      assert.deepEqual(readFileSync(audit), original);
+    }
+  } finally {
+    if (orphanAlive()) throw new Error('Hosted 夹具后代尚存活，保留其准确工作目录');
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// 只有主验收显式提供隔离的官方工具与缓存时才注册真实往返；普通 Node 测试
+// 既不偷偷联网，也不把此项计作 skip 或把格式夹具当作官方 Pub 已验证。
+if (process.env.CITIZENSDK_DART) {
+  test('Hosted 官方 Pub 实际 dry-run、归档、解包往返保持完整同版包', async (context) => {
+    assert.ok(process.env.CITIZENSDK_FLUTTER, '缺少显式官方 Flutter 路径');
+    assert.ok(process.env.CITIZENSDK_PUB_CACHE, '缺少显式中央独占 Pub cache');
+    const root = mkdtempSync(join(workRoot, 'release-hosted-official-test-'));
+    try {
+      const native = writeNativeFixture(root);
+      const candidate = join(root, 'candidate');
+      const audit = join(root, 'citizensdk.tgz');
+      const manifest = buildCitizenSdkRelease({
+        sourcePath: citizenSdkRoot, nativePath: native, outputPath: candidate,
+        archivePath: audit, gitCommitSha: '0'.repeat(40), softwareVersion: '1.0.0',
+      });
+      const output = join(root, 'hosted');
+      const result = await buildCitizenSdkHosted({
+        candidatePath: candidate,
+        archivePath: audit,
+        outputPath: output,
+        dartPath: process.env.CITIZENSDK_DART,
+        flutterRoot: process.env.CITIZENSDK_FLUTTER,
+        pubCachePath: process.env.CITIZENSDK_PUB_CACHE,
+        expectedGitSha: '0'.repeat(40),
+      });
+      assert.deepEqual(result, manifest);
+      const archive = readFileSync(join(output, 'citizen_sdk-1.0.0.tar.gz'));
+      const entries = parseHostedArchive(archive);
+      assert.deepEqual(entries, hostedPackageEntries(candidate));
+      for (const path of [
+        'pubspec.yaml', 'lib/citizen_sdk.dart', 'assets/citizenchain/manifest.json',
+        'android/src/main/jniLibs/arm64-v8a/libcitizensdk.so',
+        'darwin/citizen_sdk.podspec', 'linux/lib/LinuxARM/libcitizensdk.so',
+        'linux/lib/LinuxAMD/libcitizensdk.so', 'windows/bin/Windows/citizensdk.dll',
+      ]) {
+        assert.deepEqual(readFileSync(join(output, 'package', path)), entries.get(path).data, path);
+      }
+      assert.match(readFileSync(join(output, 'pub.log'), 'utf8'), /Package has 0 warnings(?: and \d+ hints?)?\./u);
+      assert.doesNotThrow(() => verifyCitizenSdkRelease(candidate, audit, '0'.repeat(40)));
+      context.diagnostic(JSON.stringify({
+        compressedBytes: archive.length,
+        expandedBytes: [...entries.values()].reduce((sum, entry) => sum + entry.data.length, 0),
+        files: [...entries.values()].filter((entry) => entry.type === 'file').length,
+        directories: [...entries.values()].filter((entry) => entry.type === 'directory').length,
+      }));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
+// 只有显式本轮 Apple 产物才运行安装消费；普通 Node 测试不会编译或访问网络。
+// 该本地候选的 Android/Linux/Windows 仍是格式夹具，绝不是可发布的全平台包。
+if (process.env.CITIZENSDK_APPLE_NATIVE) {
+  test('macOS 从官方 Hosted 包安装真实 Apple 运行件并调用公开 CitizenSdk', async (context) => {
+    assert.equal(process.platform, 'darwin');
+    assert.equal(process.arch, 'arm64');
+    for (const name of ['CITIZENSDK_DART', 'CITIZENSDK_FLUTTER', 'CITIZENSDK_PUB_CACHE', 'CITIZENSDK_TOOL_PATH']) {
+      assert.ok(process.env[name], `缺少显式隔离输入 ${name}`);
+    }
+    // 在创建消费夹具前执行构建器的唯一根预检；不在 Node 里另写 Runner 路径算法。
+    const checkedRoot = spawnSync('/bin/bash', ['-c', [
+      'set -euo pipefail',
+      nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path',
+        'assert_readonly_dependency_directory', 'macos_hosted_root']),
+      'tata_console_work_root="$1"; sdk_dir="$2"; macos_hosted_root',
+    ].join('\n'), 'macos-hosted-root', '/Users/rhett/TATA/tataconsole/target/.work', resolve(citizenSdkRoot)], {
+      cwd: workRoot, encoding: 'utf8', timeout: 10000,
+      env: { PATH: process.env.CITIZENSDK_TOOL_PATH,
+        GITHUB_ACTIONS: process.env.GITHUB_ACTIONS, RUNNER_TEMP: process.env.RUNNER_TEMP,
+        GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE },
+    });
+    assert.equal(checkedRoot.error, undefined);
+    assert.equal(checkedRoot.status, 0, checkedRoot.stderr);
+    const macosRoot = checkedRoot.stdout.trim();
+    const root = mkdtempSync(join(macosRoot, 'release-macos-hosted-test-'));
+    let preserve = false;
+    try {
+      const native = writeNativeFixture(root, { appleNative: process.env.CITIZENSDK_APPLE_NATIVE });
+      const candidate = join(root, 'candidate');
+      const audit = join(root, 'citizensdk.tgz');
+      const manifest = buildCitizenSdkRelease({
+        sourcePath: citizenSdkRoot, nativePath: native, outputPath: candidate,
+        archivePath: audit, gitCommitSha: '0'.repeat(40), softwareVersion: '1.0.0',
+      });
+      const hosted = join(root, 'hosted');
+      const options = {
+        candidatePath: candidate, archivePath: audit, outputPath: hosted,
+        dartPath: process.env.CITIZENSDK_DART,
+        flutterRoot: process.env.CITIZENSDK_FLUTTER,
+        pubCachePath: process.env.CITIZENSDK_PUB_CACHE,
+        expectedGitSha: '0'.repeat(40),
+      };
+      // Pub 归档先于 Flutter 构建，须独立应用单层沙箱，不能依赖后续才生成的 tool.sb。
+      // 保留官方 Pub 的只读网络校验；写入仅限本轮目录/隔离缓存，禁止用户凭据读取和 Git。
+      const policy = '(version 1)\n(allow default)\n(deny file-write*)\n' +
+        [root, options.pubCachePath].map((value) =>
+          `(allow file-write* (subpath ${JSON.stringify(value)}))\n`).join('') +
+        '(allow file-write* (literal "/dev/null"))\n(deny process-exec (regex #"/git$"))\n' +
+        ['Library/Application Support/dart', '.config/dart', '.pub-cache', 'Library/Keychains',
+          '.gitconfig', '.git-credentials', '.config/git', 'GMB/.git', 'TATA/.git', 'TUYU/.git', 'flutter/.git']
+          .map((value) => `(deny file-read* (subpath ${JSON.stringify(join(homedir(), value))}))\n`).join('');
+      const payload = JSON.stringify({ moduleUrl: new URL('./release.mjs', import.meta.url).href, options });
+      const worker = `
+let interrupted = false;
+const controller = new AbortController();
+// TERM 转为 AbortSignal；唯一发布器确认独立 Dart/Pub 组退出后才返回，不能直接杀监督器。
+process.on('SIGTERM', () => { interrupted = true; controller.abort(); });
+process.on('SIGINT', () => { interrupted = true; controller.abort(); });
+try {
+  const { moduleUrl, options } = JSON.parse(process.argv[1]);
+  const { buildCitizenSdkHosted } = await import(moduleUrl);
+  const result = await buildCitizenSdkHosted({ ...options, signal: controller.signal });
+  if (interrupted) throw new Error('CitizenSDK Hosted 归档收到停止请求，内部工具已结束');
+  process.stdout.write(JSON.stringify(result) + '\\n');
+} catch (error) {
+  process.stderr.write(String(error?.stack ?? error) + '\\n');
+  process.exitCode = 1;
+}
+`;
+      const hostedManifest = await new Promise((resolveHosted, rejectHosted) => {
+        const child = spawn('/usr/bin/sandbox-exec', [
+          '-p', policy, process.execPath, '--input-type=module', '-e', worker, payload,
+        ], {
+          cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+          env: { PATH: dirname(process.execPath), TMPDIR: root,
+            // 唯一发布器也按执行环境检查输出根；不传递会在 Runner 上误用本机目录合同。
+            GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
+            RUNNER_TEMP: process.env.RUNNER_TEMP,
+            GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE,
+            LANG: 'C.UTF-8', DASH__SUPPRESS_ANALYTICS: 'true', CI: 'true' },
+        });
+        let stdout = '', stderr = '', failed = null;
+        const stop = (error) => {
+          failed ||= error;
+          // 不发送 SIGKILL，也不提前删除目录；内部 AbortSignal 负责终止并确认 Dart 组退出。
+          if (child.pid) child.kill('SIGTERM');
+        };
+        const timer = setTimeout(() => stop(new Error('CitizenSDK Hosted 沙箱归档超过等待期限')), 420000);
+        const collect = (chunk, output) => {
+          if (stdout.length + stderr.length + chunk.length > 8 * 1024 * 1024) {
+            stop(new Error('CitizenSDK Hosted 沙箱归档输出超过上限'));
+          } else if (output) stdout += chunk.toString('utf8');
+          else stderr += chunk.toString('utf8');
+        };
+        child.stdout.on('data', (chunk) => collect(chunk, true));
+        child.stderr.on('data', (chunk) => collect(chunk, false));
+        child.on('error', (error) => { failed = error; });
+        child.on('close', (code, signal) => {
+          clearTimeout(timer);
+          try {
+            if (failed || code !== 0 || signal) {
+              throw failed || new Error(`CitizenSDK Hosted 沙箱归档失败 (${code ?? signal})：\n${stderr}`);
+            }
+            resolveHosted(JSON.parse(stdout));
+          } catch (error) { rejectHosted(error); }
+        });
+      });
+      assert.deepEqual(hostedManifest, manifest);
+      const archive = join(hosted, 'citizen_sdk-1.0.0.tar.gz');
+      const commandWork = join(root, 'citizensdk', 'work');
+      const commandOutput = join(root, 'citizensdk', 'output');
+      mkdirSync(commandWork, { recursive: true });
+      mkdirSync(commandOutput, { recursive: true });
+      const argumentsList = [
+        join(citizenSdkRoot, 'scripts/build-native.sh'), 'macOS',
+        candidate, audit, archive, process.env.CITIZENSDK_FLUTTER,
+        process.env.CITIZENSDK_PUB_CACHE, process.env.CITIZENSDK_TOOL_PATH,
+      ];
+      // TERM 交给内部工具监督器处理，不能直接杀监督器后清理其仍在写入的目录。
+      // 外层有最终期限；若进程组不能退出则保留准确目录并上报，不发送猜测 PID。
+      const output = await new Promise((resolveRun, rejectRun) => {
+        const child = spawn('/bin/bash', argumentsList, {
+          cwd: root, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+          env: {
+            PATH: process.env.CITIZENSDK_TOOL_PATH,
+            TATA_CONSOLE_WORK_DIR: root,
+            CITIZENSDK_WORK_DIR: commandWork,
+            CITIZENSDK_NATIVE_OUTPUT_DIR: commandOutput,
+            GITHUB_ACTIONS: process.env.GITHUB_ACTIONS,
+            RUNNER_TEMP: process.env.RUNNER_TEMP,
+            GITHUB_WORKSPACE: process.env.GITHUB_WORKSPACE,
+            TMPDIR: process.env.TMPDIR,
+            LANG: 'C.UTF-8', DASH__SUPPRESS_ANALYTICS: 'true', CI: 'true',
+          },
+        });
+        let text = '';
+        let failed = null;
+        let finalTimer;
+        const alive = () => {
+          if (!child.pid) return false;
+          try { process.kill(-child.pid, 0); return true; } catch (error) {
+            if (error.code === 'ESRCH') return false;
+            throw error;
+          }
+        };
+        const stop = (error) => {
+          failed ||= error;
+          if (child.pid) {
+            try { process.kill(-child.pid, 'SIGTERM'); } catch (signalError) {
+              if (signalError.code !== 'ESRCH') failed = signalError;
+            }
+          }
+          finalTimer ||= setTimeout(() => {
+            preserve = true;
+            const pending = new Error(`macOS Hosted 工具未在停止期限内退出，保留 ${root}`);
+            pending.preserveHostedOutput = true;
+            child.stdout.destroy(); child.stderr.destroy(); child.unref();
+            rejectRun(pending);
+          }, 30000);
+        };
+        const timer = setTimeout(() => stop(new Error('macOS Hosted 安装消费超过 30 分钟')), 1800000);
+        const collect = (chunk) => {
+          if (text.length + chunk.length > 32 * 1024 * 1024) stop(new Error('macOS Hosted 工具输出超过上限'));
+          else text += chunk.toString('utf8');
+        };
+        child.stdout.on('data', collect); child.stderr.on('data', collect);
+        child.on('error', (error) => { failed = error; });
+        child.on('close', async (code, signal) => {
+          clearTimeout(timer); clearTimeout(finalTimer);
+          try {
+            for (let attempt = 0; attempt < 100 && alive(); attempt += 1) {
+              await new Promise((done) => setTimeout(done, 50));
+            }
+            if (alive()) {
+              preserve = true;
+              const pending = new Error(`macOS Hosted 进程组仍存活，保留 ${root}`);
+              pending.preserveHostedOutput = true;
+              rejectRun(pending);
+            } else if (failed || code !== 0 || signal) {
+              rejectRun(failed || new Error(`macOS Hosted 消费失败 (${code ?? signal})：\n${text}`));
+            } else resolveRun(text);
+          } catch (error) { preserve = true; rejectRun(error); }
+        });
+      });
+      assert.match(output, /CitizenSDK macOS Hosted 安装消费通过/u);
+      const consumerOutput = readFileSync(join(commandWork, 'macOS/logs/consumer.stdout'), 'utf8');
+      for (const marker of ['CitizenSDK Foundation isolation passed', 'CitizenSDK Flutter consumer passed']) {
+        assert.equal(consumerOutput.split(/\r?\n/u).filter((line) => line === marker).length, 1, marker);
+      }
+      assert.doesNotThrow(() => verifyCitizenSdkRelease(candidate, audit, '0'.repeat(40)));
+      assert.deepEqual(
+        readFileSync(join(commandWork, 'macOS/package/lib/citizen_sdk.dart')),
+        readFileSync(join(candidate, 'lib/citizen_sdk.dart')),
+      );
+      context.diagnostic('真实 macOS Hosted 安装与公开入口运行通过；其它平台仅格式夹具，未验证在线 Hosted 下载。');
+    } catch (error) {
+      // 真实工具失败的细节位于独占 logs；不能在外层只收到退出码时删除根因证据。
+      // 后续仅在复核准确目录身份、占用和诊断后清理，不影响普通格式夹具的清理。
+      preserve = true;
+      context.diagnostic(`真实 macOS Hosted 验收失败，保留诊断与工作目录：${root}`);
+      throw error;
+    } finally {
+      // 内部工具可能有独立进程组；除上面的父组退出，还须确认准确工作目录无在用文件。
+      if (!preserve) {
+        const opened = spawnSync('/usr/sbin/lsof', ['-t', '+D', root], {
+          encoding: 'utf8', cwd: workRoot, timeout: 15000, killSignal: 'SIGTERM',
+        });
+        if (opened.error || opened.signal || opened.status !== 1 || opened.stdout.trim()) {
+          preserve = true;
+          throw new Error(`macOS Hosted 工作目录占用状态不能确认，保留 ${root}`);
+        }
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+}

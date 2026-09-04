@@ -2,12 +2,23 @@
 #define CITIZENSDK_LINUX_TPM2_HPP
 
 #include <array>
+#include <cstdint>
 #include "citizen_sdk_secure_store.hpp"
 #include "citizen_sdk_sensitive_buffer.hpp"
 
 namespace citizen_sdk::linux {
 
 enum class TpmAvailability { kAvailable, kUnsupported, kUnavailable };
+
+// Internal, side-effect-free classification shared by production check() and
+// contract tests. TSS software-layer codes retain the caller's fallback; they
+// must never be decoded as a TPM authentication or key-lifecycle response.
+struct TpmErrorMapping final {
+  citizensdk_error_code_t code;
+  bool dictionary_attack_lockout;
+};
+TpmErrorMapping map_tpm2_error(uint32_t response,
+                              citizensdk_error_code_t mapped) noexcept;
 
 class Tpm2 final {
  public:

@@ -8,9 +8,12 @@
 | iOS | 设备与模拟器变体；模拟器无 Secure Enclave 钱包能力 | `CitizenSDK.xcframework` |
 | macOS | 产品 ABI、Swift/Flutter；机器架构值 `arm64` | `CitizenSDK.xcframework` |
 
-LinuxARM、LinuxAMD 已有第 7.1 步尚未编译的 C/C++ Host、TPM 2.0 Vault 与合同测试源码，
-但还没有 Flutter 正式绑定、经过运行验证的硬件金库或 Release 资产，不属于当前交付平台。
-Windows 仍无平台投影。legacy `libsmoldot.dylib` 仅为外部 macOS `arm64` 差分测试宿主库，
+LinuxARM、LinuxAMD 已有 Host、Flutter adapter/测试及安装消费者源码；第 7.4 步把两者纳入
+同版本候选合同、官方 `linux` plugin 注册及默认 `CitizenSdk.open()`，不增加第二套移动通道。
+Linux 尚未经过真实编译、运行和硬件金库验证，不能把源码登记写成已发布的 Release 资产。
+Windows 已有 Host 和 Flutter 适配；第 8.4 步同时接入默认注册、同版候选和公开 Flutter
+消费者。Windows 实际编译/运行和正式发布仍须统一平台验收，不能用 macOS 结果替代。
+legacy `libsmoldot.dylib` 仅为外部 macOS `arm64` 差分测试宿主库，
 不进入任何 Release 候选。
 
 ## Dart 与 Flutter 公共边界
@@ -22,6 +25,15 @@ Android 与 Apple Flutter adapter 均使用固定：
 MethodChannel  citizen/sdk/core/v1
 EventChannel   citizen/sdk/events/v1
 ```
+
+Linux adapter 源码也只使用这两个 channel 和相同 22 方法 tuple；它不增加第 23 个方法、
+Map 旁路或 Linux 专用 Dart API。第 7.4 步公开入口使用同版已安装 Host/Core；跨平台实测仍
+由后续统一 GitHub CI 增量缓存、Release 全量构建承担，保持同一产品版本与 ABI。
+
+Windows adapter 源码也复用这两个 channel 和全部 22 方法；五份绑定各自的权威常量/方法表
+独立对拍同一金标。Windows 不带入 GLib 实现，也不增加移动端参数或业务功能；其本地身份、
+路径和 HWND 只在原生环境层取得。第 8.4 步注册官方 Windows 插件，不增加新的协议或
+产品业务；注册源码不代表已在 Hosted 发布。
 
 协议只有 22 个方法。请求、响应、事件、错误和嵌套公开值都是固定长度、固定位置的 `List`
 tuple；没有 `Map` 兼容旁路。request sequence 在接纳时严格连续，但并发响应可乱序并精确回显

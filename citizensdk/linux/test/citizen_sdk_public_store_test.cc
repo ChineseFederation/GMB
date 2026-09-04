@@ -297,6 +297,19 @@ int main() {
   assert(read_text_pragma(wrong_schema / "public-state-v1.sqlite3",
                           "PRAGMA journal_mode") == "delete");
 
+  // user_version=0 也不等于空库；必须先识别 sqlitex_* 用户表，不能初始化业务 schema。
+  const auto uninitialized = temporary.path() / "sqlitex-public-uninitialized";
+  std::filesystem::create_directory(uninitialized);
+  const auto uninitialized_database = uninitialized / "public-state-v1.sqlite3";
+  execute_sql(uninitialized_database, "CREATE TABLE sqlitex_extra(value BLOB);");
+  assert(read_text_pragma(uninitialized_database, "PRAGMA user_version") == "0");
+  expect_integrity_on_open(uninitialized);
+  assert(read_text_pragma(uninitialized_database, "PRAGMA user_version") == "0");
+  assert(read_text_pragma(uninitialized_database, "PRAGMA journal_mode") == "delete");
+  assert(read_text_pragma(uninitialized_database,
+                         "SELECT count(*) FROM sqlite_master WHERE name IN "
+                         "('singleton_records','runtime_cache')") == "0");
+
   const auto extra_schema = temporary.path() / "extra-public-schema";
   {
     PublicStore store(extra_schema);
@@ -304,6 +317,23 @@ int main() {
   execute_sql(extra_schema / "public-state-v1.sqlite3",
               "CREATE TABLE unexpected_state(value BLOB);");
   expect_integrity_on_open(extra_schema);
+
+  // 用户对象 sqlitex_* 不是 SQLite 内部对象，表和触发器都必须计入 schema 闭集。
+  const auto disguised_table = temporary.path() / "sqlitex-public-table";
+  {
+    PublicStore store(disguised_table);
+  }
+  execute_sql(disguised_table / "public-state-v1.sqlite3",
+              "CREATE TABLE sqlitex_extra(value BLOB);");
+  expect_integrity_on_open(disguised_table);
+  const auto disguised_trigger = temporary.path() / "sqlitex-public-trigger";
+  {
+    PublicStore store(disguised_trigger);
+  }
+  execute_sql(disguised_trigger / "public-state-v1.sqlite3",
+              "CREATE TRIGGER sqlitex_extra AFTER INSERT ON singleton_records "
+              "BEGIN SELECT 1; END;");
+  expect_integrity_on_open(disguised_trigger);
 
   const auto corrupt_revision = temporary.path() / "corrupt-revision";
   {

@@ -102,7 +102,7 @@ GtkParentLease GtkParentRef::acquire() const noexcept {
 #else
   try {
     std::lock_guard<std::mutex> guard(impl_->lock);
-    GObject *object = g_weak_ref_get(&impl_->weak);
+    GObject *object = static_cast<GObject *>(g_weak_ref_get(&impl_->weak));
     if (object == nullptr) return {};
     if (!GTK_IS_WINDOW(object) ||
         gtk_widget_in_destruction(GTK_WIDGET(object))) {

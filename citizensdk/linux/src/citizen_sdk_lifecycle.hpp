@@ -11,6 +11,10 @@ class Lifecycle final {
  public:
   uint64_t reserve_wallet_flow();
   void finish_wallet_flow(uint64_t token) noexcept;
+  // A service lease retains stores/vault across a provider call without
+  // holding a Host mutex while that call waits for GTK authentication.
+  void begin_service();
+  void finish_service() noexcept;
   bool begin_close();
   void cancel_close(bool teardown_started) noexcept;
   void commit_closed() noexcept;
@@ -23,6 +27,7 @@ class Lifecycle final {
   uint64_t next_token_{1};
   bool token_identity_exhausted_{false};
   uint64_t wallet_token_{};
+  uint64_t active_services_{};
   bool close_attempt_active_{false};
 };
 

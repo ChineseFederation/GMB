@@ -416,6 +416,18 @@ citizensdk_handle_t HostBridge::public_sdk() const noexcept {
 
 citizensdk_error_code_t HostBridge::set_event_callback(
     citizensdk_event_callback_t callback, void *context) {
+  if (callback == nullptr) {
+    std::lock_guard<std::mutex> guard(callback_lock_);
+    if (callback_thread_ == std::this_thread::get_id()) {
+      // A foreign setter may be waiting for this exact callback to return.
+      // Self-retirement must not wait for that setter or reject the only safe
+      // C++ destructor barrier. The setter owns its replacement context; an
+      // abandoned Host's supervisor retires that replacement after its lease.
+      public_callback_ = nullptr;
+      public_callback_context_ = nullptr;
+      return CITIZENSDK_OK;
+    }
+  }
   {
     std::lock_guard<std::recursive_mutex> call(call_lock_);
     if ((teardown_started_ || close_in_progress_ || services_retired_) &&
@@ -516,10 +528,14 @@ citizensdk_error_code_t HostBridge::set_parent_window(void *window) noexcept {
 GtkParentLease HostBridge::acquire_parent_window() const noexcept {
   return parent_window_.acquire();
 }
-citizensdk_host_vault_availability_t HostBridge::vault_availability() const noexcept {
-  std::lock_guard<std::recursive_mutex> guard(call_lock_);
-  if (services_retired_) return CITIZENSDK_HOST_VAULT_UNAVAILABLE;
-  return vault_ ? vault_->availability() : CITIZENSDK_HOST_VAULT_UNSUPPORTED;
+citizensdk_host_vault_availability_t HostBridge::vault_availability() noexcept {
+  try {
+    return service_call([&] {
+      return vault_ ? vault_->availability() : CITIZENSDK_HOST_VAULT_UNSUPPORTED;
+    });
+  } catch (...) {
+    return CITIZENSDK_HOST_VAULT_UNAVAILABLE;
+  }
 }
 
 citizensdk_error_code_t HostBridge::close() {
@@ -619,8 +635,9 @@ citizensdk_error_code_t HostBridge::close() {
 
     {
       // A successful Core destroy guarantees its host-service borrows and
-      // callbacks have ended. The call lock then forms a retirement barrier for
-      // any last Host-side service invocation before storage/vault destruction.
+      // callbacks have ended. begin_close() has already rejected active service
+      // leases and closed new service admission. The call lock now commits
+      // resource retirement without ever waiting for a GTK provider callback.
       std::lock_guard<std::recursive_mutex> guard(call_lock_);
       services_retired_ = true;
       vault_.reset();

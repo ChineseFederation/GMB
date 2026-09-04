@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "citizen_sdk_operation.hpp"
+#include "citizen_sdk_host_record.hpp"
 
 #ifndef CITIZENSDK_LINUX_TEST_SOURCE_DIR
 #error "CITIZENSDK_LINUX_TEST_SOURCE_DIR must point at the Linux source root"
@@ -113,6 +114,8 @@ int main() {
   completion.result = 11;
   auto handler = router.take(completion);
   assert(static_cast<bool>(handler));
+  // 移交本身必须清空路由，不能等 callback 执行或局部 handler 析构才释放。
+  assert(router.empty());
   handler(completion.result);
   assert(!router.take(completion));
   assert(completions == 1);
@@ -121,6 +124,34 @@ int main() {
   router.prime([](citizensdk_result_handle_t) {});
   router.cancel_primed();
   assert(router.empty());
+
+  // 回调重入可立即提交下一请求；旧 completion 不能消费新路由。
+  router.prime([&](citizensdk_result_handle_t result) {
+    assert(router.empty());
+    ++completions;
+    delivered = result;
+    router.prime([&](citizensdk_result_handle_t next_result) {
+      assert(router.empty());
+      ++completions;
+      delivered = next_result;
+    });
+    router.bind(11);
+  });
+  router.bind(10);
+  auto second = router.take(crossed);
+  assert(static_cast<bool>(second) && router.empty());
+  second(crossed.result);
+  assert(completions == 2 && delivered == 12);
+  assert(!router.empty());
+  assert(!router.take(completion) && !router.take(crossed));
+  citizensdk_event_t next = completion;
+  next.request_id = 11;
+  next.result = 13;
+  auto third = router.take(next);
+  assert(static_cast<bool>(third) && router.empty());
+  third(next.result);
+  assert(completions == 3 && delivered == 13);
+  assert(!router.take(next) && router.empty());
 
   // 96 个并发等待者明确超过旧固定 64 槽边界。准入门不缓存 result，
   // route 发布后每个 completion 都继续，且门可回到完整 idle 状态。
@@ -158,5 +189,17 @@ int main() {
          accept < cancel && cancel < bind && bind < publish_route);
   assert(source.find("early_events_") == std::string::npos);
   assert(source.find("publish_discard") == std::string::npos);
+  // 自己的 callback 清除先于一般 callback-update admission；否则另一
+  // setter 等 callback 返回时，callback 内析构会 BUSY/互相等待。
+  const auto set_callback = source.find("HostBridge::set_event_callback(");
+  const auto self_retirement = source.find(
+      "callback_thread_ == std::this_thread::get_id()", set_callback);
+  const auto clear_self = source.find("public_callback_ = nullptr", self_retirement);
+  const auto update_gate = source.find(
+      "if (callback_update_in_progress_) return CITIZENSDK_ERROR_BUSY", clear_self);
+  assert(set_callback != std::string::npos &&
+         self_retirement != std::string::npos && clear_self != std::string::npos &&
+         update_gate != std::string::npos && set_callback < self_retirement &&
+         self_retirement < clear_self && clear_self < update_gate);
   return 0;
 }

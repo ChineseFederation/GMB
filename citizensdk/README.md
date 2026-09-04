@@ -91,10 +91,10 @@ runtime/transaction version，并采用 Subxt 的长载荷签名规则。source 
 TUYU challenge、TuyuBooking 员工身份及其它业务授权不进入 SDK。业务协议可以请求钱包用
 同一用户公钥签一段明确载荷，但不能因此把三套账户、权限或审计记录合并。
 
-产品 C ABI 与 Dart/Android/Apple 官方投影已经落地。根 Dart 入口只公开类型化
+产品 C ABI 与 Dart/Android/Apple 官方投影已经落地，Linux 已纳入同版源码候选合同。根 Dart 入口只公开类型化
 `CitizenSdk`；Android Flutter 插件与原生 AAR 都调用同一个 Kotlin facade、JNI 和
 Rust Core。iOS 与 macOS 共用 `darwin/` 的 Swift、Flutter adapter、typed SQLite stores 与
-`SecretVault`，并通过同一个 `CitizenSDK.xcframework` 消费产品 Core；三端正式绑定均不运行
+`SecretVault`，并通过同一个 `CitizenSDK.xcframework` 消费产品 Core；各公开绑定均不运行
 legacy Dart 钱包或 legacy `libsmoldot`。完整 `citizensdk_create_with_host` 组合固定 smoldot provider、准确
 Runtime nonce 与唯一 `Sr25519SoftwareSigner`，并要求宿主提供 chain database、runtime
 cache、wallet profile、transaction history、encrypted secret blob 五类职责隔离的 store；
@@ -104,8 +104,19 @@ chain-only，不能把一个构造的能力快照冒充整个 ABI 的能力边�
 第 7.1 步在 `linux/` 新增 LinuxARM、LinuxAMD 共用的 C/C++ Host 源码投影：它只负责
 HostBridge、五类 typed store、TPM 2.0 KEK/DEK Vault、SDK-owned GTK 钱包流程和 header-only
 C++ convenience API，仍调用上述同一产品 ABI，不复制 Engine、smoldot 或 sr25519。该步骤只
-冻结源码和合同；Flutter plugin、两种机器目标的 `.so`、真实平台运行验证和公开 manifest
-启用均未完成，所以 Linux 仍不是当前已交付平台。
+冻结源码和合同。第 7.2 步又增加复用该 Host/Core 的 Flutter plugin 源码、固定 22 方法
+codec/session/event/wallet-flow/environment 合同及其测试源码；没有新增 Linux 专用 Dart API。
+第 7.3 步已在唯一构建器内接入安装闭集、已安装 C/C++ 消费者和标准 Flutter Release 消费者源码；
+新增夹具只验证现有公开能力，不重写 Host/Core，也不新增业务协议。
+当前开发以本机 macOS 编译通过为验收标准，不再以用户提供 Linux/TPM 环境作为本步前置条件；
+2026-09-03 已通过既有 `abi-host` 与 `apple` 构建：Core/C ABI、Swift/Flutter 原生绑定及单一
+XCFramework 验证成功，第 7.3 步该轮没有修改生产实现。跨平台构建与功能验证后续统一进入 GitHub
+CI/Release：CI 使用增量缓存，Release 使用全量构建，保持同一 Core commit、SDK 版本、ABI
+版本和一个 CitizenSDK Release，不新增平台独立产品或第二套流程。
+第 7.4 步已原子更新 `pubspec.yaml` 官方 `linux` 注册、默认 `CitizenSdk.open()`、Hosted 过滤
+及 LinuxARM/LinuxAMD 候选 manifest 合同；应用直接使用公开入口，无需内部 platform 注入。
+两种机器目标的 `.so` 及真实平台运行验证尚未生成或执行，尚无 Linux 正式分发结果；本机 macOS
+通过不能代替 Linux 的运行证据，同版运行件缺失或证据不齐时拒绝生成可分发候选。
 Linux typed store 通过自有 openat SQLite VFS 把主库和全部 sidecar 绑定到已验证目录 fd，
 并精确核验 schema、PRAGMA、权限、owner、link count、inode 与 durable commit 点；不依赖
 `/proc/self/fd` 路径。Host 统一 closing/admission lease、65+ 同步 completion 无损路由、GTK
@@ -138,9 +149,12 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   Enclave，硬件金库与钱包能力必须如实报告不可用。
 - macOS 与 iOS 共用上述 Darwin 源码、Swift API、Flutter adapter 和
   XCFramework 产品边界；产品名始终只写作 macOS。
-- LinuxARM、LinuxAMD 已有第 7.1 步 C/C++ Host、typed store、TPM Vault 和合同测试源码，但
-  尚未编译、运行或注入候选，Flutter adapter 与发布闭环也未完成；Windows 尚无平台投影。
-  三者均不能宣称已经交付。
+- LinuxARM、LinuxAMD 已有 Host、Flutter adapter、安装/消费者源码，并已在第 7.4 步纳入
+  同版候选合同和默认 Flutter 入口；尚未实际编译、运行或正式分发。Windows 已有原生 Host
+  与 Flutter 适配及独立 C/C++ 安装消费者，第 8.4 步把 Windows 默认 Flutter 入口、
+  同版候选/Hosted 运行文件与公开 Flutter 消费者一起纳入。
+  源码注册不代表已交付，跨平台实际验证按后续统一 GitHub CI/Release 推进，不阻塞本步
+  的 macOS 本机开发验收。
 - 聊天、广场、OpenMLS、TUYU 账户签名协议、旅行/生活/商家业务均不属于 CitizenSDK。
 - CitizenWallet 冷钱包是独立产品，不属于本 SDK 的能力收编范围。
 
@@ -259,47 +273,123 @@ CitizenSDK 最终统一流程合同使用 `公民SDK · CI · SDK` 与
 成功状态和准确 `source_sha`，不读取、下载或比较 CI 资产；随后从同一源码提交重新执行依赖
 检查、测试、原生构建和候选生成。这是独立重建与重新验证，不把不同 Runner 的归档字节
 天然相同作为前提。
-当前 TataConsole Flow 尚未接入本 Apple 闭集，也没有运行远程 CI 或正式 Release；
-这些流程名和门禁是后续统一集成的目标合同，不是本步运行记录。
+第 10.6 步已将既有原生入口接入 TataConsole CI 阶段 0；尚未运行远程 CI 或正式 Release。
+完整候选汇总与同包消费仍待后续阶段，不把阶段 0 作业成功当作完整 SDK 分发验收。
 
 根包已消除本地 `path`/`git` 依赖，目标 Hosted 依赖形式固定为
-`citizen_sdk: ^1.0.0`。CI 与 Release 都在 Android/Apple 原生投影注入唯一正式候选之后执行官方
+`citizen_sdk: ^1.0.0`。统一 CI 与 Release 的目标合同是在 Android/Apple/Linux/Windows 同版原生投影注入唯一正式候选之后执行官方
 `dart pub publish --dry-run`；`.pubignore` 只从该候选过滤 Rust 源码、测试、脚本、锁文件和
 审计资料，不建立第二份候选或第二条发布流程。因为 Dart 工具会生成 `.dart_tool`，dry-run 在
-唯一候选的逐字节临时副本中执行，正式候选保持不可变。Dart、Android 与
-`darwin/citizen_sdk.podspec` 源码版本现已
-统一冻结为 `1.0.0`；发布器要求请求版本、候选 manifest 和三个包版本逐项一致，禁止从旧源码
-临时改号发布。本步骤只冻结首个稳定版源码，不上传 Hosted Package；首次发布完成前仍不得
+唯一候选的逐字节临时副本中执行，正式候选保持不可变。Dart、Android、
+`darwin/citizen_sdk.podspec`、`linux/CMakeLists.txt` 与 `windows/CMakeLists.txt` 源码版本现已
+统一冻结为 `1.0.0`；发布器要求请求版本、候选 manifest 和五处源码版本逐项一致，禁止从旧源码
+临时改号发布。当前只冻结首个稳定版源码，不上传 Hosted Package；首次发布完成前仍不得
 宣称 `citizen_sdk: ^1.0.0` 已可从 Hosted Registry 获取。
 
+第 9.1 步已在同一个 `scripts/release.mjs` 增加 `--hosted` 与 `--verify-hosted` 本地入口：
+先反向验证审计候选，固定官方 Dart 3.12.2 独立执行零 warnings 的 dry-run，再调用官方
+本地归档分支。Hosted 归档按完整路径、节点类型、权限与来源字节验真，通过后才写入全新
+解包目录；没有第二套候选或上传入口。原审计包保留合法 Apple framework 链接，Hosted
+按官方 Pub 行为展开为普通文件，两者不比较 gzip 编码字节。命令及安全边界见
+[NATIVE_PACKAGING.md](docs/NATIVE_PACKAGING.md#hosted-本地归档与解包验真第-91-步)。
+本机官方工具往返使用跨平台二进制格式夹具，只证明归档工具合同；真实 macOS 安装消费、
+全平台最终体积与统一 CI/Release 验收仍须分别完成，不能据此宣称正式包已可安装。
+
+第 9.2 步已补正式包的 macOS Flutter Release 消费验收实现：输入必须来自验真 Hosted
+解包包，而不是源码或内部平台注入；公开消费者只验证初始化、能力、空钱包资料、启停、
+事件和关闭，不创建钱包、签名或提交交易。Foundation 实际状态路径必须先证明处于中央
+独占工作区，不能触及用户原钱包数据。本机 Apple 原生编译及包合同通过；用户确认将
+实际 Flutter macOS 安装运行移交第 10 步 GitHub 统一 CI，本机 Xcode/SwiftPM 权限失败
+仍如实保留。准确范围见中央任务卡第 35 节；本机开发验收完成不等于 Hosted 安装/运行
+通过，也不等于包已在 pub.dev 发布。
+
+第 10.3 步已将同一 macOS Hosted 目录预检用于本机与 GitHub Runner：本机使用上述中央
+SDK 工作区，GitHub 仅接受 `RUNNER_TEMP/citizensdk` 下的既存受控输入/输出，且必须与
+`GITHUB_WORKSPACE`/SDK 源码完全分离。缺失根、链接、穿越、根目录本身或输入输出交叠
+在构建器首次写入前拒绝；真实消费入口复用此预检并传递 Runner 环境。这里只完成路径
+合同适配，不代表 GitHub 安装、运行、CI 或 Release 已通过。
+
+第 10.4 步把 Hosted 参数接入既有 CI/Release 动作，由同一 SDK 发布器处理取消和
+Dart/Pub 进程组收尾；未确认退出就保留准确目录并失败，不启动下一阶段或误报成功。
+Hosted 归档统一由既定 macOS 作业生产，不在 Windows 运行归档工具；这不改变
+Windows SDK、解包验真或安装消费者。只完成本地受控调度/来源合同验证，尚未运行
+完整平台 CI、正式 Release 或 Hosted 上传。详见 `docs/NATIVE_PACKAGING.md`。
+
+第 10.5 步已固定 LinuxARM/LinuxAMD 的 SQLite 3.53.4、OpenSSL libcrypto 3.5.8、
+TPM2-TSS 4.2.0，以及 Windows 的 SQLite 3.53.4。中央既有依赖入口负责准备，SDK 验证
+同一静态前缀、来源合同、入口工具和最终运行库证据；三项许可原文/归属随审计与 Hosted 包
+保留。只完成本机源码、格式和拒绝路径验证，尚未运行真实 Linux/Windows 编译或完整矩阵。
+第 10.6 步已接入 Action/remote-jobs 的五宿主阶段 0：Android、共享 iOS/macOS 的 Apple、
+LinuxARM、LinuxAMD、Windows，仍只有 `gmb.citizensdk.sdk.ci` 一条 SDK 路由。
+各作业复用统一 CI 增量缓存，只缓存 Cargo/Pub 中间状态；最终库、证据及安装现场不缓存。
+官方工具原件复用中央摘要对象库，Linux 使用固定 Debian 用户态保持 GLIBC 2.31；
+不改 SDK 构建器或产品功能。阶段件绑定 run/attempt、源码 SHA 和 SDK version，不能跨轮拼包。
+阶段 1 唯一候选/审计、阶段 2 同包消费者及 Release 多宿主编排尚未接完；本机受控测试
+不代表平台真实编译、硬件金库或发布验收。Linux 独立权限策略的实际加载仍须确认。
+
 GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，其中
-tgz 当前保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，并在第 7.1 步纳入
-Linux Host 源码闭集，用于来源审计、校验和离线留档；
-Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/Apple 原生投影、README 和完整法律声明。
+tgz 候选合同保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，并纳入 Linux
+Host 源码及两平台合并的 26 项安装投影、Windows Host/adapter 源码及 21 项安装投影，用于来源审计、校验和离线留档；
+Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/Apple/Linux/Windows 原生投影、README 和完整法律声明。
 其 Dart 运行闭包精确为 17 个文件：根入口 1 个、`lib/src/api` 6 个、
 `lib/src/crypto/account_codec.dart` 1 个、`lib/src/models` 5 个和 `lib/src/platform` 4 个；
 归档的旧 Dart 链、钱包、交易、smoldot 与 Preferences 实现均由 `.pubignore` 排除。
 Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 AAR、native 测试/C++/构建
 输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 `arm64-v8a` SO。两种分发读取
-同一源码提交和同一注入后候选。CitizenSDK 不设置独立“发布”按钮，也不接入
+同一源码提交和同一注入后候选。Linux Hosted 精确保留 38 项：26 项安装件及 12 项插件输入，
+排除 Host 私有源码、测试及构建模板，不在应用中重编 Host/Core。Windows Hosted 同样精确保留
+33 项：21 项安装件及 12 项插件输入。CitizenSDK 不设置独立“发布”按钮，也不接入
 公民网下载。
 
-本机 TataConsole 只允许把 CitizenSDK 生成记录写入
-`/Users/rhett/TATA/tataconsole/target/citizensdk`。本地打包快照由准确的已提交 Git `HEAD` 导出；
+本机 CitizenSDK 最终产物容器固定为
+`/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，工作状态容器固定为
+`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK`。唯一发布器只接受两者的严格
+子路径，不允许把永久容器本身作为写入目标；拒绝旧路径、越界、穿越和链接。
+第 9.1 步只补发布器的 Hosted 归档验真，不修改原生构建器、控制台事务或 GitHub 流程。
+本地打包快照由准确的已提交 Git `HEAD` 导出；
 工作区中的未提交修改不会被冒充成该提交。中央目录现有三件套属于其生成时的历史提交，
 除非重新完成当前提交的统一构建与核验，否则不得称为当前源码候选。
-本轮第 6 步最终安全工作根仅使用
-`/Users/rhett/TATA/tataconsole/target/citizensdk/step6-verification`；结束时必须清理该
-一次性工作根，不占用运行中 TataConsole 会自行管理和清理的 `.work`，也不改动中央 `.cache`
-或历史三件套。本步没有执行 Hosted 上传、
-远程 CI、正式 Release 或 Git 写操作。
+第 6 步的工作目录和清理结果属于任务卡中的已结束历史记录，不是当前路径指引。
+本步只清理获准工作容器内由本任务生成的内容，保留永久容器、已有缓存与历史三件套。
+没有执行 Hosted 上传、远程 CI、正式 Release 或 Git 操作。
 
-第 7.1 步没有运行编译、测试、Git、远程 CI、Release 或 Hosted 上传，也没有生成任何 Linux
-原生产物。后续 Linux 验证产生的全部状态仍只能写入
-`/Users/rhett/TATA/tataconsole/target/citizensdk` 下的任务独占目录，不能写入源码树。Linux
-CTest 配置必须用 `CITIZENSDK_TEST_WORK_DIR` 显式注入该目录中已存在、有效 UID 所有且权限
+第 7.1 步没有运行 Linux 编译与 CTest、Dart/Flutter/Cargo 测试、Git、远程 CI、Release 或
+Hosted 上传，也没有生成任何 Linux 原生产物；只运行获准的 Node Release 来源合同测试与
+脚本语法检查，不能据此声称 Linux 运行验证通过。后续本机 Linux 验证状态只能写入
+`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；GitHub runner 使用统一工作流
+的 checkout 外独占目录，不照搬本机绝对路径。Linux CTest 配置必须用 `CITIZENSDK_TEST_WORK_DIR`
+显式注入对应工作区中已存在、有效 UID 所有且权限
 为 `0700` 的绝对工作根；测试不回退到 `/tmp`、当前目录或用户目录。
+
+第 7.3 步的 Linux 安装检查使用单平台 19 文件技术闭集，第 7.4 步把两者合并为 26 项唯一安装
+投影，重叠头和资产必须逐字节一致。C/C++ 消费者只链接同版已安装 Core/Host；Flutter 消费者
+使用候选的正式 plugin 注册与 `CitizenSdk.open()`，运行标准 Release bundle 并检查超时、退出码
+和成功标记。上述 Linux 原生执行、编译器与静态依赖身份、许可证、Flutter/Pub 缓存及 GTK/TPM
+功能验证归入后续同产品同版本的 GitHub CI 增量缓存、Release 全量构建验证，不再等待用户提供
+Linux 环境才完成当前开发步骤。根包源码注册不代表已正式发布；本机 macOS 编译和 Node 合同均不能代替
+这些 Linux 运行事实，也不能把未执行项目记录为通过。
 
 详细说明见 `docs/ARCHITECTURE.md`、`docs/C_ABI.md`、`docs/DART_API.md`、`docs/WALLET_MODEL.md`、
 `docs/SECURITY.md`、`docs/SOURCE_PROVENANCE.md`、`docs/MOBILE_PLATFORM.md` 与
 `docs/NATIVE_PACKAGING.md`；Linux 当前源码边界与未交付状态见 `docs/LINUX_PLATFORM.md`。
+
+## Windows 原生适配（第 8.1 步）
+
+`windows/` 新增原生 C/C++ Host、Win32 自有钱包 UI、PCP/TPM 2.0 金库与类型化存储源码。
+最低 Windows 11，公开平台名 Windows，不新增 Core、签名或交易实现。尚未在 Windows
+实际编译/运行；第 8.4 步登记默认 Flutter 入口、DLL 候选投影和真实公开消费者，尚未正式分发，
+详见 [Windows 平台合同](docs/WINDOWS_PLATFORM.md)。
+
+Windows Flutter 只使用已有双通道和 22 方法，连接同版已安装 Host/Core。宿主需一次声明
+`CITIZENSDK_APPLICATION_ID`，原样作为稳定应用数据命名空间，不是业务账户或 Windows
+身份认证；无默认值，不从文件名或展示名推导。公开类型仍只有 `CitizenSdk`，Windows
+使用默认平台和官方自动注册；缺少同版插件立即失败，不注入替代实现。宿主仍需这一项
+原生身份声明；候选合同不是 Hosted 已发布或 Windows 实际验收已经通过。
+
+第 8.3 步的原生安装合同固定 21 个文件，核验版本、同轮字节和完整 PE 导出后，由独立
+C11/C++17 程序仅消费公开头和已安装库，检查运行时 DLL 来源、异步结果所有权、启停及
+关闭重试。两个原生消费者关闭钱包和 HWND，不触发 TPM/钱包 UI 或交易。第 8.4 步继续
+运行六项 adapter 测试和官方 Flutter Release 消费者，全部通过后才向全新输出位置同卷
+导出；已有输出不覆盖。Hosted 精确保留 21 项安装件和 12 项插件输入，Host 私有实现不
+进入运行包。Windows/MSVC 运行时由宿主部署环境提供。这些验证沿用唯一构建入口，实际运行仍待
+统一 GitHub CI/Release，本机 macOS 检查不替代 Windows 平台证据。

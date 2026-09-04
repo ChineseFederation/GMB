@@ -17,6 +17,17 @@
 /linux/CMakeCache.txt
 /linux/CMakeFiles/
 /linux/cmake_install.cmake
+# Windows 运行件只在中央候选中注入；源码树不得保存 DLL/LIB/CMake/MSVC 状态。
+/windows/bin/
+/windows/lib/
+/windows/.vs/
+/windows/CMakeCache.txt
+/windows/CMakeFiles/
+/windows/cmake_install.cmake
+/windows/**/*.dll
+/windows/**/*.lib
+/windows/**/*.obj
+/windows/**/*.pdb
 *.xcresult
 *.dSYM
 *.log

@@ -1,0 +1,593 @@
+#include <flutter/standard_method_codec.h>
+
+// 验证 Windows 官方 StandardMethodCodec 与既有 v1 tuple，且不会截断 UTF-8/NUL。
+// 公开结果夹具沿用 Linux；不伪造 Core 句柄，不引入 Host 私有源码。
+#include <any>
+#include <cassert>
+#include <cstring>
+#include <initializer_list>
+#include <set>
+#include <string>
+
+#include "citizen_sdk_flutter_codec.hpp"
+
+#ifdef NDEBUG
+#error "CitizenSDK Windows codec contract assertions must remain enabled"
+#endif
+
+namespace {
+using citizen_sdk::flutter::ContractFailure;
+using citizen_sdk::flutter::DecodedRequest;
+using citizen_sdk::flutter::Method;
+using citizen_sdk::flutter::Value;
+
+Value list(Value::List items) { return Value::list(std::move(items)); }
+template <class Callback>
+void expect_failure(Callback callback, citizensdk_error_code_t expected) {
+  try { callback(); } catch (const ContractFailure &error) {
+    assert(error.code == expected); return;
+  }
+  assert(false && "Expected a contract failure");
+}
+
+std::string account(char digit) { return "0x" + std::string(64, digit); }
+
+DecodedRequest decode(const char *method, Value request) {
+  auto native = citizen_sdk::flutter::to_encodable_value(request);
+  const auto &codec = ::flutter::StandardMethodCodec::GetInstance();
+  const auto wire = codec.EncodeMethodCall(::flutter::MethodCall<::flutter::EncodableValue>(
+      method, std::make_unique<::flutter::EncodableValue>(std::move(native))));
+  assert(wire != nullptr);
+  const auto call = citizen_sdk::flutter::decode_method_call(wire->data(), wire->size());
+  assert(call != nullptr);
+  return citizen_sdk::flutter::decode_request(call->method_name(), call->arguments());
+}
+
+const Value::List &as_list(const Value &value) {
+  const auto *result = std::get_if<Value::List>(&value.data);
+  assert(result != nullptr);
+  return *result;
+}
+const std::string &as_string(const Value &value) {
+  const auto *result = std::get_if<std::string>(&value.data);
+  assert(result != nullptr);
+  return *result;
+}
+
+void test_method_closure_and_requests() {
+  constexpr Method all[] = {
+      Method::open, Method::start, Method::stop, Method::close,
+      Method::get_capabilities, Method::get_finalized_head,
+      Method::get_account_balance, Method::get_account_nonce,
+      Method::get_fee_snapshot, Method::get_wallet_profile,
+      Method::create_wallet, Method::import_wallet, Method::add_wallet_accounts,
+      Method::set_active_wallet_account, Method::rename_wallet_account,
+      Method::delete_wallet_account, Method::delete_wallet,
+      Method::reconcile_wallet_cleanup, Method::sign_wallet_payload,
+      Method::transfer_with_remark, Method::initialize_finalized_history,
+      Method::sync_finalized_history,
+  };
+  std::set<std::string> names;
+  for (Method method : all) names.insert(citizen_sdk::flutter::method_name(method));
+  assert(names.size() == 22 && names.count("open") == 1 &&
+         names.count("transferWithRemark") == 1);
+
+  assert(decode("open", list({Value::integer(1)})).method == Method::open);
+  for (const char *method : {"start", "stop", "close", "getCapabilities",
+       "getFinalizedHead", "getFeeSnapshot", "getWalletProfile", "importWallet",
+       "deleteWallet", "reconcileWalletCleanup"}) {
+    auto value = decode(method, list({Value::integer(1), Value::string("s"),
+                                      Value::integer(1)}));
+    assert(value.session == "s" && value.sequence == 1);
+  }
+  for (const char *method : {"getAccountBalance", "getAccountNonce",
+       "setActiveWalletAccount", "deleteWalletAccount"}) {
+    assert(decode(method, list({Value::integer(1), Value::string("s"),
+        Value::integer(1), Value::string(account('0'))})).account_id.bytes[0] == 0);
+  }
+  assert(decode("createWallet", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::integer(24)})).word_count == 24);
+  assert((decode("addWalletAccounts", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), list({Value::integer(1), Value::integer(1989)})})).indices ==
+      std::vector<uint32_t>{1, 1989}));
+  assert(decode("renameWalletAccount", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::string(account('1')), Value::string("账户") })).name == "账户");
+  assert(decode("signWalletPayload", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::string(account('2')), Value::bytes({1, 2})})).payload.size() == 2);
+  const std::string nul_remark("a\0b", 3);
+  const auto transfer = decode("transferWithRemark", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::string(account('3')), Value::string(account('4')),
+      Value::string("340282366920938463463374607431768211455"), Value::string(nul_remark)}));
+  assert(transfer.amount.low == UINT64_MAX && transfer.amount.high == UINT64_MAX &&
+         transfer.remark == std::vector<uint8_t>({'a', 0, 'b'}));
+  for (const char *method : {"initializeFinalizedHistory", "syncFinalizedHistory"}) {
+    assert(decode(method, list({Value::integer(1), Value::string("s"), Value::integer(1),
+        list({Value::string(account('5'))})})).account_ids.size() == 1);
+  }
+}
+
+void test_strict_failures() {
+  expect_failure([&] { (void)decode("open", list({Value::boolean(true)})); },
+                 CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  expect_failure([&] { (void)decode("unknown", list({Value::integer(1)})); },
+                 CITIZENSDK_ERROR_UNSUPPORTED);
+  expect_failure([&] { (void)decode("createWallet", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::integer(18)})); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  expect_failure([&] { (void)decode("addWalletAccounts", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), list({Value::integer(1), Value::integer(1)})})); },
+      CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  expect_failure([&] { (void)decode("transferWithRemark", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::string(account('0')), Value::string(account('1')),
+      Value::string("340282366920938463463374607431768211456"), Value::string("")})); },
+      CITIZENSDK_ERROR_INVALID_ARGUMENT);
+
+  Value nested = Value::integer(1);
+  for (int i = 0; i < 34; ++i) nested = list({std::move(nested)});
+  auto native = citizen_sdk::flutter::to_encodable_value(nested);
+  expect_failure([&] { (void)citizen_sdk::flutter::from_encodable_value(native); },
+                 CITIZENSDK_ERROR_INVALID_ARGUMENT);
+
+  Value::List too_many;
+  too_many.reserve(4097);
+  for (int i = 0; i < 4097; ++i) too_many.push_back(Value::null());
+  native = citizen_sdk::flutter::to_encodable_value(Value::list(std::move(too_many)));
+  expect_failure([&] { (void)citizen_sdk::flutter::from_encodable_value(native); },
+                 CITIZENSDK_ERROR_INVALID_ARGUMENT);
+
+  Value::Bytes bulk(9 * 1024 * 1024, 7);
+  native = citizen_sdk::flutter::to_encodable_value(list({Value::bytes(bulk), Value::bytes(std::move(bulk))}));
+  expect_failure([&] { (void)citizen_sdk::flutter::from_encodable_value(native); },
+                 CITIZENSDK_ERROR_INVALID_ARGUMENT);
+
+  const ::flutter::EncodableValue custom(::flutter::CustomEncodableValue(std::any(999)));
+  expect_failure([&] { (void)citizen_sdk::flutter::from_encodable_value(custom); },
+                 CITIZENSDK_ERROR_INVALID_ARGUMENT);
+}
+
+void test_standard_wire_preserves_nul_and_unicode() {
+  using ::flutter::EncodableValue;
+  const auto &codec = ::flutter::StandardMethodCodec::GetInstance();
+  const std::string exact("途\0遇", 7);
+  auto arguments = citizen_sdk::flutter::to_encodable_value(list({
+      Value::integer(1), Value::string("session"), Value::integer(8),
+      Value::string(account('a')), Value::string(account('b')), Value::string("1"),
+      Value::string(exact)}));
+  const ::flutter::MethodCall<EncodableValue> call(
+      "transferWithRemark", std::make_unique<EncodableValue>(arguments));
+  const auto wire = codec.EncodeMethodCall(call);
+  assert(wire != nullptr);
+  const auto decoded = citizen_sdk::flutter::decode_method_call(wire->data(), wire->size());
+  assert(decoded != nullptr && decoded->arguments() != nullptr);
+  const auto request = citizen_sdk::flutter::decode_request(
+      decoded->method_name(), decoded->arguments());
+  assert(request.remark.size() == exact.size() &&
+         std::memcmp(request.remark.data(), exact.data(), exact.size()) == 0);
+  // 真实官方编解码往返必须逐字节相同；Windows 无 custom wire tag 或 NUL 特例。
+  const auto second_wire = codec.EncodeMethodCall(*decoded);
+  assert(second_wire != nullptr && *wire == *second_wire);
+
+  // 独立标准线格式夹具：tag 7 方法名、tag 12 tuple、tag 3 int32。
+  const std::vector<uint8_t> open_wire{7, 4, 'o', 'p', 'e', 'n', 12, 1, 3, 1, 0, 0, 0};
+  const auto open = citizen_sdk::flutter::decode_method_call(open_wire.data(), open_wire.size());
+  assert(open != nullptr && citizen_sdk::flutter::decode_request(
+      open->method_name(), open->arguments()).method == Method::open);
+  const auto reencoded_open = codec.EncodeMethodCall(*open);
+  assert(reencoded_open != nullptr && *reencoded_open == open_wire);
+
+  // StandardMethodCodec 将字符串保存为带长度字节；业务转换仍须拒绝畸形 UTF-8。
+  std::get<::flutter::EncodableList>(arguments)[6] =
+      EncodableValue(std::string("\xc3\x28", 2));
+  const auto malformed_wire = codec.EncodeMethodCall(::flutter::MethodCall<EncodableValue>(
+      "transferWithRemark", std::make_unique<EncodableValue>(arguments)));
+  assert(malformed_wire != nullptr);
+  expect_failure([&] { (void)citizen_sdk::flutter::decode_method_call(
+      malformed_wire->data(), malformed_wire->size()); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+}
+
+void test_raw_wire_bounds() {
+  using citizen_sdk::flutter::decode_method_call;
+  const auto rejects = [](const std::vector<uint8_t> &wire) {
+    expect_failure([&] { (void)decode_method_call(wire.data(), wire.size()); },
+                   CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  };
+  expect_failure([&] { (void)decode_method_call(nullptr, 0); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  expect_failure([&] { (void)decode_method_call(nullptr, 1); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  const std::vector<uint8_t> prefix{7, 4, 'o', 'p', 'e', 'n'};
+  const auto argument_wire = [&](std::initializer_list<uint8_t> bytes) {
+    auto wire = prefix; wire.insert(wire.end(), bytes.begin(), bytes.end()); return wire;
+  };
+  rejects({});
+  rejects({0, 12, 1, 0});  // 方法名不是 string。
+  rejects(prefix);         // 没有 arguments。
+  rejects({7, 254, 4});    // size 的 uint16 本身截断。
+  rejects({7, 255, 4, 0});
+  rejects({7, 4, 'o'});   // 方法名 payload 截断。
+  rejects({7, 255, 255, 255, 255, 255}); // 巨长 string 声明必须在分配前失败。
+  rejects(argument_wire({12, 1, 3, 1, 0, 0})); // int32 截断。
+  rejects(argument_wire({12, 1, 4, 1, 0, 0, 0, 0, 0, 0})); // int64 截断。
+  rejects(argument_wire({12, 1, 7, 3, 'a', 'b'})); // 截断不能被补 NUL。
+  rejects(argument_wire({12, 1, 8, 3, 1, 2}));
+  rejects(argument_wire({12, 1, 7, 255, 255, 255, 255, 255}));
+  rejects(argument_wire({12, 1, 8, 255, 255, 255, 255, 255}));
+  rejects(argument_wire({12, 255, 255, 255, 255, 255}));
+  rejects(argument_wire({12, 1, 3, 1, 0, 0, 0, 0})); // 尾随零字节也不能忽略。
+  rejects(argument_wire({12, 1, 7, 2, 0xc3, 0x28}));
+  for (const uint8_t tag : {uint8_t{5}, uint8_t{6}, uint8_t{9}, uint8_t{10},
+                           uint8_t{11}, uint8_t{13}, uint8_t{14}, uint8_t{255}}) {
+    rejects(argument_wire({12, 1, tag}));
+  }
+
+  auto deeply_nested = prefix;
+  for (unsigned index = 0; index < 34; ++index) {
+    deeply_nested.push_back(12); deeply_nested.push_back(1);
+  }
+  deeply_nested.push_back(0);
+  rejects(deeply_nested);
+  // 根节点 + 4,096 子节点超过共享预算，不得先 reserve 再拒绝。
+  auto many_nodes = argument_wire({12, 254, 0, 16});
+  many_nodes.insert(many_nodes.end(), 4096, 0);
+  rejects(many_nodes);
+
+  // 官方 int32/int64 两种合法字宽均接受；不能拿转成 Value 后的再编码当门禁。
+  for (const auto &wire : {argument_wire({12, 1, 3, 1, 0, 0, 0}),
+                          argument_wire({12, 1, 4, 1, 0, 0, 0, 0, 0, 0, 0})}) {
+    const auto call = decode_method_call(wire.data(), wire.size());
+    assert(call != nullptr && citizen_sdk::flutter::decode_request(
+        call->method_name(), call->arguments()).method == Method::open);
+  }
+  // 官方允许的扩展 size 表示不属于截断/尾随；预检不另订长度编码协议。
+  const std::vector<uint8_t> extended_size{
+      7, 254, 4, 0, 'o', 'p', 'e', 'n', 12, 255, 1, 0, 0, 0, 3, 1, 0, 0, 0};
+  const auto extended = decode_method_call(extended_size.data(), extended_size.size());
+  assert(extended != nullptr && citizen_sdk::flutter::decode_request(
+      extended->method_name(), extended->arguments()).method == Method::open);
+
+  const auto &codec = ::flutter::StandardMethodCodec::GetInstance();
+  for (const char *method : {"listen", "cancel"}) {
+    auto args = citizen_sdk::flutter::to_encodable_value(list({Value::integer(1)}));
+    const auto wire = codec.EncodeMethodCall(::flutter::MethodCall<::flutter::EncodableValue>(
+        method, std::make_unique<::flutter::EncodableValue>(std::move(args))));
+    assert(wire != nullptr);
+    const auto call = decode_method_call(wire->data(), wire->size());
+    assert(call != nullptr && citizen_sdk::flutter::decode_subscription(call->arguments()));
+  }
+
+  // 从真实有效消息删除最后一个字节，防止官方零填充把截断解释成另一条合法请求。
+  for (const bool signing : {false, true}) {
+    auto args = signing
+        ? list({Value::integer(1), Value::string("s"), Value::integer(1),
+            Value::string(account('0')), Value::bytes({1, 2, 3})})
+        : list({Value::integer(1), Value::string("s"), Value::integer(1),
+            Value::string(account('0')), Value::string(account('1')),
+            Value::string("1"), Value::string("abc")});
+    const auto wire = codec.EncodeMethodCall(::flutter::MethodCall<::flutter::EncodableValue>(
+        signing ? "signWalletPayload" : "transferWithRemark",
+        std::make_unique<::flutter::EncodableValue>(citizen_sdk::flutter::to_encodable_value(args))));
+    assert(wire != nullptr && !wire->empty());
+    auto truncated = *wire; truncated.pop_back(); rejects(truncated);
+  }
+  auto bulk = citizen_sdk::flutter::to_encodable_value(list({
+      Value::bytes(Value::Bytes(9 * 1024 * 1024)), Value::bytes(Value::Bytes(9 * 1024 * 1024))}));
+  const auto bulk_wire = codec.EncodeMethodCall(::flutter::MethodCall<::flutter::EncodableValue>(
+      "open", std::make_unique<::flutter::EncodableValue>(std::move(bulk))));
+  assert(bulk_wire != nullptr); rejects(*bulk_wire);
+  // 线格式总量仍在外层预算内，但两个合法单项合计越过复制预算，须在第二项分配前拒绝。
+  auto aggregate = citizen_sdk::flutter::to_encodable_value(list({
+      Value::bytes(Value::Bytes(8 * 1024 * 1024)),
+      Value::bytes(Value::Bytes(8 * 1024 * 1024 + 8192))}));
+  const auto aggregate_wire = codec.EncodeMethodCall(::flutter::MethodCall<::flutter::EncodableValue>(
+      "open", std::make_unique<::flutter::EncodableValue>(std::move(aggregate))));
+  assert(aggregate_wire != nullptr); rejects(*aggregate_wire);
+}
+
+class CapturedResult final : public ::flutter::MethodResult<::flutter::EncodableValue> {
+ public:
+  unsigned successes{}, errors{}, not_implemented{};
+  Value value;
+  std::string code, message;
+ protected:
+  void SuccessInternal(const ::flutter::EncodableValue *result) override {
+    ++successes;
+    value = result == nullptr ? Value::null() : citizen_sdk::flutter::from_encodable_value(*result);
+  }
+  void ErrorInternal(const std::string &error_code, const std::string &error_message,
+                     const ::flutter::EncodableValue *details) override {
+    ++errors; code = error_code; message = error_message;
+    value = details == nullptr ? Value::null() : citizen_sdk::flutter::from_encodable_value(*details);
+  }
+  void NotImplementedInternal() override { ++not_implemented; }
+};
+
+void test_windows_value_types_and_limits() {
+  using namespace citizen_sdk::flutter;
+  using ::flutter::EncodableValue;
+  for (const auto &integer : {EncodableValue(int32_t{1}), EncodableValue(int64_t{1})}) {
+    EncodableValue arguments(::flutter::EncodableList{integer});
+    assert(decode_request("open", &arguments).method == Method::open);
+    assert(decode_subscription(&arguments));
+  }
+  for (const auto &wrong : {EncodableValue(true), EncodableValue(1.0),
+       EncodableValue(std::vector<int32_t>{1}), EncodableValue(std::vector<int64_t>{1}),
+       EncodableValue(std::vector<float>{1}), EncodableValue(std::vector<double>{1}),
+       EncodableValue(::flutter::EncodableMap{})}) {
+    EncodableValue arguments(::flutter::EncodableList{wrong});
+    expect_failure([&] { (void)decode_request("open", &arguments); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+    expect_failure([&] { (void)decode_subscription(&arguments); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  }
+  expect_failure([&] { (void)decode_request("open", nullptr); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  expect_failure([&] { (void)decode_subscription(nullptr); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  auto subscription = to_encodable_value(list({Value::integer(2)}));
+  expect_failure([&] { (void)decode_subscription(&subscription); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  auto open = to_encodable_value(list({Value::integer(1)}));
+  expect_failure([&] { (void)decode_request(std::string("open\0extra", 10), &open); },
+                 CITIZENSDK_ERROR_UNSUPPORTED);
+  for (const std::string &invalid : {std::string("\xc0\x80", 2), std::string("\xed\xa0\x80", 3),
+       std::string("\xf4\x90\x80\x80", 4), std::string("\xe2\x82", 2)}) {
+    assert(!valid_utf8(invalid));
+    expect_failure([&] { (void)from_encodable_value(EncodableValue(invalid)); },
+                   CITIZENSDK_ERROR_INVALID_ARGUMENT);
+    expect_failure([&] { (void)to_encodable_value(Value::string(invalid)); },
+                   CITIZENSDK_ERROR_INTEGRITY);
+  }
+  assert(valid_utf8(std::string("a\0b", 3)) && valid_utf8("公民😀"));
+
+  // 最大签名消息仍合法；单项和累计预算分别有负例，不用缩小已有 16 MiB 合同。
+  auto maximum = to_encodable_value(list({Value::integer(1), Value::string("s"),
+      Value::integer(INT64_MAX), Value::string(account('0')),
+      Value::bytes(Value::Bytes(16 * 1024 * 1024, 7))}));
+  assert(decode_request("signWalletPayload", &maximum).payload.size() == 16 * 1024 * 1024);
+  assert(decode_request("signWalletPayload", &maximum).sequence == INT64_MAX);
+  const auto maximum_wire = ::flutter::StandardMethodCodec::GetInstance().EncodeMethodCall(
+      ::flutter::MethodCall<EncodableValue>("signWalletPayload",
+          std::make_unique<EncodableValue>(maximum)));
+  assert(maximum_wire != nullptr);
+  const auto maximum_call = decode_method_call(maximum_wire->data(), maximum_wire->size());
+  assert(maximum_call != nullptr && decode_request(maximum_call->method_name(),
+      maximum_call->arguments()).payload.size() == 16 * 1024 * 1024);
+  EncodableValue too_large(std::vector<uint8_t>(16 * 1024 * 1024 + 1));
+  expect_failure([&] { (void)from_encodable_value(too_large); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  EncodableValue strings(::flutter::EncodableList{
+      EncodableValue(std::string(9 * 1024 * 1024, 'a')),
+      EncodableValue(std::string(9 * 1024 * 1024, 'b'))});
+  expect_failure([&] { (void)from_encodable_value(strings); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+
+  try {
+    (void)decode("createWallet", list({Value::integer(1), Value::string("tracked"),
+        Value::integer(3), Value::integer(18)}));
+    assert(false);
+  } catch (const ContractFailure &error) {
+    assert(error.code == CITIZENSDK_ERROR_INVALID_ARGUMENT &&
+           error.session == "tracked" && error.sequence == 3);
+  }
+}
+
+void test_envelopes_and_decimal() {
+  using namespace citizen_sdk::flutter;
+  assert(decimal_u128(parse_u128("0")) == "0");
+  assert(decimal_u128(parse_u128("340282366920938463463374607431768211455")) ==
+         "340282366920938463463374607431768211455");
+  const auto envelope = response("s", 7, list({Value::string("running")}));
+  assert(as_list(envelope).size() == 4 && as_string(as_list(envelope)[1]) == "s");
+  const auto failure = error_details(CITIZENSDK_ERROR_BUSY, "busy", "s", 7);
+  assert(as_list(failure).size() == 5 && as_string(as_list(failure)[4]) == "busy");
+  assert(std::string(error_name(CITIZENSDK_ERROR_BUSY)) == "busy");
+  std::set<std::string> codes;
+  for (citizensdk_error_code_t code = 0; code <= CITIZENSDK_ERROR_CANCELLED; ++code) {
+    codes.insert(error_name(code));
+  }
+  assert(codes.size() == 23 && std::string(error_name(-1)) == "integrity");
+  for (const char *invalid : {"", "01", "+1", "-1", "1 ", " 1",
+       "340282366920938463463374607431768211456"}) {
+    expect_failure([&] { (void)parse_u128(invalid); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  }
+  const auto &codec = ::flutter::StandardMethodCodec::GetInstance();
+  auto success_value = to_encodable_value(envelope);
+  const auto success_wire = codec.EncodeSuccessEnvelope(&success_value);
+  assert(success_wire != nullptr);
+  CapturedResult success;
+  assert(codec.DecodeAndProcessResponseEnvelope(success_wire->data(), success_wire->size(), &success));
+  assert(success.successes == 1 && success.errors == 0 && success.not_implemented == 0 &&
+         as_string(as_list(success.value)[1]) == "s");
+  auto error_value = to_encodable_value(failure);
+  const auto error_wire = codec.EncodeErrorEnvelope("busy", "busy", &error_value);
+  assert(error_wire != nullptr);
+  CapturedResult error;
+  assert(codec.DecodeAndProcessResponseEnvelope(error_wire->data(), error_wire->size(), &error));
+  assert(error.errors == 1 && error.successes == 0 && error.not_implemented == 0 &&
+         error.code == "busy" && error.message == "busy" &&
+         as_string(as_list(error.value)[4]) == "busy");
+  auto event_value = to_encodable_value(event("s", 9, "lifecycleChanged",
+      list({lifecycle(CITIZENSDK_LIFECYCLE_RUNNING)})));
+  const auto event_wire = codec.EncodeSuccessEnvelope(&event_value);
+  assert(event_wire != nullptr);
+  CapturedResult received_event;
+  assert(codec.DecodeAndProcessResponseEnvelope(event_wire->data(), event_wire->size(), &received_event));
+  assert(received_event.successes == 1 && as_list(received_event.value).size() == 5 &&
+         as_string(as_list(received_event.value)[3]) == "lifecycleChanged");
+  expect_failure([&] { (void)event("s", 9, "unknown", list({})); }, CITIZENSDK_ERROR_INTEGRITY);
+  expect_failure([&] { (void)response("s", 9, Value::string("not a tuple")); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+}
+
+Value::List &mutable_list(Value &value) { return std::get<Value::List>(value.data); }
+Value block_fixture(char hash = '1', const char *number = "7", bool finalized = true) {
+  return list({Value::string(account(hash)), Value::string(number),
+               Value::string(finalized ? "finalized" : "best")});
+}
+Value execution_fixture(bool success = true) {
+  return list({Value::string(success ? "success" : "failed"), block_fixture(),
+      Value::integer(0), success ? Value::null() : Value::integer(0), Value::null(), Value::null()});
+}
+Value transfer_fixture() {
+  return list({Value::string(account('3')), Value::string("finalizedSuccess"),
+      execution_fixture(), Value::null()});
+}
+Value profile_fixture() {
+  // Public AccountId/SS58 golden pair from citizenchain-wallet-derivation-v1;
+  // no mnemonic, child seed or password is copied into this fixture.
+  constexpr const char *id = "0x2afba9278e30ccf6a6ceb3a8b6e336b70068f045c666f2e7f4f9cc5f47db8972";
+  constexpr const char *address = "w5CZACAABUbK4jspzPB5be9trhtSgRCRZFafGe7kvFPvxq8M2";
+  auto item = list({Value::integer(0), Value::string(id), Value::string(address),
+      Value::string("主账户"), Value::string("0"), Value::boolean(true)});
+  return list({Value::integer(0), Value::string("created"), Value::string("0"),
+      Value::string(id), Value::string(id), list({std::move(item)})});
+}
+Value history_fixture() {
+  auto cursor = list({Value::string(account('1')), block_fixture(), block_fixture()});
+  auto record = list({Value::string(account('1')), Value::string(account('3')),
+      Value::string("0"), Value::string(account('2')), Value::string("1"),
+      Value::string("pending"), Value::null(), Value::null(), Value::string("0"),
+      Value::string("0"), Value::string(""), Value::null()});
+  auto transfer = list({Value::string(account('1')), Value::string(account('1')),
+      Value::string(account('2')), Value::string("1"), block_fixture(),
+      Value::integer(0), Value::null(), Value::string("outgoing"),
+      Value::string("Balances"), Value::string(""), Value::bytes({})});
+  return list({Value::string("0"), list({std::move(cursor)}),
+      list({std::move(record)}), list({std::move(transfer)})});
+}
+
+void test_profile_semantics() {
+  using citizen_sdk::flutter::validate_public_value;
+  const auto good = profile_fixture();
+  validate_public_value(Method::get_wallet_profile, list({good}));
+  for (unsigned kind = 0; kind < 7; ++kind) {
+    auto bad = good; auto &profile = mutable_list(bad);
+    auto &accounts = mutable_list(profile[5]); auto &first = mutable_list(accounts[0]);
+    switch (kind) {
+      case 0: first[2] = Value::string(""); break;
+      case 1: accounts.push_back(accounts[0]); break;
+      case 2: first[0] = Value::integer(1); break;
+      case 3: profile[4] = Value::string(account('1')); break;
+      case 4: first[3] = Value::string("\xc2\xa0"); break;
+      case 5: profile[0] = Value::integer(1); break;
+      case 6: profile[1] = Value::string("unknown"); break;
+    }
+    expect_failure([&] { validate_public_value(Method::get_wallet_profile, list({bad})); },
+                   CITIZENSDK_ERROR_INTEGRITY);
+  }
+}
+
+void test_transfer_and_watch_semantics() {
+  using citizen_sdk::flutter::validate_public_value;
+  using citizen_sdk::flutter::validate_watch_value;
+  const auto good = transfer_fixture();
+  validate_public_value(Method::transfer_with_remark, list({good}));
+  for (unsigned kind = 0; kind < 5; ++kind) {
+    auto bad = good; auto &fields = mutable_list(bad);
+    if (kind == 0) fields[1] = Value::string("finalizedFailed");
+    if (kind == 1) fields[3] = Value::string("unexpected");
+    if (kind == 2) mutable_list(fields[2])[1] = block_fixture('1', "7", false);
+    if (kind == 3) {
+      fields[1] = Value::string("poolRejected"); fields[2] = Value::null();
+      fields[3] = Value::string(" \xc2\xa0\xe3\x80\x80");
+    }
+    if (kind == 4) {
+      fields[1] = Value::string("finalizedFailed"); fields[2] = execution_fixture(false);
+      mutable_list(fields[2])[3] = Value::integer(3); // Module requires both pallet/error.
+    }
+    expect_failure([&] { validate_public_value(Method::transfer_with_remark, list({bad})); },
+                   CITIZENSDK_ERROR_INTEGRITY);
+  }
+  for (const char *status : {"ready", "future", "dropped", "invalid", "broadcast", "finalityTimeout"}) {
+    auto value = list({Value::integer(1), Value::string(status), Value::null(), Value::null(), Value::integer(0)});
+    validate_watch_value(value);
+    mutable_list(value)[3] = Value::string(account('3'));
+    expect_failure([&] { validate_watch_value(value); }, CITIZENSDK_ERROR_INTEGRITY);
+  }
+  auto finalized = list({Value::integer(1), Value::string("finalized"), block_fixture(),
+      Value::null(), Value::integer(0)});
+  validate_watch_value(finalized);
+  mutable_list(finalized)[2] = block_fixture('1', "7", false);
+  expect_failure([&] { validate_watch_value(finalized); }, CITIZENSDK_ERROR_INTEGRITY);
+  auto usurped = list({Value::integer(1), Value::string("usurped"), Value::null(),
+      Value::string(account('3')), Value::integer(0)});
+  validate_watch_value(usurped);
+}
+
+void test_history_semantics() {
+  using citizen_sdk::flutter::validate_public_value;
+  const auto good = history_fixture();
+  validate_public_value(Method::sync_finalized_history, list({good}));
+  for (unsigned kind = 0; kind < 13; ++kind) {
+    auto bad = good; auto &history = mutable_list(bad);
+    auto &cursors = mutable_list(history[1]);
+    auto &records = mutable_list(history[2]); auto &transfers = mutable_list(history[3]);
+    switch (kind) {
+      case 0: cursors.push_back(cursors[0]); break;
+      case 1: mutable_list(cursors[0])[2] = block_fixture('2'); break;
+      case 2: records.push_back(records[0]); break;
+      case 3: mutable_list(records[0])[5] = Value::string("finalizedSuccess"); break;
+      case 4: mutable_list(records[0])[4] = Value::string("0"); break;
+      case 5: transfers.push_back(transfers[0]); break;
+      case 6: mutable_list(transfers[0])[7] = Value::string("incoming"); break;
+      case 7: mutable_list(transfers[0])[8] = Value::string("unknown"); break;
+      case 8: mutable_list(transfers[0])[9] = Value::string("not the bytes"); break;
+      case 9: mutable_list(cursors[0])[2] = block_fixture('1', "6"); break;
+      case 10: mutable_list(records[0])[8] = Value::string("1"); break;
+      case 11: mutable_list(transfers[0])[2] = Value::string(account('1')); break;
+      case 12: {
+        auto &record = mutable_list(records[0]);
+        record[5] = Value::string("finalizedSuccess");
+        record[6] = block_fixture('2'); record[7] = execution_fixture(); break;
+      }
+    }
+    expect_failure([&] { validate_public_value(Method::sync_finalized_history, list({bad})); },
+                   CITIZENSDK_ERROR_INTEGRITY);
+  }
+  auto lossy = good;
+  auto &transfer = mutable_list(mutable_list(mutable_list(lossy)[3])[0]);
+  transfer[6] = Value::integer(0); transfer[8] = Value::string("OnchainTransaction");
+  transfer[9] = Value::string("\xef\xbf\xbd"); transfer[10] = Value::bytes({0xe2, 0x82});
+  validate_public_value(Method::sync_finalized_history, list({lossy}));
+  transfer[9] = Value::string(std::string("a\0b", 3)); transfer[10] = Value::bytes({'a', 0, 'b'});
+  validate_public_value(Method::sync_finalized_history, list({lossy}));
+  transfer[9] = Value::string("x"); transfer[10] = Value::bytes({0xef, 0xbb, 0xbf, 'x'});
+  validate_public_value(Method::sync_finalized_history, list({lossy}));
+}
+
+void test_balance_nonce_fee_semantics() {
+  using citizen_sdk::flutter::validate_public_value;
+  auto balance = list({Value::string(account('1')), block_fixture(),
+      Value::string("3"), Value::string("2"), Value::string("5")});
+  validate_public_value(Method::get_account_balance, list({balance}));
+  mutable_list(balance)[4] = Value::string("4");
+  expect_failure([&] { validate_public_value(Method::get_account_balance, list({balance})); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+  const auto nonce = list({Value::string(account('1')), block_fixture(), Value::string("0")});
+  expect_failure([&] { validate_public_value(Method::get_account_nonce, list({nonce})); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+  const auto fee = list({block_fixture('1', "7", false), Value::integer(0), Value::string("1"), Value::string("0")});
+  expect_failure([&] { validate_public_value(Method::get_fee_snapshot, list({fee})); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+
+  citizensdk_capability_snapshot_t snapshot{};
+  snapshot.struct_size = sizeof(snapshot); snapshot.abi_version = CITIZENSDK_ABI_VERSION;
+  snapshot.count = CITIZENSDK_CAPABILITY_COUNT;
+  for (uint32_t i = 0; i < snapshot.count; ++i) {
+    snapshot.statuses[i].name = i + 1;
+    snapshot.statuses[i].reason = CITIZENSDK_CAPABILITY_REASON_BUILD_UNSUPPORTED;
+  }
+  (void)citizen_sdk::flutter::capabilities(snapshot);
+  snapshot.statuses[0].ready = 1;
+  expect_failure([&] { (void)citizen_sdk::flutter::capabilities(snapshot); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+  snapshot.statuses[0].ready = 0;
+  snapshot.statuses[1].name = snapshot.statuses[0].name;
+  expect_failure([&] { (void)citizen_sdk::flutter::capabilities(snapshot); },
+                 CITIZENSDK_ERROR_INTEGRITY);
+}
+}  // namespace
+
+int main() {
+  test_method_closure_and_requests();
+  test_strict_failures();
+  test_standard_wire_preserves_nul_and_unicode();
+  test_raw_wire_bounds();
+  test_envelopes_and_decimal();
+  test_windows_value_types_and_limits();
+  test_profile_semantics();
+  test_transfer_and_watch_semantics();
+  test_history_semantics();
+  test_balance_nonce_fee_semantics();
+  return 0;
+}

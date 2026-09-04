@@ -65,7 +65,9 @@ RequestRouter::Handler RequestRouter::take(const citizensdk_event_t &event) {
   {
     std::lock_guard<std::mutex> guard(lock_);
     if (primed_ || request_ == 0 || request_ != event.request_id) return {};
-    handler = std::move(handler_);
+    // std::function 移动后的源对象只保证有效，未保证变为空。
+    // 与已空的本地 handler 交换，确保路由被消费后可关闭或接纳下一请求。
+    handler.swap(handler_);
     request_ = 0;
   }
   return handler;

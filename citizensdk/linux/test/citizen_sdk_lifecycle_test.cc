@@ -1,8 +1,11 @@
 // 验证钱包流程与关闭 admission 使用同一个单调状态机。
 #include <cassert>
+#include <condition_variable>
 #include <fstream>
 #include <iterator>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include "citizen_sdk_lifecycle.hpp"
 
@@ -68,6 +71,63 @@ int main() {
   }
   assert(closed_rejected);
 
+  // 模拟 worker 正在等 GTK 认证：service 只持租约、不持状态机锁。
+  // UI 仍可查询状态并立即取得 BUSY；worker 返回后正常关闭且关闭期间
+  // 禁止新 provider admission。CTEST timeout 会捕捉持锁等待回归。
+  Lifecycle services;
+  std::mutex service_lock;
+  std::condition_variable service_ready;
+  bool entered = false;
+  bool release_service = false;
+  std::thread provider([&] {
+    services.begin_service();
+    {
+      std::unique_lock<std::mutex> guard(service_lock);
+      entered = true;
+      service_ready.notify_all();
+      service_ready.wait(guard, [&] { return release_service; });
+    }
+    services.finish_service();
+  });
+  {
+    std::unique_lock<std::mutex> guard(service_lock);
+    service_ready.wait(guard, [&] { return entered; });
+  }
+  assert(!services.wallet_active());
+  bool active_service_busy = false;
+  try {
+    (void)services.begin_close();
+  } catch (const HostError &error) {
+    active_service_busy = error.code() == CITIZENSDK_ERROR_BUSY;
+  }
+  assert(active_service_busy);
+  {
+    std::lock_guard<std::mutex> guard(service_lock);
+    release_service = true;
+  }
+  service_ready.notify_all();
+  provider.join();
+  assert(services.begin_close());
+  bool closing_rejected_service = false;
+  try {
+    services.begin_service();
+  } catch (const HostError &error) {
+    closing_rejected_service = error.code() == CITIZENSDK_ERROR_INVALID_STATE;
+  }
+  assert(closing_rejected_service);
+  services.cancel_close(false);
+  services.begin_service();
+  services.finish_service();
+  assert(services.begin_close());
+  services.commit_closed();
+  bool closed_rejected_service = false;
+  try {
+    services.begin_service();
+  } catch (const HostError &error) {
+    closed_rejected_service = error.code() == CITIZENSDK_ERROR_INVALID_STATE;
+  }
+  assert(closed_rejected_service);
+
   const auto read = [](const char *relative) {
     const std::string path = std::string(CITIZENSDK_LINUX_TEST_SOURCE_DIR) +
                              relative;
@@ -91,10 +151,8 @@ int main() {
   assert(host_api.find("citizensdk_stop(sdk") != std::string::npos);
   assert(host_api.find("std::min(delay * 2") != std::string::npos);
 
-  // 每个带 Host handle 的公开入口都先取得 registry lease。retirement
-  // 封闭新 admission 后只等待既有 lease，Host 真正关闭成功后才从
-  // registry 移除；等待时 condition_variable 会释放 registry lock，
-  // 因而 callback 重入不会被 close 持锁死锁。
+  // 显式 destroy 遇到另一个 API lease 立即 BUSY，绝不在 callback/GTK
+  // 线程等待；abandon 则让 supervisor 保留完整对象图，待 lease 退出。
   assert(host_api.find("class HostLease final") != std::string::npos);
   assert(host_api.find("(!include_retiring && found->second->retiring)") !=
          std::string::npos);
@@ -102,8 +160,23 @@ int main() {
          std::string::npos);
   assert(host_api.find("--entry_->active_calls") != std::string::npos);
   assert(host_api.find(
-             "registry_idle().wait(guard, [&] { return entry->active_calls == 1; })") !=
+             "if (!abandon && entry->active_calls != 1) return CITIZENSDK_ERROR_BUSY") !=
          std::string::npos);
+  assert(host_api.find("registry_idle") == std::string::npos);
+  const auto supervisor = host_api.find("void supervise_abandoned_host(");
+  const auto supervisor_admission = host_api.find(
+      "entry->abandoned && entry->active_calls == 0", supervisor);
+  const auto supervisor_close = host_api.find("host->close()", supervisor_admission);
+  assert(supervisor != std::string::npos &&
+         supervisor_admission != std::string::npos &&
+         supervisor_close != std::string::npos &&
+         supervisor < supervisor_admission &&
+         supervisor_admission < supervisor_close);
+  const auto abandonment = host_api.find("citizensdk_error_code_t citizensdk_host_abandon(");
+  const auto detached = host_api.find("supervisor.detach()", abandonment);
+  const auto committed = host_api.find("host.entry()->abandoned = true", detached);
+  assert(abandonment != std::string::npos && detached != std::string::npos &&
+         committed != std::string::npos && detached < committed);
   std::size_t leased_entry_points = 0;
   std::size_t lease_cursor = 0;
   while ((lease_cursor = host_api.find("auto host = acquire_host(",
@@ -118,6 +191,10 @@ int main() {
   assert(retirement != std::string::npos && host_close != std::string::npos &&
          registry_erase != std::string::npos && retirement < host_close &&
          host_close < registry_erase);
+  // close 已成功时，只读 abandon probe 可以暂持 shared_ptr lease；不能
+  // 因其计数不是 1 就遗留一个再也无法取得的 retiring registry entry。
+  assert(host_api.substr(host_close, registry_erase - host_close).find(
+             "active_calls != 1") == std::string::npos);
 
   // HostBridge 不跨 root ABI 调用持有 call_lock_；Core 销毁成功后才按
   // Vault -> secure store -> public store 的顺序退休宿主资源。

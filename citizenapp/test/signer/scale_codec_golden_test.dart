@@ -17,14 +17,18 @@ import 'package:citizenapp/signer/signing.dart';
 // 生成器:citizenchain/runtime/primitives/tests/scale_codec_golden.rs
 //        (SCALE_GOLDEN_UPDATE=1 重新生成)
 
-const String _vectorsPath =
-    '../citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json';
-
 String _bytesToHex(List<int> bytes) =>
     bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 
 void main() {
-  final file = File(_vectorsPath);
+  // 工具根与源码根不同；只读准确主仓金标，不在中央目录复制 Runtime 数据。
+  final root = Platform.environment['GMB_ROOT'];
+  if (root == null || !root.startsWith('/')) {
+    throw StateError('SCALE 金标检查缺少准确 GMB_ROOT');
+  }
+  final file = File(
+    '$root/citizenchain/runtime/primitives/tests/fixtures/scale_codec_vectors.json',
+  );
   final canonical =
       jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
   final compactVectors =

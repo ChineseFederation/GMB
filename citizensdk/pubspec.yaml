@@ -43,5 +43,10 @@ flutter:
       macos:
         pluginClass: CitizenSdkPlugin
         sharedDarwinSource: true
+      # LinuxARM/LinuxAMD 共享 Flutter 官方 linux 注册和同版 Host/Core。
+      linux:
+        pluginClass: CitizenSdkPlugin
+      windows:
+        pluginClass: CitizenSdkPlugin
   assets:
     - assets/citizenchain/

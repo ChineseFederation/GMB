@@ -10,18 +10,27 @@ String? smoldotNativeSkipReason() {
   _smoldotProbeCompleted = true;
 
   final cwd = Directory.current.path;
+  final ci = Platform.environment['CI'] == 'true';
+  // 本机只验本端 Cargo 产物；CI 保持既有 Runner 相对路径和系统装载行为。
+  final target = ci
+      ? '$cwd/smoldot/ffi/target'
+      : Platform.environment['CARGO_TARGET_DIR'];
+  if (target == null || (!ci && !target.startsWith('/'))) {
+    _smoldotSkipReason = '本机原生测试缺少当前任务 CARGO_TARGET_DIR';
+    return _smoldotSkipReason;
+  }
   final candidates = switch (Platform.operatingSystem) {
     'macos' => <String>[
-        '$cwd/smoldot/ffi/target/release/libsmoldot.dylib',
-        'libsmoldot.dylib',
+        '$target/release/libsmoldot.dylib',
+        if (ci) 'libsmoldot.dylib',
       ],
     'linux' => <String>[
-        '$cwd/smoldot/ffi/target/release/libsmoldot.so',
-        'libsmoldot.so',
+        '$target/release/libsmoldot.so',
+        if (ci) 'libsmoldot.so',
       ],
     'windows' => <String>[
-        '$cwd/smoldot/ffi/target/release/smoldot.dll',
-        'smoldot.dll',
+        '$target/release/smoldot.dll',
+        if (ci) 'smoldot.dll',
       ],
     _ => const <String>[],
   };

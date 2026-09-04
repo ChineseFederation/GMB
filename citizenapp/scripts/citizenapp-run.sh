@@ -1,6 +1,5 @@
-TATACHATSDK_ROOT="/Users/rhett/TATA/tatachatsdk"
 #!/usr/bin/env bash
-# 清理目标平台缓存并生成本机优化安装包；本脚本不启动、不安装产品。
+# 在本端中央工作根生成本机优化安装包；本脚本不启动、不安装产品。
 #
 # 用法：citizenapp-run.sh <ios|android>
 # 只读包检查：citizenapp-run.sh <verify-ios-localization|verify-android-localization> <产物路径>
@@ -16,76 +15,59 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # 消解 scripts/..，确保直接产品源码身份使用唯一真实路径。
 APP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+TATACHATSDK_ROOT="$(cd "$REPO_ROOT/../TATA/tatachatsdk" && pwd)"
 PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 [[ "$PLATFORM" == ios || "$PLATFORM" == android \
   || "$PLATFORM" == verify-ios-localization || "$PLATFORM" == verify-android-localization ]] \
   || { echo "目标平台或检查模式不合法：$PLATFORM" >&2; exit 1; }
-cd "$APP_ROOT"
-
 if [[ "$PLATFORM" == ios || "$PLATFORM" == android ]]; then
   : "${TATA_CONSOLE_TARGET_ROOT:?本机编译必须由 TataConsole 提供中央产物目录}"
   : "${TATA_CONSOLE_WORK_DIR:?本机编译必须由 TataConsole 提供中央工作目录}"
-  case "$TATA_CONSOLE_WORK_DIR" in "$TATA_CONSOLE_TARGET_ROOT/.work/citizenapp-$PLATFORM") ;; *)
+  case "$TATA_CONSOLE_WORK_DIR" in "$TATA_CONSOLE_TARGET_ROOT/.work/GMB/citizenapp/$PLATFORM") ;; *)
     echo "公民中央工作目录不合法：$TATA_CONSOLE_WORK_DIR" >&2; exit 1 ;;
   esac
-  # Flutter会把依赖状态写到当前工程；Build直接读取产品源码，并在退出时清除临时状态。
+  # 源码根只用于读取输入和调用原生脚本；Flutter 的所有可写配置由控制台在本端生成。
   [[ "$APP_ROOT" == "$REPO_ROOT/citizenapp" ]] || {
-  echo "citizenapp本机Build源码身份无效：$APP_ROOT" >&2
-  exit 1
-
-}
-
-TATACHATSDK_OVERRIDE_PATH="$APP_ROOT/pubspec_overrides.yaml"
-PUBSPEC_LOCK_BACKUP="$TATA_CONSOLE_WORK_DIR/citizenapp.pubspec.lock"
-
-prepare_local_tatachat_sdk_dependency() {
-  [[ ! -e "$TATACHATSDK_OVERRIDE_PATH" ]] || {
-    echo "CitizenApp 本机依赖覆盖文件已存在：$TATACHATSDK_OVERRIDE_PATH" >&2
+    echo "citizenapp本机Build源码身份无效：$APP_ROOT" >&2
     exit 1
   }
-  cp -p "$APP_ROOT/pubspec.lock" "$PUBSPEC_LOCK_BACKUP"
-  # 本机开发只直连当前仓库 TataChatSDK；正式源码依赖仍由准确 Git Release Tag 管理。
-  cat > "$TATACHATSDK_OVERRIDE_PATH" <<'YAML'
-dependency_overrides:
-  tatachat_sdk:
-    path: ../../TATA/tatachatsdk
-YAML
-}
-
-cleanup_direct_source_state() {
-  rm -rf "$APP_ROOT/.dart_tool" "$APP_ROOT/.flutter-plugins" \
-    "$APP_ROOT/.flutter-plugins-dependencies" "$APP_ROOT/ios/Pods" \
-    "$APP_ROOT/ios/.symlinks" "$APP_ROOT/android/.gradle"
-  rm -f "$TATACHATSDK_OVERRIDE_PATH"
-  if [[ -f "$PUBSPEC_LOCK_BACKUP" ]]; then
-    cp -p "$PUBSPEC_LOCK_BACKUP" "$APP_ROOT/pubspec.lock"
-    rm -f "$PUBSPEC_LOCK_BACKUP"
-  fi
-  if [[ "$PLATFORM" == ios ]]; then
-    rm -f "$TATACHATSDK_ROOT/ios/TataChatSDK.xcframework"
-  fi
-}
-trap 'status=$?; cleanup_direct_source_state; exit "$status"' EXIT
-prepare_local_tatachat_sdk_dependency
+  : "${TATA_CONSOLE_FLUTTER_ROOT:?缺少本端Flutter配置根}"
+  [[ "$TATA_CONSOLE_FLUTTER_ROOT" == "$TATA_CONSOLE_WORK_DIR" \
+    && ! -L "$TATA_CONSOLE_FLUTTER_ROOT" \
+    && -f "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" \
+    && ! -L "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" \
+    && -f "$TATA_CONSOLE_FLUTTER_ROOT/pubspec_overrides.yaml" \
+    && ! -L "$TATA_CONSOLE_FLUTTER_ROOT/pubspec_overrides.yaml" ]] || {
+    echo 'CitizenApp 必须使用本端独立生成的 Flutter 配置和依赖覆盖' >&2
+    exit 1
+  }
+  cd "$TATA_CONSOLE_FLUTTER_ROOT"
+  [[ "$(pwd -P)" == "$TATA_CONSOLE_WORK_DIR" ]] || {
+    echo 'CitizenApp 中央工作根不得通过符号链接指向其它目录' >&2
+    exit 1
+  }
+  INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少TataConsole本机增量缓存目录}"
+  [[ "$INCREMENTAL_CACHE_DIR" == "$TATA_CONSOLE_WORK_DIR/cache" ]] || {
+    echo "CitizenApp本机增量缓存必须位于$TATA_CONSOLE_WORK_DIR/cache" >&2
+    exit 1
+  }
+  BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
+  ARTIFACT_ROOT="$TATA_CONSOLE_TARGET_ROOT/GMB/citizenapp/$PLATFORM"
+  export TATA_CONSOLE_BUILD_DIR="$BUILD_DIR"
+  export TATA_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
+  export TATA_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
+  export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
+  export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
+  export PUB_CACHE="$INCREMENTAL_CACHE_DIR/dart-pub"
+  export GRADLE_USER_HOME="$INCREMENTAL_CACHE_DIR/gradle"
+  export CP_HOME_DIR="$INCREMENTAL_CACHE_DIR/cocoapods"
+  export TMPDIR="$TATA_CONSOLE_WORK_DIR/"
+  export FLUTTER_SUPPRESS_ANALYTICS=true COCOAPODS_DISABLE_STATS=true
+  mkdir -p "$XDG_CONFIG_HOME"
+  flutter config --build-dir=cache/flutter-build >/dev/null
 fi
 
-INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少TataConsole本机增量缓存目录}"
-[[ "$INCREMENTAL_CACHE_DIR" == "$TATA_CONSOLE_WORK_DIR/cache" ]] || {
-  echo "CitizenApp本机增量缓存必须位于$TATA_CONSOLE_WORK_DIR/cache" >&2
-  exit 1
-}
-BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
-ARTIFACT_ROOT="$TATA_CONSOLE_TARGET_ROOT/citizenapp"
-export TATA_CONSOLE_BUILD_DIR="$BUILD_DIR"
-export TATA_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
-export TATA_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
-export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
-export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
-mkdir -p "$XDG_CONFIG_HOME"
-build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$APP_ROOT")"
-flutter config --build-dir="$build_dir_relative" >/dev/null
-
-# iOS 与 Android 使用独立中央缓存。中间产物保留，最终候选包每轮必须重新生成。
+# 仅清理本任务的候选包；退出清理由控制台核对任务身份后执行，不触碰源码或另一端。
 clean_platform_build_outputs() {
   case "$PLATFORM" in
     ios) rm -rf "$BUILD_DIR/ios/iphoneos/Runner.app" ;;
@@ -197,7 +179,12 @@ echo "==> 编译 Rust 原生库（${PLATFORM}）..."
 # Smoldot 和 TataChatSDK 分别生成自己的原生产物；iOS 由静态 Smoldot Framework 与
 # 动态 TataChatSDK XCFramework 隔离 Rust runtime，Android 继续使用两个独立 .so。
 if [[ "$PLATFORM" == ios ]]; then
-  TATACHATSDK_PACKAGE_IOS_DIR="$TATACHATSDK_ROOT/ios" \
+  # CocoaPods 插件根也属于本任务，不再把原生产物链接写进共享 SDK 源码。
+  [[ -f "$TATA_CONSOLE_WORK_DIR/dependencies/tatachatsdk/ios/tatachat_sdk.podspec" ]] || {
+    echo 'CitizenApp 本端 TataChatSDK iOS 插件配置缺失' >&2
+    exit 1
+  }
+  TATACHATSDK_PACKAGE_IOS_DIR="$TATA_CONSOLE_WORK_DIR/dependencies/tatachatsdk/ios" \
     "$TATACHATSDK_ROOT/scripts/build-native.sh" "$PLATFORM"
 else
   "$TATACHATSDK_ROOT/scripts/build-native.sh" "$PLATFORM"

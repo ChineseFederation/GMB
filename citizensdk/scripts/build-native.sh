@@ -12,6 +12,7 @@ android_gradle_project="$sdk_dir/android"
 darwin_source_root="$sdk_dir/darwin/Sources/CitizenSDK"
 darwin_flutter_source_root="$sdk_dir/darwin/Sources/CitizenSDKFlutter"
 linux_source_root="$sdk_dir/linux"
+windows_source_root="$sdk_dir/windows"
 apple_asset_root="$sdk_dir/assets/citizenchain"
 target_name="${1:-all}"
 tata_console_target_root="/Users/rhett/TATA/tataconsole/target"
@@ -26,6 +27,36 @@ fail() {
   echo "CitizenSDK 原生构建失败：$1" >&2
   exit 1
 }
+
+# Windows 原生工具使用 drive 路径，Bash 安全目录函数使用 Git Bash POSIX 路径。
+# 必须在 canonical_directory 第一次 mkdir 前检查二者指向同一非源码目录。
+windows_path_preflight() {
+  case "$(uname -s)" in MINGW*|MSYS*) ;; *) fail "Windows 只允许在 Windows MSVC runner 构建" ;; esac
+  command -v cygpath >/dev/null 2>&1 || fail "Windows 缺少官方 Git Bash 路径转换工具"
+  command -v node >/dev/null 2>&1 || fail "Windows 缺少既有构建合同使用的 Node"
+  local path converted
+  for path in "${CITIZENSDK_WORK_DIR:-}" "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"; do
+    [[ "$path" == /* && "$path" != / ]] || fail "Windows 工作目录须使用 Git Bash 绝对路径"
+    converted="$(cygpath -m "$path")"
+    CITIZENSDK_PATH_CHECK="$converted" CITIZENSDK_SOURCE_CHECK="$(cygpath -m "$sdk_dir")" node -e '
+      const fs=require("fs"), p=require("path").win32;
+      const value=process.env.CITIZENSDK_PATH_CHECK, source=process.env.CITIZENSDK_SOURCE_CHECK;
+      if (!/^[A-Za-z]:\//.test(value) || /[<>"|?*\x00-\x1f]/.test(value)) throw Error("invalid Windows drive path");
+      const pieces=value.slice(3).split("/");
+      if (pieces.some(x=>!x || x==="." || x===".." || /[ .:]$/.test(x) || x.includes(":") || /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(x))) throw Error("unsafe Windows path component");
+      const normalized=p.resolve(value).toLowerCase(), root=p.resolve(source).toLowerCase();
+      if (normalized===root || normalized.startsWith(root+p.sep)) throw Error("Windows output is inside source");
+      let current=value.slice(0,3);
+      for (const part of pieces) {
+        current=p.join(current,part);
+        try { const st=fs.lstatSync(current); if (!st.isDirectory() || st.isSymbolicLink() || p.resolve(fs.realpathSync(current)).toLowerCase()!==p.resolve(current).toLowerCase()) throw Error("Windows path reparse or alias"); }
+        catch(e) { if (e.code==="ENOENT") break; throw e; }
+      }
+    ' || fail "Windows 目录首次写入前预检失败"
+  done
+}
+
+if [[ "$target_name" == Windows ]]; then windows_path_preflight; fi
 
 assert_safe_directory_path() {
   local path="$1" label="$2" component current=''
@@ -82,8 +113,19 @@ if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   done
 fi
 
-work_dir="$(canonical_directory "${CITIZENSDK_WORK_DIR:-}" CITIZENSDK_WORK_DIR)"
-output_dir="$(canonical_directory "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" CITIZENSDK_NATIVE_OUTPUT_DIR)"
+if [[ "$target_name" == macOS ]]; then
+  # Hosted 输入互斥检查必须早于首次写入；只接受调用方已准备的本机/Runner 受控容器。
+  work_dir="${CITIZENSDK_WORK_DIR:-}"
+  output_dir="${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"
+  for path in "$work_dir" "$output_dir"; do
+    assert_safe_directory_path "$path" "macOS Hosted 受控容器"
+    [[ -d "$path" && ! -L "$path" && "$(cd "$path" && pwd -P)" == "$path" ]] \
+      || fail "macOS Hosted 受控容器必须已存在且没有路径别名"
+  done
+else
+  work_dir="$(canonical_directory "${CITIZENSDK_WORK_DIR:-}" CITIZENSDK_WORK_DIR)"
+  output_dir="$(canonical_directory "${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" CITIZENSDK_NATIVE_OUTPUT_DIR)"
+fi
 
 # 中文注释：无论本机、TataConsole 还是 GitHub runner，都禁止把 Cargo、二进制或符号清单
 # 回写到 SDK 源码树；TataConsole 本机调用时两个目录必须位于 CitizenSDK 固定产品目录，
@@ -171,7 +213,9 @@ assert_readonly_static_archive() {
 }
 
 cargo_target_dir="$work_dir/cargo"
-prepare_safe_directory "$work_dir" "$cargo_target_dir" "Cargo target 目录"
+if [[ "$target_name" != macOS ]]; then
+  prepare_safe_directory "$work_dir" "$cargo_target_dir" "Cargo target 目录"
+fi
 export CARGO_TARGET_DIR="$cargo_target_dir"
 
 symbol_list_android() {
@@ -317,19 +361,148 @@ version_is_greater() {
 }
 
 verify_linux_glibc_contract() {
-  local library="$1" readelf_bin="$2" label="$3" versions version
-  versions="$("$readelf_bin" --version-info "$library" 2>/dev/null \
+  local library="$1" readelf_bin="$2" label="$3" versions version version_info
+  local allow_cpp_runtime="${4:-false}"
+  # 工具失败不能当成“没有版本需求”；先取得完整输出，再解析允许的数字版本。
+  version_info="$("$readelf_bin" --version-info "$library" 2>/dev/null)" \
+    || fail "无法读取 $label 的 ELF version-info"
+  if printf '%s\n' "$version_info" | grep -Eq 'GLIBC_[A-Za-z]'; then
+    fail "$label 包含不能按 GLIBC_$linux_glibc_baseline 验证的版本需求"
+  fi
+  versions="$(printf '%s\n' "$version_info" \
     | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)*' \
     | sed 's/^GLIBC_//' | sort -Vu || true)"
   while IFS= read -r version; do
     [[ -n "$version" ]] || continue
     ! version_is_greater "$version" "$linux_glibc_baseline" \
-      || fail "$label 要求 GLIBC_$version，超过固定基线 GLIBC_$linux_glibc_baseline"
+      || fail "$label 要求 GLIBC_${version}，超过固定基线 GLIBC_$linux_glibc_baseline"
   done <<<"$versions"
-  if "$readelf_bin" --version-info "$library" 2>/dev/null \
-      | grep -Eq 'GLIBCXX_|CXXABI_'; then
+  if [[ "$allow_cpp_runtime" != true ]] \
+      && printf '%s\n' "$version_info" | grep -Eq 'GLIBCXX_|CXXABI_'; then
     fail "$label 禁止依赖宿主 libstdc++/CXX ABI；C++ runtime 必须静态装配"
   fi
+}
+
+linux_install_files() {
+  local platform="$1"
+  case "$platform" in LinuxARM|LinuxAMD) ;; *) fail "未登记的 Linux 平台：$platform" ;; esac
+  printf '%s\n' \
+    include/citizensdk.h include/citizensdk_types.h \
+    include/citizen_sdk/citizen_sdk.hpp \
+    include/citizen_sdk/citizen_sdk_config.hpp \
+    include/citizen_sdk/citizen_sdk_error.hpp \
+    include/citizen_sdk/citizen_sdk_events.hpp \
+    include/citizen_sdk/citizen_sdk_models.hpp \
+    include/citizen_sdk/citizen_sdk_wallet_flow.hpp \
+    include/citizen_sdk/citizensdk_host.h \
+    "lib/$platform/libcitizensdk.so" "lib/$platform/libcitizensdk_host.so" \
+    "lib/$platform/cmake/CitizenSDK/CitizenSDKConfig.cmake" \
+    "lib/$platform/cmake/CitizenSDK/CitizenSDKConfigVersion.cmake" \
+    "lib/$platform/cmake/CitizenSDK/CitizenSDKDependencies.cmake" \
+    "lib/$platform/cmake/CitizenSDK/CitizenSDKTargets.cmake" \
+    "lib/$platform/cmake/CitizenSDK/CitizenSDKTargets-release.cmake" \
+    share/citizensdk/citizenchain/manifest.json \
+    share/citizensdk/citizenchain/chainspec.json \
+    share/citizensdk/citizenchain/light_sync_state.json \
+    | LC_ALL=C sort
+}
+
+verify_linux_install() {
+  local prefix="$1" platform="$2" software_version="$3" source_core="$4"
+  local readelf_bin="$5" nm_bin="$6" expected actual directories path parent package_dir
+  local expected_directories='' version declarations core_symbols host_symbols
+  assert_safe_directory_path "$prefix" "$platform 安装前缀"
+  [[ -d "$prefix" && ! -L "$prefix" ]] || fail "$platform 安装前缀不是普通目录"
+  [[ -z "$(find "$prefix" -mindepth 1 ! -type f ! -type d -print -quit)" ]] \
+    || fail "$platform 安装投影禁止符号链接和特殊节点"
+  expected="$(linux_install_files "$platform")"
+  [[ "$(printf '%s\n' "$expected" | wc -l | tr -d ' ')" == 19 ]] \
+    || fail "$platform 安装文件合同必须精确为 19 项"
+  actual="$(cd "$prefix" && find . -type f -print | sed 's|^./||' | LC_ALL=C sort)"
+  [[ "$actual" == "$expected" ]] || fail "$platform 安装文件闭集不一致"
+  while IFS= read -r path; do
+    parent="$(dirname "$path")"
+    while [[ "$parent" != . ]]; do
+      expected_directories+="$parent"$'\n'
+      parent="$(dirname "$parent")"
+    done
+  done <<<"$expected"
+  directories="$(cd "$prefix" && find . -mindepth 1 -type d -print \
+    | sed 's|^./||' | LC_ALL=C sort)"
+  expected_directories="$(printf '%s' "$expected_directories" | LC_ALL=C sort -u)"
+  [[ "$directories" == "$expected_directories" ]] || fail "$platform 安装目录闭集不一致"
+  for path in citizensdk.h citizensdk_types.h; do
+    cmp -s "$sdk_dir/include/$path" "$prefix/include/$path" \
+      || fail "$platform 安装 Core 头字节漂移：$path"
+  done
+  for path in citizen_sdk.hpp citizen_sdk_config.hpp citizen_sdk_error.hpp \
+      citizen_sdk_events.hpp citizen_sdk_models.hpp citizen_sdk_wallet_flow.hpp citizensdk_host.h; do
+    cmp -s "$linux_source_root/include/citizen_sdk/$path" "$prefix/include/citizen_sdk/$path" \
+      || fail "$platform 安装 Host 头字节漂移：$path"
+  done
+  for path in manifest.json chainspec.json light_sync_state.json; do
+    cmp -s "$apple_asset_root/$path" "$prefix/share/citizensdk/citizenchain/$path" \
+      || fail "$platform 安装链资产字节漂移：$path"
+  done
+  cmp -s "$source_core" "$prefix/lib/$platform/libcitizensdk.so" \
+    || fail "$platform 安装 Core 字节漂移"
+  package_dir="$prefix/lib/$platform/cmake/CitizenSDK"
+  cmp -s "$linux_source_root/cmake/CitizenSDKDependencies.cmake" \
+    "$package_dir/CitizenSDKDependencies.cmake" || fail "$platform 安装依赖合同漂移"
+  version="$(sed -n 's/^set(PACKAGE_VERSION "\([^"]*\)")$/\1/p' \
+    "$package_dir/CitizenSDKConfigVersion.cmake")"
+  [[ "$version" == "$software_version" ]] || fail "$platform 安装版本不一致"
+  declarations="$(sed -n 's/^set(_CITIZENSDK_PACKAGE_PLATFORM "\([^"]*\)")$/\1/p' \
+    "$package_dir/CitizenSDKConfig.cmake")"
+  [[ "$declarations" == "$platform" ]] || fail "$platform 安装平台不一致"
+  # 已安装 package 必须可搬动，不能靠源码或这次构建目录找到头和运行库。
+  if grep -F -e "$sdk_dir" -e "$work_dir" "$package_dir"/*.cmake >/dev/null; then
+    fail "$platform 安装配置泄漏源码或构建绝对路径"
+  fi
+  core_symbols="$(product_header_symbols)"
+  host_symbols="$(linux_host_header_symbols)"
+  [[ "$(printf '%s\n' "$core_symbols" | wc -l | tr -d ' ')" == 70 \
+      && "$(printf '%s\n' "$host_symbols" | wc -l | tr -d ' ')" == 13 ]] \
+    || fail "$platform 公开 ABI 必须精确为 70 Core / 13 Host"
+  verify_linux_elf_identity "$platform" "$prefix/lib/$platform/libcitizensdk.so" \
+    "$prefix/lib/$platform/libcitizensdk_host.so" "$readelf_bin" "$nm_bin"
+}
+
+copy_linux_install() {
+  local source_prefix="$1" destination_prefix="$2" platform="$3" destination_root="$4"
+  local paths path source destination
+  assert_safe_directory_path "$source_prefix" "$platform 安装投影来源"
+  [[ -d "$source_prefix" && ! -L "$source_prefix" ]] \
+    || fail "$platform 安装投影来源必须是普通目录"
+  paths="$(linux_install_files "$platform")"
+  assert_descendant_path "$destination_root" "$destination_prefix" "$platform 安装投影目标"
+  assert_safe_directory_path "$destination_prefix" "$platform 安装投影目标"
+  # 唯一 19 项名单同时用于外部 native 输入和 Flutter 包内投影。源码已有的
+  # 七个 Host 公开头只做字节比较，绝不覆盖不同版本或复制整个未受控目录。
+  # 全量预检完成后才写入，缺项或重叠漂移不会留下半份安装投影。
+  while IFS= read -r path; do
+    source="$source_prefix/$path"
+    destination="$destination_prefix/$path"
+    assert_safe_directory_path "$(dirname "$source")" "$platform 安装文件来源父目录"
+    assert_safe_directory_path "$(dirname "$destination")" "$platform 安装文件目标父目录"
+    [[ -f "$source" && ! -L "$source" ]] \
+      || fail "$platform 安装投影缺少普通文件：$path"
+    if [[ -e "$destination" || -L "$destination" ]]; then
+      [[ -f "$destination" && ! -L "$destination" ]] \
+        || fail "$platform 重叠安装文件类型无效：$path"
+      cmp -s "$source" "$destination" \
+        || fail "$platform 重叠安装文件字节漂移：$path"
+    fi
+  done <<<"$paths"
+  prepare_safe_directory "$destination_root" "$destination_prefix" "$platform 安装投影目标"
+  while IFS= read -r path; do
+    source="$source_prefix/$path"
+    destination="$destination_prefix/$path"
+    if [[ ! -e "$destination" && ! -L "$destination" ]]; then
+      prepare_safe_output_file "$destination_root" "$destination" "$platform 安装投影文件"
+      cp "$source" "$destination"
+    fi
+  done <<<"$paths"
 }
 
 verify_linux_machine() {
@@ -346,7 +519,7 @@ verify_linux_machine() {
     || fail "$label 必须是 ET_DYN shared object"
   machine="$(printf '%s\n' "$header" | sed -n 's/^[[:space:]]*Machine:[[:space:]]*//p')"
   [[ "$machine" == "$expected_machine" ]] \
-    || fail "$label 机器类型漂移：预期=$expected_machine；实际=${machine:-无}"
+    || fail "$label 机器类型漂移：预期=${expected_machine}；实际=${machine:-无}"
 }
 
 verify_linux_host_symbols() {
@@ -767,6 +940,342 @@ resolve_xcframework_framework_slice() {
     || fail "$module 必须精确提供一个 $platform/${expected_variant:-device} arm64 slice；实际=$count"
   printf '%s\n' "$found"
 }
+
+# Hosted 消费只接受本轮中央候选、官方归档及已隔离工具，不运行工具来探测版本。
+# 预检保持只读；真正解包仍由唯一 release.mjs 再次逐项验真，目录名不是证明。
+macos_hosted_root() {
+  local root checkout path
+  assert_readonly_dependency_directory "$sdk_dir" "CitizenSDK 源码"
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    # 只使用 GitHub 官方环境变量；缺失时立即失败，不接受本机根或任意临时目录。
+    assert_readonly_dependency_directory "${RUNNER_TEMP:-}" RUNNER_TEMP
+    assert_readonly_dependency_directory "${GITHUB_WORKSPACE:-}" GITHUB_WORKSPACE
+    root="$RUNNER_TEMP/citizensdk"
+    checkout="$GITHUB_WORKSPACE"
+    assert_descendant_path "$checkout" "$sdk_dir" "CitizenSDK checkout"
+  else
+    root="$tata_console_work_root/GMB/citizensdk/SDK/citizensdk"
+    checkout="$(dirname "$sdk_dir")"
+  fi
+  assert_readonly_dependency_directory "$root" "macOS Hosted 受控根"
+  # 同时拒绝源码位于工作根中、工作根位于源码中；必须在首次 mkdir 前检查。
+  for path in "$checkout" "$sdk_dir"; do
+    case "$root/" in "$path/"*) fail "macOS Hosted 受控根与源码交叠" ;; esac
+    case "$path/" in "$root/"*) fail "macOS Hosted 源码与受控根交叠" ;; esac
+  done
+  # APFS 可能以不同大小写接受同一目录；仅比较 Bash 路径文本不足以隔离源码。
+  node - "$root" "$checkout" "$sdk_dir" <<'NODE' || fail "macOS Hosted 源码真实路径预检失败"
+  const fs = require('node:fs'), path = require('node:path');
+  const [root, ...sources] = process.argv.slice(2).map((value) => fs.realpathSync.native(value));
+  const inside = (parent, child) => child === parent || child.startsWith(parent + path.sep);
+  if (sources.some((source) => inside(root, source) || inside(source, root))) {
+    throw new Error('macOS Hosted 受控根与源码真实路径交叠');
+  }
+NODE
+  printf '%s\n' "$root"
+}
+
+macos_hosted_preflight() {
+  [[ "$#" == 6 ]] || fail "macOS Hosted 消费需要 candidate、audit、hosted、flutter、pub-cache、tool-path 六个参数"
+  local candidate="$1" audit="$2" hosted="$3" flutter="$4" cache="$5" tool_path="$6"
+  local path component central
+  [[ "$(uname -s)" == Darwin && "$(uname -m)" == arm64 ]] \
+    || fail "macOS Hosted 消费只允许 macOS Apple Silicon"
+  central="$(macos_hosted_root)"
+  for path in "$work_dir" "$output_dir" "$candidate" "$flutter" "$cache"; do
+    assert_readonly_dependency_directory "$path" "macOS Hosted 输入目录"
+    assert_descendant_path "$central" "$path" "macOS Hosted 受控输入"
+  done
+  for path in "$audit" "$hosted"; do
+    assert_descendant_path "$central" "$path" "macOS Hosted 归档"
+    assert_readonly_dependency_directory "$(dirname "$path")" "macOS Hosted 归档父目录"
+    [[ -f "$path" && ! -L "$path" ]] || fail "macOS Hosted 归档必须是普通文件"
+  done
+  # Flutter/Pub 会写其副本；只读候选和归档不能与这些目录或新消费根等值、互相包含。
+  # 对归档按文件路径一起比较，防止可写 cache 的父目录吞入来源文件。
+  local first second
+  # 候选/归档只读，Flutter/Pub 与消费工作区可写；连预备输出容器也不能包住任何输入。
+  local -a inputs=("$candidate" "$audit" "$hosted" "$flutter" "$cache" "$work_dir" "$output_dir")
+  for ((first = 0; first < ${#inputs[@]}; first++)); do
+    for ((second = first + 1; second < ${#inputs[@]}; second++)); do
+      case "${inputs[first]}/" in "${inputs[second]}/"*) fail "macOS Hosted 输入和可写目录必须双向互斥" ;; esac
+      case "${inputs[second]}/" in "${inputs[first]}/"*) fail "macOS Hosted 输入和可写目录必须双向互斥" ;; esac
+    done
+  done
+  # 固定受控根的磁盘大小写由系统决定；其下任何输入别名都不能隐藏互相包含关系。
+  node - "$central" "${inputs[@]}" <<'NODE' || fail "macOS Hosted 输入真实路径预检失败"
+  const fs = require('node:fs'), path = require('node:path');
+  const [root, ...inputs] = process.argv.slice(2);
+  const realRoot = fs.realpathSync.native(root);
+  for (const input of inputs) {
+    if (fs.realpathSync.native(input) !== path.join(realRoot, path.relative(root, input))) {
+      throw new Error('macOS Hosted 输入真实路径存在别名');
+    }
+  }
+NODE
+  for component in bin/cache/dart-sdk/bin/dart bin/cache/flutter_tools.snapshot \
+      bin/cache/flutter.version.json packages/flutter_tools/.dart_tool/package_config.json; do
+    path="$flutter/$component"
+    assert_readonly_dependency_directory "$(dirname "$path")" "macOS Hosted 工具文件父目录"
+    [[ -f "$path" && ! -L "$path" ]] || fail "macOS Hosted 缺少已隔离的 Flutter 工具：$component"
+  done
+  [[ -x "$flutter/bin/cache/dart-sdk/bin/dart" ]] || fail "macOS Hosted Dart 不可执行"
+  [[ -n "$tool_path" && "$tool_path" != :* && "$tool_path" != *: && "$tool_path" != *::* ]] \
+    || fail "macOS Hosted 工具 PATH 不得包含空项"
+  local -a components
+  IFS=: read -r -a components <<<"$tool_path"
+  for path in "${components[@]}"; do
+    assert_readonly_dependency_directory "$path" "macOS Hosted 工具 PATH"
+    case "$work_dir/macOS/" in "$path/"*) fail "macOS Hosted 工具 PATH 不得包含消费输出" ;; esac
+    case "$path/" in "$work_dir/macOS/"*) fail "macOS Hosted 工具 PATH 不得来自消费输出" ;; esac
+  done
+  [[ -x /usr/bin/sandbox-exec ]] || fail "macOS Hosted 缺少系统 sandbox-exec"
+}
+
+build_macos_flutter_consumer() (
+  macos_hosted_preflight "$@"
+  local candidate="$1" audit="$2" hosted="$3" flutter_root="$4" cache_root="$5" tool_path="$6"
+  local root="$work_dir/macOS" package="$work_dir/macOS/package" runner="$work_dir/macOS/consumer"
+  local dart_bin="$flutter_root/bin/cache/dart-sdk/bin/dart" node_bin path framework bundle executable
+  local source_uuid installed_uuid
+  node_bin="$(command -v node)"
+  [[ -n "$node_bin" && "$node_bin" == /* && -x "$node_bin" ]] || fail "macOS Hosted 缺少既有 Node"
+  [[ ! -e "$root" && ! -L "$root" ]] || fail "macOS Hosted 工作目录已存在，拒绝混入旧状态"
+  umask 077
+  for path in "$root" "$root/tmp" "$root/logs" "$root/config" "$root/cache" \
+      "$root/pods" "$root/pods/cache" "$root/pods/repos" "$root/module-cache" \
+      "$root/tool-state" "$root/runtime" "$root/runtime/tmp"; do
+    prepare_safe_directory "$work_dir" "$path" "macOS Hosted 独占目录"
+    chmod 0700 "$path"
+  done
+
+  # 监督器只把显式工具配置传给子进程，不传 HOME、发布令牌、Git 配置或 DYLD 注入。
+  # 每个工具独立进程组；退出、超时和中断都等待整组消失，失败不删除工作目录。
+  "$node_bin" - "$root" "$flutter_root" "$cache_root" "$tool_path" <<'NODE'
+const fs = require('fs'), path = require('path'), url = require('url');
+const [root, flutter, cache, tools] = process.argv.slice(2);
+const packageConfig = path.join(flutter, 'packages/flutter_tools/.dart_tool/package_config.json');
+const inside = (parent, child) => child === parent || child.startsWith(parent + path.sep);
+for (const entry of JSON.parse(fs.readFileSync(packageConfig, 'utf8')).packages) {
+  const uri = new URL(entry.rootUri, url.pathToFileURL(packageConfig));
+  if (uri.protocol !== 'file:') throw Error('Flutter tools package is not local');
+  const actual = fs.realpathSync(url.fileURLToPath(uri));
+  if (![flutter, cache].some((parent) => inside(parent, actual))) {
+    throw Error('Flutter tools package config escapes isolated tool/cache inputs');
+  }
+}
+const config = {
+  PATH: tools, FLUTTER_ROOT: flutter, PUB_CACHE: cache,
+  TMPDIR: path.join(root, 'tmp'), XDG_CONFIG_HOME: path.join(root, 'config'),
+  XDG_CACHE_HOME: path.join(root, 'cache'), CP_HOME_DIR: path.join(root, 'pods'),
+  CP_CACHE_DIR: path.join(root, 'pods/cache'), CP_REPOS_DIR: path.join(root, 'pods/repos'),
+  CLANG_MODULE_CACHE_PATH: path.join(root, 'module-cache'),
+  SWIFTPM_MODULECACHE_OVERRIDE: path.join(root, 'module-cache'),
+  CFFIXED_USER_HOME: path.join(root, 'tool-state'),
+  COCOAPODS_DISABLE_STATS: 'true', FLUTTER_SUPPRESS_ANALYTICS: 'true',
+  DASH__SUPPRESS_ANALYTICS: 'true', LANG: 'en_US.UTF-8', LC_ALL: 'en_US.UTF-8',
+};
+// Xcode 工具选择不是凭据；只保留调用方显式选择的既有工具目录。
+if (process.env.DEVELOPER_DIR) config.DEVELOPER_DIR = process.env.DEVELOPER_DIR;
+fs.writeFileSync(path.join(root, 'environment.json'), JSON.stringify(config), { flag: 'wx', mode: 0o600 });
+// macOS 不允许重复安装 sandbox；每个工具由监督器单独隔离，消费者使用其更严格的运行策略。
+// 离线构建工具只可写本轮宿主、Flutter 和 Pub 副本，Git 元数据始终只读。
+const user = require('os').homedir();
+const quote = (value) => JSON.stringify(value);
+const policy = '(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n' +
+  [root, flutter, cache].map((value) => `(allow file-write* (subpath ${quote(value)}))\n`).join('') +
+  '(allow file-write* (literal "/dev/null"))\n' +
+  `(deny file-write* (subpath ${quote(path.join(flutter, '.git'))}))\n` +
+  ['Library/Application Support/citizensdk', 'Library/Keychains', 'Library/Application Support/dart',
+   '.config/dart', '.pub-cache', '.gitconfig', '.git-credentials', '.config/git',
+   'GMB/.git', 'TATA/.git', 'TUYU/.git', 'flutter/.git']
+    .map((value) => `(deny file-read* (subpath ${quote(path.join(user, value))}))\n`).join('');
+fs.writeFileSync(path.join(root, 'tool.sb'), policy, { flag: 'wx', mode: 0o600 });
+NODE
+  prepare_safe_output_file "$work_dir" "$root/run.mjs" "macOS Hosted 工具监督器"
+  cat >"$root/run.mjs" <<'NODE'
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+const [root, label, seconds, cwd, command, ...args] = process.argv.slice(2);
+if (!/^[a-z-]+$/.test(label) || !/^\d+$/.test(seconds)) throw Error('Invalid supervised command');
+const env = JSON.parse(fs.readFileSync(path.join(root, 'environment.json'), 'utf8'));
+if (label === 'consumer') {
+  env.CFFIXED_USER_HOME = path.join(root, 'runtime');
+  env.TMPDIR = path.join(root, 'runtime/tmp');
+}
+const stdout = fs.openSync(path.join(root, 'logs', `${label}.stdout`), 'wx', 0o600);
+const stderr = fs.openSync(path.join(root, 'logs', `${label}.stderr`), 'wx', 0o600);
+let failed = false, exited = false, child;
+const alive = () => {
+  if (!child?.pid) return false;
+  try { process.kill(-child.pid, 0); return true; }
+  catch (error) { if (error.code === 'ESRCH') return false; throw error; }
+};
+const signal = (value) => { if (alive()) process.kill(-child.pid, value); };
+let killing;
+const stop = () => {
+  failed = true;
+  signal('SIGTERM');
+  killing ??= setTimeout(() => signal('SIGKILL'), 2000);
+};
+process.on('SIGTERM', stop);
+process.on('SIGINT', stop);
+// consumer 参数已经指定 runtime.sb，不能再次嵌套；其它工具统一套用只写中央副本的策略。
+const executable = label === 'consumer' ? command : '/usr/bin/sandbox-exec';
+const argumentsList = label === 'consumer' ? args : ['-f', path.join(root, 'tool.sb'), command, ...args];
+child = spawn(executable, argumentsList, { cwd, env, detached: true, stdio: ['ignore', stdout, stderr] });
+const timeout = setTimeout(stop, Number(seconds) * 1000);
+const result = await new Promise((resolve) => {
+  child.once('error', () => { failed = true; resolve(1); });
+  child.once('exit', (code, received) => { exited = true; resolve(received ? 1 : code ?? 1); });
+});
+clearTimeout(timeout);
+if (alive()) stop();
+const deadline = Date.now() + 12000;
+while (alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+if (killing) clearTimeout(killing);
+fs.closeSync(stdout); fs.closeSync(stderr);
+if (alive() || !exited || failed || result !== 0) {
+  process.stderr.write(`CitizenSDK macOS ${label} failed; logs and state retained\n`);
+  process.exitCode = 1;
+}
+NODE
+  macos_command() {
+    "$node_bin" "$root/run.mjs" "$root" "$@"
+  }
+  macos_command verify 180 "$root" "$node_bin" "$script_dir/release.mjs" \
+    --verify-hosted "$candidate" --archive "$audit" --hosted-archive "$hosted" --output "$package"
+  [[ -d "$package" && ! -L "$package" ]] || fail "macOS Hosted 未得到验真运行包"
+  # 重新验真的 Hosted 普通目录就是唯一安装输入；不得修复成原审计包五条链接。
+  local -a flutter=("$dart_bin" "--packages=$flutter_root/packages/flutter_tools/.dart_tool/package_config.json"
+    "$flutter_root/bin/cache/flutter_tools.snapshot" --no-version-check --suppress-analytics)
+  macos_command create 180 "$root" "${flutter[@]}" create --offline --no-pub --platforms=macos \
+    --project-name=citizensdk_consumer --org=org.citizen "$runner"
+  "$node_bin" - "$runner" "$package" "$root" "$candidate" <<'NODE'
+const fs = require('fs'), path = require('path');
+const [runner, source, root, candidate] = process.argv.slice(2);
+const pubspec = fs.readFileSync(path.join(source, 'pubspec.yaml'), 'utf8');
+const version = /^version: ([0-9]+\.[0-9]+\.[0-9]+)$/m.exec(pubspec)?.[1];
+if (!version) throw Error('Hosted SDK version is not unique');
+fs.writeFileSync(path.join(runner, 'pubspec.yaml'), `name: citizensdk_consumer\npublish_to: none\nversion: ${version}\nenvironment:\n  sdk: ">=3.8.0 <4.0.0"\ndependencies:\n  flutter:\n    sdk: flutter\n  citizen_sdk:\n    path: ../package\nflutter:\n  uses-material-design: true\n`);
+// 测试夹具也来自已验真的审计候选，不能用当前工作区未验真的代码替换验收合同。
+fs.copyFileSync(path.join(candidate, 'darwin/Tests/citizen_sdk_flutter_consumer.dart'), path.join(runner, 'lib/main.dart'));
+// 只修改临时宿主最低系统与架构，不改变 SDK 或 Flutter 官方插件注册装配。
+const project = path.join(runner, 'macos/Runner.xcodeproj/project.pbxproj');
+let text = fs.readFileSync(project, 'utf8');
+if (!text.includes('MACOSX_DEPLOYMENT_TARGET = ')) throw Error('Official macOS deployment setting is missing');
+text = text.replace(/MACOSX_DEPLOYMENT_TARGET = [0-9.]+;/g, 'MACOSX_DEPLOYMENT_TARGET = 13.0;\n\t\t\t\tARCHS = arm64;');
+fs.writeFileSync(project, text);
+const window = path.join(runner, 'macos/Runner/MainFlutterWindow.swift');
+text = fs.readFileSync(window, 'utf8');
+const start = '  override func awakeFromNib() {';
+if (text.split(start).length !== 2 || text.split('RegisterGeneratedPlugins(registry: flutterViewController)').length !== 2) {
+  throw Error('Official macOS Flutter registration template changed');
+}
+const expected = path.join(root, 'runtime/Library/Application Support/citizensdk/v1');
+const preflight = `
+    // 先验证 Foundation 实际路径；此时尚未创建 Flutter engine 或注册 SDK。
+    guard let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+      fputs("CitizenSDK Foundation isolation failed\\n", stderr); exit(78)
+    }
+    let state = support.appendingPathComponent("citizensdk/v1", isDirectory: true).standardizedFileURL
+    guard state.path == ${JSON.stringify(expected)}, state.resolvingSymlinksInPath().path == state.path else {
+      fputs("CitizenSDK Foundation isolation failed\\n", stderr); exit(78)
+    }
+    // 动态加载来源只能是最终 app 内的同版框架，禁止 DYLD 外部注入。
+    let expectedFramework = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks/CitizenSDK.framework").resolvingSymlinksInPath().path + "/"
+    var frameworkCount = 0
+    for index in 0..<_dyld_image_count() {
+      guard let name = _dyld_get_image_name(index) else { continue }
+      let image = String(cString: name)
+      if image.contains("CitizenSDK.framework/") {
+        guard URL(fileURLWithPath: image).resolvingSymlinksInPath().path.hasPrefix(expectedFramework) else {
+          fputs("CitizenSDK framework origin failed\\n", stderr); exit(79)
+        }
+        frameworkCount += 1
+      }
+    }
+    guard frameworkCount == 1 else { fputs("CitizenSDK framework origin failed\\n", stderr); exit(79) }
+    print("CitizenSDK Foundation isolation passed")
+    fflush(stdout)
+`;
+fs.writeFileSync(window, text.replace('import Cocoa', 'import Cocoa\nimport MachO').replace(start, start + preflight));
+// sandbox 是运行必须条件，不靠 CFFIXED_USER_HOME 名称推断隔离。它禁止任何工作区外写入，
+// 并禁止用户 SDK/Keychain 状态读取。Foundation 仍需在 app 内独立完成精确路径检查。
+const os = require('os');
+const user = os.homedir();
+const quote = (value) => JSON.stringify(value);
+fs.writeFileSync(path.join(root, 'runtime.sb'), `(version 1)\n(allow default)\n(deny network*)\n(deny file-write*)\n(allow file-write* (subpath ${quote(root)}))\n` +
+  ['Library/Application Support/citizensdk', 'Library/Keychains', '.config/dart'].map((name) =>
+    `(deny file-read* (subpath ${quote(path.join(user, name))}))\n`).join(''), { flag: 'wx', mode: 0o600 });
+NODE
+  macos_command pub 180 "$runner" "${flutter[@]}" pub get --offline
+  "$node_bin" - "$runner" "$package" "$flutter_root" "$cache_root" <<'NODE'
+const fs = require('fs'), path = require('path'), url = require('url');
+const [runner, source, flutter, cache] = process.argv.slice(2);
+const configPath = path.join(runner, '.dart_tool/package_config.json');
+const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const inside = (parent, child) => child === parent || child.startsWith(parent + path.sep);
+let sdkCount = 0;
+for (const entry of config.packages) {
+  const uri = new URL(entry.rootUri, url.pathToFileURL(configPath));
+  if (uri.protocol !== 'file:') throw Error('Consumer package is not local');
+  const actual = fs.realpathSync(url.fileURLToPath(uri));
+  if (![runner, source, flutter, cache].some((parent) => inside(parent, actual))) {
+    throw Error('Consumer package config escapes isolated installed inputs');
+  }
+  if (entry.name === 'citizen_sdk') {
+    if (actual !== source) throw Error('Consumer does not depend on verified Hosted package');
+    sdkCount += 1;
+  }
+}
+if (sdkCount !== 1) throw Error('Consumer CitizenSDK package is not unique');
+const plugins = JSON.parse(fs.readFileSync(path.join(runner, '.flutter-plugins-dependencies'), 'utf8'));
+const entries = plugins.plugins?.macos?.filter((entry) => entry.name === 'citizen_sdk') ?? [];
+// APFS 可保留与调用方不同的路径大小写；同版来源按实际目录身份判断，不改中央目录命名。
+const sameDirectory = (left, right) => {
+  const actual = fs.statSync(left), expected = fs.statSync(right);
+  return actual.isDirectory() && expected.isDirectory() && actual.dev === expected.dev && actual.ino === expected.ino;
+};
+if (entries.length !== 1 || !sameDirectory(entries[0].path, source)) {
+  throw Error('Official macOS plugin discovery did not select the verified Hosted package');
+}
+const registrant = fs.readFileSync(path.join(runner, 'macos/Flutter/GeneratedPluginRegistrant.swift'), 'utf8');
+if (registrant.split('import citizen_sdk').length !== 2 || registrant.split('CitizenSdkPlugin.register(').length !== 2) {
+  throw Error('Official macOS CitizenSDK plugin registration is not unique');
+}
+NODE
+  # 保持 Flutter 默认 SwiftPM/CocoaPods 选择；不切换全局设置、不重写 podspec。
+  macos_command build 900 "$runner" "${flutter[@]}" build macos --release --no-pub
+  bundle="$runner/build/macos/Build/Products/Release/citizensdk_consumer.app"
+  executable="$bundle/Contents/MacOS/citizensdk_consumer"
+  [[ -x "$executable" ]] || fail "macOS Hosted 缺少最终 Release app"
+  framework="$(resolve_xcframework_framework_slice \
+    "$package/darwin/CitizenSDK.xcframework" CitizenSDK macos '')"
+  [[ -f "$framework/Versions/A/CitizenSDK" ]] || fail "macOS Hosted 缺少已验真的 macOS framework"
+  # Apple 签名会更改文件尾部签名区；比较原生 UUID、架构和资产，不误用全文件摘要。
+  macos_command source-uuid 30 "$root" /usr/bin/xcrun dwarfdump --uuid "$framework/Versions/A/CitizenSDK"
+  macos_command installed-uuid 30 "$root" /usr/bin/xcrun dwarfdump --uuid "$bundle/Contents/Frameworks/CitizenSDK.framework/Versions/A/CitizenSDK"
+  source_uuid="$(awk '{print $2, $3}' "$root/logs/source-uuid.stdout")"
+  installed_uuid="$(awk '{print $2, $3}' "$root/logs/installed-uuid.stdout")"
+  [[ "$source_uuid" == "$installed_uuid" && "$source_uuid" == *' (arm64)' && "$source_uuid" != *$'\n'* ]] \
+    || fail "macOS Hosted 已安装 Core UUID 或架构漂移"
+  for path in manifest.json chainspec.json light_sync_state.json; do
+    cmp -s "$package/assets/citizenchain/$path" \
+      "$bundle/Contents/Frameworks/App.framework/Resources/flutter_assets/packages/citizen_sdk/assets/citizenchain/$path" \
+      || fail "macOS Hosted Flutter 安装链资产漂移：$path"
+    cmp -s "$package/assets/citizenchain/$path" \
+      "$bundle/Contents/Frameworks/CitizenSDK.framework/Resources/citizenchain/$path" \
+      || fail "macOS Hosted 原生安装链资产漂移：$path"
+  done
+  macos_command consumer 200 "$root" /usr/bin/sandbox-exec -f "$root/runtime.sb" "$executable"
+  [[ "$(grep -Fxc 'CitizenSDK Foundation isolation passed' "$root/logs/consumer.stdout" || true)" == 1 ]] \
+    || fail "macOS Hosted 缺少唯一 Foundation 隔离预检成功标记"
+  [[ "$(grep -Fxc 'CitizenSDK Flutter consumer passed' "$root/logs/consumer.stdout" || true)" == 1 ]] \
+    || fail "macOS Hosted 缺少唯一公开消费者成功标记"
+  echo "CitizenSDK macOS Hosted 安装消费通过"
+)
 
 compile_apple_flutter_adapter() {
   local apple_sdk="$1" swift_target="$2" slice_name="$3" platform="$4"
@@ -1779,20 +2288,374 @@ linux_platform_contract() {
   printf '%s|%s\n' "$rust_target" "$expected_arch"
 }
 
-build_linux() {
+verify_linux_ctest_inventory() {
+  local ctest_bin="$1" directory="$2" label="$3" expected="$4" inventory count
+  local variable names actual
+  case "$label:$expected" in
+    LinuxHost:12) variable=CITIZENSDK_LINUX_CONTRACT_TESTS ;;
+    LinuxFlutter:6) variable=CITIZENSDK_LINUX_FLUTTER_CONTRACT_TESTS ;;
+    LinuxConsumer:2) variable='' ;;
+    *) fail "未登记的 Linux CTest 闭集：$label/$expected" ;;
+  esac
+  if [[ -n "$variable" ]]; then
+    names="$(CITIZENSDK_CTEST_LIST="$variable" perl -0777 -ne '
+      my $name = $ENV{CITIZENSDK_CTEST_LIST};
+      my @lists = /set\(\Q$name\E\s+([^)]*)\)/g;
+      die "CTest source list must be unique\n" unless @lists == 1;
+      my @names = grep { length } split /\s+/, $lists[0];
+      for (@names) { die "Invalid CTest source name\n" unless /^citizen_sdk_[a-z0-9_]+_test$/; }
+      print join("\n", map { "CitizenSDK.Linux.$_" } @names), "\n";
+      exit;
+    ' "$linux_source_root/test/CMakeLists.txt")" \
+      || fail "无法读取 $label 唯一源码测试名单"
+  else
+    names=$'CitizenSDK.Linux.CConsumer\nCitizenSDK.Linux.CppConsumer'
+  fi
+  [[ "$(printf '%s\n' "$names" | wc -l | tr -d ' ')" == "$expected" \
+      && "$(printf '%s\n' "$names" | LC_ALL=C sort | uniq -d)" == '' ]] \
+    || fail "$label 源码测试名单数量或唯一性漂移"
+  inventory="$("$ctest_bin" --test-dir "$directory" -N -L "^$label$" 2>&1)" \
+    || fail "无法枚举 $label CTest 合同"
+  count="$(printf '%s\n' "$inventory" | sed -n 's/^Total Tests: \([0-9][0-9]*\)$/\1/p')"
+  [[ "$count" == "$expected" ]] \
+    || fail "$label CTest 数量必须为 ${expected}；实际=${count:-无}"
+  actual="$(printf '%s\n' "$inventory" \
+    | sed -n 's/^[[:space:]]*Test[[:space:]]*#[0-9][0-9]*:[[:space:]]*//p' \
+    | LC_ALL=C sort)"
+  [[ "$actual" == "$(printf '%s\n' "$names" | LC_ALL=C sort)" ]] \
+    || fail "$label CTest 名称闭集不一致；拒绝替换、重复或遗漏"
+}
+
+verify_linux_runtime_resolution() {
+  local executable="$1" runtime_dir="$2" resolution library resolved
+  resolution="$(LC_ALL=C ldd "$executable" 2>&1)" \
+    || fail "无法解析 Linux 消费者的真实动态运行依赖"
+  ! printf '%s\n' "$resolution" | grep -Fq 'not found' \
+    || fail "Linux 消费者存在未解析的动态依赖"
+  for library in libcitizensdk.so libcitizensdk_host.so; do
+    resolved="$(printf '%s\n' "$resolution" | awk -v name="$library" '$1 == name && $2 == "=>" { print $3 }')"
+    [[ "$resolved" == "$runtime_dir/$library" ]] \
+      || fail "Linux 消费者没有解析到本轮唯一的 $library"
+  done
+}
+
+verify_linux_tool_tree() {
+  local root="$1" label="$2" entry target resolved
+  assert_readonly_dependency_directory "$root" "$label"
+  [[ -z "$(find "$root" ! -type f ! -type d ! -type l -print -quit)" ]] \
+    || fail "$label 禁止特殊文件"
+  [[ -z "$(find "$root" -type f -name .git -print -quit)" ]] \
+    || fail "$label 禁止指向外部 worktree 的 .git 文件"
+  while IFS= read -r -d '' entry; do
+    target="$(readlink "$entry")" || fail "$label 无法读取符号链接"
+    [[ "$target" != /* ]] || fail "$label 禁止绝对符号链接"
+    resolved="$(realpath -e "$entry")" || fail "$label 禁止悬空符号链接"
+    case "$resolved/" in "$root/"*) ;; *) fail "$label 符号链接越界" ;; esac
+  done < <(find "$root" -type l -print0)
+}
+
+verify_linux_flutter_cache() {
+  local root="$1" platform="$2" arch revision name expected path
+  case "$platform" in LinuxARM) arch=arm64 ;; LinuxAMD) arch=x64 ;; *) fail "未登记的 Linux 平台：$platform" ;; esac
+  verify_linux_tool_tree "$root" "$platform Flutter SDK"
+  [[ -d "$root/.git" && ! -L "$root/.git" ]] || fail "Flutter SDK 必须是预装的完整普通目录"
+  for path in bin/cache/flutter_tools.snapshot bin/cache/flutter_tools.stamp \
+      bin/cache/flutter.version.json bin/cache/engine.stamp bin/internal/engine.version \
+      packages/flutter_tools/pubspec.yaml packages/flutter_tools/pubspec.lock \
+      bin/cache/dart-sdk/bin/dart \
+      bin/cache/pkg/sky_engine/pubspec.yaml bin/cache/pkg/flutter_gpu/pubspec.yaml \
+      bin/cache/artifacts/engine/common/flutter_patched_sdk/platform_strong.dill \
+      bin/cache/artifacts/engine/common/flutter_patched_sdk_product/platform_strong.dill \
+      "bin/cache/artifacts/engine/linux-$arch/font-subset" \
+      "bin/cache/artifacts/engine/linux-$arch/icudtl.dat" \
+      "bin/cache/artifacts/engine/linux-$arch-release/gen_snapshot"; do
+    [[ -f "$root/$path" && ! -L "$root/$path" && -s "$root/$path" ]] \
+      || fail "$platform 缺少已缓存 Flutter 文件：${path}；禁止自动下载"
+  done
+  revision="$(<"$root/bin/cache/engine.stamp")"
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || fail "Flutter engine.stamp 格式无效"
+  [[ "$(<"$root/bin/internal/engine.version")" == "$revision" ]] \
+    || fail "$platform Flutter 源码 engine.version 与已有缓存不同；禁止自动升级"
+  for name in flutter_sdk linux-sdk font-subset; do
+    [[ -f "$root/bin/cache/$name.stamp" && ! -L "$root/bin/cache/$name.stamp" \
+        && "$(<"$root/bin/cache/$name.stamp")" == "$revision" ]] \
+      || fail "$platform Flutter $name 缓存版本不完整；禁止自动更新"
+  done
+  for name in material_fonts gradle_wrapper; do
+    [[ -f "$root/bin/internal/$name.version" && -f "$root/bin/cache/$name.stamp" ]] \
+      || fail "$platform Flutter $name 缓存未预装"
+    expected="$(<"$root/bin/internal/$name.version")"
+    [[ "$(<"$root/bin/cache/$name.stamp")" == "$expected" \
+        && -d "$root/bin/cache/artifacts/$name" ]] \
+      || fail "$platform Flutter $name 缓存版本不完整"
+  done
+  # 官方 LinuxEngineArtifacts 会同时检查三个目录；即使这里只构建 Release，
+  # 也不能留缺项诱使 Flutter build 自动取得其它运行件。ICU 是无 mode 的
+  # 通用 host artifact（上面已核验），不要求 profile/release 各自含一份。
+  for name in "linux-$arch" "linux-$arch-profile" "linux-$arch-release"; do
+    for path in libflutter_linux_gtk.so flutter_linux/flutter_linux.h gen_snapshot; do
+      [[ -f "$root/bin/cache/artifacts/engine/$name/$path" \
+          && ! -L "$root/bin/cache/artifacts/engine/$name/$path" ]] \
+        || fail "$platform Flutter $name/$path 缓存缺失"
+    done
+  done
+  perl -MJSON::PP -e '
+    use strict; use warnings;
+    my ($root, $engine) = @ARGV;
+    open my $input, "<", "$root/bin/cache/flutter.version.json" or die "Flutter version missing\n";
+    local $/; my $version = decode_json(<$input>);
+    die "Flutter engine revision mismatch\n" unless $version->{engineRevision} eq $engine;
+    die "Flutter framework revision invalid\n" unless $version->{frameworkRevision} =~ /^[0-9a-f]{40}$/;
+    open my $stamp, "<", "$root/bin/cache/flutter_tools.stamp" or die "Flutter tools stamp missing\n";
+    my $value = <$stamp>; $value =~ s/\s+\z//;
+    die "Flutter snapshot version mismatch\n" unless $value eq "$version->{frameworkRevision}:";
+  ' "$root" "$revision" || fail "$platform Flutter snapshot/版本身份不一致"
+}
+
+verify_linux_flutter_elf() {
+  local platform="$1" bundle="$2" prefix="$3" readelf_bin="$4" nm_bin="$5"
+  local machine plugin needed symbols rpath runpath library
+  case "$platform" in LinuxARM) machine=AArch64 ;; LinuxAMD) machine='Advanced Micro Devices X86-64' ;; *) fail "未登记的 Linux 平台：$platform" ;; esac
+  [[ -d "$bundle" && ! -L "$bundle" ]] || fail "$platform Flutter bundle 缺失"
+  [[ -z "$(find "$bundle" ! -type d ! -type f -print -quit)" ]] \
+    || fail "$platform Flutter bundle 禁止符号链接或特殊节点"
+  for library in libcitizensdk.so libcitizensdk_host.so; do
+    cmp -s "$prefix/lib/$platform/$library" "$bundle/lib/$library" \
+      || fail "$platform Flutter bundle 的 $library 不是同版安装运行件"
+  done
+  verify_linux_elf_identity "$platform" "$bundle/lib/libcitizensdk.so" \
+    "$bundle/lib/libcitizensdk_host.so" "$readelf_bin" "$nm_bin"
+  plugin="$bundle/lib/libcitizen_sdk_plugin.so"
+  for library in "$bundle/citizensdk_consumer" "$plugin" "$bundle/lib/libflutter_linux_gtk.so" "$bundle/lib/libapp.so"; do
+    [[ -f "$library" && ! -L "$library" ]] || fail "$platform Flutter bundle 运行闭包不完整"
+    verify_linux_machine "$library" "$readelf_bin" "$machine" "$platform Flutter $(basename "$library")"
+    # Flutter engine 是官方运行件，不能把它的 C++ ABI 误称 SDK 自身静态闭包。
+    if [[ "$library" == "$bundle/lib/libflutter_linux_gtk.so" ]]; then
+      verify_linux_glibc_contract "$library" "$readelf_bin" "$platform Flutter engine" true
+    else
+      verify_linux_glibc_contract "$library" "$readelf_bin" "$platform Flutter $(basename "$library")"
+    fi
+    needed="$(linux_elf_dynamic_values "$library" "$readelf_bin" NEEDED)"
+    [[ "$needed" != */* ]] || fail "$platform Flutter DT_NEEDED 禁止构建路径"
+  done
+  symbols="$(product_library_symbols "$plugin" "$nm_bin" '')"
+  [[ "$symbols" == citizen_sdk_plugin_register_with_registrar ]] \
+    || fail "$platform Flutter plugin 只能导出官方注册入口，不得复制 Core/Host"
+  needed="$(linux_elf_dynamic_values "$plugin" "$readelf_bin" NEEDED)"
+  for library in libcitizensdk.so libcitizensdk_host.so libflutter_linux_gtk.so; do
+    [[ "$(printf '%s\n' "$needed" | grep -Fxc "$library" || true)" == 1 ]] \
+      || fail "$platform Flutter plugin 必须精确依赖一次 $library"
+  done
+  if printf '%s\n' "$needed" | grep -Eq '^(libsmoldot|libstdc\+\+|libgcc_s|libsqlite3|libtss2-|libcrypto|libssl)'; then
+    fail "$platform Flutter plugin 泄漏禁止的动态依赖"
+  fi
+  rpath="$(linux_elf_dynamic_values "$plugin" "$readelf_bin" RPATH)"
+  runpath="$(linux_elf_dynamic_values "$plugin" "$readelf_bin" RUNPATH)"
+  [[ -z "$rpath" && "$runpath" == '$ORIGIN' ]] || fail "$platform Flutter plugin RUNPATH 必须精确为 \$ORIGIN"
+  rpath="$(linux_elf_dynamic_values "$bundle/citizensdk_consumer" "$readelf_bin" RPATH)"
+  runpath="$(linux_elf_dynamic_values "$bundle/citizensdk_consumer" "$readelf_bin" RUNPATH)"
+  [[ -z "$rpath" && "$runpath" == '$ORIGIN/lib' ]] || fail "$platform Flutter runner RUNPATH 必须精确为 \$ORIGIN/lib"
+  for library in manifest.json chainspec.json light_sync_state.json; do
+    cmp -s "$prefix/share/citizensdk/citizenchain/$library" \
+      "$bundle/data/flutter_assets/packages/citizen_sdk/assets/citizenchain/$library" \
+      || fail "$platform Flutter bundle 链资产漂移：$library"
+  done
+}
+
+build_linux_flutter_consumer() (
+  local platform="$1" platform_work="$2" prefix="$3" cmake_bin="$4" ctest_bin="$5"
+  local readelf_bin="$6" nm_bin="$7" flutter_source="${CITIZENSDK_FLUTTER_ROOT:-}"
+  local cache_source="${PUB_CACHE:-}" root tool_root cache_root sdk_stage runner dart_bin
+  local arch flutter_build bundle path output status unshare_bin
+  case "$platform" in LinuxARM) arch=arm64 ;; LinuxAMD) arch=x64 ;; *) fail "未登记的 Linux 平台：$platform" ;; esac
+  for path in ninja clang clang++ unshare timeout realpath perl; do
+    command -v "$path" >/dev/null 2>&1 || fail "$platform Flutter 验收缺少已预装工具：$path"
+  done
+  # Flutter/Dart 的部分设置与 telemetry 仍会直接访问现有 HOME，不遵循
+  # XDG。只接受调用环境已隔离好的 HOME；本脚本绝不设置 HOME、创建用户
+  # 或挂载文件系统。未满足时，在任何 Dart/Flutter 命令执行前失败关闭。
+  [[ -n "${HOME:-}" ]] || fail "$platform 未提供获准的隔离 HOME 环境"
+  assert_safe_directory_path "$HOME" "$platform 已有工具 HOME"
+  case "$HOME/" in "$work_dir/"*) ;; *) fail "$platform 已有 HOME 必须位于本轮中央 work_dir；请提供获准隔离环境" ;; esac
+  [[ -d "$HOME" && ! -L "$HOME" \
+      && "$(stat -c '%a' "$HOME")" == 700 \
+      && "$(stat -c '%u' "$HOME")" == "$(id -u)" ]] \
+    || fail "$platform 已有 HOME 必须是当前用户所有的普通 0700 目录"
+  verify_linux_tool_tree "$HOME" "$platform 已有工具 HOME"
+  [[ ! -e "$HOME/.flutter_settings" && ! -L "$HOME/.flutter_settings" ]] \
+    || fail "$platform 隔离 HOME 不得带入旧 Flutter 设置或 build-dir 重定向"
+  unshare_bin="$(command -v unshare)"
+  # 无特权隔离只覆盖工具装配；不可用即失败，绝不 sudo、安装、改网络或创建 VM。
+  "$unshare_bin" --user --map-root-user --net true \
+    || fail "$platform 缺少获准的无特权 user/network namespace；禁止联网取得工具"
+  verify_linux_flutter_cache "$flutter_source" "$platform"
+  verify_linux_tool_tree "$cache_source" "$platform PUB_CACHE"
+  [[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]] || fail "$platform 真实 Flutter 消费者需要已获准的 GTK 显示会话"
+  root="$platform_work/flutter"
+  tool_root="$root/tools"
+  cache_root="$root/pub-cache"
+  sdk_stage="$root/citizen_sdk"
+  runner="$root/consumer"
+  for path in "$flutter_source" "$cache_source" "$sdk_dir"; do
+    case "$root/" in "$path/"*) fail "$platform 工具或源码不能包含本轮副本目标" ;; esac
+    case "$path/" in "$root/"*) fail "$platform 工具或源码不能位于本轮副本目标内" ;; esac
+  done
+  for path in "$root" "$tool_root" "$cache_root" "$sdk_stage" "$runner" \
+      "$root/tmp" "$root/config" "$root/cache" "$root/data" "$root/state" "$root/test-state"; do
+    prepare_safe_directory "$work_dir" "$path" "$platform Flutter 独占目录"
+    chmod 0700 "$path"
+  done
+  # 仅复制调用方显式提供的工具/缓存，全部锁、package_config 与构建记录留本轮中央根。
+  cp -a "$flutter_source/." "$tool_root/"
+  cp -a "$cache_source/." "$cache_root/"
+  cp -a "$sdk_dir/." "$sdk_stage/"
+  chmod 0700 "$tool_root" "$cache_root" "$sdk_stage"
+  verify_linux_tool_tree "$tool_root" "$platform Flutter 工具副本"
+  verify_linux_tool_tree "$cache_root" "$platform PUB_CACHE 副本"
+  [[ -z "$(find "$sdk_stage" -type l -print -quit)" ]] || fail "$platform SDK 验收副本禁止符号链接"
+  # 候选消费者与发布包使用完全相同的 linux/ 安装前缀；本机构建只注入
+  # 当前平台，双平台共有文件的原子合并由唯一 release 打包器负责。
+  copy_linux_install "$prefix" "$sdk_stage/linux" "$platform" "$work_dir"
+  export FLUTTER_ROOT="$tool_root" PUB_CACHE="$cache_root"
+  export XDG_CONFIG_HOME="$root/config" XDG_CACHE_HOME="$root/cache"
+  export XDG_DATA_HOME="$root/data" XDG_STATE_HOME="$root/state" TMPDIR="$root/tmp"
+  export FLUTTER_SUPPRESS_ANALYTICS=true
+  # 不继承可把日志、引擎或 pub 路由到外部的工具覆盖项；缓存缺失只能失败。
+  unset FLUTTER_TOOL_ARGS FLUTTER_ANALYTICS_LOG_FILE FLUTTER_STORAGE_BASE_URL \
+    PUB_HOSTED_URL DART_VM_OPTIONS DART_VM_FLAGS FLUTTER_ENGINE FLUTTER_ENGINE_SRC_PATH
+  dart_bin="$tool_root/bin/cache/dart-sdk/bin/dart"
+  # 外层直接消费已核验 snapshot。官方 CMake 后端仍会调用副本 bin/flutter
+  # 执行 assemble；不改写该官方链路，靠完整缓存预检与整个工具子进程禁网
+  # 拒绝缺项升级。--offline 仅用于官方确实支持的 pub/create 命令。
+  (cd "$tool_root/packages/flutter_tools" && \
+    "$unshare_bin" --user --map-root-user --net "$dart_bin" pub get --offline)
+  local package_config="$tool_root/packages/flutter_tools/.dart_tool/package_config.json"
+  if grep -F -e "$flutter_source/" -e "$cache_source/" "$package_config" >/dev/null; then
+    fail "$platform Flutter 工具配置仍引用原工具或缓存"
+  fi
+  local -a flutter=("$unshare_bin" --user --map-root-user --net "$dart_bin"
+    "--packages=$package_config" "$tool_root/bin/cache/flutter_tools.snapshot"
+    --no-version-check --suppress-analytics)
+  "${flutter[@]}" create --offline --no-pub --platforms=linux \
+    --project-name=citizensdk_consumer --org=org.citizen "$runner"
+  printf '%s\n' 'name: citizensdk_consumer' 'publish_to: none' 'version: 1.0.0' \
+    'environment:' '  sdk: ">=3.8.0 <4.0.0"' 'dependencies:' '  flutter:' \
+    '    sdk: flutter' '  citizen_sdk:' '    path: ../citizen_sdk' \
+    'flutter:' '  uses-material-design: true' >"$runner/pubspec.yaml"
+  cp "$sdk_dir/pubspec.lock" "$runner/pubspec.lock"
+  cp "$linux_source_root/test/citizen_sdk_flutter_consumer.dart" "$runner/lib/main.dart"
+  # 只改生成的 runner CMake 装配。保留官方 generated registrant 和自动插件发现；
+  # 父级 enable_testing 让六个 adapter 合同能被顶层 CTest 实际枚举到。
+  for path in "$root/test-state"; do
+    case "$path" in *'"'*|*';'*|*'$'*|*'\'*|*$'\n'*|*$'\r'*) fail "Flutter CMake 路径含不允许的语法字符" ;; esac
+  done
+  CITIZENSDK_ADAPTER_TEST_ROOT="$root/test-state" \
+    perl -0777 -i -pe '
+      # 官方模板沿用 Dart project name 中的下划线，但 Host application_id
+      # 的既有安全合同只允许字母数字与分隔点；只修验证 runner 的公开身份。
+      s/^set\(APPLICATION_ID "org\.citizen\.citizensdk_consumer"\)$/set(APPLICATION_ID "org.citizensdk.flutterconsumer")/m == 1
+        or die "Unexpected official runner application identity\n";
+      my $settings = "set(CITIZENSDK_BUILD_TESTS ON)\n" .
+        "set(CITIZENSDK_TEST_WORK_DIR \"$ENV{CITIZENSDK_ADAPTER_TEST_ROOT}\")\n" .
+        "enable_testing()\n";
+      s/^include\(flutter\/generated_plugins.cmake\)/$settings . $&/me == 1
+        or die "Missing official generated plugins include\n";
+      $_ .= "\ntarget_link_options(\${BINARY_NAME} PRIVATE -static-libstdc++ -static-libgcc)\n";
+    ' "$runner/linux/CMakeLists.txt"
+  (cd "$runner" && "${flutter[@]}" pub get --offline && \
+    "${flutter[@]}" build linux --release --no-pub --target-platform="linux-$arch")
+  flutter_build="$runner/build/linux/$arch/release"
+  bundle="$flutter_build/bundle"
+  verify_linux_ctest_inventory "$ctest_bin" "$flutter_build" LinuxFlutter 6
+  LD_LIBRARY_PATH="$sdk_stage/linux/lib/$platform:$runner/linux/flutter/ephemeral" \
+    "$ctest_bin" --test-dir "$flutter_build" --build-config Release \
+      -L '^LinuxFlutter$' --no-tests=error --output-on-failure
+  verify_linux_flutter_elf "$platform" "$bundle" "$sdk_stage/linux" "$readelf_bin" "$nm_bin"
+  verify_linux_runtime_resolution "$bundle/citizensdk_consumer" "$bundle/lib"
+  # 不使用 flutter run 的“已启动”退出状态代替消费者结果；只运行最终bundle。
+  output="$root/consumer.stdout"
+  prepare_safe_output_file "$work_dir" "$output" "$platform Flutter 消费者输出"
+  prepare_safe_output_file "$work_dir" "$root/consumer.stderr" "$platform Flutter 消费者错误输出"
+  status=0
+  FLUTTER_LINUX_RENDERER=software timeout --signal=TERM --kill-after=10s 200s \
+    "$bundle/citizensdk_consumer" >"$output" 2>"$root/consumer.stderr" || status=$?
+  [[ "$status" == 0 ]] || fail "$platform Flutter 消费者失败或超时；退出码=$status"
+  [[ "$(grep -Fxc 'CitizenSDK Flutter consumer passed' "$output" || true)" == 1 ]] \
+    || fail "$platform Flutter 消费者缺少唯一成功标记"
+)
+
+
+# 唯一中央准备收据是这些静态环境输入的共同来源；不得逐个指向不同安装树。
+load_native_dependencies() {
+  local platform="$1" receipt="${CITIZENSDK_DEPENDENCY_RECEIPT:-}" source="$sdk_dir"
+  local values key value supplied
+  [[ -n "$receipt" ]] || fail "$platform 缺少 CITIZENSDK_DEPENDENCY_RECEIPT"
+  if [[ "$platform" == Windows ]]; then
+    receipt="$(cygpath -m "$receipt")"; source="$(cygpath -m "$source")"
+  fi
+  values="$(MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$source" "$receipt" "$platform" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
+import {readFileSync} from 'node:fs';
+const [source,receipt,platform]=process.argv.slice(2);
+const {resolve}=await import('node:path');
+// Git Bash 的 C:/ 与 Node 的 C:\\ 是同一官方路径；进入严格路径验证前规范化一次。
+const canonicalReceipt=resolve(receipt);
+const api=await import(pathToFileURL(join(source,'scripts/release.mjs')));
+const inputs=api.assertCitizenSdkDependencyInputs(canonicalReceipt,platform);
+if(inputs.source_sha!==process.env.GMB_SOURCE_SHA) throw Error('dependency source SHA mismatch');
+if(!readFileSync(join(source,'pubspec.yaml'),'utf8').includes('\nversion: '+inputs.software_version+'\n'))
+  throw Error('dependency software version mismatch');
+for(const [key,value] of Object.entries(api.citizenSdkDependencyEnvironment(canonicalReceipt,platform))) {
+  if(/[\r\n=]/.test(value)) throw Error('unsafe dependency path');
+  process.stdout.write(key+'='+value+'\n');
+}
+NODE
+)" || fail "$platform 静态依赖收据验证失败"
+  while IFS='=' read -r key value; do
+    [[ -n "$key" ]] || continue
+    if [[ "$platform" == Windows ]]; then value="$(cygpath -u "$value")"; fi
+    supplied="${!key:-}"
+    [[ -z "$supplied" || "$supplied" == "$value" ]] || fail "$platform 禁止混用其他静态输入：$key"
+    export "$key=$value"
+  done <<<"$values"
+}
+
+record_native_dependencies() {
+  local platform="$1" receipt="$CITIZENSDK_DEPENDENCY_RECEIPT" source="$sdk_dir" native="$output_dir"
+  if [[ "$platform" == Windows ]]; then
+    receipt="$(cygpath -m "$receipt")"; source="$(cygpath -m "$source")"; native="$(cygpath -m "$native")"
+  fi
+  MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$source" "$receipt" "$platform" "$native" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
+const [sourcePath,receiptPath,platform,nativePath]=process.argv.slice(2);
+const {writeCitizenSdkDependencyEvidence}=await import(pathToFileURL(join(sourcePath,'scripts/release.mjs')));
+const {resolve}=await import('node:path');
+writeCitizenSdkDependencyEvidence({sourcePath:resolve(sourcePath),receiptPath:resolve(receiptPath),platform,
+  nativePath:resolve(nativePath),sourceSha:process.env.GMB_SOURCE_SHA});
+NODE
+}
+
+
+build_linux() (
   local platform="$1" contract rust_target expected_arch cmake_bin ctest_bin
-  local nm_bin readelf_bin strip_bin cmake_build runtime_stage source_core built_host
+  local nm_bin readelf_bin strip_bin cmake_build runtime_stage source_core
   local destination core_destination host_destination linux_platform_work
-  local linux_test_work
+  local linux_test_work install_prefix consumer_build software_version loader_variable
   local sqlite_include openssl_include tss2_include
   local sqlite_archive crypto_archive tss2_esys_archive tss2_mu_archive
   local tss2_sys_archive tss2_rc_archive tss2_tcti_device_archive
   contract="$(linux_platform_contract "$platform")"
   IFS='|' read -r rust_target expected_arch <<<"$contract"
+  # 只影响 Linux 子进程：新状态统一 0700，且动态加载器不能被调用方环境
+  # 指向另一套 Core/Host。Android/Apple 的既有流程和环境保持原样。
+  umask 077
+  for loader_variable in ${!LD_@}; do unset "$loader_variable"; done
   require_rust_target "$rust_target"
   [[ -d "$linux_source_root" && ! -L "$linux_source_root" ]] \
     || fail "CitizenSDK 缺少普通 Linux 平台源码目录"
-  for tool in cmake ctest; do
+  for tool in cmake ctest ldd; do
     command -v "$tool" >/dev/null 2>&1 || fail "$platform 缺少 $tool"
   done
   cmake_bin="$(command -v cmake)"
@@ -1802,8 +2665,12 @@ build_linux() {
   strip_bin="$(command -v llvm-strip || command -v strip || true)"
   [[ -n "$nm_bin" && -n "$readelf_bin" && -n "$strip_bin" ]] \
     || fail "$platform 缺少 llvm-nm/nm、llvm-readelf/readelf 或 llvm-strip/strip"
+  software_version="$(sed -n 's/^version: \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$sdk_dir/pubspec.yaml")"
+  [[ "$software_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || fail "$platform SDK 版本必须是唯一正式三段版本"
 
   # Linux Host 只能链接 CI/Release 预先锁定并放在源码树外的静态依赖。
+  load_native_dependencies "$platform"
   # 禁止 CMake 从宿主动态库或源码目录临时下载另一份 SQLite、crypto 或 TPM2-TSS。
   sqlite_include="${CITIZENSDK_HOST_SQLITE_INCLUDE_DIR:-}"
   openssl_include="${CITIZENSDK_HOST_OPENSSL_INCLUDE_DIR:-}"
@@ -1837,23 +2704,28 @@ build_linux() {
   cmake_build="$linux_platform_work/cmake"
   runtime_stage="$linux_platform_work/runtime"
   linux_test_work="$linux_platform_work/test-state"
-  destination="$output_dir/$platform"
+  install_prefix="$linux_platform_work/install"
+  consumer_build="$linux_platform_work/consumers"
+  destination="$output_dir/linux/$platform"
+  [[ ! -e "$destination" && ! -L "$destination" ]] \
+    || fail "$platform 原生安装输出必须全新：$destination"
   prepare_safe_directory "$work_dir" "$cmake_build" "$platform CMake 目录"
   prepare_safe_directory "$work_dir" "$runtime_stage" "$platform 运行件暂存目录"
   prepare_safe_directory "$work_dir" "$linux_test_work" "$platform 测试状态目录"
+  prepare_safe_directory "$work_dir" "$install_prefix" "$platform 安装验证前缀"
+  prepare_safe_directory "$work_dir" "$consumer_build" "$platform 安装后消费者构建目录"
   # Linux Host 测试只可在当前平台任务独占的中央目录落盘；0700 是
   # CITIZENSDK_TEST_WORK_DIR 的公开前置条件，不能依赖 runner 的 umask。
   chmod 0700 "$linux_test_work"
   [[ "$(stat -c '%a' "$linux_test_work")" == 700 ]] \
     || fail "$platform 测试状态目录权限必须精确为 0700：$linux_test_work"
   core_destination="$runtime_stage/libcitizensdk.so"
-  host_destination="$runtime_stage/libcitizensdk_host.so"
   prepare_safe_output_file "$work_dir" "$core_destination" "$platform Core 暂存"
 
   # 机器 target triple 是类型化工具链字段，不得提升为公开平台名或输出目录名。
   CARGO_PROFILE_RELEASE_STRIP=false \
   RUSTFLAGS='-C link-arg=-Wl,-soname,libcitizensdk.so -C link-arg=-static-libgcc' \
-    cargo build --manifest-path "$product_ffi_manifest" --release --locked \
+    cargo build --manifest-path "$product_ffi_manifest" --release --locked --offline \
       --target "$rust_target"
   source_core="$CARGO_TARGET_DIR/$rust_target/release/libcitizensdk.so"
   [[ -f "$source_core" && ! -L "$source_core" ]] \
@@ -1865,6 +2737,9 @@ build_linux() {
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER="${CC:-cc}" \
     -DCMAKE_CXX_COMPILER="${CXX:-c++}" \
+    -DCMAKE_INSTALL_PREFIX="$install_prefix" \
+    -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_INCLUDEDIR=include \
+    -DCMAKE_INSTALL_DATADIR=share -DCMAKE_INSTALL_BINDIR=bin \
     -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$runtime_stage" \
     -DCITIZENSDK_PLATFORM="$platform" \
     -DCITIZENSDK_CORE_LIBRARY="$core_destination" \
@@ -1885,29 +2760,44 @@ build_linux() {
     -DCITIZENSDK_ENABLE_WALLET_UI=ON \
     -DCITIZENSDK_WARNINGS_AS_ERRORS=ON
   "$cmake_bin" --build "$cmake_build" --config Release --parallel
+  verify_linux_ctest_inventory "$ctest_bin" "$cmake_build" LinuxHost 12
   LD_LIBRARY_PATH="$runtime_stage" \
     "$ctest_bin" --test-dir "$cmake_build" --build-config Release \
-      --output-on-failure
-  built_host="$runtime_stage/libcitizensdk_host.so"
-  [[ -f "$built_host" && ! -L "$built_host" ]] \
-    || fail "$platform CMake 未生成普通 libcitizensdk_host.so"
-  # CMake 已直接写入受控 runtime_stage；目标与暂存路径相同时不复制。
-  if [[ "$built_host" != "$host_destination" ]]; then
-    cp "$built_host" "$host_destination"
-  fi
+      -L '^LinuxHost$' --no-tests=error --output-on-failure
+  # CMake install 完成后才验 RUNPATH：build-tree 仍可含链接期路径，不能
+  # 用它冒充已安装运行件。19 项是本步技术投影，不宣称已完成分发许可证闭包。
+  "$cmake_bin" --install "$cmake_build" --config Release --prefix "$install_prefix"
+  host_destination="$install_prefix/lib/$platform/libcitizensdk_host.so"
+  [[ -f "$host_destination" && ! -L "$host_destination" ]] \
+    || fail "$platform CMake 未安装普通 libcitizensdk_host.so"
   "$strip_bin" --strip-unneeded "$host_destination"
-  verify_linux_elf_identity "$platform" "$core_destination" \
-    "$host_destination" "$readelf_bin" "$nm_bin"
-  destination="$output_dir/$platform"
-  prepare_safe_directory "$output_dir" "$destination" "$platform 输出目录"
-  prepare_safe_output_file "$output_dir" "$destination/libcitizensdk.so" \
-    "$platform Core 输出"
-  prepare_safe_output_file "$output_dir" "$destination/libcitizensdk_host.so" \
-    "$platform Host 输出"
-  cp "$core_destination" "$destination/libcitizensdk.so"
-  cp "$host_destination" "$destination/libcitizensdk_host.so"
-  echo "CitizenSDK $platform 双运行件完成：$destination"
-}
+  verify_linux_install "$install_prefix" "$platform" "$software_version" \
+    "$core_destination" "$readelf_bin" "$nm_bin"
+
+  # 原生消费者只有安装前缀，没有源码 Core/Host target 或私有头入口。
+  "$cmake_bin" -S "$linux_source_root/test" -B "$consumer_build" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER="${CC:-cc}" -DCMAKE_CXX_COMPILER="${CXX:-c++}" \
+    -DCITIZENSDK_CONSUMER_PREFIX="$install_prefix" \
+    -DCITIZENSDK_PLATFORM="$platform" \
+    -DCITIZENSDK_CONSUMER_VERSION="$software_version" \
+    -DCITIZENSDK_TEST_WORK_DIR="$linux_test_work"
+  "$cmake_bin" --build "$consumer_build" --config Release --parallel \
+    --target citizen_sdk_c_consumer citizen_sdk_cpp_consumer
+  verify_linux_runtime_resolution "$consumer_build/citizen_sdk_c_consumer" "$install_prefix/lib/$platform"
+  verify_linux_runtime_resolution "$consumer_build/citizen_sdk_cpp_consumer" "$install_prefix/lib/$platform"
+  verify_linux_ctest_inventory "$ctest_bin" "$consumer_build" LinuxConsumer 2
+  "$ctest_bin" --test-dir "$consumer_build" --build-config Release \
+    -L '^LinuxConsumer$' --no-tests=error --output-on-failure
+  build_linux_flutter_consumer "$platform" "$linux_platform_work" "$install_prefix" \
+    "$cmake_bin" "$ctest_bin" "$readelf_bin" "$nm_bin"
+  # 所有消费者通过后才导出完整安装前缀，不能把裸双库当作可用的 SDK 输入。
+  copy_linux_install "$install_prefix" "$destination" "$platform" "$output_dir"
+  verify_linux_install "$destination" "$platform" "$software_version" \
+    "$core_destination" "$readelf_bin" "$nm_bin"
+  record_native_dependencies "$platform"
+  echo "CitizenSDK $platform 安装、原生与 Flutter 消费者验证完成：$destination"
+)
 
 build_host() {
   [[ "$(uname -s)" == "Darwin" ]] || fail "当前宿主测试库只允许在 macOS runner 构建"
@@ -1930,6 +2820,746 @@ build_host() {
   symbols="$(symbol_list_ios "$destination" "$nm_bin")"
   verify_symbol_contract "$symbols" "_" "macOS 宿主测试库"
   echo "CitizenSDK macOS 宿主测试库完成：$destination"
+}
+
+windows_install_files() {
+  printf '%s\n' \
+    include/citizensdk.h include/citizensdk_types.h \
+    include/citizen_sdk/citizen_sdk.hpp \
+    include/citizen_sdk/citizen_sdk_config.hpp \
+    include/citizen_sdk/citizen_sdk_error.hpp \
+    include/citizen_sdk/citizen_sdk_events.hpp \
+    include/citizen_sdk/citizen_sdk_models.hpp \
+    include/citizen_sdk/citizen_sdk_wallet_flow.hpp \
+    include/citizen_sdk/citizensdk_host.h \
+    bin/Windows/citizensdk.dll bin/Windows/citizensdk_host.dll \
+    lib/Windows/citizensdk.dll.lib lib/Windows/citizensdk_host.lib \
+    lib/Windows/cmake/CitizenSDK/CitizenSDKConfig.cmake \
+    lib/Windows/cmake/CitizenSDK/CitizenSDKConfigVersion.cmake \
+    lib/Windows/cmake/CitizenSDK/CitizenSDKDependencies.cmake \
+    lib/Windows/cmake/CitizenSDK/CitizenSDKTargets.cmake \
+    lib/Windows/cmake/CitizenSDK/CitizenSDKTargets-release.cmake \
+    share/citizensdk/citizenchain/manifest.json \
+    share/citizensdk/citizenchain/chainspec.json \
+    share/citizensdk/citizenchain/light_sync_state.json | LC_ALL=C sort
+}
+
+verify_windows_install() {
+  local prefix="$1" software_version="$2" core_dir="$3" cmake_build="$4" expected
+  assert_safe_directory_path "$prefix" "Windows 安装前缀"
+  [[ -d "$prefix" && ! -L "$prefix" ]] || fail "Windows 安装前缀不是普通目录"
+  expected="$(windows_install_files)"
+  # 安装清单不是信任来源：实际文件/目录反向闭集、当前源码和本轮构建原件
+  # 三者必须同时相符。验证不执行安装中的 CMake，随后独立消费者检查完整导入目标。
+  MSYS2_ARG_CONV_EXCL='*' node -e '
+    const fs=require("fs"), p=require("path");
+    const [prefix,version,core,build,sdk,windows,assets,listing]=process.argv.slice(1);
+    const expected=listing.split("\n");
+    if(expected.length!==21 || new Set(expected).size!==21) throw Error("Windows install set must contain 21 files");
+    const identity=x=>process.platform==="win32"?p.resolve(x).toLowerCase():p.resolve(x);
+    function ordinary(path,directory) {
+      const root=p.parse(path).root;
+      if(!root || path.includes("\0")) throw Error("invalid installation source path");
+      let current=root;
+      for(const part of p.relative(root,path).split(p.sep)) {
+        if(!part || part==="." || part==="..") throw Error("unsafe installation source component");
+        current=p.join(current,part);
+        const st=fs.lstatSync(current);
+        if(st.isSymbolicLink() || identity(fs.realpathSync(current))!==identity(current)) throw Error("installation reparse or alias");
+        if(identity(current)!==identity(path) && !st.isDirectory()) throw Error("installation ancestor is not a directory");
+      }
+      const st=fs.lstatSync(path);
+      if(directory?!st.isDirectory():(!st.isFile() || st.size===0 || st.nlink!==1)) throw Error("invalid installation node");
+    }
+    ordinary(prefix,true);
+    const actual=[], directories=[];
+    function walk(directory,relative="") {
+      for(const name of fs.readdirSync(directory)) {
+        const path=p.join(directory,name), key=relative?relative+"/"+name:name;
+        const st=fs.lstatSync(path);
+        if(st.isSymbolicLink() || identity(fs.realpathSync(path))!==identity(path)) throw Error("installation reparse or alias");
+        if(st.isDirectory()) { directories.push(key); walk(path,key); }
+        else if(st.isFile() && st.nlink===1 && st.size>0) actual.push(key);
+        else throw Error("installation contains a special, empty or linked file");
+      }
+    }
+    walk(prefix);
+    const expectedDirectories=new Set();
+    for(const file of expected) {
+      const parts=file.split("/");
+      while(parts.length>1) { parts.pop(); expectedDirectories.add(parts.join("/")); }
+    }
+    const equal=(a,b)=>JSON.stringify(a.slice().sort())===JSON.stringify(b.slice().sort());
+    if(!equal(actual,expected) || !equal(directories,[...expectedDirectories])) throw Error("Windows installed file/directory closure drift");
+    const manifestPath=p.join(build,"install_manifest.txt"); ordinary(manifestPath,false);
+    const manifest=fs.readFileSync(manifestPath,"utf8").replace(/\r?\n$/,"").split(/\r?\n/);
+    if(manifest.some(x=>!p.isAbsolute(x) || /(^|[\\/])\.{1,2}([\\/]|$)/.test(x))) throw Error("invalid install_manifest path");
+    const installed=expected.map(x=>identity(p.join(prefix,...x.split("/"))));
+    if(!equal(manifest.map(identity),installed)) throw Error("install_manifest does not match complete Windows installation");
+    function same(source,relative) {
+      const destination=p.join(prefix,...relative.split("/"));
+      ordinary(source,false); ordinary(destination,false);
+      if(!fs.readFileSync(source).equals(fs.readFileSync(destination))) throw Error("Windows installed bytes differ: "+relative);
+    }
+    for(const name of ["citizensdk.h","citizensdk_types.h"]) same(p.join(sdk,"include",name),"include/"+name);
+    for(const name of ["citizen_sdk.hpp","citizen_sdk_config.hpp","citizen_sdk_error.hpp","citizen_sdk_events.hpp","citizen_sdk_models.hpp","citizen_sdk_wallet_flow.hpp","citizensdk_host.h"])
+      same(p.join(windows,"include","citizen_sdk",name),"include/citizen_sdk/"+name);
+    for(const name of ["manifest.json","chainspec.json","light_sync_state.json"])
+      same(p.join(assets,name),"share/citizensdk/citizenchain/"+name);
+    same(p.join(core,"citizensdk.dll"),"bin/Windows/citizensdk.dll");
+    same(p.join(core,"citizensdk.dll.lib"),"lib/Windows/citizensdk.dll.lib");
+    same(p.join(build,"Release","citizensdk_host.dll"),"bin/Windows/citizensdk_host.dll");
+    same(p.join(build,"Release","citizensdk_host.lib"),"lib/Windows/citizensdk_host.lib");
+    const packageDir="lib/Windows/cmake/CitizenSDK/";
+    for(const name of ["CitizenSDKConfig.cmake","CitizenSDKConfigVersion.cmake"]) same(p.join(build,name),packageDir+name);
+    same(p.join(windows,"cmake","CitizenSDKDependencies.cmake"),packageDir+"CitizenSDKDependencies.cmake");
+    const exportRoot=p.join(build,"CMakeFiles","Export"), exports=[];
+    ordinary(exportRoot,true);
+    function collect(directory) {
+      for(const name of fs.readdirSync(directory)) {
+        const file=p.join(directory,name), st=fs.lstatSync(file);
+        if(st.isSymbolicLink()) throw Error("generated CMake export is linked");
+        if(st.isDirectory()) collect(file);
+        else if(name==="CitizenSDKTargets.cmake" || name==="CitizenSDKTargets-release.cmake") exports.push(file);
+      }
+    }
+    collect(exportRoot);
+    for(const name of ["CitizenSDKTargets.cmake","CitizenSDKTargets-release.cmake"]) {
+      const matches=exports.filter(x=>p.basename(x)===name);
+      if(matches.length!==1) throw Error("generated CMake export is missing or ambiguous");
+      same(matches[0],packageDir+name);
+    }
+    if(!/^[0-9]+\.[0-9]+\.[0-9]+$/.test(version)) throw Error("invalid SDK version");
+    const pubspec=fs.readFileSync(p.join(sdk,"pubspec.yaml"),"utf8");
+    const versions=[...pubspec.matchAll(/^version: ([0-9]+\.[0-9]+\.[0-9]+)$/gm)].map(x=>x[1]);
+    const project=[...fs.readFileSync(p.join(windows,"CMakeLists.txt"),"utf8").matchAll(/^project\(CitizenSDKHost VERSION ([0-9]+\.[0-9]+\.[0-9]+) LANGUAGES C CXX\)$/gm)].map(x=>x[1]);
+    if(JSON.stringify(versions)!==JSON.stringify([version]) || JSON.stringify(project)!==JSON.stringify([version])) throw Error("SDK source version drift");
+    const versionTemplate=fs.readFileSync(p.join(windows,"cmake","CitizenSDKConfigVersion.cmake.in"),"utf8")
+      .replaceAll("@PROJECT_VERSION@",version).replaceAll("@PROJECT_VERSION_MAJOR@",version.split(".")[0]);
+    const installedVersion=fs.readFileSync(p.join(prefix,...(packageDir+"CitizenSDKConfigVersion.cmake").split("/")),"utf8");
+    if(installedVersion!==versionTemplate) throw Error("installed CMake version template drift");
+    for(const name of ["CitizenSDKConfig.cmake","CitizenSDKConfigVersion.cmake","CitizenSDKDependencies.cmake","CitizenSDKTargets.cmake","CitizenSDKTargets-release.cmake"]) {
+      const content=fs.readFileSync(p.join(prefix,...(packageDir+name).split("/")),"utf8");
+      if([sdk,build,prefix,core].some(x=>content.includes(x) || content.includes(x.replaceAll("\\","/")))) throw Error("installed CMake leaks an absolute build path");
+    }
+  ' "$(cygpath -m "$prefix")" "$software_version" "$(cygpath -m "$core_dir")" \
+    "$(cygpath -m "$cmake_build")" "$(cygpath -m "$sdk_dir")" \
+    "$(cygpath -m "$windows_source_root")" "$(cygpath -m "$apple_asset_root")" "$expected" \
+    || fail "Windows 安装闭集、清单、版本或来源字节验证失败"
+  verify_windows_exports "$prefix/bin/Windows/citizensdk.dll" "$product_header" Core
+  verify_windows_exports "$prefix/bin/Windows/citizensdk_host.dll" \
+    "$windows_source_root/include/citizen_sdk/citizensdk_host.h" Host
+}
+
+verify_windows_consumer_inventory() {
+  local build="$1" prefix="$2" state="$3" inventory
+  inventory="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
+    -C Release --show-only=json-v1)" || fail "Windows 消费者 CTest 清单读取失败"
+  MSYS2_ARG_CONV_EXCL='*' node -e '
+    const fs=require("fs"), p=require("path");
+    const [text,build,prefix,state]=process.argv.slice(1), data=JSON.parse(text);
+    const expected=[
+      ["CitizenSDK.Windows.CConsumer","citizen_sdk_c_consumer.exe"],
+      ["CitizenSDK.Windows.CppConsumer","citizen_sdk_cpp_consumer.exe"]
+    ];
+    if(!Array.isArray(data.tests) || data.tests.length!==2) throw Error("Windows consumer test count drift");
+    const names=data.tests.map(x=>x.name).sort();
+    if(JSON.stringify(names)!==JSON.stringify(expected.map(x=>x[0]))) throw Error("Windows consumer exact test set drift");
+    const identity=x=>process.platform==="win32"?p.resolve(x).toLowerCase():p.resolve(x);
+    const runtime=p.join(build,"Release"), assets=p.join(prefix,"share","citizensdk","citizenchain");
+    function ordinaryFile(path) {
+      let current=p.parse(path).root;
+      for(const part of p.relative(current,path).split(p.sep)) {
+        current=p.join(current,part);
+        const st=fs.lstatSync(current);
+        if(st.isSymbolicLink() || identity(fs.realpathSync(current))!==identity(current)) throw Error("Windows consumer reparse or alias");
+        if(identity(current)!==identity(path) && !st.isDirectory()) throw Error("Windows consumer ancestor is not a directory");
+      }
+      const st=fs.lstatSync(path);
+      if(!st.isFile() || st.size===0 || st.nlink!==1) throw Error("Windows consumer file is unavailable");
+    }
+    for(const [name,executable] of expected) {
+      const test=data.tests.find(x=>x.name===name), args=[p.join(runtime,executable),state,assets,runtime];
+      if(!Array.isArray(test.command) || test.command.length!==4 || test.command.some((x,i)=>typeof x!=="string" || identity(x)!==identity(args[i]))) throw Error("Windows consumer command drift");
+      const props=test.properties||[];
+      if(new Set(props.map(x=>x.name)).size!==props.length) throw Error("duplicate CTest property");
+      const property=name=>props.find(x=>x.name===name)?.value;
+      if(property("TIMEOUT")!==180 || property("RUN_SERIAL")!==true) throw Error("Windows consumer timeout or serialization drift");
+      // PASS_REGULAR_EXPRESSION 会忽略非零退出码；不允许任何跳过/反转成功的属性。
+      if(props.some(x=>/^(PASS_REGULAR_EXPRESSION|SKIP_REGULAR_EXPRESSION|SKIP_RETURN_CODE|WILL_FAIL|DISABLED)$/.test(x.name))) throw Error("Windows consumer exit contract override");
+      ordinaryFile(args[0]);
+    }
+    for(const name of ["citizensdk.dll","citizensdk_host.dll"]) {
+      const actual=p.join(runtime,name), expected=p.join(prefix,"bin","Windows",name);
+      ordinaryFile(actual); ordinaryFile(expected);
+      if(!fs.readFileSync(actual).equals(fs.readFileSync(expected))) throw Error("Windows consumer DLL bytes drift");
+    }
+  ' "$inventory" "$(cygpath -m "$build")" "$(cygpath -m "$prefix")" "$(cygpath -m "$state")" \
+    || fail "Windows 消费者必须是准确两个真实程序及同版运行库"
+}
+
+run_windows_consumers() {
+  local build="$1" prefix="$2" state="$3" output
+  verify_windows_consumer_inventory "$build" "$prefix" "$state"
+  # 同时检查 CTest 真实退出码和两个程序各自唯一成功行，不能用标记掩盖失败。
+  output="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
+    -C Release --no-tests=error --verbose 2>&1)" || {
+      printf '%s\n' "$output" >&2
+      fail "Windows 已安装消费者运行失败"
+    }
+  printf '%s\n' "$output"
+  MSYS2_ARG_CONV_EXCL='*' node -e '
+    const lines=process.argv[1].split(/\r?\n/);
+    for(const marker of ["CitizenSDK C consumer passed","CitizenSDK C++ consumer passed"]) {
+      if(lines.filter(x=>/^\d+: /.test(x) && x.replace(/^\d+: /,"")===marker).length!==1) throw Error("Windows consumer success marker missing or repeated");
+    }
+  ' "$output" || fail "Windows 已安装消费者成功标记不完整"
+}
+
+export_windows_install() {
+  local prefix="$1" destination="$2"
+  assert_descendant_path "$work_dir" "$prefix" "Windows 已验证安装来源"
+  assert_descendant_path "$output_dir" "$destination" "Windows 安装导出"
+  assert_safe_directory_path "$prefix" "Windows 已验证安装来源"
+  assert_safe_directory_path "$(dirname "$destination")" "Windows 安装导出父目录"
+  [[ -d "$prefix" && ! -L "$prefix" ]] || fail "Windows 已验证安装来源不是普通目录"
+  [[ ! -e "$destination" && ! -L "$destination" ]] || fail "Windows 安装导出目标已存在，保留已有产物"
+  # 所有安装/消费者检查成功后才同卷重命名；跨卷失败，不退回复制半份目录，
+  # 不删除旧产物、不清理永久容器，也不覆盖已存在或被替换为 reparse point 的目标。
+  MSYS2_ARG_CONV_EXCL='*' node -e '
+    const fs=require("fs"), p=require("path");
+    const [source,target]=process.argv.slice(1);
+    const identity=x=>process.platform==="win32"?p.resolve(x).toLowerCase():p.resolve(x);
+    for(const directory of [source,p.dirname(target)]) {
+      const st=fs.lstatSync(directory);
+      if(!st.isDirectory() || st.isSymbolicLink() || identity(fs.realpathSync(directory))!==identity(directory)) throw Error("Windows export directory identity drift");
+    }
+    try { fs.lstatSync(target); throw Error("Windows export already exists"); }
+    catch(error) { if(error.code!=="ENOENT") throw error; }
+    fs.renameSync(source,target);
+  ' "$(cygpath -m "$prefix")" "$(cygpath -m "$destination")" \
+    || fail "Windows 已验证安装同卷导出失败，禁止覆盖或跨卷复制"
+}
+
+verify_windows_flutter_cache() {
+  local root="$1" cache="$2"
+  assert_readonly_dependency_directory "$root" "Windows Flutter SDK"
+  assert_readonly_dependency_directory "$cache" "Windows Pub cache"
+  # 官方 WindowsEngineArtifacts 同时登记 debug/profile/release；缺项只能失败，
+  # 不能让后续 build 自动取得运行件。ICU 属于无 mode 的通用目录。
+  MSYS2_ARG_CONV_EXCL='*' node - "$(cygpath -m "$root")" "$(cygpath -m "$cache")" <<'NODE'
+const fs = require('fs'), path = require('path');
+const [root, cache] = process.argv.slice(2);
+function ordinaryTree(directory) {
+  const st = fs.lstatSync(directory);
+  if (!st.isDirectory() || st.isSymbolicLink()
+      || path.resolve(fs.realpathSync(directory)).toLowerCase() !== path.resolve(directory).toLowerCase()) throw Error('Windows tool directory is redirected');
+  for (const item of fs.readdirSync(directory, {withFileTypes:true})) {
+    const value = path.join(directory, item.name), state = fs.lstatSync(value);
+    if (state.isSymbolicLink() || (!state.isFile() && !state.isDirectory())) throw Error('Windows tool tree contains a link or special node');
+    if (state.isDirectory()) ordinaryTree(value);
+  }
+}
+ordinaryTree(root);
+for (const name of ['hosted', 'hosted-hashes']) ordinaryTree(path.join(cache, name));
+function file(name, read = false) {
+  const value = path.join(root, name), st = fs.lstatSync(value);
+  if (!st.isFile() || st.isSymbolicLink() || st.size === 0) throw Error('Windows Flutter cache is incomplete: ' + name);
+  return read ? fs.readFileSync(value, 'utf8').trim() : undefined;
+}
+if (!fs.lstatSync(path.join(root, '.git')).isDirectory()
+    || fs.existsSync(path.join(root, '.git/commondir'))) throw Error('Windows Flutter SDK must be a complete ordinary installation');
+const version = JSON.parse(file('bin/cache/flutter.version.json', true));
+const revision = file('bin/cache/engine.stamp', true);
+if (!/^[0-9a-f]{40}$/.test(revision) || version.engineRevision !== revision
+    || !/^[0-9a-f]{40}$/.test(version.frameworkRevision)
+    || file('bin/internal/engine.version', true) !== revision
+    || file('bin/cache/flutter_tools.stamp', true) !== version.frameworkRevision + ':') throw Error('Windows Flutter cache identity mismatch');
+for (const name of ['flutter_sdk', 'windows-sdk', 'font-subset']) {
+  if (file('bin/cache/' + name + '.stamp', true) !== revision) throw Error('Windows Flutter artifact revision mismatch');
+}
+for (const name of ['material_fonts', 'gradle_wrapper']) {
+  if (file('bin/cache/' + name + '.stamp', true) !== file('bin/internal/' + name + '.version', true)
+      || !fs.lstatSync(path.join(root, 'bin/cache/artifacts', name)).isDirectory()) throw Error('Windows universal Flutter cache is incomplete');
+}
+for (const name of [
+  'bin/cache/flutter_tools.snapshot', 'bin/cache/dart-sdk/bin/dart.exe',
+  'packages/flutter_tools/.dart_tool/package_config.json',
+  'bin/cache/pkg/sky_engine/pubspec.yaml', 'bin/cache/pkg/flutter_gpu/pubspec.yaml',
+  'bin/cache/artifacts/engine/common/flutter_patched_sdk/platform_strong.dill',
+  'bin/cache/artifacts/engine/common/flutter_patched_sdk_product/platform_strong.dill',
+  'bin/cache/artifacts/engine/windows-x64/icudtl.dat',
+  'bin/cache/artifacts/engine/windows-x64/font-subset.exe',
+  'bin/cache/artifacts/engine/windows-x64-release/gen_snapshot.exe',
+  'bin/cache/artifacts/engine/windows-x64/cpp_client_wrapper/include/flutter/plugin_registrar_windows.h',
+]) file(name);
+for (const mode of ['', '-profile', '-release']) {
+  for (const name of ['flutter_windows.dll', 'flutter_windows.dll.exp', 'flutter_windows.dll.lib',
+    'flutter_windows.dll.pdb', 'flutter_export.h', 'flutter_messenger.h',
+    'flutter_plugin_registrar.h', 'flutter_texture_registrar.h', 'flutter_windows.h']) {
+    file('bin/cache/artifacts/engine/windows-x64' + mode + '/' + name);
+  }
+}
+NODE
+}
+
+verify_windows_flutter_inventory() {
+  local build="$1" state="$2" prefix="$3" inventory
+  inventory="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
+    -C Release --show-only=json-v1)" || fail "Windows Flutter CTest 清单读取失败"
+  MSYS2_ARG_CONV_EXCL='*' node - "$inventory" "$(cygpath -m "$build")" \
+    "$(cygpath -m "$state")" "$(cygpath -m "$prefix")" <<'NODE'
+const fs=require('fs'), path=require('path');
+const [raw, build, state, prefix]=process.argv.slice(2);
+const tests=JSON.parse(raw).tests;
+const names=['codec','environment','sessions','wallet_flow','plugin','secret_boundary']
+  .map(x=>'CitizenSDK.Windows.citizen_sdk_flutter_'+x+'_test').sort();
+if(!Array.isArray(tests) || JSON.stringify(tests.map(x=>x.name).sort())!==JSON.stringify(names)) throw Error('Windows Flutter CTest exact set drift');
+const normalize=x=>path.resolve(x).toLowerCase();
+function ordinaryFile(file) {
+  let current=path.parse(path.resolve(file)).root;
+  for(const part of path.relative(current,path.resolve(file)).split(path.sep)) {
+    current=path.join(current,part); const st=fs.lstatSync(current);
+    if(st.isSymbolicLink() || normalize(fs.realpathSync(current))!==normalize(current)) throw Error('Windows Flutter CTest path is redirected');
+    if(normalize(current)===normalize(file)) {
+      if(!st.isFile() || !st.size || st.nlink!==1) throw Error('Windows Flutter CTest input is not an ordinary single-link file');
+    } else if(!st.isDirectory()) throw Error('Windows Flutter CTest ancestor is not a directory');
+  }
+}
+for(const test of tests) {
+  const name=test.name.slice('CitizenSDK.Windows.'.length);
+  const expected=path.join(build,'plugins/citizen_sdk/test/Release',name+'.exe');
+  if(!Array.isArray(test.command) || test.command.length!==1 || normalize(test.command[0])!==normalize(expected)) throw Error('Windows Flutter CTest command drift');
+  const props=new Map();
+  for(const property of test.properties || []) {
+    if(props.has(property.name)) throw Error('Windows Flutter CTest duplicate property');
+    props.set(property.name,property.value);
+  }
+  if(props.get('TIMEOUT')!==60 || JSON.stringify(props.get('ENVIRONMENT'))!==JSON.stringify(['CITIZENSDK_TEST_WORK_DIR='+state])) throw Error('Windows Flutter CTest state/timeout drift');
+  if(!Array.isArray(props.get('LABELS')) || JSON.stringify([...props.get('LABELS')].sort())!==JSON.stringify(['CitizenSDK','Contract','WindowsFlutter'])) throw Error('Windows Flutter CTest labels drift');
+  for(const property of ['PASS_REGULAR_EXPRESSION','SKIP_REGULAR_EXPRESSION','SKIP_RETURN_CODE','WILL_FAIL','DISABLED']) {
+    if(props.has(property)) throw Error('Windows Flutter CTest cannot mask failure');
+  }
+  ordinaryFile(expected);
+  for(const name of ['citizensdk.dll','citizensdk_host.dll']) {
+    const actual=path.join(path.dirname(expected),name);
+    const source=path.join(prefix,'bin/Windows',name);
+    ordinaryFile(actual); ordinaryFile(source);
+    if(!fs.readFileSync(actual).equals(fs.readFileSync(source))) throw Error('Windows Flutter CTest runtime differs from its installation');
+  }
+}
+NODE
+}
+
+run_windows_flutter_consumer() {
+  local bundle="$1"
+  # .NET 用真实管道启动 GUI Release，并等待退出和输出排空，不使用
+  # Start-Process 的“已启动”状态。官方 AttachConsole 保留 STARTF_USESTDHANDLES
+  # 提供的重定向句柄；不改 runner main 或手动注册插件。
+  CITIZENSDK_FLUTTER_BUNDLE="$(cygpath -m "$bundle")" \
+    MSYS2_ARG_CONV_EXCL='*' pwsh -NoLogo -NoProfile -NonInteractive -Command - <<'POWERSHELL'
+$ErrorActionPreference = 'Stop'
+try {
+  if ($PSVersionTable.PSVersion.Major -lt 7 -or !$IsWindows -or
+      $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') {
+    throw 'Windows Flutter execution requires the authorized isolated runner'
+  }
+  Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
+using System.Text;
+using System.Threading;
+using Microsoft.Win32.SafeHandles;
+
+public static class CitizenSdkFlutterConsumer {
+  [DllImport("shell32.dll")] static extern int SHGetKnownFolderPath(ref Guid id, uint flags, IntPtr token, out IntPtr path);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern uint GetFileAttributesW(string path);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern SafeFileHandle CreateFileW(string path, uint access, uint share, IntPtr security, uint disposition, uint flags, IntPtr template);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool GetFileInformationByHandle(SafeFileHandle handle, out Information information);
+  [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+  static extern uint GetFinalPathNameByHandleW(SafeFileHandle handle, StringBuilder path, uint capacity, uint flags);
+  [DllImport("advapi32.dll", SetLastError=true)]
+  static extern uint GetSecurityInfo(SafeFileHandle handle, uint kind, uint flags, out IntPtr owner, out IntPtr group, out IntPtr dacl, out IntPtr sacl, out IntPtr descriptor);
+  [DllImport("advapi32.dll")] static extern uint GetSecurityDescriptorLength(IntPtr descriptor);
+  [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr value);
+  [DllImport("kernel32.dll", SetLastError=true)]
+  static extern bool SetFileInformationByHandle(SafeFileHandle handle, int kind, ref Disposition value, uint size);
+  [StructLayout(LayoutKind.Sequential)] struct Disposition { public byte Delete; }
+  [StructLayout(LayoutKind.Sequential)] struct Information {
+    public uint Attributes, CreationLow, CreationHigh, AccessLow, AccessHigh, WriteLow, WriteHigh;
+    public uint Volume, SizeHigh, SizeLow, Links, IndexHigh, IndexLow;
+  }
+  static readonly SecurityIdentifier User = CurrentUser();
+  static SecurityIdentifier CurrentUser() {
+    using (var identity = WindowsIdentity.GetCurrent()) { return identity.User; }
+  }
+  const string Application = "org.citizensdk.flutterconsumer";
+  const string Marker = "CitizenSDK Flutter consumer passed";
+  static void Require(bool value) { if (!value) throw new InvalidOperationException("Windows Flutter consumer boundary failed"); }
+  static string Full(string value) {
+    var path = Path.GetFullPath(value);
+    Require(path.Length > 3 && path[1] == ':' && !path.StartsWith(@"\\") && path.IndexOf('\0') < 0);
+    return path.TrimEnd('\\');
+  }
+  static bool Missing(string path) {
+    if (GetFileAttributesW(path) != UInt32.MaxValue) return false;
+    var error = Marshal.GetLastWin32Error();
+    Require(error == 2 || error == 3);
+    return true;
+  }
+  static void Private(SafeFileHandle handle) {
+    IntPtr owner, group, dacl, sacl, descriptor;
+    Require(GetSecurityInfo(handle, 1, 5, out owner, out group, out dacl, out sacl, out descriptor) == 0);
+    try {
+      var size = GetSecurityDescriptorLength(descriptor);
+      Require(size > 0 && size <= 65536);
+      var bytes = new byte[(int)size]; Marshal.Copy(descriptor, bytes, 0, bytes.Length);
+      var security = new RawSecurityDescriptor(bytes, 0);
+      Require(User != null && User.Equals(security.Owner)
+        && (security.ControlFlags & ControlFlags.DiscretionaryAclProtected) != 0
+        && security.DiscretionaryAcl != null && security.DiscretionaryAcl.Count == 1);
+      var ace = security.DiscretionaryAcl[0] as CommonAce;
+      Require(ace != null && ace.AceQualifier == AceQualifier.AccessAllowed && ace.AceFlags == AceFlags.None
+        && ace.AccessMask == 0x1f01ff && User.Equals(ace.SecurityIdentifier));
+    } finally { LocalFree(descriptor); }
+  }
+  static SafeFileHandle Open(string path, bool directory, bool remove, bool secure) {
+    // 不分享删除；每一层都保持句柄直到下层检查/清理结束，避免检查后换父目录。
+    var handle = CreateFileW(path, 0x20080u | (directory ? 1u : 0u) | (remove ? 0x10000u : 0u),
+      3, IntPtr.Zero, 3, 0x02200000, IntPtr.Zero);
+    try {
+      Require(!handle.IsInvalid);
+      Information info; Require(GetFileInformationByHandle(handle, out info));
+      Require((info.Attributes & 0x400) == 0 && ((info.Attributes & 0x10) != 0) == directory
+        && (directory || info.Links == 1));
+      var name = new StringBuilder(32768);
+      var count = GetFinalPathNameByHandleW(handle, name, (uint)name.Capacity, 0);
+      Require(count > 0 && count < name.Capacity);
+      var final = name.ToString();
+      Require(final.StartsWith(@"\\?\") && String.Equals(final.Substring(4).TrimEnd('\\'),
+        Path.GetFullPath(path).TrimEnd('\\'), StringComparison.OrdinalIgnoreCase));
+      if (secure) Private(handle);
+      return handle;
+    } catch { handle.Dispose(); throw; }
+  }
+  static string Identity(SafeFileHandle handle) {
+    Information value; Require(GetFileInformationByHandle(handle, out value));
+    return value.Volume.ToString("x8") + value.IndexHigh.ToString("x8") + value.IndexLow.ToString("x8");
+  }
+  sealed class Node : IDisposable {
+    public SafeFileHandle Handle;
+    public List<Node> Children = new List<Node>();
+    public void Dispose() { foreach (var child in Children) child.Dispose(); if (Handle != null) Handle.Dispose(); }
+    public void Delete() {
+      foreach (var child in Children) child.Delete();
+      var value = new Disposition { Delete = 1 };
+      Require(SetFileInformationByHandle(Handle, 4, ref value, 1));
+      Handle.Dispose();
+    }
+  }
+  static Node Collect(string path, int depth, ref int count) {
+    Require(depth <= 16 && ++count <= 4096);
+    var attributes = GetFileAttributesW(path); Require(attributes != UInt32.MaxValue);
+    var directory = (attributes & 0x10) != 0;
+    var node = new Node { Handle = Open(path, directory, true, true) };
+    try {
+      if (directory) foreach (var child in Directory.EnumerateFileSystemEntries(path)) node.Children.Add(Collect(child, depth + 1, ref count));
+      return node;
+    } catch { node.Dispose(); throw; }
+  }
+  public static void Run(string suppliedBundle) {
+    var bundle = Full(suppliedBundle);
+    var folder = new Guid("F1B32785-6FBA-4FCF-9D55-7B8E7F157091"); IntPtr pointer;
+    Require(SHGetKnownFolderPath(ref folder, 0, IntPtr.Zero, out pointer) == 0);
+    string data; try { data = Full(Marshal.PtrToStringUni(pointer)); } finally { Marshal.FreeCoTaskMem(pointer); }
+    var target = Path.Combine(data, Application);
+    var ancestors = new List<SafeFileHandle>(); SafeFileHandle observed = null;
+    string identity = null; bool started = false, ended = false, succeeded = false;
+    var process = new Process();
+    try {
+      var current = Path.GetPathRoot(data);
+      ancestors.Add(Open(current, true, false, false));
+      foreach (var part in data.Substring(current.Length).Split('\\')) {
+        Require(part.Length != 0 && part != "." && part != "..");
+        current = Path.Combine(current, part); ancestors.Add(Open(current, true, false, false));
+      }
+      Require(Missing(target));  // 不认领、更改或删除任何原有用户状态。
+      process.StartInfo = new ProcessStartInfo(Path.Combine(bundle, "citizensdk_consumer.exe")) {
+        WorkingDirectory = bundle, UseShellExecute = false,
+        RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
+        CreateNoWindow = true
+      };
+      Require(process.Start()); started = true; process.StandardInput.Close();
+      var stdout = process.StandardOutput.ReadToEndAsync();
+      var stderr = process.StandardError.ReadToEndAsync();
+      var loaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      var libraries = new HashSet<string>(new [] { "citizensdk.dll", "citizensdk_host.dll", "citizen_sdk_plugin.dll", "flutter_windows.dll" }, StringComparer.OrdinalIgnoreCase);
+      var clock = Stopwatch.StartNew();
+      while (!process.WaitForExit(5)) {
+        Require(clock.ElapsedMilliseconds < 180000);
+        if (observed == null && !Missing(target)) { observed = Open(target, true, false, true); identity = Identity(observed); }
+        ProcessModuleCollection modules = null;
+        try { process.Refresh(); modules = process.Modules; }
+        catch (System.ComponentModel.Win32Exception error) {
+          // 仅允许启动/退出间的暂态枚举失败；未实际看到全部 DLL 始终不能通过。
+          Require(error.NativeErrorCode == 299 || process.HasExited);
+        } catch (InvalidOperationException) { if (!process.HasExited) throw; }
+        if (modules != null) foreach (ProcessModule module in modules) if (libraries.Contains(module.ModuleName)) {
+          Require(String.Equals(Full(module.FileName), Path.Combine(bundle, module.ModuleName), StringComparison.OrdinalIgnoreCase));
+          loaded.Add(module.ModuleName);
+        }
+      }
+      ended = true;
+      Require(stdout.Wait(5000) && stderr.Wait(5000));
+      Require(process.ExitCode == 0 && loaded.SetEquals(libraries));
+      Require(stdout.Result.Split(new [] { "\r\n", "\n" }, StringSplitOptions.None).Count(line => line == Marker) == 1);
+      if (observed == null) { observed = Open(target, true, false, true); identity = Identity(observed); }
+      succeeded = true;
+    } finally {
+      try {
+        try {
+          if (started && !ended) {
+            if (!process.HasExited) process.Kill(true);
+            ended = process.WaitForExit(10000);
+          }
+        } finally {
+          // 终止/等待自身也可能失败；仍释放观察句柄，但不清理未确认退出的进程状态。
+          process.Dispose();
+          if (observed != null) observed.Dispose();
+        }
+        // 必须先确认进程退出、观察到本次私有目录身份，再整树验所有权后删除。
+        // 任意身份/ACL/reparse 不明时保留，不能把安全失败改成强制 Remove-Item。
+        if (started && ended && identity != null) {
+          int count = 0;
+          using (var owned = Collect(target, 0, ref count)) { Require(Identity(owned.Handle) == identity); owned.Delete(); }
+          Require(Missing(target));
+        } else if (started && !Missing(target)) { succeeded = false; throw new InvalidOperationException("Windows Flutter test state ownership is unproven; retained"); }
+      } finally { foreach (var handle in ancestors) handle.Dispose(); }
+    }
+    Require(succeeded);
+    Console.WriteLine(Marker);
+  }
+}
+'@
+  [CitizenSdkFlutterConsumer]::Run($env:CITIZENSDK_FLUTTER_BUNDLE)
+  exit 0
+} catch {
+  [Console]::Error.WriteLine('Windows Flutter consumer failed; unproven state is retained')
+  exit 1
+}
+POWERSHELL
+}
+
+build_windows_flutter_consumer() (
+  local build_root="$1" prefix="$2" software_version="$3"
+  local flutter_source="${CITIZENSDK_FLUTTER_ROOT:-}" cache_source="${PUB_CACHE:-}"
+  local root="$build_root/flutter" tool_root cache_root sdk_stage runner dart_bin build bundle test_state
+  [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] \
+    || fail "Windows Flutter 真实消费只允许已授权的一次性 GitHub Windows 用户环境"
+  command -v pwsh >/dev/null 2>&1 || fail "Windows Flutter 消费缺少预装 PowerShell 7"
+  MSYS2_ARG_CONV_EXCL='*' node -e '
+    const fs=require("fs"),path=require("path");
+    if(!process.env.APPDATA || !path.isAbsolute(process.env.APPDATA)) throw Error("Windows Flutter tool profile is unavailable");
+    try { fs.lstatSync(path.join(process.env.APPDATA,".flutter_settings")); throw Error("Windows Flutter settings must not redirect this build"); }
+    catch(error) { if(error.code!=="ENOENT") throw error; }
+  ' || fail "Windows Flutter 一次性用户环境带有不允许的工具配置"
+  verify_windows_flutter_cache "$flutter_source" "$cache_source"
+  tool_root="$root/tools"; cache_root="$root/pub-cache"; sdk_stage="$root/citizen_sdk"
+  runner="$root/consumer"; test_state="$root/test-state"
+  for directory in "$flutter_source" "$cache_source" "$sdk_dir"; do
+    case "$root/" in "$directory/"*) fail "Windows Flutter 输入不能包含本轮副本目标" ;; esac
+    case "$directory/" in "$root/"*) fail "Windows Flutter 输入不能来自本轮副本目标" ;; esac
+  done
+  for directory in "$root" "$tool_root" "$cache_root" "$sdk_stage" "$root/tmp"; do
+    [[ ! -e "$directory" && ! -L "$directory" ]] || fail "Windows Flutter 工作目录已存在，拒绝混用"
+    prepare_safe_directory "$work_dir" "$directory" "Windows Flutter 独占目录"
+  done
+  # 副本只含显式预装工具及 hosted 依赖；不复制 Pub 凭据、Git hooks/config。
+  # Flutter 官方 backend 仍执行其副本 assemble 链路；不改官方 registrant。
+  MSYS2_ARG_CONV_EXCL='*' node - "$(cygpath -m "$flutter_source")" "$(cygpath -m "$cache_source")" \
+    "$(cygpath -m "$tool_root")" "$(cygpath -m "$cache_root")" \
+    "$(cygpath -m "$sdk_dir")" "$(cygpath -m "$sdk_stage")" <<'NODE'
+const fs=require('fs'), path=require('path'), url=require('url');
+const [source,cache,tool,copyCache,sdk,stage]=process.argv.slice(2);
+for(const [from,to] of [[source,tool],[sdk,stage]]) {
+  fs.cpSync(from,to,{recursive:true,errorOnExist:true,force:false,filter:value=>{
+    const relative=path.relative(from,value).replaceAll('\\','/');
+    return !['.git/config','.git/hooks','.git/logs'].some(x=>relative===x || relative.startsWith(x+'/'));
+  }});
+}
+for(const name of ['hosted','hosted-hashes']) fs.cpSync(path.join(cache,name),path.join(copyCache,name),{recursive:true,errorOnExist:true,force:false});
+const original=path.join(source,'packages/flutter_tools/.dart_tool/package_config.json');
+const config=JSON.parse(fs.readFileSync(original,'utf8'));
+for(const item of config.packages) {
+  const root=url.fileURLToPath(new URL(item.rootUri,url.pathToFileURL(original)));
+  const maps=[[source,tool],[cache,copyCache]];
+  const mapping=maps.find(([from])=>root.toLowerCase().startsWith(path.resolve(from).toLowerCase()+path.sep));
+  if(!mapping) throw Error('Windows Flutter package config refers outside explicit tool/cache inputs');
+  item.rootUri=url.pathToFileURL(path.join(mapping[1],path.relative(mapping[0],root))+path.sep).href;
+}
+fs.writeFileSync(path.join(tool,'packages/flutter_tools/.dart_tool/package_config.json'),JSON.stringify(config));
+NODE
+  MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$(cygpath -m "$sdk_dir")" \
+    "$(cygpath -m "$prefix")" "$(cygpath -m "$sdk_stage")" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
+const [source,prefix,stage]=process.argv.slice(2);
+const release=await import(pathToFileURL(join(source,'scripts/release.mjs')));
+release.copyWindowsNativeArtifact(source,prefix,stage);
+release.assertWindowsReleaseProjection(stage);
+release.assertHostedRuntimeWindowsProjection(stage,{allowInjectedWindowsArtifacts:true});
+NODE
+  # 不设置 HOME、APPDATA、LOCALAPPDATA 或 KnownFolder。工具自身 profile 状态
+  # 只属于已授权的一次性 runner 用户；依赖、工具副本和 TEMP 始终留本轮 work。
+  export FLUTTER_ROOT="$(cygpath -m "$tool_root")" PUB_CACHE="$(cygpath -m "$cache_root")"
+  export TEMP="$(cygpath -m "$root/tmp")" TMP="$TEMP" TMPDIR="$root/tmp"
+  export FLUTTER_SUPPRESS_ANALYTICS=true
+  unset FLUTTER_TOOL_ARGS FLUTTER_ANALYTICS_LOG_FILE FLUTTER_STORAGE_BASE_URL \
+    PUB_HOSTED_URL DART_VM_OPTIONS DART_VM_FLAGS FLUTTER_ENGINE FLUTTER_ENGINE_SRC_PATH
+  dart_bin="$tool_root/bin/cache/dart-sdk/bin/dart.exe"
+  local -a flutter=("$dart_bin" "--packages=$(cygpath -m "$tool_root/packages/flutter_tools/.dart_tool/package_config.json")"
+    "$(cygpath -m "$tool_root/bin/cache/flutter_tools.snapshot")" --no-version-check --suppress-analytics)
+  MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" create --offline --no-pub --platforms=windows \
+    --project-name=citizensdk_consumer --org=org.citizen "$(cygpath -m "$runner")"
+  MSYS2_ARG_CONV_EXCL='*' node - "$(cygpath -m "$runner")" "$(cygpath -m "$test_state")" \
+    "$(cygpath -m "$sdk_dir")" "$software_version" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [runner,state,source,version]=process.argv.slice(2);
+if(/[";$\\\r\n]/.test(state)) throw Error('Windows CMake test path is unsafe');
+fs.writeFileSync(path.join(runner,'pubspec.yaml'),`name: citizensdk_consumer\npublish_to: none\nversion: ${version}\nenvironment:\n  sdk: ">=3.8.0 <4.0.0"\ndependencies:\n  flutter:\n    sdk: flutter\n  citizen_sdk:\n    path: ../citizen_sdk\nflutter:\n  uses-material-design: true\n`);
+fs.copyFileSync(path.join(source,'pubspec.lock'),path.join(runner,'pubspec.lock'));
+fs.copyFileSync(path.join(source,'windows/test/citizen_sdk_flutter_consumer.dart'),path.join(runner,'lib/main.dart'));
+const cmake=path.join(runner,'windows/CMakeLists.txt');
+const text=fs.readFileSync(cmake,'utf8'), target='include(flutter/generated_plugins.cmake)';
+if(text.split(target).length!==2) throw Error('Windows official generated plugin include is not unique');
+fs.writeFileSync(cmake,text.replace(target,
+  'set(CITIZENSDK_APPLICATION_ID "org.citizensdk.flutterconsumer")\nset(CITIZENSDK_BUILD_TESTS ON)\n'+
+  `set(CITIZENSDK_TEST_WORK_DIR "${state}")\nenable_testing()\n${target}`));
+NODE
+  (cd "$runner" && MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" pub get --offline)
+  (cd "$runner" && MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" build windows --release --no-pub)
+  cmp -s "$sdk_dir/pubspec.yaml" "$sdk_stage/pubspec.yaml" \
+    || fail "Windows Flutter 不允许改写 SDK pubspec 注册"
+  build="$runner/build/windows/x64"; bundle="$build/runner/Release"
+  verify_windows_flutter_inventory "$build" "$test_state" "$prefix"
+  MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
+    -C Release --no-tests=error --output-on-failure
+  MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$(cygpath -m "$sdk_dir")" \
+    "$(cygpath -m "$prefix")" "$(cygpath -m "$bundle")" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import {join} from 'node:path';
+const [source,prefix,bundle]=process.argv.slice(2);
+const {assertWindowsFlutterBundle}=await import(pathToFileURL(join(source,'scripts/release.mjs')));
+assertWindowsFlutterBundle(source,prefix,bundle);
+NODE
+  run_windows_flutter_consumer "$bundle"
+)
+
+build_windows() {
+  local target=x86_64-pc-windows-msvc build_root prefix test_root core_dir
+  local software_version consumer_build consumer_state destination
+  windows_path_preflight
+  command -v cl >/dev/null 2>&1 || fail "Windows 缺少预先初始化的 MSVC 编译环境"
+  command -v dumpbin >/dev/null 2>&1 || fail "Windows 缺少 MSVC dumpbin"
+  command -v cmake >/dev/null 2>&1 || fail "Windows 缺少 CMake"
+  load_native_dependencies Windows
+  require_rust_target "$target"
+  [[ -n "${CITIZENSDK_WINDOWS_SQLITE_INCLUDE_DIR:-}" && -n "${CITIZENSDK_WINDOWS_SQLITE_ARCHIVE:-}" ]] \
+    || fail "Windows 必须显式提供已固定的 SQLite 头和 MSVC 静态库"
+  assert_readonly_dependency_directory "$CITIZENSDK_WINDOWS_SQLITE_INCLUDE_DIR" "Windows SQLite include"
+  [[ "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE" == /* && "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE" == *.lib \
+      && -f "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE" && ! -L "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE" ]] \
+    || fail "Windows SQLite archive 必须是既存绝对 .lib 路径"
+  assert_safe_directory_path "$(dirname "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE")" "Windows SQLite archive 父目录"
+  build_root="$work_dir/Windows"
+  prefix="$build_root/install"
+  destination="$output_dir/Windows"
+  consumer_build="$build_root/consumer"
+  consumer_state="$build_root/consumer-state"
+  test_root="$build_root/test-state"
+  prepare_safe_directory "$work_dir" "$build_root" "Windows 构建目录"
+  # 测试最终目录由实际生产 Directory 首次相对创建，直接附加受保护 SID DACL。
+  # Bash mkdir/chmod 不是 Windows 私有 ACL；这里仅检查路径，不能先造继承 ACL 目录。
+  assert_descendant_path "$work_dir" "$test_root" "Windows 测试状态"
+  assert_safe_directory_path "$test_root" "Windows 测试状态"
+  assert_descendant_path "$work_dir" "$consumer_state" "Windows 消费者状态"
+  assert_safe_directory_path "$consumer_state" "Windows 消费者状态"
+  assert_safe_directory_path "$prefix" "Windows 原生安装目录"
+  [[ ! -e "$prefix" && ! -L "$prefix" ]] || fail "Windows 临时安装前缀已存在，拒绝混入旧安装件"
+  prepare_safe_directory "$work_dir" "$prefix" "Windows 临时原生安装目录"
+  software_version="$(sed -n 's/^version: \([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$sdk_dir/pubspec.yaml")"
+  [[ -n "$software_version" ]] || fail "Windows 缺少唯一 SDK 版本"
+  # 不安装工具、不联网补依赖，Cargo 输出和 CMake/CTest 状态均留在中央工作区。
+  CARGO_TARGET_DIR="$(cygpath -m "$cargo_target_dir")" MSYS2_ARG_CONV_EXCL='*' \
+    cargo build --manifest-path "$(cygpath -m "$product_ffi_manifest")" \
+      --target "$target" --release --locked --offline
+  core_dir="$cargo_target_dir/$target/release"
+  [[ -f "$core_dir/citizensdk.dll" && -f "$core_dir/citizensdk.dll.lib" ]] \
+    || fail "Windows Core DLL/import library 不完整"
+  MSYS2_ARG_CONV_EXCL='*' cmake -S "$(cygpath -m "$windows_source_root")" \
+    -B "$(cygpath -m "$build_root/cmake")" -G 'Visual Studio 17 2022' -A x64 \
+    -DCITIZENSDK_PLATFORM=Windows \
+    -DCITIZENSDK_CORE_LIBRARY="$(cygpath -m "$core_dir/citizensdk.dll")" \
+    -DCITIZENSDK_CORE_IMPORT_LIBRARY="$(cygpath -m "$core_dir/citizensdk.dll.lib")" \
+    -DCITIZENSDK_SQLITE_INCLUDE_DIR="$(cygpath -m "$CITIZENSDK_WINDOWS_SQLITE_INCLUDE_DIR")" \
+    -DCITIZENSDK_SQLITE_ARCHIVE="$(cygpath -m "$CITIZENSDK_WINDOWS_SQLITE_ARCHIVE")" \
+    -DCITIZENSDK_BUILD_TESTS=ON \
+    -DCITIZENSDK_TEST_WORK_DIR="$(cygpath -m "$test_root")" \
+    -DCMAKE_INSTALL_PREFIX="$(cygpath -m "$prefix")"
+  MSYS2_ARG_CONV_EXCL='*' cmake --build "$(cygpath -m "$build_root/cmake")" --config Release
+  local test_inventory
+  test_inventory="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build_root/cmake")" -C Release --show-only=json-v1)" \
+    || fail "Windows CTest 清单读取失败"
+  CITIZENSDK_WINDOWS_TEST_INVENTORY="$test_inventory" node -e '
+    const expected=["api_contract","assets","host_operation","lifecycle","directory","public_store","record_key","secure_store","sensitive_buffer","secret_vault","secret_boundary","cng","user_auth","wallet_flow"].map(x=>"CitizenSDK.Windows.citizen_sdk_"+x+"_test").sort();
+    const actual=JSON.parse(process.env.CITIZENSDK_WINDOWS_TEST_INVENTORY).tests.map(x=>x.name).sort();
+    if(JSON.stringify(actual)!==JSON.stringify(expected)) throw Error("Windows CTest exact set drift");
+  ' || fail "Windows CTest 必须精确包含 14 个正式程序"
+  MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build_root/cmake")" -C Release --no-tests=error --output-on-failure
+  MSYS2_ARG_CONV_EXCL='*' cmake --install "$(cygpath -m "$build_root/cmake")" --config Release
+  verify_windows_install "$prefix" "$software_version" "$core_dir" "$build_root/cmake"
+  prepare_safe_directory "$work_dir" "$consumer_build" "Windows 独立消费者构建目录"
+  MSYS2_ARG_CONV_EXCL='*' cmake -S "$(cygpath -m "$windows_source_root/test")" \
+    -B "$(cygpath -m "$consumer_build")" -G 'Visual Studio 17 2022' -A x64 \
+    -DCITIZENSDK_CONSUMER_PREFIX="$(cygpath -m "$prefix")" \
+    -DCITIZENSDK_CONSUMER_VERSION="$software_version" -DCITIZENSDK_PLATFORM=Windows \
+    -DCITIZENSDK_TEST_WORK_DIR="$(cygpath -m "$consumer_state")"
+  MSYS2_ARG_CONV_EXCL='*' cmake --build "$(cygpath -m "$consumer_build")" --config Release
+  run_windows_consumers "$consumer_build" "$prefix" "$consumer_state"
+  build_windows_flutter_consumer "$build_root" "$prefix" "$software_version"
+  # 消费者结束后再次核对安装件；改名后不再使用记录旧前缀的 install_manifest。
+  verify_windows_install "$prefix" "$software_version" "$core_dir" "$build_root/cmake"
+  export_windows_install "$prefix" "$destination"
+  record_native_dependencies Windows
+  echo "CitizenSDK Windows 原生、C/C++、Flutter adapter 与 Release 消费者检查完成；未执行正式发布"
+}
+
+verify_windows_exports() {
+  local library="$1" header="$2" label="$3" exports
+  # dumpbin 的完整导出表逐项比较，禁止先过滤 citizensdk 前缀掩盖额外导出。
+  exports="$(MSYS2_ARG_CONV_EXCL='*' dumpbin /NOLOGO /EXPORTS "$(cygpath -m "$library")")" \
+    || fail "Windows $label 无法读取 PE 导出"
+  CITIZENSDK_PE_EXPORTS="$exports" CITIZENSDK_PE_LIBRARY="$(cygpath -m "$library")" \
+    CITIZENSDK_PE_HEADER="$(cygpath -m "$header")" node -e '
+      const fs=require("fs"); const b=fs.readFileSync(process.env.CITIZENSDK_PE_LIBRARY);
+      if(b.length<64 || b.readUInt16LE(0)!==0x5a4d) throw Error("not PE");
+      const o=b.readUInt32LE(60);
+      if(o>b.length-26 || b.readUInt32LE(o)!==0x4550 || b.readUInt16LE(o+4)!==0x8664 || b.readUInt16LE(o+24)!==0x20b) throw Error("wrong Windows PE machine");
+      const actual=[...process.env.CITIZENSDK_PE_EXPORTS.matchAll(/^\s*\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)(.*)$/gm)];
+      if(actual.some(x=>x[2].includes("="))) throw Error("forwarded export");
+      const names=actual.map(x=>x[1]).sort();
+      const expected=[...new Set([...fs.readFileSync(process.env.CITIZENSDK_PE_HEADER,"utf8").matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map(x=>x[1]))].sort();
+      if(JSON.stringify(names)!==JSON.stringify(expected)) throw Error("Windows full export set drift");
+    ' || fail "Windows $label PE/COFF 或完整导出合同失败"
 }
 
 build_abi_host() {
@@ -1994,8 +3624,10 @@ verify_outputs() {
 case "$target_name" in
   android) build_android ;;
   apple) build_apple ;;
+  macOS) shift; build_macos_flutter_consumer "$@" ;;
   LinuxARM) build_linux LinuxARM ;;
   LinuxAMD) build_linux LinuxAMD ;;
+  Windows) build_windows ;;
   host) build_host ;;
   abi-host) build_abi_host ;;
   apple-tests) build_apple_tests ;;
@@ -2042,5 +3674,5 @@ case "$target_name" in
       "$output_dir/$CITIZENSDK_TEST_OUTPUT_RELATIVE" \
       "CitizenSDK 安全写路径测试目标"
     ;;
-  *) fail "用法：$0 [android|apple|LinuxARM|LinuxAMD|apple-tests|host|abi-host|all|verify]" ;;
+  *) fail "用法：$0 [android|apple|macOS candidate audit hosted flutter pub-cache tool-path|LinuxARM|LinuxAMD|Windows|apple-tests|host|abi-host|all|verify]" ;;
 esac

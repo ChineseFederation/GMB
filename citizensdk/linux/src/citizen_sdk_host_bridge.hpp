@@ -36,7 +36,7 @@ class HostBridge final : public std::enable_shared_from_this<HostBridge> {
                                              void *context);
   citizensdk_error_code_t set_parent_window(void *gtk_parent_window) noexcept;
   GtkParentLease acquire_parent_window() const noexcept;
-  citizensdk_host_vault_availability_t vault_availability() const noexcept;
+  citizensdk_host_vault_availability_t vault_availability() noexcept;
   citizensdk_error_code_t close();
 
   uint64_t reserve_wallet_flow();
@@ -77,11 +77,26 @@ class HostBridge final : public std::enable_shared_from_this<HostBridge> {
   void dispatch_routed_event(const citizensdk_event_t &event) noexcept;
   citizensdk_host_services_v1_t services() noexcept;
   void configure_vtables() noexcept;
+  class ServiceLease final {
+   public:
+    explicit ServiceLease(HostBridge &host) : host_(host) {
+      std::lock_guard<std::recursive_mutex> guard(host_.call_lock_);
+      require(!host_.services_retired_, CITIZENSDK_ERROR_INVALID_STATE,
+              "CitizenSDK Host services are retired");
+      host_.lifecycle_.begin_service();
+    }
+    ServiceLease(const ServiceLease &) = delete;
+    ServiceLease &operator=(const ServiceLease &) = delete;
+    ~ServiceLease() { host_.lifecycle_.finish_service(); }
+   private:
+    HostBridge &host_;
+  };
   template <typename Function>
   auto service_call(Function function) -> decltype(function()) {
-    std::lock_guard<std::recursive_mutex> guard(call_lock_);
-    require(!services_retired_, CITIZENSDK_ERROR_INVALID_STATE,
-            "CitizenSDK Host services are retired");
+    // Admission is short and protects resource lifetime. The provider itself
+    // must run unlocked: authentication waits for the GTK owner, which is
+    // permitted to query Host state or request a BUSY close in the meantime.
+    ServiceLease lease(*this);
     return function();
   }
 

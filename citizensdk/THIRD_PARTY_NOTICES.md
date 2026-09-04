@@ -7,9 +7,12 @@ GPL with Classpath Exception 原文，以及根许可证入口中完整重现的
 
 第 7.1 步新增的 `linux/` Host 与合同测试是 CitizenSDK 自有实现，适用根 MIT 许可证。该步只
 提交源码，没有在仓库中携带 TPM2-TSS、SQLite、GTK 或 C++ runtime 的第三方源码/二进制副本，
-也没有执行 Linux 编译或测试、没有生成 Linux `.so`。第 7.3 步必须根据最终静态/动态链接闭包重新核对每个组件的许可证、
+也没有执行 Linux 编译或测试、没有生成 Linux `.so`。第 7.4 步把同版本安装投影与 Hosted
+过滤纳入唯一候选合同，不新增或更改第三方组件版本。后续统一 GitHub CI/Release 必须根据
+实际构建输入与最终静态/动态链接闭包重新核对每个组件的许可证、
 copyright notice 与可重分发条件并写入正式候选；本段不能替代届时从实际二进制和锁定构建输入
-得到的依赖清单。
+得到的依赖清单，证据不齐不得生成可分发候选。Hosted 排除 Linux Host 私有构建源码，不等于
+免除随同版 Core/Host 运行库分发所需的许可证、归属和来源材料；不得用未知版本占位。
 
 ## sr25519 signer
 
@@ -93,3 +96,77 @@ crate 入口和 identity 模块做最小产品边界适配。PoW 依赖闭包由
 
 完整来源分类、排除项和同步策略见 `docs/SOURCE_PROVENANCE.md`。锁文件是依赖输入，不是
 构建产物；实际许可证义务仍以每个依赖包自身许可证为准。
+
+## Windows 系统适配来源（第 8.1 步）
+
+Windows 平台无关 Host、typed records、生命周期及钱包流程来自本 SDK 现有 Linux 实现；
+必要 Windows 差异单独列入来源文档，不能声称这些适配与 CitizenApp 逐字节相同。
+Microsoft Windows SDK 的 Win32、NCrypt、BCrypt、TBS 和 NT 文件 API 是目标系统接口；
+本仓库没有复制 Microsoft SDK 或 PCPTool 源码，官方样例只用于接口参考。
+Host 消费显式预置的 SQLite MSVC 静态归档。第 10.5 步已固定下述准确版本、构建选项
+和许可证来源；真实原生构建仍待统一矩阵验收。Windows 不增加 OpenSSL、TPM2-TSS 或软件金库。
+
+## 固定静态依赖（第 10.5 步）
+
+本 SDK 的 LinuxARM/LinuxAMD Host 固定 SQLite 3.53.4、OpenSSL libcrypto 3.5.8、
+TPM2-TSS 4.2.0（ESYS/SYS/MU/RC/device）；Windows Host 只固定 SQLite 3.53.4。
+它们是待矩阵实编验证的准确输入，不能据本节宣称 Linux/Windows 已编译或运行通过。
+
+SQLite 属于 Public Domain。OpenSSL 是 Apache-2.0；TPM2-TSS 所选闭集是 BSD-2-Clause。
+三项法律原文均已加入根 LICENSE，Hosted 和审计包必须保留，不能由 SDK 的 MIT 替代。
+官方来源、归档摘要、固定构建选项以中央 dependencies.json 的 native_dependencies 子合同
+为唯一准备依据；SDK 发布器只固定该合同摘要，不在发布时联网选择依赖版本。
+
+OpenSSL 官方 README.md 的原文归属：
+Copyright (c) 1998-2026 The OpenSSL Project Authors
+Copyright (c) 1995-1998 Eric A. Young, Tim J. Hudson
+All rights reserved.
+
+TPM2-TSS 所选生产实现与八个公共头的原文归属（重复行合并，未修饰上游拼写）：
+
+Copyright (c) 2015-2018, Intel Corporation
+Copyright (c) 2015 - 2018, Intel Corporation
+Copyright 2015, Andreas Fuchs @ Fraunhofer SIT
+Copyright (c) 2015 - 2017, Intel Corporation
+Copyright (c) 2020, Intel Corporation
+Copyright (c) 2025 - 2025, Huawei Technologies Co., Ltd.
+Copyright (c) 2018, Intel Corporation
+Copyright (c) 2017, Intel Corporation
+Copyright (c) 2015 - 2020, Intel Corporation
+Copyright (c) 2025, Juergen Repp
+Copyright (c) 2015 - 2018 Intel Corporation
+Copyright 2017-2018, Fraunhofer SIT sponsored by Infineon Technologies AG
+SPDX-FileCopyrightText: 2018, David J. Maria @ fb.com
+SPDX-FileCopyrightText: 2018, Intel
+SPDX-FileCopyrightText: 2019, Infineon Technologies AG
+SPDX-FileCopyrightText: 2019, Alon Bar-Lev
+SPDX-FileCopyrightText: 2019, Fraunhofer SIT sponsored by Infineon
+Copyright 2017, Fraunhofer SIT sponsored by Infineon Technologies AG
+Copyright 2025, Juergen Repp
+Copyright (c) 2022, Intel Corporation
+Copyright 2020, Fraunhofer SIT sponsored by Infineon Technologies AG
+SPDX-FileCopyrightText: 2018 - 2022, Intel
+SPDX-FileCopyrightText: 2018 - 2020, Fraunhofer SIT sponsored by Infineon
+SPDX-FileCopyrightText: 2019, Fabrice Funtaine
+SPDX-FileCopyrightText: 2019 - 2022, Infineon Technologies AG
+SPDX-FileCopyrightText: 2022, Juergen Repp
+SPDX-FileCopyrightText: 2018, Fraunhofer SIT sponsored by Infineon
+SPDX-FileCopyrightText: 2019 - 2023, Intel
+SPDX-FileCopyrightText: 2022, Erik Larsson
+SPDX-FileCopyrightText: 2023 - 2024, Infineon Technologies AG
+SPDX-FileCopyrightText: 2023, Juergen Repp
+Copyright 2019, Intel Corporation
+Copyright (c) 2019, Wind River Systems.
+Copyright (c) 2018 Intel Corporation
+SPDX-FileCopyrightText: 2019 Intel Corporation
+All rights reserved.
+
+以上对应 tpm2-tss-4.2.0 的 src/tss2-esys、src/tss2-sys、src/tss2-mu、
+src/tss2-rc、src/util、src/tss2-tcti 的 device/nodl 公共部分，以及所交付八个头。
+不交付 SPI/I2C/FAPI/Policy 后端及其头。编译时使用未经修改的官方完整源码副本；
+构建源码仅是中央工作状态，不能假称 SDK 源码树已经收编这些上游源码。
+
+最终运行库继续经过既有 ELF/PE、导出与动态依赖门禁。新证据绑定静态输入和最终
+Core/Host 字节；这不是独立签名证明，不替代同源 CI/Release 与平台运行测试。
+GTK/系统库以及 Cargo 解析闭包的其余许可义务仍须随完整发布验收核对，本步骤只闭合
+上述三项新固定静态输入，不把它们冒充整个 SDK 的完整 SBOM。

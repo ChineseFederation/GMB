@@ -42,7 +42,7 @@ citizensdk/
 ├── darwin/                 iOS/macOS 共享 Apple 投影
 │   ├── Sources/CitizenSDK/ Rust Core 的 Swift API、typed stores、Vault 与 SDK-owned UI
 │   └── Sources/CitizenSDKFlutter/ 只消费 CitizenSDK.framework 的 Flutter adapter
-├── linux/                  LinuxARM/LinuxAMD 共用 Host、C/C++ API、typed stores 与 TPM Vault
+├── linux/                  LinuxARM/LinuxAMD 共用 Host、C/C++、Flutter adapter 与 TPM Vault
 ├── assets/
 │   ├── README.md           随包静态资产与设备运行状态边界
 │   └── citizenchain/       manifest、chain spec 与 #0 light sync state
@@ -166,7 +166,9 @@ Apple 共享 Darwin 绑定均已改接这个产品 ABI；iOS 与 macOS 使用同
 以下实现已经从根 `citizen_sdk.dart` 移除且 Android、iOS 与 macOS 正式绑定均不可到达，只保留
 用于归档和差分验证：
 
-- `CitizenSdk`：组合 `chain`、`rpc`、`wallet`、`transfers`、finalized 流水与 `signer`。
+- 原 legacy 组合门面已删除，不保留兼容别名；下列内部实现只作为差分基线。当前公开
+  `CitizenSdk` 位于 `lib/src/api/citizen_sdk.dart`，仅通过 `chain`、`wallet`、`transactions`
+  分组调用产品 ABI，不暴露 legacy RPC 或 signer。
 - `CitizenLightClient`：管理 smoldot 生命周期、随包创世锚、bootnode、同步健康、
   finalized database、JSON-RPC 与链头订阅。
 - `CitizenChainAssets`：在创建或初始化 smoldot 原生客户端前核对 manifest 精确字段闭集、正式
@@ -281,13 +283,25 @@ Provider 上重试。完整 ABI 规则见 `C_ABI.md`。
 请求 checkpointed stop 后只沿同一 teardown 状态继续重试；析构自身只有有限 clear/destroy
 尝试，连 ownership transfer 都失败时以 `std::terminate` 失败关闭。C++ `EventObserver` 只同步
 借用 event/result，不能自行 release；trampoline 在 observer 正常或异常返回后 RAII exact-once
-释放非零 result。所有公开 API、callback、parent、route、Vault 与钱包 UI 都服从一个 closing
-admission/lease fence；关闭封闭新租约后等待既有租约退役，并避免持锁等待可重入 Core callback。
+释放非零 result。所有公开 API、callback、parent、route、Vault 与钱包 UI 都服从统一的
+closing admission/lease fence。显式 destroy 有其它 API lease 时返回 BUSY；provider 以独立
+service lease 保持资源存活，不跨 GTK 认证等待持有全局锁，close 对在途 service 返回 BUSY。
+abandon 由 supervisor 等既有 lease 退役；不可逆 teardown 后不重开 admission，也不持锁等待
+可重入 Core callback。
 私有 route 安装期间的同步 completion 对 65+ 和并发突发保持无损。本步没有生成上述 `.so`，也没有
 修改 Core、Cargo workspace 或根产品头。
 Linux 钱包 flow 对 prepared-handle release 失败保留唯一所有权和 lifecycle lease，由专用
 supervisor 重试至 Core 明确确认后才允许 registry 移除和 Host teardown，不能把失败清理静默
 丢成孤儿 handle。
+
+第 7.2 步 Flutter adapter 只把既有 22 方法 fixed tuple 映射到上述 Host/Core，不解析交易、
+钱包信封或 sr25519。callback 动态范围内把公开 result 复制为纯拥有值，再投递 Flutter UI
+线程；`FlValue`、借用 result 和原生句柄均不跨线程。每个请求在 Core 接受前预置 route，
+完成事件与公开值复制完成分开记录，禁止早回调使 route 提前退役。钱包变更跨 session/引擎
+互斥，Core EMPTY 删除结果串行回读 profile 后才释放互斥。Event sink 以 epoch 隔离取消/重订阅，
+detach 先停止接纳，并保活未完成 route 至真实完成后再收口会话。标准 Linux Flutter
+`FlValue` 不能无损持有内嵌 NUL 字符串，因此 adapter 通过官方 StandardMessageCodec 扩展点
+在内部保留长度；wire 仍是标准 string tag，备注不截断，也不新增 wire 类型。
 
 ## CI、Release 与平台边界
 
@@ -362,22 +376,32 @@ Android Gradle/Kotlin persistent project state 只允许位于 TataConsole 中�
 `@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A` framework
 和 `@rpath/CitizenSDK.framework/Versions/A/CitizenSDK` install ID。候选只允许 macOS
 framework 标准布局所需的精确五个内部相对符号链接，其他任何符号链接均失败关闭。
-LinuxARM、LinuxAMD 已有第 7.1 步 Linux Host、TPM Vault、C/C++ API 与合同测试源码，但没有
-运行两种机器目标的编译/测试，也没有 Flutter adapter、`.so` 注入或 manifest 平台项；因此
-仍未交付。Windows 仍没有平台投影。legacy `libsmoldot.dylib` 只允许
+LinuxARM、LinuxAMD 已有 Host、Flutter adapter/合同测试及安装消费者源码。第 7.4 步把两种
+同版本安装投影、官方 `linux` plugin 注册、默认 `CitizenSdk.open()` 与 manifest 候选合同
+原子接入；26 项安装件加 12 项插件输入构成 Hosted 的 38 项 Linux 运行闭集。应用只编译薄
+plugin，不重编 Host/Core，也不携带 Host 私有源码。两种机器目标的实际编译/运行仍由后续
+统一 GitHub CI 增量缓存、Release 全量构建验证，源码注册不是已交付。Windows 已有原生
+Host 和 Flutter 适配；第 8.4 步同时接入默认公开注册、同版候选与正式 Flutter 消费者。
+Windows Hosted 固定 21 项安装件与 12 项插件输入，不重新编译 Host/Core；源码登记仍
+不代表 Windows/MSVC 或实体 TPM 已实测。
+legacy `libsmoldot.dylib` 只允许
 作为 macOS `arm64` 差分测试宿主库；其 build-local `LC_ID_DYLIB` 不具分发身份，不得进入候选并须随
 本机工作目录清理。
 
-源码中的 Dart pubspec、Android Gradle 与 `darwin/citizen_sdk.podspec` 版本已统一冻结为
-`1.0.0`。发布器在
-复制前拒绝三者不一致，也拒绝 Release 请求版本与源码版本不同；复制后再核对候选 manifest、
-pubspec 与两个平台版本。因此 GitHub Release 和 Hosted Package 只能来自同一准确版本提交，
+源码中的 Dart pubspec、Android Gradle、`darwin/citizen_sdk.podspec`、
+`linux/CMakeLists.txt` 与 `windows/CMakeLists.txt` 五处版本统一冻结为 `1.0.0`。
+发布器在复制前拒绝版本不一致，也拒绝 Release 请求版本与源码版本不同；复制后再核对
+候选 manifest、pubspec 与平台源码版本。Windows 与其它平台共同进入同一版本的候选合同。
+因此 GitHub Release 和 Hosted Package 只能来自同一准确版本提交，
 不能在 Runner 中把旧源码临时改号。本步骤不执行 Hosted 上传；Hosted 身份、凭证和首次实际
 发布仍需另行明确授权。现有 Release 仍只有 GitHub 正式分发动作，没有新增“发布”按钮。
 
-Linux 完整设计、GNU target、glibc 2.31 基线、TPM fail-closed 规则和第 7.1 步未验证声明见
-`LINUX_PLATFORM.md`。第 7.1 步只更新 canonical 源码/Release 源文件闭集，没有运行测试、
-编译、Git、远程 CI、Release 或 Hosted 上传，也没有修改 TataConsole 执行流程。
+Linux 完整设计、GNU target、glibc 2.31 基线、TPM fail-closed 规则和第 7 步未验证声明见
+`LINUX_PLATFORM.md`。第 7.1/7.2 步只更新 canonical 源码/Release 源文件闭集，未运行 Linux
+编译与 CTest、Dart/Flutter/Cargo 测试、Git、远程 CI、Release 或 Hosted 上传；获准执行的
+Node Release 来源合同测试与脚本语法检查不等于 Linux 运行验证。第 7.4 步候选合并要求共享
+头/资产字节一致，平台库与 CMake package 分别隔离；实际产物、依赖和许可证证据不齐不得
+生成可分发候选。没有修改 TataConsole 执行流程。
 
 ## 产品外部边界
 
@@ -385,3 +409,15 @@ Linux 完整设计、GNU target、glibc 2.31 基线、TPM fail-closed 规则和�
 - 广场和聊天由各产品及其 Cloudflare/服务端边界实现。
 - CitizenWallet 冷钱包保持独立。
 - CitizenApp 在单独批准切换前继续使用现有实现。
+
+## Windows 原生系统层（第 8.1 步）
+
+`Windows C/C++ → citizensdk_host.dll → citizensdk.dll → 原有 Engine/Contracts/Providers`。
+Host 保留 typed records、generation、CAS、事件和关闭语义，只适配 Win32/CNG/HANDLE。
+Windows 11、PCP/TPM 2.0、独立设备口令；没有软件降级。无钱包模式不创建 HWND。
+第 8.2 步增加 `Flutter → Windows adapter → 已安装 Host/Core`，仅协调标准 codec、
+原生环境、公开事件/回复与 Win32 钱包 UI，不重写核心行为。应用身份由一次性
+`CITIZENSDK_APPLICATION_ID` 声明，缺失或非法拒绝，不进入 Dart tuple。Host 的 Core
+已退休但窗口仍 BUSY 时，只保留关闭重试，不公开虚假 disposed 或再次操作已释放的 Core。
+第 8.3/8.4 步补齐原生及 Flutter 消费者、默认注册和候选投影；所有检查只扩展已有构建器
+与发布器，不增加第二份核心或流程。实际 Windows 运行和正式发布仍待统一平台验收。

@@ -15,6 +15,38 @@
 #include "citizen_sdk_host_record.hpp"
 
 namespace citizen_sdk::linux {
+
+TpmErrorMapping map_tpm2_error(uint32_t response,
+                              citizensdk_error_code_t mapped) noexcept {
+  if (response == TSS2_RC_SUCCESS) return {CITIZENSDK_OK, false};
+
+  // TPM2-TSS 4.1.3 defines the layer in bits 16..23 in tss2_common.h.
+  // Only raw TPM and resource-manager-forwarded TPM responses carry TPM
+  // format-one selectors. ESAPI/SYS/MU/TCTI/RESMGR errors belong to different
+  // numeric domains, even when their low bits resemble a TPM response.
+  const TSS2_RC layer = response & TSS2_RC_LAYER_MASK;
+  if (layer != TSS2_TPM_RC_LAYER && layer != TSS2_RESMGR_TPM_RC_LAYER) {
+    return {mapped, false};
+  }
+  TPM2_RC base = response & ~TSS2_RC_LAYER_MASK;
+  if ((base & UINT32_C(0xffff0000)) != 0) return {mapped, false};
+  if ((base & TPM2_RC_FMT1) != 0) {
+    // tss2_tpm2_types.h encodes the handle/session/parameter selectors outside
+    // the six-bit format-one error number. Preserve the format bit itself.
+    base &= static_cast<TPM2_RC>(TPM2_RC_FMT1 | UINT32_C(0x3f));
+  }
+  if (base == TPM2_RC_BAD_AUTH || base == TPM2_RC_AUTH_FAIL) {
+    return {CITIZENSDK_ERROR_AUTHENTICATION_REQUIRED, false};
+  }
+  if (base == TPM2_RC_LOCKOUT) {
+    return {CITIZENSDK_ERROR_UNAVAILABLE, true};
+  }
+  if (base == TPM2_RC_HANDLE || base == TPM2_RC_REFERENCE_H0) {
+    return {CITIZENSDK_ERROR_KEY_INVALIDATED, false};
+  }
+  return {mapped, false};
+}
+
 namespace {
 
 template <typename Function>
@@ -112,25 +144,10 @@ class TpmContext final {
 
 void check(TSS2_RC code, citizensdk_error_code_t mapped, const char *message) {
   if (code == TSS2_RC_SUCCESS) return;
-  uint32_t base = TSS2_RC_GET_CODE(code);
-  if ((base & TPM2_RC_FMT1) != 0) {
-    // Format-one response codes encode handle/session/parameter selection in
-    // bits outside the six-bit error number. Strip that selector before
-    // mapping authentication failures so every indexed form fails closed in
-    // the same way.
-    base &= static_cast<uint32_t>(TPM2_RC_FMT1 | 0x3fU);
-  }
-  if (base == TPM2_RC_BAD_AUTH || base == TPM2_RC_AUTH_FAIL) {
-    throw HostError(CITIZENSDK_ERROR_AUTHENTICATION_REQUIRED, message);
-  }
-  if (base == TPM2_RC_LOCKOUT) {
-    throw HostError(CITIZENSDK_ERROR_UNAVAILABLE,
-                    "TPM dictionary-attack lockout is active");
-  }
-  if (base == TPM2_RC_HANDLE || base == TPM2_RC_REFERENCE_H0) {
-    throw HostError(CITIZENSDK_ERROR_KEY_INVALIDATED, message);
-  }
-  throw HostError(mapped, message);
+  const TpmErrorMapping result = map_tpm2_error(code, mapped);
+  throw HostError(result.code, result.dictionary_attack_lockout
+                                  ? "TPM dictionary-attack lockout is active"
+                                  : message);
 }
 
 TPM2B_PUBLIC primary_template() {

@@ -17,8 +17,13 @@ directory remains lowercase `linux` and is not a third product identity.
   TPM objects, user authentication, and native wallet flow.
 - Native applications include `citizensdk.h` and `citizen_sdk/citizen_sdk.hpp`.
   The C++ API is header-only so the stable binary contract remains C.
-- A later Flutter projection links this Host library; secrets never cross a
-  Flutter method or event channel.
+- `libcitizen_sdk_plugin.so` is the Step 7.2 Flutter adapter source target. It
+  links the exact same-version installed Host/Core pair and maps only the fixed
+  22-method tuple protocol; it neither rebuilds Core/Host nor accepts an
+  arbitrary RPC method.
+- Secrets never cross a Flutter method or event channel. SDK-owned create,
+  import and add-account screens remain in the existing native GTK flow; only
+  their public wallet profile is returned.
 
 Native owners must stop Core and await its persisted checkpoint before normal
 destroy. The C++ RAII wrapper transfers an unexpectedly busy destructor to the
@@ -29,6 +34,14 @@ ownership transfer cannot be established. A C++ `EventObserver` only borrows
 its event/result synchronously and must not retain or release the result; the
 wrapper releases it exactly once after normal or exceptional observer return.
 
+Explicit destroy returns `BUSY` when another public call still holds a lease;
+it does not wait on a callback thread. Provider service leases protect resource
+lifetime without holding the Host call mutex across GTK authentication, and
+close returns `BUSY` while a service is active. Abandon transfers the complete
+graph to the supervisor, which waits for existing leases outside the caller.
+Host and test targets use standard C++17 with GNU C++ extensions disabled so
+the compiler's legacy `linux` macro cannot replace an internal namespace.
+
 The source tree must not contain generated libraries, build directories,
 CMake caches, downloaded dependencies, or test reports. Every local generated
 item belongs under `/Users/rhett/TATA/tataconsole/target/citizensdk` in a
@@ -37,6 +50,48 @@ configuration requires that existing mode-`0700` directory through
 `-DCITIZENSDK_TEST_WORK_DIR=<absolute-path>`; the test helper rejects a missing,
 relative, root, symlinked, wrongly owned, or wrongly permissioned directory and
 has no `/tmp` fallback.
+
+## Flutter adapter and candidate contract
+
+The Flutter-facing CMake branch is selected only when Flutter's official
+`flutter` target exists. It accepts the official machine target value and maps
+that value internally to exactly one public platform, `LinuxARM` or
+`LinuxAMD`. The Host prefix is fixed to this package's
+`linux/` directory and must contain a complete ordinary
+same-version installed projection containing `libcitizensdk.so`,
+`libcitizensdk_host.so`, and its isolated CMake package. System search paths,
+network downloads, another repository and source rebuilds are not fallbacks.
+
+The adapter registers only `citizen/sdk/core/v1` and
+`citizen/sdk/events/v1`. Request routes are allocated before native admission,
+public result data is synchronously copied while the Host-owned result is
+borrowed, and only an owned value tree is queued back to GTK. Event cancellation
+changes the sink epoch without closing sessions. Engine detach first revokes
+Flutter replies/events, then cancels eligible wallet/transfer work and retires
+the complete Host graph through its existing supervisor boundary.
+
+Runtime environment values are native-only: the executable determines the
+standard `data/flutter_assets/packages/citizen_sdk/assets/citizenchain` bundle
+path, `g_get_user_data_dir()` supplies the XDG data root, the real default
+`GApplication` supplies its application ID, and the registrar view supplies a
+weak GTK parent. Dart cannot provide a path, identity or window pointer. A
+headless view may use chain reads but cannot silently borrow another active
+window for wallet UI.
+
+Step 7.2 added this source and its contract tests without registering Linux or
+building its runtime. Step 7.4 registers the official `linux` plugin as
+`CitizenSdkPlugin`, enables the default `CitizenSdk.open()` path, and includes
+both Linux platforms in the same-version candidate contract. Actual Linux
+runtime validation belongs to the later unified GitHub CI/Release, not to a
+requirement for user-provided local Linux hosts.
+
+第 7.3 步已在唯一构建器中增加安装闭集和真实消费者装配源码。当前开发以本机 macOS 编译通过
+为验收标准；2026-09-03 已通过既有 `abi-host` 与 `apple`，不再等待用户提供 Linux/TPM 环境。
+跨平台构建与功能验证后续统一进入 GitHub CI/Release：CI 使用增量缓存，Release 使用全量构建，
+保持同一 Core commit、SDK 版本、ABI 版本和一个 CitizenSDK Release。
+第 7.4 步源码包已使用正式 Linux plugin 注册，由标准 Flutter 工具生成 runner/registrant；
+真实消费者直接调用 `CitizenSdk.open()`，不注入内部 platform 或临时改写 pubspec。
+plugin 自己固定 `$ORIGIN` 运行库路径，不依赖测试 runner 补配置；同版安装件缺失即失败关闭。
 
 Each application supplies a validated reverse-DNS `application_id`. Host data
 is always placed below `<base>/<application_id>/citizensdk/v1/{public,secure}`;
@@ -59,7 +114,7 @@ dependency fallback. `libstdc++` and `libgcc` are selected statically by the
 Release-pinned compiler through `-static-libstdc++ -static-libgcc`. CI/Release
 must record that toolchain, verify every archive identity, and reject dynamic
 C++ runtime dependencies before the two ordinary runtime files are admitted
-in step 7.3.
+to the same-version release through that unified platform validation.
 
 ## CMake consumer shape
 
@@ -96,11 +151,26 @@ host.close();
 ```
 
 No `COMPONENTS` are declared. This snippet records the intended source contract
-only: Step 7.1 did not install the package, compile this consumer, or run it.
-The real relocated-install consumer fixture and both machine-target checks
-remain Step 7.3 gates. `CitizenSDK::Host` carries `CitizenSDK::Core` in its
+only: the Step 7.3 installed C/C++ consumer fixtures have not yet been compiled
+or run on either Linux machine target; local macOS acceptance does not imply
+that they have. `CitizenSDK::Host` carries `CitizenSDK::Core` in its
 public link interface; consumers do not rediscover SQLite, TPM2-TSS, OpenSSL,
 GTK, or a second Core.
+
+安装技术闭集为 19 个普通文件：9 个公开头、同平台 Core/Host 双库、5 个隔离 CMake 包文件和
+3 个链资产。构建器逐字节核对公开头、资产、Core 和依赖合同，并检查安装后 Host 的 `$ORIGIN`
+RUNPATH、双库 ELF/ABI 和 GLIBC 2.31 基线。私有头、plugin 注册头、测试及源码不进入此安装前缀。
+两种平台合并为同一候选 `linux/` 下的 26 项安装投影，9 个公开头与 3 个链资产只留一份且
+重叠字节必须一致。Hosted 在这 26 项之外仅保留 `CMakeLists.txt`、`cmake/CitizenSDKFlutter.cmake`、
+5 个 plugin `.cc`、4 个对应 `.hpp` 和 Flutter 注册头，精确为 38 项；Host 私有源码不进入
+Hosted，也不在 Flutter 应用编译时重建。
+这不是已经验收的正式分发包：真实依赖身份、许可证与两种 Linux 平台运行证据由后续统一
+GitHub CI/Release 验证，不作为等待用户提供环境的当前开发阻塞。
+
+`test/CitizenSDKConsumer.cmake` 只链接该安装前缀；真实 C/C++ 消费者不回指 Host 私有源码。
+后续 Linux 验证须将 12 个 Host 合同目标、6 个 adapter 合同目标和 2 个原生消费者分别精确
+枚举再运行，Flutter Release bundle 还必须限时以 0 退出并输出成功标记。源码/Node 合同不能替代 GTK/实体 TPM
+和实际消费者验证，macOS 编译也不提供这些证据；当前没有通过任何 Linux 实机验收。
 
 ## Hardware-vault contract
 
@@ -108,8 +178,9 @@ Wallet capability is available only when TPM 2.0 and the SDK-owned strong user
 authentication flow are both usable. Missing or inaccessible TPM hardware is
 reported truthfully and never falls back to a file KEK, Secret Service, or a
 software-only key. Chain read and verification remain usable without a vault.
-Deterministic software-TPM validation must therefore run inside a controlled
-Linux guest that exposes its vTPM as `/dev/tpmrm0` or `/dev/tpm0`; production
+When executed in that later validation phase, deterministic software-TPM
+validation must therefore run inside a controlled Linux guest that exposes
+its vTPM as `/dev/tpmrm0` or `/dev/tpm0`; production
 code has no socket TCTI injection or public downgrade switch.
 
 The separate device-vault unlock password is used as the TPM object's authValue

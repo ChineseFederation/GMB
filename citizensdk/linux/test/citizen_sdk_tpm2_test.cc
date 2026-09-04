@@ -1,10 +1,11 @@
-// 验证 Linux TPM 适配固定 OAEP-SHA256、加密 HMAC 会话和失败清零合同。
+// 验证 Linux TPM 错误层分类、OAEP-SHA256、加密 HMAC 会话和失败清零合同。
 #include <algorithm>
 #include <array>
 #include <cassert>
 #include <fstream>
 #include <iterator>
 #include <string>
+#include <tss2/tss2_tpm2_types.h>
 
 #include "citizen_sdk_tpm2.hpp"
 
@@ -17,6 +18,54 @@
 
 int main() {
   using namespace citizen_sdk::linux;
+
+  // Exercise the same pure classifier used by production check(), without a
+  // TPM device. Only TPM/RESMGR_TPM may interpret format-one selectors; an
+  // identically shaped software-layer payload must preserve its fallback.
+  constexpr citizensdk_error_code_t fallback = CITIZENSDK_ERROR_INTEGRITY;
+  const auto success = map_tpm2_error(TSS2_RC_SUCCESS, fallback);
+  assert(success.code == CITIZENSDK_OK && !success.dictionary_attack_lockout);
+  for (const TSS2_RC layer : {TSS2_TPM_RC_LAYER, TSS2_RESMGR_TPM_RC_LAYER}) {
+    for (const TPM2_RC authentication : {TPM2_RC_BAD_AUTH, TPM2_RC_AUTH_FAIL}) {
+      for (const TPM2_RC selector : {TPM2_RC_H, TPM2_RC_H | TPM2_RC_2,
+                                     TPM2_RC_S | TPM2_RC_3,
+                                     TPM2_RC_P | TPM2_RC_F}) {
+        const auto result = map_tpm2_error(layer | authentication | selector,
+                                           fallback);
+        assert(result.code == CITIZENSDK_ERROR_AUTHENTICATION_REQUIRED);
+        assert(!result.dictionary_attack_lockout);
+      }
+    }
+    for (const TPM2_RC invalidated : {TPM2_RC_HANDLE,
+                                      TPM2_RC_HANDLE | TPM2_RC_1,
+                                      TPM2_RC_REFERENCE_H0}) {
+      const auto result = map_tpm2_error(layer | invalidated, fallback);
+      assert(result.code == CITIZENSDK_ERROR_KEY_INVALIDATED);
+      assert(!result.dictionary_attack_lockout);
+    }
+    const auto lockout = map_tpm2_error(layer | TPM2_RC_LOCKOUT, fallback);
+    assert(lockout.code == CITIZENSDK_ERROR_UNAVAILABLE);
+    assert(lockout.dictionary_attack_lockout);
+    const auto unknown = map_tpm2_error(layer | TPM2_RC_FAILURE, fallback);
+    assert(unknown.code == fallback && !unknown.dictionary_attack_lockout);
+  }
+  for (const TSS2_RC layer : {TSS2_FEATURE_RC_LAYER, TSS2_ESAPI_RC_LAYER,
+                              TSS2_SYS_RC_LAYER, TSS2_MU_RC_LAYER,
+                              TSS2_TCTI_RC_LAYER, TSS2_RESMGR_RC_LAYER,
+                              TSS2_RC_LAYER(0xff)}) {
+    for (const TPM2_RC shaped_payload : {TPM2_RC_BAD_AUTH | TPM2_RC_S | TPM2_RC_1,
+                                         TPM2_RC_AUTH_FAIL | TPM2_RC_P | TPM2_RC_2,
+                                         TPM2_RC_HANDLE | TPM2_RC_3,
+                                         TPM2_RC_REFERENCE_H0, TPM2_RC_LOCKOUT}) {
+      const auto result = map_tpm2_error(layer | shaped_payload, fallback);
+      assert(result.code == fallback && !result.dictionary_attack_lockout);
+    }
+  }
+  const auto transport = map_tpm2_error(TSS2_TCTI_RC_IO_ERROR, fallback);
+  assert(transport.code == fallback && !transport.dictionary_attack_lockout);
+  const auto reserved = map_tpm2_error(UINT32_C(0x01000000) | TPM2_RC_BAD_AUTH,
+                                       fallback);
+  assert(reserved.code == fallback && !reserved.dictionary_attack_lockout);
 
   const auto availability = Tpm2().availability();
   assert(availability == TpmAvailability::kAvailable ||

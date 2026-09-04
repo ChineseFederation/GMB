@@ -4,10 +4,12 @@ import '../api/citizen_sdk_error.dart';
 import 'citizen_sdk_flutter_codec.dart';
 import 'citizen_sdk_platform.dart';
 
-/// Android、iOS 与 macOS 官方 binding 共用的唯一 Flutter transport。
+/// CitizenSDK 官方 binding 共用的唯一 Flutter transport。
 ///
-/// 三个平台必须实现完全相同的 22 个 MethodChannel tuple 方法与同一
-/// EventChannel 事件合同。transport 不携带平台分支、Map、秘密或原生句柄。
+/// Android、iOS、macOS、Linux 与 Windows 使用相同的 22 个
+/// MethodChannel tuple 方法和 EventChannel 事件合同。Linux/Windows 实际平台验证
+/// 由统一 CI/Release 执行；注册不等于已运行。transport 不携带平台分支、
+/// Map、秘密或原生句柄，同版原生插件缺失时返回 unsupported。
 final class FlutterCitizenSdkPlatform implements CitizenSdkPlatform {
   FlutterCitizenSdkPlatform({
     MethodChannel? methodChannel,

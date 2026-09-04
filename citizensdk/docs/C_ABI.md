@@ -16,9 +16,13 @@ library contain exactly 70 public symbols.
 
 The Step 7.1 Linux C/C++ Host source projection also consumes this exact ABI.
 Its header-only C++ facade does not define another binary contract, and its Host
-library must not re-export or duplicate the Core symbols. Linux Flutter
-registration, LinuxARM/LinuxAMD shared libraries and public release-manifest
-entries are deferred; source presence alone is not a delivered platform claim.
+library must not re-export or duplicate the Core symbols. Step 7.4 includes
+the official Linux Flutter registration and both LinuxARM/LinuxAMD projections
+in the same-version candidate contract. This changes neither the 70-function
+Core ABI nor the 13-function Host ABI; actual platform builds and execution
+remain subject to the later unified GitHub CI/Release validation.
+源码候选合并 26 项同版安装件；Hosted 只增加 12 项 plugin 输入，不携带 Host 私有实现，
+也不创建第二份 Core。公共注册不表示 Linux 已运行或正式发布，缺少运行件不能生成可分发候选。
 The Linux Host ABI v1 is a closed set of 13 `citizensdk_host_*` functions that
 compose and own the root instance; `citizensdk_host_abandon` is only an ownership-transfer escape hatch
 for a destructor that can no longer report a close error. It schedules the same
@@ -302,3 +306,10 @@ require the owning live `CitizenSdkHandle`; another instance cannot guess and
 read, release or consume the mnemonic. Import and account expansion accept
 mnemonic bytes only as explicit user recovery input. This narrow boundary does
 not permit a private-key export, raw signer, or persistent secret callback.
+
+## Windows 薄 Host（第 8.1 步）
+
+70 项 Core 根符号与既有数值/布局不变。Windows 另固定 13 项 `citizensdk_host_*`，
+配置平台 owner 字段为 `void *hwnd`，配置/钱包请求/公开结果分别为 72/32/16 字节。
+Host 独占 Core 所有权；应用不能直接销毁借用 handle 或替换内部事件回调。关闭在 Core
+释放后还要等待 UI 线程确认 HWND 退休，BUSY 时保留完整资源图。根 ABI 不增加秘密旁路。

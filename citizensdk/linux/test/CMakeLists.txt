@@ -1,3 +1,13 @@
+cmake_minimum_required(VERSION 3.24)
+
+# 独立消费者只从本轮安装前缀取得公开头与双库；提前返回，绝不落入
+# 下方 Host 内部合同测试的生产源码编译分支。
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  project(CitizenSDKConsumer LANGUAGES C CXX)
+  include(CitizenSDKConsumer.cmake)
+  return()
+endif()
+
 # Linux 合同测试直接编译与正式 Host 相同的生产源码；不维护测试专用实现。
 find_package(Threads REQUIRED)
 
@@ -12,6 +22,45 @@ if(CITIZENSDK_TEST_WORK_DIR STREQUAL "" OR
    NOT IS_DIRECTORY "${CITIZENSDK_TEST_WORK_DIR}")
   message(FATAL_ERROR
     "CITIZENSDK_TEST_WORK_DIR must be an existing task-exclusive absolute directory")
+endif()
+
+# Flutter 路径只重用适配层生产源码，仍链接同版已安装 Host/Core。
+# 不运行 Host 源码重编译，不下载测试框架或建立第二份核心。
+if(TARGET citizen_sdk_plugin)
+  set(CITIZENSDK_LINUX_FLUTTER_CONTRACT_TESTS
+    citizen_sdk_flutter_codec_test
+    citizen_sdk_flutter_sessions_test
+    citizen_sdk_flutter_wallet_flow_test
+    citizen_sdk_flutter_environment_test
+    citizen_sdk_flutter_plugin_test
+    citizen_sdk_flutter_secret_boundary_test
+  )
+  add_library(citizensdk_linux_flutter_test_support STATIC
+    ${CITIZENSDK_FLUTTER_ADAPTER_SOURCES})
+  target_compile_features(citizensdk_linux_flutter_test_support PUBLIC cxx_std_17)
+  target_compile_definitions(citizensdk_linux_flutter_test_support PRIVATE FLUTTER_PLUGIN_IMPL)
+  target_include_directories(citizensdk_linux_flutter_test_support PUBLIC
+    "${CMAKE_CURRENT_LIST_DIR}/../include"
+    "${CMAKE_CURRENT_LIST_DIR}/../src")
+  target_link_libraries(citizensdk_linux_flutter_test_support PUBLIC
+    flutter CitizenSDK::Host Threads::Threads)
+  target_compile_options(citizensdk_linux_flutter_test_support PRIVATE
+    -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion
+    $<$<BOOL:${CITIZENSDK_WARNINGS_AS_ERRORS}>:-Werror>)
+  foreach(test_name IN LISTS CITIZENSDK_LINUX_FLUTTER_CONTRACT_TESTS)
+    add_executable(${test_name} "${test_name}.cc")
+    target_link_libraries(${test_name} PRIVATE citizensdk_linux_flutter_test_support)
+    target_compile_definitions(${test_name} PRIVATE
+      CITIZENSDK_LINUX_TEST_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/..")
+    target_compile_options(${test_name} PRIVATE
+      -UNDEBUG -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion
+      $<$<BOOL:${CITIZENSDK_WARNINGS_AS_ERRORS}>:-Werror>)
+    add_test(NAME CitizenSDK.Linux.${test_name} COMMAND ${test_name})
+    set_tests_properties(CitizenSDK.Linux.${test_name} PROPERTIES
+      TIMEOUT 30 LABELS "CitizenSDK;LinuxFlutter;Contract"
+      ENVIRONMENT "CITIZENSDK_TEST_WORK_DIR=${CITIZENSDK_TEST_WORK_DIR}")
+  endforeach()
+  return()
 endif()
 
 set(CITIZENSDK_LINUX_HOST_TEST_SOURCES

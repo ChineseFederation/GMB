@@ -41,6 +41,8 @@ int main() {
   }
   const std::set<std::string> expected_headers{
       "citizensdk_host.h",
+      // Flutter 注册声明只负责装配；和原生 Host 头一起接受秘密边界扫描。
+      "citizen_sdk_plugin.h",
       "citizen_sdk.hpp",
       "citizen_sdk_config.hpp",
       "citizen_sdk_error.hpp",

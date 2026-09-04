@@ -127,9 +127,13 @@ RSA-2048/OAEP-SHA256 wrap 的完整参数组合；不能只凭算法列表宣布
 墓碑与 provision 线性化，unwrap 在长认证提示返回后、交付明文前再次核验未退休并在失败时
 清零输出。
 
-所有 Host API 先取得受统一 closing fence 管理的 lease；destroy 永久关闭 admission，并等
-现有 API、callback、route、Vault 与 UI lease 退役后才销毁 store/Vault。关闭不能持有回调
-可能重入的 API 锁等待 Core。建立私有 route 期间同步到达的 completion 必须对 65 个以上和
+Linux Host API 先取得统一 closing fence 的 lease；显式 destroy 有其它在途 API lease 时
+返回 `BUSY`，不等待回调线程。provider 另持 service lease，认证期间不持 Host 全局锁，
+close 对在途 service 返回 `BUSY`。abandon 把完整图移交 supervisor 后，由其等待 lease
+退役；不可逆 teardown 开始后不重开 admission。callback、route、Vault 与 UI 均收口后才
+销毁 store/Vault，关闭不能持有回调可能重入的 API 锁等待 Core。TPM 返回码只对 TPM/
+RESMGR_TPM 层解释 format-1，软件层不可借相同低位伪装为认证或密钥错误。
+建立私有 route 期间同步到达的 completion 必须对 65 个以上和
 并发突发保持无损。GTK parent 的 `destroy` 在 owner UI 线程立即清空并退休密码/恢复词控件、
 使 parent 引用失效并唤醒等待者，不能让后台认证稍后解引用悬空窗口。
 
@@ -292,10 +296,16 @@ checkpoint 到 provider/Engine 生命周期提交之间没有另一项链、钱�
 `citizensdk_*` 符号，并拒绝 `smoldot_*`、`citizen_sr25519_*` 与 `account_crypto_*`。legacy
 smoldot/signer 符号只允许存在于源码树外的 macOS `arm64` 差分测试宿主库，绝不进入候选。
 
-Linux C/C++ Host 同样只能加载唯一 `libcitizensdk.so`。预定的 `libcitizensdk_host.so` 不得
+Linux C/C++ Host 同样只能加载唯一 `libcitizensdk.so`。`libcitizensdk_host.so` 不得
 重复导出 Core、内嵌第二份 smoldot/signer/Engine，或让恢复词、设备金库口令、DEK、child
 mini-secret 和 private key 穿过公共 C++/Flutter 边界。第 7.1 步只提交这套源码与测试合同，
 没有构建 `.so`，也没有取得 LinuxARM/LinuxAMD 或实体 TPM 的运行证据。
+第 7.4 步把双平台安装投影、默认公开入口和 Hosted 过滤纳入同版本候选合同，不改变上述秘密
+边界。Hosted 只保留 38 项 Linux 运行输入，不携带 Host 私有源码或从系统位置替换 Core/Host；
+plugin 固定 `$ORIGIN`，不借助测试 runner 修补路径。同版产物缺失或重叠文件漂移时拒绝
+候选。CMake 全部指令采用闭集校验，阻断追加命令覆盖导入路径。当前 ELF 结构/禁止依赖
+检查不能证明实际构建提交或静态依赖来源；真实依赖、许可证和运行证据不齐不得正式分发，
+这些证据由后续统一 CI/Release 验收，不在本步以伪造元数据填补。
 
 聊天、广场、OpenMLS、TUYU 消息协议与产品数据库均被排除。测试夹具只能使用公开向量和
 非生产数据，不得加入真实助记词、设备密钥或用户数据。
@@ -304,24 +314,29 @@ mini-secret 和 private key 穿过公共 C++/Flutter 边界。第 7.1 步只提�
 
 - SDK 源码树不得接收构建缓存、原生库或 Release 产物。
 - 本机 Linux 合同测试必须由 CMake/CTest 以 `CITIZENSDK_TEST_WORK_DIR` 注入
-  `/Users/rhett/TATA/tataconsole/target/citizensdk` 下有效 UID 所有、`0700`、任务独占的现有
+  `/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下有效 UID 所有、`0700`、任务独占的现有
   绝对目录。测试 helper 逐级 no-follow 验证后，以 CSPRNG 随机名称和 `mkdirat` 只在已验证
   目录 fd 下创建子目录，不回退 `/tmp`、当前目录或用户目录，也不递归删除未经 fd 与 inode
   复核的路径。
 - 原生构建和 Release 在首次建目录前校验绝对规范路径及每一级既存祖先，拒绝路径穿越、
   符号链接祖先和非目录祖先。
+- 本机发布器只接受 `/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK` 和
+  `/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 的严格后代；永久根本身、
+  旧根、邻产品/仓库/平台、伪前缀和最终链接均拒绝。只核验匹配根存在且为普通目录，
+  未使用根缺失不影响本次请求。GitHub 隔离分支不变。该门禁不替代执行方对 UID、权限、
+  任务归属和清理范围的检查；永久容器不得删除，不能清理别的任务内容。
 - CI/Release 使用锁文件与准确提交；Release 必须绑定同产品、同目标的成功 CI。
 - 候选只允许标准 macOS framework 内精确五个相对符号链接：`Versions/Current -> A`，以及
   根 `CitizenSDK`、`Headers`、`Modules`、`Resources` 指向 `Versions/Current/...`；其他任何
   符号链接、路径穿越、未登记文件、常见密钥文件及 PEM 私钥材料均拒绝。
 - `SHA256SUMS` 是 tgz 外部资产，精确覆盖 manifest 与 tgz；校验器重建规范归档字节。
-- Release 候选合同包含 Android、iOS 与 macOS；iOS 设备和模拟器只是同一平台的技术变体，
-  三个平台使用同一产品 ABI、Core commit 和 SDK version。当前 Android ABI 为 `arm64-v8a`，
+- Release 候选合同包含 Android、iOS、macOS、LinuxARM、LinuxAMD 与 Windows；iOS 设备和模拟器只是同一平台的技术变体，
+  全部平台使用同一产品 ABI、Core commit 和 SDK version。当前 Android ABI 为 `arm64-v8a`，
   Apple machine slice 架构元数据为 `arm64`。
 - GitHub Release 是正式分发终态，但不等于真机硬件金库安全验收；对应结果必须单独留档。
-- LinuxARM、LinuxAMD 当前只完成第 7.1 步源码边界，仍不在 Release manifest；公开支持前
-  必须分别验证 ELF/GLIBC、公共符号、依赖闭集、软件 TPM 与实体 TPM，且不能用软件 TPM
-  结果代替硬件证明。
+- LinuxARM、LinuxAMD 已在第 7.4 步纳入 manifest 候选合同与公开入口，但尚未真实编译或运行；
+  正式分发前必须由后续统一 GitHub CI/Release 分别验证 ELF/GLIBC、公共符号、依赖闭集、
+  软件 TPM 与实体 TPM，不能把源码注册或软件 TPM 结果代替硬件证明。
 
 本轮 Apple 本机已编译 iOS 设备与模拟器变体两组测试 bundle，但因无 Simulator
 runtime 没有声称 iOS XCTest 已运行。macOS Core 50 项与 Flutter adapter 22 项 XCTest
@@ -329,8 +344,19 @@ runtime 没有声称 iOS XCTest 已运行。macOS Core 50 项与 Flutter adapter
 Apple 移动设备，所以 Secure Enclave、生物认证和 device-only Keychain 仍需真机验收。
 当前 TataConsole Flow 尚未接入本闭集；本步未运行远程 CI、正式 Release、Hosted 上传或 Git。
 
-第 7.1 步也没有运行 Linux 编译、合同测试、Git、远程 CI、Release 或 Hosted 上传；其完整
-平台安全合同见 `LINUX_PLATFORM.md`。
+第 7.1 步没有运行 Linux 编译与 CTest、Dart/Flutter/Cargo 测试、Git、远程 CI、Release 或
+Hosted 上传；仅执行获准的 Node Release 来源合同测试与脚本语法检查，不代表 Linux 安全
+运行验收通过。完整平台安全合同见 `LINUX_PLATFORM.md`。
+
+第 7.2 步 Linux Flutter adapter 也不承载秘密：助记词和 password 只出现在 SDK-owned GTK
+控件，DEK/child secret/sr25519 仍只在 Host/Core 受控路径；tuple 没有对应位置。Core callback
+内只同步复制公开结果到拥有值，借用 result、Host/Core/request/flow handle 和 `FlValue` 不跨
+线程。请求 route 先于原生接受，终态复制结束才允许退役；钱包变更门禁覆盖不同 session/引擎，
+删除类方法的 EMPTY→profile 回读也在同一门禁内。Event sink 用 epoch 阻止迟到队列进入新订阅，
+detach 不在 handler 销毁栈内回复；待回复句柄保留到 UI 队列再结束，防止活 engine 通道替换
+造成悬空请求。它也不提前释放在途变更门禁，真实完成后才交既有 Host 关闭机制。
+长度保持 codec 只修复 GLib 内部 NUL 表示，wire 仍为 Flutter
+标准字符串类型，拒绝其它自定义值和超深/超大输入。
 
 iOS 设备与模拟器变体的浅层 framework install ID 为
 `@rpath/CitizenSDK.framework/CitizenSDK`；macOS 标准 `Versions/A` framework install ID 为
@@ -343,3 +369,39 @@ Android built-in Kotlin 迁移提示延后到第 9 步处理。
 同一本机闭集已验证 Android AAR、Hosted 17 文件分析 0 问题、完整 Dart 316/316
 （`--timeout=2m`）、根 Rust 285/285 与 compile-fail 文档测试 1/1、Clippy/格式，以及
 Android 原生 Kotlin/Java 单元测试 Gradle 17 个 task；这些结果不扩大上述真机安全验收边界。
+
+## Windows 系统金库边界（第 8.1 步）
+
+只使用 PCP + TPM 2.0、当前用户不可导出的 RSA KEK。SDK 设备口令在有界可清零缓冲区
+进入官方 PIN 授权，不是业务登录或链口令；DEK 直接解封到 Rust 的 32 字节输出，失败清零。
+PCP 冷/暖进程、重开 key、错误/缺失口令和静默解密仍需隔离硬件验收，关闭 handle
+不等于清除 OS 缓存。生产代码不试错口令、不清 TPM，不使用软件降级。
+持久 KEK 按 generation 定址；跨 Host 创建/提交与退休串行，CAS 失败不能删除胜者 key。
+物理删除失败保留重试身份。文件操作绑定已验证父 HANDLE、SID/DACL、文件身份、单链接
+和无 reparse。自有输入不经 EDIT/业务通道；缓冲区清零不代表系统渲染副本或截图可控。
+
+第 8.2 步的 Flutter adapter 只传递公开拥有值，不把助记词、设备口令、私钥、DEK 或原生
+handle 放进 tuple、错误或事件。钱包入口只调用现有 Windows 原生流程，未引入新秘密存储。
+`CITIZENSDK_APPLICATION_ID` 是稳定数据命名空间而非 Windows 身份认证；它不能替代 SID、
+DACL、TPM 或路径检查。插件不修改 Shell 身份，不从显示名、可执行文件名或目录推导身份。
+事件订阅按 epoch 隔离，工作线程不接触 Flutter 消息对象；原生结果在回调期间完成拥有值
+复制，再调度 UI 回复。已接纳请求与钱包变更门必须存活到真实终态，不能以 handler 销毁
+或 detach 代替完成。Windows Host 关闭可能先释放 Core、再等待 UI 退休；只有已经进入
+合法关闭流程的会话可以内部重试，无 Core 不能被普遍解释成关闭成功。Host 生产实现和
+Core 均未在本步修改。Windows/MSVC、真实消息泵与 TPM 验收仍待统一平台检查。
+
+两条 Windows channel 在官方解码前先执行无分配的标准 wire 预检，限制字节数、节点数和
+深度，拒绝截断、尾随数据、不支持的类型和畸形 UTF-8。不能只在官方 decoder 已分配后
+检查 Value 大小，也不能让截断载荷被零填充后进入签名或交易。预检不替代官方 codec，
+合法消息仍由 StandardMethodCodec 解码；保留合法整数宽度、长度表示及内嵌 NUL。
+
+第 8.4 步的公开入口和安装投影不改变上述安全实现。候选与 Hosted 仅接受同版 21 项
+安装件和 12 项插件输入，额外 DLL、路径、修改过的公开头或链资产均失败关闭。正式消费者
+必须经原始包声明与自动注册，不允许内部平台注入或通过临时修改 SDK 副本规避来源检查。
+
+Windows Flutter 生产数据根由 SHGetKnownFolderPath(FOLDERID_LocalAppData) 返回，不能
+通过 HOME、LOCALAPPDATA 或 XDG 环境变量替换。真实消费者只在一次性 GitHub 隔离用户
+环境中运行，使用运行前不存在的 org.citizensdk.flutterconsumer 命名空间；只允许清理
+核实归属后的自身状态，不能删除整个 LocalAppData。Flutter/Pub 工具副本与缓存放本轮
+工作目录；官方工具自身用户状态由一次性 runner 隔离，不在本机 Windows 用户中执行。
+消费者不创建钱包、显示秘密或发交易，能力不可用必须如实呈现，不能证明实体 TPM 授权。

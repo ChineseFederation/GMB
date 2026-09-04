@@ -19,11 +19,14 @@ void main() {
   }
 
   Map<String, dynamic> readRolePermissionFixture() {
-    final candidates = [
-      File('../citizenchain/runtime/tests/fixtures/role_permission.json'),
-      File('citizenchain/runtime/tests/fixtures/role_permission.json'),
-    ];
-    final file = candidates.firstWhere((candidate) => candidate.existsSync());
+    // 只读实际仓库的单一金标位置，不受本端中央工作根影响。
+    final root = Platform.environment['GMB_ROOT'];
+    if (root == null || !root.startsWith('/')) {
+      throw StateError('岗位金标检查缺少准确 GMB_ROOT');
+    }
+    final file = File(
+      '$root/citizenchain/runtime/tests/fixtures/role_permission.json',
+    );
     return jsonDecode(file.readAsStringSync()) as Map<String, dynamic>;
   }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 清理目标平台缓存并生成本机优化安装包；本脚本不启动、不安装产品。
+# 在本端中央工作根生成本机优化安装包；本脚本不启动、不安装产品。
 #
 # 用法：citizenwallet-run.sh <ios|android>
 #
@@ -10,46 +10,54 @@
 # 本机中间文件只允许进入TataConsole中央`.work`，最终成功包覆盖中央产品产物目录中的固定文件。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-CITIZENWALLET_DIR="$SCRIPT_DIR/.."
-REPO_ROOT="$SCRIPT_DIR/../.."
+CITIZENWALLET_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PLATFORM="${1:?缺少目标平台，用法：$0 <ios|android>}"
 [[ "$PLATFORM" == ios || "$PLATFORM" == android ]] \
   || { echo "本机目标平台只接受 ios 或 android：$PLATFORM" >&2; exit 1; }
-cd "$CITIZENWALLET_DIR"
 
 : "${TATA_CONSOLE_TARGET_ROOT:?本机编译必须由 TataConsole 提供中央产物目录}"
 : "${TATA_CONSOLE_WORK_DIR:?本机编译必须由 TataConsole 提供中央工作目录}"
-case "$TATA_CONSOLE_WORK_DIR" in "$TATA_CONSOLE_TARGET_ROOT/.work/citizenwallet-$PLATFORM") ;; *)
+case "$TATA_CONSOLE_WORK_DIR" in "$TATA_CONSOLE_TARGET_ROOT/.work/GMB/citizenwallet/$PLATFORM") ;; *)
   echo "公民钱包中央工作目录不合法：$TATA_CONSOLE_WORK_DIR" >&2; exit 1 ;;
 esac
-# 与公民使用同一条不可绕过边界：Build直接读取登记的GMB产品源码。
+# 源码根只读；两个端的 Flutter、Pods 和 Gradle 状态分别由控制台生成。
 [[ "$CITIZENWALLET_DIR" == "$REPO_ROOT/citizenwallet" ]] || {
   echo "citizenwallet本机Build源码身份无效：$CITIZENWALLET_DIR" >&2
   exit 1
-
 }
-
-cleanup_direct_source_state() {
-  rm -rf "$CITIZENWALLET_DIR/.dart_tool" "$CITIZENWALLET_DIR/.flutter-plugins" \
-    "$CITIZENWALLET_DIR/.flutter-plugins-dependencies" "$CITIZENWALLET_DIR/ios/Pods" \
-    "$CITIZENWALLET_DIR/ios/.symlinks" "$CITIZENWALLET_DIR/android/.gradle"
+: "${TATA_CONSOLE_FLUTTER_ROOT:?缺少本端Flutter配置根}"
+[[ "$TATA_CONSOLE_FLUTTER_ROOT" == "$TATA_CONSOLE_WORK_DIR" \
+  && ! -L "$TATA_CONSOLE_FLUTTER_ROOT" \
+  && -f "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" \
+  && ! -L "$TATA_CONSOLE_FLUTTER_ROOT/pubspec.yaml" ]] || {
+  echo 'CitizenWallet 必须使用本端独立生成的 Flutter 配置' >&2
+  exit 1
 }
-trap 'status=$?; cleanup_direct_source_state; exit "$status"' EXIT
+cd "$TATA_CONSOLE_FLUTTER_ROOT"
+[[ "$(pwd -P)" == "$TATA_CONSOLE_WORK_DIR" ]] || {
+  echo 'CitizenWallet 中央工作根不得通过符号链接指向其它目录' >&2
+  exit 1
+}
 INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?缺少TataConsole本机增量缓存目录}"
 [[ "$INCREMENTAL_CACHE_DIR" == "$TATA_CONSOLE_WORK_DIR/cache" ]] || {
   echo "CitizenWallet本机增量缓存必须位于$TATA_CONSOLE_WORK_DIR/cache" >&2
   exit 1
 }
 BUILD_DIR="$INCREMENTAL_CACHE_DIR/flutter-build"
-ARTIFACT_ROOT="$TATA_CONSOLE_TARGET_ROOT/citizenwallet"
+ARTIFACT_ROOT="$TATA_CONSOLE_TARGET_ROOT/GMB/citizenwallet/$PLATFORM"
 export TATA_CONSOLE_BUILD_DIR="$BUILD_DIR"
 export TATA_CONSOLE_NATIVE_ANDROID_DIR="$INCREMENTAL_CACHE_DIR/native/android"
 export TATA_CONSOLE_NATIVE_IOS_DIR="$INCREMENTAL_CACHE_DIR/native/ios"
 export CARGO_TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
 export XDG_CONFIG_HOME="$INCREMENTAL_CACHE_DIR/flutter-config"
+export PUB_CACHE="$INCREMENTAL_CACHE_DIR/dart-pub"
+export GRADLE_USER_HOME="$INCREMENTAL_CACHE_DIR/gradle"
+export CP_HOME_DIR="$INCREMENTAL_CACHE_DIR/cocoapods"
+export TMPDIR="$TATA_CONSOLE_WORK_DIR/"
+export FLUTTER_SUPPRESS_ANALYTICS=true COCOAPODS_DISABLE_STATS=true
 mkdir -p "$XDG_CONFIG_HOME"
-build_dir_relative="$(python3 -c 'import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))' "$BUILD_DIR" "$CITIZENWALLET_DIR")"
-flutter config --build-dir="$build_dir_relative" >/dev/null
+flutter config --build-dir=cache/flutter-build >/dev/null
 
 # 与 CitizenApp 共用仓库根 Flutter 依赖真源；版本不符必须在
 # 依赖解析之前失败，不能生成另一套 iOS 依赖状态污染工程。
@@ -60,7 +68,7 @@ ACTUAL_FLUTTER_VERSION="$(flutter --version --machine 2>/dev/null | python3 -c '
   exit 1
 }
 
-# 与CitizenApp相同，两个平台使用独立中央缓存，中间产物可复用但最终包必须重建。
+# 仅清理本任务候选包；退出清理由控制台核对任务身份后执行，不触碰源码或另一端。
 clean_platform_build_outputs() {
   case "$PLATFORM" in
     ios) rm -rf "$BUILD_DIR/ios/iphoneos/Runner.app" ;;
@@ -79,8 +87,7 @@ retain_ios_local_artifact() {
 }
 
 
-# 本机编译只调用仓库内唯一的索引同步实现，禁止在本脚本复制第二份规则。
-"$SCRIPT_DIR/sync-pallet-registry.sh" "$REPO_ROOT"
+# 已跟踪的 pallet_registry.dart 是构建输入；本机编译不得回写共享源码索引。
 
 echo "==> 清理 ${PLATFORM} 平台构建产物..."
 clean_platform_build_outputs
@@ -93,7 +100,7 @@ flutter pub get
 # 所以必须先于 flutter build 产出；实现来自 shared/citizen-signer，
 # 与 CitizenApp 热端同一份源码。
 echo "==> 编译原生签名库（${PLATFORM}）..."
-# 必须用绝对路径 SCRIPT_DIR:上方已 cd 进 CITIZENWALLET_DIR,而塔塔控制台以相对路径
+# 必须用绝对路径 SCRIPT_DIR:上方已 cd 进本端中央工作根,而塔塔控制台以相对路径
 # 调本脚本时 $0 是相对串,$(dirname "$0") 会拼在新 cwd 上多套一层目录。
 "$SCRIPT_DIR/build-signer-native.sh" "$PLATFORM"
 

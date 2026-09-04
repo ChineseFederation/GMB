@@ -6,23 +6,29 @@ CitizenChain 轻节点、钱包、sr25519、Runtime 或交易实现；它只把�
 
 ## 当前状态
 
-第 7.1 步只新增并审查 Linux C/C++ Host 源码、typed stores、TPM 2.0 Vault、SDK-owned
-钱包流程、合同测试源码和文档。此时：
+第 7.1 步新增 Linux C/C++ Host、typed stores、TPM 2.0 Vault 和 SDK-owned 钱包流程源码；
+第 7.2 步新增复用它们的 Flutter adapter 与合同测试源码，第 7.4 步原子纳入统一候选。当前：
 
-- 尚未注册根 `pubspec.yaml` 的 Linux Flutter plugin；
-- 尚未把 LinuxARM、LinuxAMD 写入正式 Release manifest；
+- 根 `pubspec.yaml` 已以官方 `linux`、`CitizenSdkPlugin` 注册插件，默认 `CitizenSdk.open()` 直接使用该绑定；
+- LinuxARM、LinuxAMD 已纳入同版本候选 manifest 合同，Hosted 运行闭集与之同步；
 - 尚未生成或注入任何 `.so`；
-- 尚未运行 Linux 编译、测试、远程 CI、Release、Hosted 上传或 Git；
+- 尚未运行 Linux 编译、CTest、远程 CI、Release、Hosted 上传或 Git；已完成的 Node 来源合同与脚本语法检查不代表 Linux 运行通过；
 - 因而不能把 LinuxARM、LinuxAMD 描述为已经交付的平台。
 
-第 7.2 步才增加 Flutter adapter；第 7.3 步在两种真实机器目标完成编译、测试、ELF/ABI
-核验和候选反向校验后，才允许原子启用公开平台声明。
+第 7.2 步的 adapter 已纳入第 7.4 步公开入口；第 7.3 步已补齐安装后 C/C++、Flutter 消费者与唯一构建器
+装配源码。当前开发以本机 macOS 编译通过为验收标准；2026-09-03 已通过既有 `abi-host` 与
+`apple`，不再等待用户提供 Linux/TPM 环境。跨平台构建与功能验证后续统一进入 GitHub CI/Release：
+CI 使用增量缓存，Release 使用全量构建，保持同一 Core commit、SDK 版本、ABI 版本和一个
+CitizenSDK Release，不增加平台独立产品或第二套流程。
+两种 Linux 机器目标的编译、测试、ELF/ABI 和硬件验收仍未执行；macOS 编译不能替代这些运行
+证据。候选投影、pubspec 和默认入口已在第 7.4 步同步修改，后续由统一 CI/Release 检查；
+正式发布必须取得真实证据，不把源码注册当作 Linux 已运行或正式交付。
 
 ## 平台与工具链
 
 公开平台名称严格限定为：
 
-| 平台 | GNU target triple | ELF machine | 第 7 步目标 |
+| 平台 | GNU target triple | ELF machine | 后续统一 CI/Release 验证 |
 |---|---|---|---|
 | LinuxARM | `aarch64-unknown-linux-gnu` | ELF64 AArch64 | 待构建与验证 |
 | LinuxAMD | `x86_64-unknown-linux-gnu` | ELF64 x86-64 | 待构建与验证 |
@@ -33,6 +39,8 @@ manifest 和面向用户的 API 只能使用 `LinuxARM` 或 `LinuxAMD`，不得�
 
 首版基线是 glibc 2.31；不包含 i386、armhf、musl、riscv64、ppc64 或 s390x。候选验证必须
 检查每个动态符号所需的最高 GLIBC version 不超过该基线，而不能只读取构建镜像名称。
+Host 与合同测试固定标准 C++17、关闭 GNU C++ 扩展，避免扩展模式的 `linux` 预定义宏改写
+内部命名空间；官方工具链 target triple 保持原值。
 
 ## 分层与产物
 
@@ -59,7 +67,7 @@ Flutter App           │       │
 - 第 7.2 步的 Flutter 动态库名固定为 `libcitizen_sdk_plugin.so`，只依赖 Host，不直接复制
   或静态链接第二份 Core。
 
-正式候选的运行库路径在第 7.3 步固定为：
+第 7.4 步统一候选合同的运行库路径为（源码目录不生成运行库）：
 
 ```text
 linux/lib/LinuxARM/libcitizensdk.so
@@ -68,14 +76,35 @@ linux/lib/LinuxAMD/libcitizensdk.so
 linux/lib/LinuxAMD/libcitizensdk_host.so
 ```
 
+两种平台各 19 项安装投影合并为 26 项：`include/` 下根 C ABI 2 头与 7 个 Host/C++ 头、
+`share/citizensdk/citizenchain/` 的 3 项资产只保留一份；重叠文件必须逐字节一致。每个平台
+`lib/<平台>/` 内保留 Core/Host 双库及 `cmake/CitizenSDK/` 的 5 项配置，不能跨平台覆盖。
+Hosted Linux 精确为上述 26 项加 12 项 plugin 输入：`CMakeLists.txt`、
+`cmake/CitizenSDKFlutter.cmake`、5 个 `.cc`、4 个内部 `.hpp` 和 `citizen_sdk_plugin.h`。
+Host 私有实现、测试、文档与原生构建模板只进入源码审计闭集，不进入 Hosted 运行包。
+源码校验继续拒绝生成库；只有候选校验准入准确安装投影。缺件、错版本、重叠字节漂移
+即拒绝候选。正式分发还要求真实依赖、许可证、构建来源和平台运行证据；这些留后续统一
+CI/Release，不能只凭 ELF 结构、头文件或版本声明视为已取得。
+
 这些运行库由发布构造器从源码树外注入；`/Users/rhett/GMB/citizensdk` 永远不保存生成的
 `.so`、CMake cache、`build/` 或 `target/`。本机 CitizenSDK 生成状态只能进入
-`/Users/rhett/TATA/tataconsole/target/citizensdk` 下由任务独占的工作目录。
+`/Users/rhett/TATA/tataconsole/target/citizensdk` 下由任务独占的工作目录；GitHub runner 使用
+统一工作流的 checkout 外独占目录，不照搬本机绝对路径。
 Linux 合同测试配置必须通过
 `-DCITIZENSDK_TEST_WORK_DIR=<绝对路径>` 显式注入其中一个已经存在、有效 UID 所有且权限精确
 为 `0700` 的任务目录；CTest 将同名环境变量传给测试进程。测试 helper 逐级 no-follow 验证
 后，以系统 CSPRNG 生成 128-bit 随机名称，并只通过已验证目录 fd 的 `mkdirat` 创建子目录；
 不允许重新解析根路径或回退到 `/tmp`、当前目录、用户目录。
+
+后续统一 CI/Release 执行 Linux 原生分支时，第 7.3 步工具装配要求显式预装的
+`CITIZENSDK_FLUTTER_ROOT` 与 `PUB_CACHE`，按当前平台
+核对 snapshot、engine revision 和必要缓存后才复制到本轮中央目录。Flutter/Dart 的所有写状态
+必须留在该目录：调用环境既有 `HOME` 必须已隔离到本轮 `CITIZENSDK_WORK_DIR` 下且为当前
+用户所有的 `0700` 普通目录；构建器只验证，不修改 `HOME`、创建用户、挂载或建立虚拟机。
+XDG、TMP 和工具缓存使用本轮目录，工具命令在预装可用的无特权 user/network namespace 中
+禁网执行；缺少缓存、工具或隔离能力即失败，不自动安装下载。实际 bundle 在获准 GTK 会话中
+运行；该环境要求不是实体 TPM 验收的替代物，也不是要求用户在当前 macOS 开发步骤提供
+Linux 环境。
 
 ## Host 与 C ABI
 
@@ -125,13 +154,42 @@ C++ `EventObserver` 只在 trampoline 调用期间同步借用 event 和 result�
 复制公开结果，但不得保留或自行调用 `citizensdk_result_release`。header-only wrapper 在
 observer 正常返回或抛出后都通过 RAII 对每个非零 result 执行一次 release。
 
-每个公开 Host API 调用都必须先在同一个 admission/closing fence 下取得短期 lease；关闭先
-永久封闭新 admission，再等待已经取得的 API lease、callback delivery、私有 route、Vault
-operation 与钱包 UI 收口。callback 安装/清除和 parent window 更新也经过同一个线性化门，
-关闭不得在持有重入 API 所需锁时等待根 Core callback，否则同步 callback 可形成死锁。
+## Flutter adapter 源码合同
+
+Linux Flutter adapter 固定 `citizen/sdk/core/v1` 与 `citizen/sdk/events/v1`，精确复用 Dart、
+Android、Darwin 的 22 方法和 fixed tuple。一个 session 持有一个 Host/Core；Dart 只看见
+随机 session ID。请求在 Core 接受前预置 route；callback 动态范围内复制公开 result，只有
+纯拥有值经非 inline 的 scheduler 回 UI 线程。原生终态到达与复制完成是两个独立状态；只有
+复制完成后才能移除 route。EventChannel cancel 只取消 sink，epoch 防止旧队列污染新订阅。
+钱包资料变更使用跨 session/Flutter engine 的进程级互斥；删除账户、删除钱包和清理的 Core
+EMPTY 结果必须串行回读公开 profile，期间不释放互斥。detach 撤销原生完成投递和接纳，但
+保活未完成 route 及其互斥，等完成值复制并收口后才移交既有 Host 关闭机制，不把请求取消
+当作完成。Flutter 待回复句柄保留到 handler 销毁栈退出，再在 UI 队列中逐一回复关闭错误；
+不能因通道替换就丢弃未回复句柄，也不能在销毁栈内重入 messenger。
+
+Flutter Linux 的普通 `FlValue` string 以 NUL 结尾，无法直接表示合法备注中的内嵌 NUL。
+adapter 通过官方 StandardMessageCodec virtual hook 在内部保存精确长度，并在输出时仍编码为
+标准 string tag 7；不增加 wire tag、Map 或兼容旁路。任意其它 custom value、错误类型、超深
+或超大值均失败关闭。公开返回值还验证钱包账户闭集、余额/nonce/费用的区块语义、交易执行
+终态、watch 字段组合及 finalized history 的唯一键、区块和备注投影；不把 included 当作执行成功。
+
+环境只从标准 Flutter bundle 的 executable-relative
+`data/flutter_assets/packages/citizen_sdk/assets/citizenchain` 取资产，从真实 `GApplication`
+取 application-id，从 XDG 用户数据根取状态目录，从 registrar view 取得弱父窗口。没有父窗口
+仍可做链读取，但不能虚报 GTK 钱包 UI 可展示；无效身份/路径/资产失败关闭，不读 Dart 路径
+参数、工作目录、仓库目录或共享 fallback 身份。
+
+每个公开 Host API 调用都必须先在同一个 admission/closing fence 下取得短期 lease。显式
+destroy 遇到其它在途 API lease 时返回 `BUSY`，不在当前线程等待；Vault/store provider 通过
+独立 service lease 保持资源存活，认证等待期间不持有 Host 全局调用锁，close 遇到在途
+service 同样返回 `BUSY`，保证 GTK 主线程仍能处理认证和取消。真正进入 teardown 后才封闭
+后续 admission；callback、私有 route、Vault operation 与钱包 UI 必须收口后才能释放资源。
+abandon 可将仍有在途 lease 的完整资源图移交 supervisor，由其等待 lease 归还后推进关闭，
+调用线程不等待。callback 内部自清除不能等待正在等待该 callback 的另一 setter；关闭也
+不得持有重入 API 所需锁等待 Core callback。
 
 关闭与 Core 生命周期保持单调：停止 capability monitor、清除 callback、销毁 Core，失败只重试
-当前或后继 teardown 阶段，最终 closed。任何阶段失败都不得重新开放请求，也不得提前释放 Core 借用的 HostBridge、
+当前或后继 teardown 阶段，最终 closed。不可逆 teardown 开始后失败不得重新开放请求，也不得提前释放 Core 借用的 HostBridge、
 store 或 vault context。destroy 成功前必须退役 public/secure store 与 Vault、清零其敏感状态，
 并确认所有 lease 已归还。Host-backed 实例必须先成功 graceful stop/checkpoint，直接 destroy
 不能冒充持久化完成。显式调用者保留失败 handle 并自行重试；C++ RAII 析构等无法再返回错误
@@ -184,6 +242,9 @@ RSA-2048/OAEP-SHA256 child/wrap 参数组合。任一条件不成立都必须报
 自动改用软件 KEK、重新建钥或绕过用户恢复流程。无合格 Vault 时，链读取、同步和公开验证仍
 可工作；`HARDWARE_VAULT`、
 `LOCAL_SIGNING`、`WALLET_PROFILE` 与钱包交易构造不得被标记为 ready。
+TPM 错误映射使用官方 TPM2-TSS 层定义：只有 TPM 与 RESMGR_TPM 层可解释 format-1
+handle/session/parameter selector；ESAPI、SYS、MU、TCTI 等软件层即使低位相同也保留原调用点
+错误分类，不能误报为认证失败、密钥失效或 DA lockout。
 
 ## SDK-owned 钱包流程
 
@@ -224,7 +285,7 @@ Host/C++ 旁路以及钱包流程 admission。根产品 C ABI 的明确备份/�
 软件 TPM 只能提供确定性集成测试，不能
 替代 LinuxARM、LinuxAMD 实体 TPM 验收。
 
-第 7.3 步公开 Linux 支持前还必须在两种目标上验证：
+公开 Linux 支持前，后续统一 GitHub CI 增量缓存、Release 全量构建验证还必须覆盖两种目标：
 
 - ELF64 machine、SONAME、GLIBC 基线和 `DT_NEEDED` 闭集；
 - Core 精确 70 exports，Host 不重复 Core symbols 且只依赖一次 `libcitizensdk.so`；
@@ -232,4 +293,24 @@ Host/C++ 旁路以及钱包流程 admission。根产品 C ABI 的明确备份/�
 - 两种机器目标的 C/C++、Flutter、SQLite、软件 TPM 和实体 TPM 测试；
 - 候选、归档和 Hosted dry-run 的逐文件闭集与反向校验。
 
-本文件记录的是已经确认的设计和第 7.1 步源码边界，不是上述运行验证的替代品。
+第 7.3 步增加的安装消费者只包含公开 API 调用：C 使用 Host C API，C++ 使用安装的
+header-only Host；第 7.4 步 Flutter 直接使用默认 `CitizenSdk.open()` 与正式注册，不再注入
+内部 platform 或临时修改 pubspec。plugin 自己固定 `$ORIGIN`，不依赖测试 runner 代偿。
+它们与 12 个 Host、6 个 adapter
+合同目标分别验收，不把源码正则或假 readelf 输出作为实际运行结果。后续平台验证中的运行失败
+或环境缺失必须保留对应未验收状态，不能以跳过测试产生“Linux 已交付”的结论；这些尚未执行
+的 Linux 项目不再阻塞本步以 macOS 本机编译为标准的开发验收。
+
+本文件记录已经确认的设计和源码装配边界，不是上述运行验证的替代品。
+
+## 已知同源缺陷修正（第 8.1.1 步）
+
+两个结构计数查询统一使用 `name NOT GLOB 'sqlite_*'`，下划线只表示字面字符。
+初始化前与打开既有库时都检查全部非系统对象，sqlitex 表、索引、视图或触发器不能被
+误当作 sqlite_ 系统对象排除。固定 schema、版本、CAS 与 Linux OFD 锁行为不变；
+版本 0 已有非系统对象时拒绝初始化，不能先创建业务表再报告错误。
+
+RequestRouter 将已接纳 callback 与空 `std::function` 交换，保证移交后路由立即为空；
+不依赖移动源的未指定状态。callback 可重入接纳下一请求，过期 completion 不能消费新路由。
+对应测试补直接头依赖及这些回归边界。此修正不改变任何平台、Flutter 方法或 Core ABI；
+实际 Linux 存储/UI/TPM 运行证据仍须由后续统一平台验收取得。

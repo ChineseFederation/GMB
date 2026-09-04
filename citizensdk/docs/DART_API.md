@@ -10,17 +10,28 @@ import 'package:citizen_sdk/citizen_sdk.dart';
 
 Android、iOS 与 macOS 已安装正式 binding。iOS 和 macOS 在 `pubspec.yaml` 中共同使用
 `sharedDarwinSource: true`，由 `darwin/` 的同一 Swift/Flutter adapter 投影产品 ABI。
-`CitizenSdk.open()` 在 LinuxARM、LinuxAMD、Windows 和 WASM 上稳定返回
-`CitizenSdkErrorCode.unsupported`，不会误走移动或 Darwin channel。
+第 7.4 步把 LinuxARM/LinuxAMD 同时纳入候选合同、官方 `linux` plugin 注册及默认
+`CitizenSdk.open()`，直接使用 `CitizenSdkPlugin` 和同一 transport，不注入内部 platform。
+第 8.4 步用同样方式纳入 Windows 默认入口、官方自动注册和同版运行投影。
+WASM 和未支持的 Flutter 平台仍在进入通道前返回 `CitizenSdkErrorCode.unsupported`；
+已支持平台缺少同版原生插件时同样失败关闭，不用另一套实现冒充 session。
+Linux/Windows 实际编译、CTest、C/C++/Flutter 与平台 UI/TPM 运行仍由后续统一 GitHub
+CI/Release 验证，当前源码注册不是正式发布或这些平台运行通过。
 iOS 模拟器变体可运行产品 ABI 与公开链能力，但没有 Secure Enclave；硬件金库、钱包和
 依赖它们的签名/交易能力必须通过 capability snapshot 报告不可用。
 
 共享 `citizen/sdk/core/v1` 的 22 方法 tuple 从未定义 mnemonic、password、DEK、child secret、
-private key、prepared/result/native handle 或 signed-extrinsic 位置。Android 与 Darwin adapter
-都必须遵守同一秘密不跨 Flutter 的合同。
+private key、prepared/result/native handle 或 signed-extrinsic 位置。Android、Darwin、Linux
+以及第 8.2 步 Windows adapter 源码都遵守同一秘密不跨 Flutter 的合同。Linux 使用长度保持的标准消息 codec，线上仍是
+标准 string tag；内嵌 NUL 的合法备注不得被 GLib 的 NUL 结尾字符串表示截断。
+
+Windows adapter 使用官方 StandardMethodCodec 的长度保持字符串。默认 `CitizenSdk.open()`
+不需要产品侧包装或别名；宿主在 generated_plugins.cmake 前声明一次
+`CITIZENSDK_APPLICATION_ID`，原样作为应用数据命名空间，不是新的 Dart 参数、业务账户
+或链身份。不能省略该声明并宣传 Windows 完全零配置。
 
 `lib/src` 中保留的旧 Dart 轻节点、钱包和交易代码是归档差分基线；它们已从
-`lib/citizen_sdk.dart` 根入口移除，Android、iOS 和 macOS 正式绑定均不可达，也不是新宿主的
+`lib/citizen_sdk.dart` 根入口移除，Android、iOS、macOS、Linux 和 Windows 公开绑定均不可达，也不是新宿主的
 公开 API。
 
 Hosted Package 的 Dart 运行时闭包精确为 17 个文件：
@@ -48,9 +59,9 @@ lib/src/platform/flutter_citizen_sdk_platform.dart
 根包运行依赖只有 Flutter SDK 与 `polkadart_keyring`；legacy/差分源码所需其余依赖只是
 dev dependencies，且相应源码由 `.pubignore` 排除，不会成为宿主的运行时闭包。
 
-本机对该精确 17 文件 Hosted 闭包执行分析为 0 问题；完整 Dart 套件使用
-`flutter test --timeout=2m` 执行 316/316。这里记录本地闭集验证，不代表 Hosted 已上传，
-也不代表 TataConsole 远程 CI 已运行。
+此前第 6 步本机对当时的 17 文件 Hosted 闭包执行分析为 0 问题；完整 Dart 套件使用
+`flutter test --timeout=2m` 执行 316/316。这是历史本地闭集验证，不代表第 7.1 步公开门面
+命名统一后重新运行过 Dart 测试，也不代表 Hosted 已上传或 TataConsole 远程 CI 已运行。
 
 真实 Flutter consumer 已从本公开入口完成 Android release APK（ABI `arm64-v8a`）、iOS device Release
 no-codesign、iOS 模拟器变体（Rust target `aarch64-apple-ios-sim`）编译和 macOS Release 构建。该结果只证明公开

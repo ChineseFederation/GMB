@@ -1,5 +1,16 @@
 # CitizenSDK Apple tests
 
+第 9.2 步新增 `citizen_sdk_flutter_consumer.dart`，供唯一构建器在真实 Hosted 解包包上
+编译标准 macOS Flutter Release 工程。消费者只使用公开 CitizenSdk，覆盖初始化、能力、
+空钱包、typed error、启停/有序事件、关闭幂等和重开；不创建钱包、签名或提交交易。
+宿主必须先证明 Foundation 状态目录位于中央独占工作区且系统 sandbox 已生效，才能注册
+插件并进入 Dart 消费者。工具/编译与真实运行分别记录，实施进度见中央任务卡第 35 节；
+下文既有 Swift/源码测试的通过记录不能代替这一项。
+当前安装验收停在 Xcode Swift Package 解析的目录权限问题；Foundation 诊断程序不是
+SDK 消费者。归档、构建与最终运行分别隔离，失败日志保留，不能把前序通过当作完整运行。
+用户已确认第 9.2 步按本机原生编译及验收实现收尾；实际 Flutter macOS 安装运行移交
+第 10 步 GitHub 统一 CI，仍是必须通过的独立验收，不得用本机开发完成替代运行结果。
+
 The canonical central Apple candidate harness runs these tests in two modes without
 writing build state into this source tree. TataConsole workflow integration is
 a later step and must not be claimed until that workflow actually invokes the
