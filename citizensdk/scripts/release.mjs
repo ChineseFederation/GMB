@@ -836,7 +836,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
-  'scripts/release.test.mjs': 'e167e681c4a9a47b8ccde9b401e8bf673d991288721599924a202abb1bcb1051',
+  'scripts/release.test.mjs': '6353c49fd9e08ace3b10d705270aca4598aee35b329b45ef728b588242e7f733',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': '037b35aec6ebb55cfb05316a1e7ae595e42601c9679b602d31eca5c1b675b2b8',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',
@@ -907,7 +907,7 @@ const SMOLDOT_DART_FILES = Object.freeze({
   'lib/src/smoldot/chain.dart': '43f3fbc8420f61d335acb0c48ee471a7885ebbd71d320d8b820805b1537d8053',
   'lib/src/smoldot/client.dart': '916fd74c20f4daefca2e17e668e8a2fb16c59219b8f3bdd3148d10454a71ddff',
   'lib/src/smoldot/json_rpc.dart': 'c3a030b236814731f773bb8b1aa9dd1e5789bc7d0809f3c0dd7011d59b401d01',
-  'lib/src/smoldot/platform.dart': 'f64a0c05aa615eeea49554e3cb918496e7507788910acf27dbbe452c1a45d24f',
+  'lib/src/smoldot/platform.dart': '8efb99639389f12dc725199befc3073d5b49027ac761aea097d17e6df449d491',
   'lib/src/smoldot/smoldot.dart': '8e13185cd86609faf7d96f1da22a2457ce2e129f1d8e637c8220a2a481147758',
   'lib/src/smoldot/types.dart': 'e20b6f97d0b6e289c2b492e12dd66afafc1133adc0fc5fe5a547106ed3338e89',
   'test/smoldot/chain_info_test.dart': '5de74abf31c75c579716366d72a457e91339352972a4a118ec7fe18de005b158',
@@ -3688,7 +3688,7 @@ export function assertCitizenSdkNativeContract(value) {
 export function assertCitizenSdkStaticArchive(bytes, platform) {
   dependencyCheck(NATIVE_DEPENDENCY_PLATFORMS.includes(platform), '未知平台');
   dependencyCheck(bytes.length >= 8 && bytes.subarray(0, 8).toString() === '!<arch>\n', '不是完整静态归档');
-  let offset = 8, objects = 0;
+  let offset = 8, objects = 0, gnuNames = null;
   while (offset < bytes.length) {
     dependencyCheck(offset + 60 <= bytes.length, 'ar header 截断');
     const header = bytes.subarray(offset, offset + 60);
@@ -3703,6 +3703,20 @@ export function assertCitizenSdkStaticArchive(bytes, platform) {
       dependencyCheck(Number.isSafeInteger(length) && length > 0 && length <= object.length, 'BSD ar 名称无效');
       actualName = object.subarray(0, length).toString().replace(/\0+$/, '');
       object = object.subarray(length);
+    }
+    if (name === '//') {
+      dependencyCheck(gnuNames === null && object.length > 0, 'GNU ar 长名称表无效');
+      gnuNames = object;
+    } else if (/^\/\d+$/.test(name)) {
+      const nameOffset = Number(name.slice(1));
+      dependencyCheck(gnuNames && Number.isSafeInteger(nameOffset) && nameOffset >= 0
+        && nameOffset < gnuNames.length
+        && (nameOffset === 0 || (gnuNames[nameOffset - 2] === 47 && gnuNames[nameOffset - 1] === 10)),
+      'GNU ar 长名称偏移无效');
+      const end = gnuNames.indexOf(Buffer.from('/\n'), nameOffset);
+      dependencyCheck(end > nameOffset, 'GNU ar 长名称未终止');
+      actualName = gnuNames.subarray(nameOffset, end).toString();
+      dependencyCheck(/^[A-Za-z0-9_.+@-]+$/.test(actualName), 'GNU ar 长名称字符无效');
     }
     if (!['/', '//', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED'].includes(actualName)) {
       if (platform === 'Windows') {

@@ -24,7 +24,8 @@ class SmoldotPlatform {
     } else {
       throw SmoldotFfiException(
         'Unsupported platform: ${Platform.operatingSystem}',
-        details: 'Only Android, iOS, macOS, LinuxARM, LinuxAMD, and Windows are supported',
+        details:
+            'Only Android, iOS, macOS, LinuxARM, LinuxAMD, and Windows are supported',
       );
     }
   }

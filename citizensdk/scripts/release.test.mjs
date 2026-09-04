@@ -1371,6 +1371,16 @@ function dependencyArchiveFixture(platform) {
     + '100644'.padEnd(8) + String(object.length).padEnd(10) + '\x60\n';
   return Buffer.concat([Buffer.from('!<arch>\n' + header), object]);
 }
+function dependencyGnuLongArchiveFixture(platform, reference = '/0', terminator = '/\n') {
+  const object = dependencyArchiveFixture(platform).subarray(68);
+  const names = Buffer.from('citizensdk_dependency_object_with_long_name.o' + terminator);
+  const member = (name, payload) => {
+    const header = name.padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6)
+      + '100644'.padEnd(8) + String(payload.length).padEnd(10) + '\x60\n';
+    return Buffer.concat([Buffer.from(header), payload, ...(payload.length % 2 ? [Buffer.from('\n')] : [])]);
+  };
+  return Buffer.concat([Buffer.from('!<arch>\n'), member('//', names), member(reference, object)]);
+}
 function dependencyInputsFixture(root, platform) {
   const files = { 'include/sqlite3.h': Buffer.from('format-only SQLite header') };
   const archives = platform === 'Windows' ? ['sqlite3.lib'] : ['libsqlite3.a', 'libcrypto.a',
@@ -1415,6 +1425,7 @@ test('第10.5步静态归档逐成员拒绝错误架构薄归档及动态输入'
   for (const platform of ['LinuxARM', 'LinuxAMD', 'Windows']) {
     const bytes = dependencyArchiveFixture(platform);
     assert.doesNotThrow(() => assertCitizenSdkStaticArchive(bytes, platform));
+    assert.doesNotThrow(() => assertCitizenSdkStaticArchive(dependencyGnuLongArchiveFixture(platform), platform));
     const malformed = Buffer.from(bytes);
     if (platform === 'Windows') malformed.writeUInt16LE(99, 68 + 2);
     else malformed.writeBigUInt64LE(999999n, 68 + 40);
@@ -1424,6 +1435,9 @@ test('第10.5步静态归档逐成员拒绝错误架构薄归档及动态输入'
     for (const bad of [Buffer.from('!<thin>\n'), bytes.subarray(0, -1),
       Buffer.from('dynamic shared library'), Buffer.from('!<arch>\n')])
       assert.throws(() => assertCitizenSdkStaticArchive(bad, platform), /静态依赖/);
+    for (const bad of [dependencyGnuLongArchiveFixture(platform, '/999'),
+      dependencyGnuLongArchiveFixture(platform, '/0', '\n')])
+      assert.throws(() => assertCitizenSdkStaticArchive(bad, platform), /GNU ar/);
   }
 });
 
