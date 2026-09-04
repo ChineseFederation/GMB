@@ -1381,6 +1381,12 @@ function dependencyGnuLongArchiveFixture(platform, reference = '/0', terminator 
   };
   return Buffer.concat([Buffer.from('!<arch>\n'), member('//', names), member(reference, object)]);
 }
+function dependencyNestedCryptoArchiveFixture(platform, name = 'libcrypto.a/') {
+  const object = dependencyArchiveFixture(platform);
+  const header = name.padEnd(16) + '0'.padEnd(12) + '0'.padEnd(6) + '0'.padEnd(6)
+    + '100644'.padEnd(8) + String(object.length).padEnd(10) + '\x60\n';
+  return Buffer.concat([Buffer.from('!<arch>\n' + header), object]);
+}
 function dependencyInputsFixture(root, platform) {
   const files = { 'include/sqlite3.h': Buffer.from('format-only SQLite header') };
   const archives = platform === 'Windows' ? ['sqlite3.lib'] : ['libsqlite3.a', 'libcrypto.a',
@@ -1426,6 +1432,17 @@ test('第10.5步静态归档逐成员拒绝错误架构薄归档及动态输入'
     const bytes = dependencyArchiveFixture(platform);
     assert.doesNotThrow(() => assertCitizenSdkStaticArchive(bytes, platform));
     assert.doesNotThrow(() => assertCitizenSdkStaticArchive(dependencyGnuLongArchiveFixture(platform), platform));
+    if (platform !== 'Windows') {
+      assert.doesNotThrow(() => assertCitizenSdkStaticArchive(dependencyNestedCryptoArchiveFixture(platform), platform));
+      assert.throws(
+        () => assertCitizenSdkStaticArchive(dependencyNestedCryptoArchiveFixture(platform, 'other.a/'), platform),
+        /非目标 Linux ELF relocatable 对象：other\.a\//,
+      );
+      assert.throws(
+        () => assertCitizenSdkStaticArchive(dependencyNestedCryptoArchiveFixture(platform), platform, true),
+        /libcrypto 静态归档嵌套层级无效/,
+      );
+    }
     const malformed = Buffer.from(bytes);
     if (platform === 'Windows') malformed.writeUInt16LE(99, 68 + 2);
     else malformed.writeBigUInt64LE(999999n, 68 + 40);

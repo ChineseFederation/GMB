@@ -836,7 +836,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
-  'scripts/release.test.mjs': '1d0598dc37e8ee9f2a2b6d1ab7d5ec386290c5a9592a2f63dbb22bee4b707922',
+  'scripts/release.test.mjs': '627486216607a04ea75ed2266fda10b0462e04ebf266c27c6bdc7a125d6b614c',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': '037b35aec6ebb55cfb05316a1e7ae595e42601c9679b602d31eca5c1b675b2b8',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',
@@ -3685,8 +3685,9 @@ export function assertCitizenSdkNativeContract(value) {
 }
 
 /** 逐成员读真实 ar；拒绝薄归档、动态库、COFF import object、bitcode 及另一平台对象。 */
-export function assertCitizenSdkStaticArchive(bytes, platform) {
+export function assertCitizenSdkStaticArchive(bytes, platform, nested = false) {
   dependencyCheck(NATIVE_DEPENDENCY_PLATFORMS.includes(platform), '未知平台');
+  dependencyCheck(typeof nested === 'boolean', '静态归档嵌套状态无效');
   dependencyCheck(bytes.length >= 8 && bytes.subarray(0, 8).toString() === '!<arch>\n', '不是完整静态归档');
   let offset = 8, objects = 0, gnuNames = null;
   while (offset < bytes.length) {
@@ -3721,7 +3722,14 @@ export function assertCitizenSdkStaticArchive(bytes, platform) {
     if (!['/', '//', '/SYM64/', '__.SYMDEF', '__.SYMDEF SORTED'].includes(actualName)) {
       // 归档成员名只用于失败诊断；限制为短 ASCII，避免第三方归档把控制字符写入 CI 日志。
       const diagnosticName = /^[\x20-\x7e]{1,80}$/.test(actualName) ? actualName : '<invalid-name>';
-      if (platform === 'Windows') {
+      if (actualName === 'libcrypto.a/') {
+        // OpenSSL 的正式静态输出可能用一个同名成员封装内部归档；只接受这一层精确名称，
+        // 并递归验证其中每个 ELF 对象，不能把嵌套归档当作任意非对象成员跳过。
+        dependencyCheck(platform !== 'Windows' && !nested, 'libcrypto 静态归档嵌套层级无效');
+        dependencyCheck(object.length >= 8 && object.subarray(0, 8).toString() === '!<arch>\n',
+          `libcrypto 静态归档成员不是完整归档：${diagnosticName}`);
+        assertCitizenSdkStaticArchive(object, platform, true);
+      } else if (platform === 'Windows') {
         dependencyCheck(object.length >= 20 && object.readUInt16LE(0) === 0x8664
           && object.readUInt16LE(2) > 0 && object.readUInt16LE(16) === 0, '非 Windows MSVC 静态对象');
         const count = object.readUInt16LE(2), tableEnd = 20 + count * 40;
