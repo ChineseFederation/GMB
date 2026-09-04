@@ -1,5 +1,10 @@
 # CitizenSDK C ABI contract
 
+异步 admission 在接受请求前预留一个结果和一个真实完成事件槽位；队列容量为 64，
+容量用尽返回 `QUEUE_FULL`，不得先接收请求再丢失完成事件。普通事件与完成事件均即时
+入队，任何发送都不得持有 enqueue 锁等待宿主回调；结果所有权及一次释放合同不变。
+钱包转账恢复复用现有高层调用，不新增 raw extrinsic 返回值、恢复符号或 ABI 布局。
+
 ## Boundary
 
 `native/ffi` and root `include` define the one product ABI. Official Dart,

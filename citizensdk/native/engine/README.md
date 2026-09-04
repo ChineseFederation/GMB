@@ -166,4 +166,4 @@ the same trusted-host boundary.
 
 Build and test state must be redirected outside this source tree. For local
 CitizenSDK work, only
-`/Users/rhett/TATA/tataconsole/target/citizensdk` is permitted.
+`/Users/rhett/TATA/target/GMB/citizensdk/SDK` is permitted.

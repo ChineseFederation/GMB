@@ -50,10 +50,22 @@ jobs:
       ci_phase_1_matrix: ${{ steps.central_job.outputs.ci_phase_1_matrix }}
       has_ci_phase_2: ${{ steps.central_job.outputs.has_ci_phase_2 }}
       ci_phase_2_matrix: ${{ steps.central_job.outputs.ci_phase_2_matrix }}
-      has_release_standard: ${{ steps.central_job.outputs.has_release_standard }}
-      release_standard_matrix: ${{ steps.central_job.outputs.release_standard_matrix }}
-      has_release_attested: ${{ steps.central_job.outputs.has_release_attested }}
-      release_attested_matrix: ${{ steps.central_job.outputs.release_attested_matrix }}
+      has_release_phase_0_standard: ${{ steps.central_job.outputs.has_release_phase_0_standard }}
+      release_phase_0_standard_matrix: ${{ steps.central_job.outputs.release_phase_0_standard_matrix }}
+      has_release_phase_0_attested: ${{ steps.central_job.outputs.has_release_phase_0_attested }}
+      release_phase_0_attested_matrix: ${{ steps.central_job.outputs.release_phase_0_attested_matrix }}
+      has_release_phase_1_standard: ${{ steps.central_job.outputs.has_release_phase_1_standard }}
+      release_phase_1_standard_matrix: ${{ steps.central_job.outputs.release_phase_1_standard_matrix }}
+      has_release_phase_1_attested: ${{ steps.central_job.outputs.has_release_phase_1_attested }}
+      release_phase_1_attested_matrix: ${{ steps.central_job.outputs.release_phase_1_attested_matrix }}
+      has_release_phase_2_standard: ${{ steps.central_job.outputs.has_release_phase_2_standard }}
+      release_phase_2_standard_matrix: ${{ steps.central_job.outputs.release_phase_2_standard_matrix }}
+      has_release_phase_2_attested: ${{ steps.central_job.outputs.has_release_phase_2_attested }}
+      release_phase_2_attested_matrix: ${{ steps.central_job.outputs.release_phase_2_attested_matrix }}
+      has_release_phase_3_standard: ${{ steps.central_job.outputs.has_release_phase_3_standard }}
+      release_phase_3_standard_matrix: ${{ steps.central_job.outputs.release_phase_3_standard_matrix }}
+      has_release_phase_3_attested: ${{ steps.central_job.outputs.has_release_phase_3_attested }}
+      release_phase_3_attested_matrix: ${{ steps.central_job.outputs.release_phase_3_attested_matrix }}
       has_repository_contracts: ${{ steps.central_job.outputs.has_repository_contracts }}
       repository_contracts_matrix: ${{ steps.central_job.outputs.repository_contracts_matrix }}
     steps:
@@ -165,7 +177,7 @@ jobs:
         with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
 
   ci_phase_1:
-    if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_1 == 'true' && (needs.ci_phase_0.result == 'success' || needs.ci_phase_0.result == 'skipped') }}
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_ci_phase_1 == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     needs: [validate_dispatch, ci_phase_0]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -182,8 +194,8 @@ jobs:
         with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
 
   ci_phase_2:
-    if: ${{ always() && needs.validate_dispatch.outputs.has_ci_phase_2 == 'true' && (needs.ci_phase_1.result == 'success' || needs.ci_phase_1.result == 'skipped') }}
-    needs: [validate_dispatch, ci_phase_1]
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_ci_phase_2 == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, ci_phase_0, ci_phase_1]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     permissions: { actions: write, contents: read }
@@ -198,13 +210,15 @@ jobs:
       - uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
 
-  release_standard:
-    if: ${{ needs.validate_dispatch.outputs.has_release_standard == 'true' }}
+  # 中文注释：每阶段保留 standard/attested 权限隔离；所有先前阶段成功才可推进，
+  # 禁止把失败后 skipped 的中间阶段误判为允许汇总或正式 Release。
+  release_phase_0_standard:
+    if: ${{ needs.validate_dispatch.outputs.has_release_phase_0_standard == 'true' }}
     needs: validate_dispatch
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     permissions: { actions: read, contents: write }
-    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_standard_matrix) }}" }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_0_standard_matrix) }}" }
     env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -215,13 +229,115 @@ jobs:
       - uses: ./.tata-flow/tataconsole/flows/gmb/shared
         with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
 
-  release_attested:
-    if: ${{ needs.validate_dispatch.outputs.has_release_attested == 'true' }}
+  release_phase_0_attested:
+    if: ${{ needs.validate_dispatch.outputs.has_release_phase_0_attested == 'true' }}
     needs: validate_dispatch
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
     permissions: { actions: read, contents: write, id-token: write, attestations: write }
-    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_attested_matrix) }}" }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_0_attested_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_1_standard:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_1_standard == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_1_standard_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_1_attested:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_1_attested == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write, id-token: write, attestations: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_1_attested_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_2_standard:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_2_standard == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested, release_phase_1_standard, release_phase_1_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_2_standard_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_2_attested:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_2_attested == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested, release_phase_1_standard, release_phase_1_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write, id-token: write, attestations: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_2_attested_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_3_standard:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_3_standard == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested, release_phase_1_standard, release_phase_1_attested, release_phase_2_standard, release_phase_2_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_3_standard_matrix) }}" }
+    env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with: { repository: VoyagerRhett/TATA, ref: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}", token: "${{ secrets[format('TATA_FLOW_READ_TOKEN_{0}', inputs.lease_id)] }}", path: .tata-flow, persist-credentials: false }
+      - shell: bash
+        env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
+        run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
+      - uses: ./.tata-flow/tataconsole/flows/gmb/shared
+        with: { job: dispatch-product, pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}", route_product: "${{ matrix.product }}", route_job: "${{ matrix.route_job }}", route_prepare_job: "${{ matrix.route_prepare_job }}", version_tag: "${{ inputs.version_tag }}", software_version: "${{ inputs.software_version }}", spec_version: "${{ inputs.spec_version }}", chain_spec_version: "${{ inputs.chain_spec_version }}", genesis_hash: "${{ inputs.genesis_hash }}", finalized_head: "${{ inputs.finalized_head }}" }
+
+  release_phase_3_attested:
+    if: ${{ always() && needs.validate_dispatch.result == 'success' && needs.validate_dispatch.outputs.has_release_phase_3_attested == 'true' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs: [validate_dispatch, release_phase_0_standard, release_phase_0_attested, release_phase_1_standard, release_phase_1_attested, release_phase_2_standard, release_phase_2_attested]
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    permissions: { actions: read, contents: write, id-token: write, attestations: write }
+    strategy: { fail-fast: false, matrix: "${{ fromJSON(needs.validate_dispatch.outputs.release_phase_3_attested_matrix) }}" }
     env: { GH_TOKEN: "${{ github.token }}", CARGO_INCREMENTAL: "0", CI: "true", WRANGLER_SEND_METRICS: "false", SOURCE_SHA: "${{ inputs.source_sha }}", CI_RUN_ID: "${{ inputs.ci_run_id }}", TOOL_SHA: "${{ github.sha }}", RELEASE_DIR: "${{ matrix.release_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.release_dir) }}", CANDIDATE_DIR: "${{ matrix.candidate_dir == '' && '' || format('{0}/{1}', github.workspace, matrix.candidate_dir) }}", ARCHIVE_PATH: "${{ matrix.archive_path == '' && '' || format('{0}/{1}', github.workspace, matrix.archive_path) }}", TATA_CONSOLE_CONTEXT_MATRIX_EXPECTED_RUNNER_ARCH: "${{ matrix.context_expected_runner_arch }}", TATA_CONSOLE_CONTEXT_MATRIX_CI_BUNDLE_TARGETS: "${{ matrix.context_ci_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_MANUAL_BUNDLE_TARGETS: "${{ matrix.context_manual_bundle_targets }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_MANIFEST_NAME: "${{ matrix.context_updater_manifest_name }}", TATA_CONSOLE_CONTEXT_MATRIX_PLATFORM: "${{ matrix.context_platform }}", TATA_CONSOLE_CONTEXT_MATRIX_INSTALLER_NAME: "${{ matrix.context_installer_name }}", TATA_CONSOLE_CONTEXT_MATRIX_UPDATER_ASSET_NAME: "${{ matrix.context_updater_asset_name }}", TATA_CONSOLE_CONTEXT_MATRIX_DEB_ARCH: "${{ matrix.context_deb_arch }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_KEY: "${{ secrets[matrix.secret_app_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_APP_PROFILE: "${{ secrets[matrix.secret_app_profile] }}", TATA_CONSOLE_CONTEXT_SECRETS_IOS_KEY: "${{ secrets[matrix.secret_ios_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_KEY: "${{ secrets[matrix.secret_update_key] }}", TATA_CONSOLE_CONTEXT_SECRETS_UPDATE_PASS: "${{ secrets[matrix.secret_update_pass] }}", TATA_CONSOLE_CONTEXT_SECRETS_WALLET_PROFILE: "${{ secrets[matrix.secret_wallet_profile] }}" }
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0

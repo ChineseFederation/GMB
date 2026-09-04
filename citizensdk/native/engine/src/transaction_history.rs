@@ -14,8 +14,8 @@ use citizen_sdk_contracts::{
         FinalizedTransferRecord, HistoryTransactionStatus, TransactionHistoryCursor,
         TransactionHistoryRecord, TransactionHistoryState, TransactionHistoryStore,
     },
-    AccountId32, ContractErrorCode, ExecutionConclusion, FinalizedBlockRef, Hash32,
-    VerifiedBlockRef,
+    AccountId32, ContractErrorCode, ExecutionConclusion, FinalizedBlockRef, Hash32, RuntimeVersion,
+    SignedExtrinsic, VerifiedBlockRef,
 };
 use futures::lock::Mutex as AsyncMutex;
 
@@ -126,6 +126,10 @@ impl TransactionHistoryService {
         destination_account_id: AccountId32,
         amount_fen: u128,
         remark: &str,
+        signed_extrinsic: SignedExtrinsic,
+        block: VerifiedBlockRef,
+        runtime_version: RuntimeVersion,
+        genesis_hash: Hash32,
     ) -> Result<TransactionHistoryState, EngineError> {
         let _guard = history_mutation_gate().lock().await;
         let now = self.clock.now_millis()?;
@@ -139,6 +143,10 @@ impl TransactionHistoryService {
             HistoryTransactionStatus::Pending,
             now,
             now,
+            signed_extrinsic,
+            block,
+            runtime_version,
+            genesis_hash,
         )?;
         self.mutate(move |state| {
             if let Some(existing) = find_record(state, account_id, transaction_hash) {
@@ -179,6 +187,47 @@ impl TransactionHistoryService {
             }))
         })
         .await
+    }
+
+    /// 同参数调用恢复原始授权；不同参数不得越过同账户未决门重新占用 nonce。
+    pub(crate) async fn resumable_transfer(
+        &self,
+        account_id: AccountId32,
+        destination: AccountId32,
+        amount_fen: u128,
+        remark: &str,
+    ) -> Result<Option<TransactionHistoryRecord>, EngineError> {
+        let state = self.load().await?;
+        let open: Vec<_> = state
+            .records()
+            .iter()
+            .filter(|record| {
+                record.account_id() == account_id
+                    && matches!(
+                        record.status(),
+                        HistoryTransactionStatus::Pending
+                            | HistoryTransactionStatus::InBlock { .. }
+                    )
+            })
+            .collect();
+        match open.as_slice() {
+            [] => Ok(None),
+            [record]
+                if record.destination_account_id() == destination
+                    && record.amount_fen() == amount_fen
+                    && record.remark() == remark =>
+            {
+                Ok(Some((*record).clone()))
+            }
+            [_] => Err(error(
+                ContractErrorCode::Conflict,
+                "同一账户已有不同参数的未决交易；禁止重新签名或占用 nonce",
+            )),
+            _ => Err(error(
+                ContractErrorCode::Integrity,
+                "同一账户存在多条未决交易，不能选择任意记录恢复",
+            )),
+        }
     }
 
     /// 保存交易池提供的块锚；仍保持未终态，不能展示为执行成功。

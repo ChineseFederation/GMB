@@ -38,6 +38,9 @@ Windows adapter 源码也复用这两个 channel 和全部 22 方法；五份绑
 协议只有 22 个方法。请求、响应、事件、错误和嵌套公开值都是固定长度、固定位置的 `List`
 tuple；没有 `Map` 兼容旁路。request sequence 在接纳时严格连续，但并发响应可乱序并精确回显
 自己的序号；event sequence 独立递增。cancel/relisten 使用订阅代际和 sink identity，旧队列事件
+不能进入新 sink。Android 同笔交易的 bind 前后进度统一进入单派发者 FIFO，较晚事件不能
+越过尚在 drain 的早期事件；Apple Flutter 字节参数只接受 `FlutterStandardTypedData.uint8`，
+Int32/Int64/浮点 typed data 即使底层长度合适也会失败关闭。
 不得进入新订阅。
 
 每个 Flutter engine 只建立一个 EventChannel router，并在 native open 前订阅。早到事件按
@@ -76,7 +79,7 @@ CITIZENSDK_ANDROID_BUILD_DIR
 CITIZENSDK_ANDROID_CORE_DIR
 ```
 
-本机路径必须位于 `/Users/rhett/TATA/tataconsole/target/citizensdk`，GitHub Actions 路径必须位于 checkout
+本机路径必须位于 `/Users/rhett/TATA/target/GMB/citizensdk/SDK`，GitHub Actions 路径必须位于 checkout
 之外。源码树不得产生 Gradle、CMake、SO、AAR 或测试报告。
 
 ## Android 钱包安全界面
@@ -121,6 +124,11 @@ profile、加密秘密信封和 Vault 引用放入 typed secure SQLite；两者�
 持久 revision CAS 与写后回读，不提供任意键值逃生口。iOS 文件保护等级按数据域区分；macOS
 使用相同 schema 与原子语义。
 
+Apple 默认根为 `Application Support/<application_id>/citizensdk/v1/{public,secure}`，
+application_id 来自宿主 `Bundle.main.bundleIdentifier`，不是 SDK framework 标识。
+缺失或非法身份在创建文件前拒绝；Keychain KEK 标签同时绑定该身份、wallet index 和 generation。
+不自动搬动或删除既有数据库与 Keychain。命名空间隔离不等于抵御已控制同一宿主进程的代码。
+
 `CitizenSDKNative` 为 Core 借用的 HostBridge/callback/store/vault 上下文保留一个显式
 ABI +1。关闭只能沿 `live -> monitorStopped -> destroyOnly -> closed` 前进；callback clear
 在首次 destroy 前已经成为持久阶段，所以之后不再重新安装 callback 或调用其它
@@ -146,6 +154,13 @@ Flutter。child mini-secret 与 sr25519 private key 仍只在 Rust；任何秘�
 macOS 也必须在 Secure Enclave 与生物认证实际可用时才开放对应钱包能力；能力缺失不影响公开
 链读取，但禁止软件 KEK 降级。
 
+Android 生物识别 Prompt 的创建、启动和取消均在主线程，执行前重查宿主 resumed 状态。
+Activity 销毁或 detach 只完成一次操作；终态取得 buffer 所有权后才复制/清零，迟到回调
+不能再触及已归还的 Rust buffer。Keystore/Cipher 准备仍在工作线程。
+Android close 先标记 closing，再在不持有 facade/native 调用锁的情况下等待 Core 销毁；
+已有调用持短 lease，关闭期间新调用立即拒绝。失败保留唯一关闭所有权供重试，不能先释放
+HostServices 或重复销毁。公开调用的同步监听器重入不会与关闭屏障互锁。
+
 iOS 没有与 Android `FLAG_SECURE` 完全等价的系统能力：SDK-owned 界面在录屏与进入后台时使用
 保护覆盖层；macOS 的 SDK-owned window 禁止系统共享。文档不能把这些 best-available 防护写成
 对恶意宿主进程或所有截屏路径的硬隔离。
@@ -161,8 +176,8 @@ AAR 与 XCFramework 投影。本轮本机 Android AAR 构建通过，Apple 单�
 由于没有 Simulator runtime，没有把 iOS XCTest 记为已运行。macOS 已运行 Core 50 项与
 Flutter adapter 22 项 XCTest，0 失败，1 项真机硬件用例跳过；最终 normal/supervisor
 smoke 均通过。本机无真实 Apple 移动设备，不声称 Secure Enclave、生物认证或
-device-only Keychain 已完成真机验收。当前 TataConsole Flow 尚未接入本闭集，本步
-未运行远程 CI、正式 Release、Hosted 上传或 Git。
+device-only Keychain 已完成真机验收。TataConsole Flow 已接入本闭集，但本机记录
+不冒充远程 CI、正式 Release、Hosted 上传或 Git 已运行。
 
 iOS 设备与模拟器变体使用浅层 framework 和
 `@rpath/CitizenSDK.framework/CitizenSDK` install ID；macOS 使用标准 `Versions/A`

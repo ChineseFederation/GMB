@@ -210,12 +210,19 @@ runtime context，不能信任宿主可写缓存中的 metadata。
 
 Rust 交易构造只接受准确 CitizenChain 身份、同一 best 块的 runtime context 和同次
 `AccountNonceApi_account_nonce` typed snapshot。该 Runtime 值不包含交易池；同账户一旦有
-Pending/InBlock，持久历史 single-flight 会在新构造前失败，防止本地复用 nonce。
+Pending/InBlock，持久历史 single-flight 会禁止构造另一笔交易；同参数只恢复原始授权，
+不同参数返回 Conflict，防止本地复用 nonce。
 `transfer_with_remark` 固定 pallet `4` / call `0`、正分金额、最多 99 UTF-8 字节
 remark、immortal era 与 tip `0`；metadata 动态编码必须与固定 call bytes 相等。签名前复核
 source AccountId 与金库秘密公钥，签后立即验签。Rust 钱包不公开可拆分的 signed build；唯一
 `transfer_with_remark` 入口在内部把 source/destination/amount/remark/nonce 与完整 extrinsic
-hash 持久化为 pending，确认 CAS 成功后才广播。纯链客户端的 raw pre-signed submit 只用于
+hash、完整 signed extrinsic、构造块、RuntimeVersion 和 genesis_hash 原子持久化为 pending，
+确认 CAS 成功后才广播。恢复先补扫 finalized 历史；仍未决才从当前已验证 best 读取同版本
+Runtime，核对账户、nonce、call、完整编码与 sr25519 签名，再决定是否重发相同字节。
+immortal 的额外签名域绑定 genesis 而非原 best 哈希，因此原构造块不可读不阻断同版本恢复。
+当前 Runtime 版本已变且尚无执行证据时安全报错，保留原授权，不擅自重签或清除记录。写后异常、
+取消或进程退出不丢失这份授权；缺少授权的状态失败关闭，不自动清库或重签。
+纯链客户端的 raw pre-signed submit 只用于
 无钱包组合；一旦注入任一钱包交易组件，它也必须命中内部 pending，否则失败关闭。底层
 `watch_extrinsic` 合同实际会 submit-and-watch，而不是被动观察既有哈希；因此只要组合任一
 钱包交易组件，Engine 也会在触达 provider 前禁止 raw submit-and-watch。
@@ -240,6 +247,9 @@ outgoing、保留接收方 incoming，并在同一原始块重放时保持终态
 最大 256 KiB 和不倒退门禁。finalized 事件还绑定生产 metadata 的绝对 AccountId32/u128/
 BoundedVec<u8> 类型指纹；call/event 同步漂移也必须在读取值前失败。Runtime 备注按最多 99 个
 原始 bytes 保存，并以标准 UTF-8 lossy/U+FFFD 显示，不能把非法 bytes 与真实 `?` 混同。
+Balances.Transfer 的 Initialization/Finalization 阶段保留空 extrinsic_index 和准确事件序号；
+不得把两条无调用索引的流水合并。System 执行结果和 TransferWithRemark 仍严格要求
+ApplyExtrinsic，不能用 hook 流水证明某笔 extrinsic 执行成功。
 engine 使用官方 `subxt-core = 0.43.0` 做 metadata/events 解码，
 不增加第二轻节点。真实 `smoldot/provider` 已实现 `VerifiedChainClient`；它内部仅允许源码
 固定的准确块读取、runtime、提交/观察和状态方法，产品 ABI 不接受任意 RPC 方法名。Provider
@@ -273,7 +283,10 @@ checkpoint 到 provider/Engine 生命周期提交之间没有另一项链、钱�
 产品 ABI 使用单调非零实例/result handle、Rust-owned 结果和显式一次释放，销毁在请求或结果
 未收口时返回 `BUSY`。回调只在每实例独立线程执行；从自身回调销毁或同步退订 capability 会在
 任何生命周期/monitor 变更前返回 `BUSY`。事件与请求队列均有界，watch 背压使用稳定
-`QUEUE_FULL`，不能无界占用内存。host completion 被 claim 后仍计为 outstanding，直到 SDK
+`QUEUE_FULL`，不能无界占用内存。每个已接受请求在 admission 前预留 64 槽队列中的一个
+真实完成槽位和一个结果 handle；普通事件不得占用预留容量。序号分配与即时入队共用短锁，
+不在锁内等待队列空间，宿主回调始终锁外调用。容量耗尽在接收请求前拒绝。
+host completion 被 claim 后仍计为 outstanding，直到 SDK
 校验、复制与投递结束；其后的无状态 callback 尾部不访问实例，避免 destroy 在敏感窗口释放
 实例状态。所有输出先支持 `NULL + 0` 长度查询，再复制到宿主缓冲区。
 每个非空 completion 必须在读取或 claim pending registry 前先核对 callback token 与
@@ -314,18 +327,23 @@ plugin 固定 `$ORIGIN`，不借助测试 runner 修补路径。同版产物缺�
 
 - SDK 源码树不得接收构建缓存、原生库或 Release 产物。
 - 本机 Linux 合同测试必须由 CMake/CTest 以 `CITIZENSDK_TEST_WORK_DIR` 注入
-  `/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下有效 UID 所有、`0700`、任务独占的现有
+  `/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK` 下有效 UID 所有、`0700`、任务独占的现有
   绝对目录。测试 helper 逐级 no-follow 验证后，以 CSPRNG 随机名称和 `mkdirat` 只在已验证
   目录 fd 下创建子目录，不回退 `/tmp`、当前目录或用户目录，也不递归删除未经 fd 与 inode
   复核的路径。
 - 原生构建和 Release 在首次建目录前校验绝对规范路径及每一级既存祖先，拒绝路径穿越、
-  符号链接祖先和非目录祖先。
-- 本机发布器只接受 `/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK` 和
-  `/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 的严格后代；永久根本身、
+  符号链接祖先和非目录祖先；工作目录与产物目录必须成对通过预检，任一无效时保持零写入。
+- 本机发布器只接受 `/Users/rhett/TATA/target/GMB/citizensdk/SDK` 和
+  `/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK` 的严格后代；永久根本身、
   旧根、邻产品/仓库/平台、伪前缀和最终链接均拒绝。只核验匹配根存在且为普通目录，
   未使用根缺失不影响本次请求。GitHub 隔离分支不变。该门禁不替代执行方对 UID、权限、
   任务归属和清理范围的检查；永久容器不得删除，不能清理别的任务内容。
 - CI/Release 使用锁文件与准确提交；Release 必须绑定同产品、同目标的成功 CI。
+- Android 与 Apple 的 generation 准入/退休数据库事实和物理 Keystore/Keychain KEK
+  副作用处于同一个进程内锁与 OS 文件锁临界区。退休 tombstone 先提交，迟到 ensure 不能
+  在另一进程删除后复活同 generation 的物理 KEK；锁文件只含协调状态，不含密钥。
+- Apple SQLite revision 只接受 SQLite INTEGER 且范围为 `1...Int64.max`；负数、零、REAL、
+  TEXT 或其他畸形持久值作为存储错误失败关闭，不触发 Swift 数值转换 trap。
 - 候选只允许标准 macOS framework 内精确五个相对符号链接：`Versions/Current -> A`，以及
   根 `CitizenSDK`、`Headers`、`Modules`、`Resources` 指向 `Versions/Current/...`；其他任何
   符号链接、路径穿越、未登记文件、常见密钥文件及 PEM 私钥材料均拒绝。
@@ -339,10 +357,16 @@ plugin 固定 `$ORIGIN`，不借助测试 runner 修补路径。同版产物缺�
   软件 TPM 与实体 TPM，不能把源码注册或软件 TPM 结果代替硬件证明。
 
 本轮 Apple 本机已编译 iOS 设备与模拟器变体两组测试 bundle，但因无 Simulator
-runtime 没有声称 iOS XCTest 已运行。macOS Core 50 项与 Flutter adapter 22 项 XCTest
+runtime 没有声称 iOS XCTest 已运行。macOS Core 58 项与 Flutter adapter 23 项 XCTest
 0 失败，1 项需要真机硬件的用例跳过；normal/supervisor smoke 通过。本机无真实
 Apple 移动设备，所以 Secure Enclave、生物认证和 device-only Keychain 仍需真机验收。
-当前 TataConsole Flow 尚未接入本闭集；本步未运行远程 CI、正式 Release、Hosted 上传或 Git。
+TataConsole Flow 已接入 Apple/Hosted 与五平台 Release 闭集；本轮仅执行本机闭集，
+没有运行远程 CI、正式 Release、Hosted 上传或 Git。
+
+同轮 Android ARM64 Core/JNI/AAR 构建、原生 Kotlin 单元测试及最新本机 Flutter/AGP
+宿主的插件单元测试通过；Rust 根 workspace 295 项和 TataConsole CitizenSDK 合同
+61 项通过。Android 硬件金库跨进程用例保留在 androidTest，仍须真机执行；这些本机
+结果不替代 GitHub 五宿主 Release 或实体硬件验收。
 
 第 7.1 步没有运行 Linux 编译与 CTest、Dart/Flutter/Cargo 测试、Git、远程 CI、Release 或
 Hosted 上传；仅执行获准的 Node Release 来源合同测试与脚本语法检查，不代表 Linux 安全

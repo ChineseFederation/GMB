@@ -3390,7 +3390,7 @@ test('Windows Hosted 19/33 闭集与全部复制预检保持七头原字节及�
     // 不创建越界路径；调用必须在任何 mkdir/write 之前被本机双根门禁拒绝。
     if (process.env.GITHUB_ACTIONS !== 'true') {
       assert.throws(() => copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix,
-        '/Users/rhett/TATA/tataconsole/target/GMB/unregistered/SDK/candidate'), /目录|路径/u);
+        '/Users/rhett/TATA/target/GMB/unregistered/SDK/candidate'), /目录|路径/u);
     }
     copyWindowsNativeArtifact(citizenSdkRoot, fixture.prefix, rejected);
     assert.deepEqual(readFileSync(header), bytes);
@@ -4187,6 +4187,30 @@ test('Core Rust 合同拒绝 workspace Cargo manifest 与锁文件漂移', () =>
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('P1修复的交易恢复与事件容量源码必须按逐文件摘要进入候选', () => {
+  const root = mkdtempSync(join(workRoot, 'release-p1-core-'));
+  try {
+    writeCoreRustFixture(root);
+    assert.doesNotThrow(() => assertCoreRustSource(root));
+    // 每个安全修复边界均必须纳入正式来源守卫；不得仅修改实现却遗漏固定摘要。
+    for (const relative of [
+      'native/contracts/src/store/transaction_history.rs',
+      'native/engine/src/transaction_builder.rs',
+      'native/engine/src/finalized_events.rs',
+      'native/engine/src/wallet_transfer_watch.rs',
+      'native/ffi/src/events.rs',
+      'native/ffi/src/host_codec.rs',
+    ]) {
+      const file = join(root, relative);
+      const original = readFileSync(file);
+      writeFileSync(file, Buffer.concat([original, Buffer.from('\n// source drift\n')]));
+      assert.throws(() => assertCoreRustSource(root), /来源文件哈希漂移/u, relative);
+      writeFileSync(file, original);
+      assert.doesNotThrow(() => assertCoreRustSource(root));
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('Core Rust 合同拒绝第三方许可证与来源声明漂移', () => {
@@ -4992,8 +5016,8 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
   // GitHub 分支仍在通用路径检查之后；不把本机进程伪装成 GitHub 来绕过门禁。
   assert.match(functions[2], /const target = assertSafeTargetPath\(path, label\);\n  if \(process\.env\.GITHUB_ACTIONS === 'true'\) return target;/u);
   const expectedRoots = [
-    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK',
-    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/target/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK',
   ];
 
   // 仅替换文件系统事实，不复制路径算法，也不在其它 OS 创建真实 /Users 目录。
@@ -5081,16 +5105,16 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
     withEntry(leaf, 'file', () => { assert.equal(check(leaf), leaf); });
   }
   for (const path of [
-    '/Users/rhett/TATA/tataconsole/target/citizensdk/candidate',
-    '/Users/rhett/TATA/tataconsole/target/.work/citizensdk/candidate',
-    '/Users/rhett/TATA/tataconsole/target/GMB/citizenapp/SDK/candidate',
-    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizenapp/SDK/candidate',
-    '/Users/rhett/TATA/tataconsole/target/TUYU/citizensdk/SDK/candidate',
-    '/Users/rhett/TATA/tataconsole/target/.work/TATA/citizensdk/SDK/candidate',
-    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/macOS/candidate',
-    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/Windows/candidate',
-    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk',
-    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk',
+    '/Users/rhett/TATA/target/citizensdk/candidate',
+    '/Users/rhett/TATA/target/.work/citizensdk/candidate',
+    '/Users/rhett/TATA/target/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/target/.work/GMB/citizenapp/SDK/candidate',
+    '/Users/rhett/TATA/target/TUYU/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/target/.work/TATA/citizensdk/SDK/candidate',
+    '/Users/rhett/TATA/target/GMB/citizensdk/macOS/candidate',
+    '/Users/rhett/TATA/target/.work/GMB/citizensdk/Windows/candidate',
+    '/Users/rhett/TATA/target/GMB/citizensdk',
+    '/Users/rhett/TATA/target/.work/GMB/citizensdk',
   ]) {
     assert.throws(() => check(path), /本地路径/u);
   }
@@ -5232,6 +5256,26 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
       CITIZENSDK_NATIVE_OUTPUT_DIR: join(root, 'native-output'),
       GITHUB_ACTIONS: 'false',
     };
+    // 两个输出参数是一个事务预检；任意一方无效时，另一方也不得被 mkdir。
+    for (const [index, work, output] of [
+      [0, join(root, 'zero-write-work-a'), `${root}/invalid/../zero-write-output-a`],
+      [1, `${root}/invalid/../zero-write-work-b`, join(root, 'zero-write-output-b')],
+    ]) {
+      const result = spawnSync('/bin/bash', [join(citizenSdkRoot, 'scripts/build-native.sh'), 'android'], {
+        cwd: workRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          GITHUB_ACTIONS: 'true',
+          CITIZENSDK_WORK_DIR: work,
+          CITIZENSDK_NATIVE_OUTPUT_DIR: output,
+        },
+      });
+      assert.notEqual(result.status, 0, `零写预检夹具 ${index}`);
+      assert.match(result.stderr, /规范路径|\. 或 \.\./u);
+      assert.equal(existsSync(resolve(work)), false, `无效双参数不得创建 work：${index}`);
+      assert.equal(existsSync(resolve(output)), false, `无效双参数不得创建 output：${index}`);
+    }
     const traversalResult = spawnSync('/bin/bash', [join(citizenSdkRoot, 'scripts/build-native.sh'), 'android'], {
       cwd: workRoot,
       encoding: 'utf8',
@@ -5287,7 +5331,7 @@ test('原生构建入口固定 Apple arm64 技术合同/最低版本且在 mkdir
       'local_build_path_is_allowed "$1"',
     ].join('\n');
     assert.doesNotMatch(hostPredicate, /canonical_directory|\bmkdir\b/u);
-    const virtualHostTask = `/Users/rhett/TATA/tataconsole/target/.work/citizensdk-host-path-${process.pid}`;
+    const virtualHostTask = `/Users/rhett/TATA/target/.work/citizensdk-host-path-${process.pid}`;
     const hostEnvironment = {
       ...process.env,
       GITHUB_ACTIONS: 'false',
@@ -5348,7 +5392,11 @@ test('Android Core 在 AAR 与独立双库投影前只执行一次固定 NDK str
   assert.equal(positions.every((position) => position >= 0), true);
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
   assert.equal(nativeBuildScript.split(strip).length - 1, 1);
-  assert.doesNotMatch(nativeBuildScript, /keepDebugSymbols|doNotStrip/);
+  // 原生构建只 strip 一次；最终包消费者必须原样装入已 strip 的双库。
+  const consumerOffset = nativeBuildScript.indexOf('build_mobile_hosted_consumer()');
+  assert.ok(consumerOffset > positions.at(-1));
+  assert.doesNotMatch(nativeBuildScript.slice(0, consumerOffset), /keepDebugSymbols|doNotStrip/);
+  assert.match(nativeBuildScript.slice(consumerOffset), /keepDebugSymbols \+= setOf\("\*\*\/libcitizensdk\.so", "\*\*\/libcitizensdk_jni\.so"\)/u);
 });
 
 test('Android JNI 导出闭集要求唯一版本化 JNI_OnLoad', () => {
@@ -6408,6 +6456,83 @@ test('Hosted Pub glob 的双星匹配零层，单星子项不排除父目录', (
   assert.equal(cmake.test('linux/cmake/CitizenSDKFlutter.cmake'), true);
 });
 
+test('最终 Hosted 六平台消费统一验真且不重编 Core、不把测试注入包', () => {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts/build-native.sh'), 'utf8');
+  const start = source.indexOf('build_hosted_consumer() (\n');
+  const end = source.indexOf('\nbuild_mobile_hosted_consumer() (', start);
+  assert.ok(start >= 0 && end > start);
+  const consume = source.slice(start, end);
+  assert.match(consume, /hosted_preflight "\$@"/u);
+  assert.match(consume, /verifyCitizenSdkHosted\(\{candidatePath:candidate,archivePath:audit,/u);
+  assert.match(consume, /expectedGitSha:process\.env\.GMB_SOURCE_SHA/u);
+  assert.doesNotMatch(consume, /cargo |build_linux |build_windows[; ]|build_android|copyWindowsNativeArtifact|copy_linux_install/u);
+  // CI 复用 checkout 中固定的消费者测试源码与中央增量对象；本轮唯一候选仍是
+  // 链接、运行和字节验真的唯一 SDK 输入。Release 未传缓存根，始终全量构建。
+  assert.match(consume, /-S "\$sdk_dir\/linux\/test"/u);
+  assert.match(consume, /\$sdk_dir\/windows\/test/u);
+  assert.match(consume, /local prefix="\$package\/linux"/u);
+  assert.match(consume, /local prefix="\$package\/windows"/u);
+  assert.match(consume, /run_windows_consumers "\$build" "\$prefix" "\$state"/u);
+  assert.match(consume, /verify_linux_ctest_inventory .* LinuxConsumer 2/u);
+  assert.match(source, /cp -a "\$\{package:-\$sdk_dir\}\/\." "\$sdk_stage\/"/u);
+  assert.match(source, /if \[\[ -z "\$package" \]\]; then\s+copy_linux_install/u);
+  assert.match(source, /if \[\[ -z "\$package" \]\]; then\s+verify_windows_flutter_inventory/u);
+  const mobile = source.slice(end, source.indexOf('\ncase "$target_name" in', end));
+  assert.match(mobile, /build apk --release --no-pub --target-platform=android-arm64/u);
+  assert.match(mobile, /cmp -s <\(unzip -p "\$apk" "lib\/arm64-v8a\/\$library"\)/u);
+  assert.match(mobile, /keepDebugSymbols \+= setOf\("\*\*\/libcitizensdk\.so", "\*\*\/libcitizensdk_jni\.so"\)/u);
+  assert.match(mobile, /minSdk = 24/u);
+  assert.match(mobile, /platform :ios, '16\.0'/u);
+  assert.match(mobile, /Mobile Hosted tool dependency outside explicit Flutter\/Pub inputs/u);
+  assert.match(mobile, /build ios --release --no-pub --no-codesign/u);
+  assert.match(mobile, /-target arm64-apple-ios16\.0-simulator/u);
+  assert.match(mobile, /CitizenSdk\.open\(\); await sdk\.close\(\)/u);
+  assert.doesNotMatch(mobile, /adb install|simctl (?:install|launch)|cargo |--debug|setMockMethodCallHandler/u);
+  assert.match(mobile, /未进行真机运行/u);
+});
+
+test('最终 Hosted 真实只读预检拒绝缺参、非Runner、跨平台、越界、交叠与链接', () => {
+  const root = mkdtempSync(join(workRoot, 'hosted-input-'));
+  try {
+    const central = join(root, 'citizensdk');
+    const paths = Object.fromEntries(['candidate', 'flutter', 'cache', 'work', 'output', 'tools']
+      .map((name) => [name, join(central, name)]));
+    for (const directory of Object.values(paths)) mkdirSync(directory, { recursive: true });
+    const audit = join(central, 'audit.tgz'), hosted = join(central, 'hosted.tgz');
+    writeFileSync(audit, 'public path fixture'); writeFileSync(hosted, 'public path fixture');
+    const source = readFileSync(join(citizenSdkRoot, 'scripts/build-native.sh'), 'utf8');
+    const start = source.indexOf('hosted_preflight() {\n');
+    const end = source.indexOf('\n# 只由唯一发布器', start);
+    assert.ok(start >= 0 && end > start);
+    const shell = ['set -euo pipefail', nativeShellFunctions([
+      'fail', 'assert_safe_directory_path', 'assert_readonly_dependency_directory', 'assert_descendant_path',
+    ]), source.slice(start, end),
+    'uname() { case "$1" in -s) printf "%s\\n" "${FIXTURE_OS:-Linux}" ;; -m) printf "%s\\n" "${FIXTURE_ARCH:-x86_64}" ;; esac; }',
+    `sdk_dir=${JSON.stringify(citizenSdkRoot.replace(/\/$/u, ''))}`,
+    `work_dir=${JSON.stringify(paths.work)}; output_dir=${JSON.stringify(paths.output)}`,
+    'hosted_preflight "$@"'].join('\n');
+    const args = ['LinuxAMD', paths.candidate, audit, hosted, paths.flutter, paths.cache, paths.tools];
+    const run = (values = args, env = {}) => spawnSync('/bin/bash', ['-c', shell, 'hosted-input', ...values], {
+      encoding: 'utf8', timeout: 10000, env: { ...process.env, GITHUB_ACTIONS: 'true',
+        RUNNER_ENVIRONMENT: 'github-hosted', RUNNER_TEMP: root, GMB_SOURCE_SHA: 'a'.repeat(40), ...env },
+    });
+    assert.equal(run().status, 0, run().stderr);
+    for (const [values, environment] of [
+      [args.slice(1), {}], [args, { GITHUB_ACTIONS: 'false' }],
+      [args, { RUNNER_ENVIRONMENT: 'self-hosted' }], [args, { GMB_SOURCE_SHA: 'bad' }],
+      [args, { FIXTURE_ARCH: 'arm64' }], [args, { FIXTURE_OS: 'Darwin' }],
+      [args.map((value, i) => i === 1 ? root : value), {}],
+      [args.map((value, i) => i === 4 ? paths.candidate : value), {}],
+      [args.map((value, i) => i === 6 ? `${paths.tools}:` : value), {}],
+      [args.map((value, i) => i === 6 ? paths.work : value), {}],
+    ]) assert.notEqual(run(values, environment).status, 0);
+    const linked = join(central, 'linked'); symlinkSync(paths.candidate, linked);
+    assert.notEqual(run(args.map((value, i) => i === 1 ? linked : value)).status, 0);
+    assert.deepEqual(readdirSync(paths.work), []);
+    assert.deepEqual(readdirSync(paths.output), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
 test('macOS Hosted 消费者只用公开入口并在 Release 显式验收生命周期和有序事件', () => {
   const source = readFileSync(join(citizenSdkRoot, 'darwin/Tests/citizen_sdk_flutter_consumer.dart'), 'utf8');
   assert.match(source, /import 'package:citizen_sdk\/citizen_sdk\.dart';/u);
@@ -6438,11 +6563,11 @@ test('macOS Hosted 唯一构建入口先验三件输入并保留官方插件装�
   assert.ok(start >= 0 && end > start);
   const build = source.slice(start, end);
   assert.match(source, /macOS\) shift; build_macos_flutter_consumer "\$@" ;;/u);
-  const containerStart = source.indexOf('if [[ "$target_name" == macOS ]]; then');
+  const containerStart = source.indexOf('if [[ "$target_name" == macOS || "$hosted_consumer" == true ]]; then');
   const containerEnd = source.indexOf('\nelse\n', containerStart);
   assert.ok(containerStart >= 0 && containerEnd > containerStart);
   assert.doesNotMatch(source.slice(containerStart, containerEnd), /\bmkdir\b|canonical_directory\s|prepare_safe_directory\s/u);
-  assert.match(source, /if \[\[ "\$target_name" != macOS \]\]; then\n  prepare_safe_directory "\$work_dir" "\$cargo_target_dir"/u);
+  assert.match(source, /if \[\[ "\$target_name" != macOS && "\$hosted_consumer" != true \]\]; then\n  prepare_safe_directory "\$work_dir" "\$cargo_target_dir"/u);
   assert.match(build, /macos_hosted_preflight "\$@"/u);
   assert.ok(build.indexOf('macos_hosted_preflight "$@"') < build.indexOf('prepare_safe_directory'));
   const preflight = nativeShellFunctions(['macos_hosted_root', 'macos_hosted_preflight']);
@@ -6964,6 +7089,7 @@ test('Hosted 工具调度固定版本和两次独立命令，失败不上传且�
       throw error;
     }
   };
+  let preserveRoot = false;
   try {
     const native = writeNativeFixture(root);
     const candidate = join(root, 'candidate');
@@ -7107,14 +7233,21 @@ test('Hosted 工具调度固定版本和两次独立命令，失败不上传且�
       });
       try { await ready(); } finally { child.kill(signal); }
       const result = await done;
-      assert.deepEqual(result, { code: expectedCode, name: null }, stderr);
-      assert.equal(orphanAlive(), false); assert.equal(existsSync(output), false);
+      if (existsSync(output)) {
+        preserveRoot = true;
+        assert.equal(result.code, 1, stderr);
+        assert.equal(result.name, null, stderr);
+        assert.match(stderr, /保留工作目录/u);
+      } else {
+        assert.deepEqual(result, { code: expectedCode, name: null }, stderr);
+      }
+      assert.equal(orphanAlive(), false);
       assert.equal(readFileSync(calls, 'utf8').trim().split('\n').length, 2);
       assert.deepEqual(readFileSync(audit), original);
     }
   } finally {
     if (orphanAlive()) throw new Error('Hosted 夹具后代尚存活，保留其准确工作目录');
-    rmSync(root, { recursive: true, force: true });
+    if (!preserveRoot) rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -7125,6 +7258,7 @@ if (process.env.CITIZENSDK_DART) {
     assert.ok(process.env.CITIZENSDK_FLUTTER, '缺少显式官方 Flutter 路径');
     assert.ok(process.env.CITIZENSDK_PUB_CACHE, '缺少显式中央独占 Pub cache');
     const root = mkdtempSync(join(workRoot, 'release-hosted-official-test-'));
+    let preserve = false;
     try {
       const native = writeNativeFixture(root);
       const candidate = join(root, 'candidate');
@@ -7163,8 +7297,11 @@ if (process.env.CITIZENSDK_DART) {
         files: [...entries.values()].filter((entry) => entry.type === 'file').length,
         directories: [...entries.values()].filter((entry) => entry.type === 'directory').length,
       }));
+    } catch (error) {
+      preserve = error?.preserveHostedOutput === true;
+      throw error;
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      if (!preserve) rmSync(root, { recursive: true, force: true });
     }
   });
 }
@@ -7184,7 +7321,7 @@ if (process.env.CITIZENSDK_APPLE_NATIVE) {
       nativeShellFunctions(['fail', 'assert_safe_directory_path', 'assert_descendant_path',
         'assert_readonly_dependency_directory', 'macos_hosted_root']),
       'tata_console_work_root="$1"; sdk_dir="$2"; macos_hosted_root',
-    ].join('\n'), 'macos-hosted-root', '/Users/rhett/TATA/tataconsole/target/.work', resolve(citizenSdkRoot)], {
+    ].join('\n'), 'macos-hosted-root', '/Users/rhett/TATA/target/.work', resolve(citizenSdkRoot)], {
       cwd: workRoot, encoding: 'utf8', timeout: 10000,
       env: { PATH: process.env.CITIZENSDK_TOOL_PATH,
         GITHUB_ACTIONS: process.env.GITHUB_ACTIONS, RUNNER_TEMP: process.env.RUNNER_TEMP,

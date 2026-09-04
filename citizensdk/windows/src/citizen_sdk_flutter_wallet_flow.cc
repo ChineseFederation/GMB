@@ -77,9 +77,14 @@ WalletFlowRequest FlutterWalletFlows::contract(const DecodedRequest &request) {
       value.kind = WalletFlowKind::Create;
       value.word_count = request.word_count;
       break;
-    case Method::import_wallet: value.kind = WalletFlowKind::Import; break;
+    case Method::import_wallet:
+      value.kind = WalletFlowKind::Import;
+      // word_count 仅属于创建；导入必须按 Host 合同清空默认创建参数。
+      value.word_count = 0;
+      break;
     case Method::add_wallet_accounts:
       value.kind = WalletFlowKind::AddAccounts;
+      value.word_count = 0;
       value.account_indices = request.indices;
       break;
     default:

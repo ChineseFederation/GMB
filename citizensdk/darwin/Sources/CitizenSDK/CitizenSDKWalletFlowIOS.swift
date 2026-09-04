@@ -1,3 +1,13 @@
+import Foundation
+
+/// 密码可为空；创建时仍必须逐字匹配确认值。派生和长度规则继续由 Core 校验。
+internal func citizenSDKValidateWalletPassword(_ password: String, confirmation: String?,
+                                               request: CitizenSDKWalletFlowRequest) throws {
+    if case .create = request, password != (confirmation ?? "") {
+        throw CitizenSDKError(.invalidArgument, "两次输入的钱包密码不一致")
+    }
+}
+
 #if os(iOS)
 import UIKit
 
@@ -145,10 +155,8 @@ private final class CitizenSDKWalletViewController: UIViewController {
     private func beginOperation() {
         do {
             let passwordText = password.text ?? ""
-            guard !passwordText.isEmpty else { throw CitizenSDKError(.invalidArgument, "请输入钱包密码") }
-            if case .create = request, passwordText != passwordConfirmation.text {
-                throw CitizenSDKError(.invalidArgument, "两次输入的钱包密码不一致")
-            }
+            try citizenSDKValidateWalletPassword(passwordText, confirmation: passwordConfirmation.text,
+                                                 request: request)
             let passwordBuffer = try citizenSDKSensitiveText(passwordText, label: "password")
             password.text = nil
             passwordConfirmation.text = nil

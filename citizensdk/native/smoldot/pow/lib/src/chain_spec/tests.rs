@@ -108,9 +108,8 @@ fn relay_chain_para_id_either_both_present_or_absent() {
     )
     .unwrap();
 
-    assert!(
-        ChainSpec::from_json_bytes(
-            r#"{
+    assert!(ChainSpec::from_json_bytes(
+        r#"{
             "name": "Test",
             "id": "test",
             "bootNodes": [],
@@ -123,13 +122,11 @@ fn relay_chain_para_id_either_both_present_or_absent() {
             }
           }
           "#,
-        )
-        .is_err()
-    );
+    )
+    .is_err());
 
-    assert!(
-        ChainSpec::from_json_bytes(
-            r#"{
+    assert!(ChainSpec::from_json_bytes(
+        r#"{
             "name": "Test",
             "id": "test",
             "bootNodes": [],
@@ -142,9 +139,8 @@ fn relay_chain_para_id_either_both_present_or_absent() {
             }
           }
           "#,
-        )
-        .is_err()
-    );
+    )
+    .is_err());
 }
 
 #[test]

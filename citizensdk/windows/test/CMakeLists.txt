@@ -15,7 +15,8 @@ if(CITIZENSDK_TEST_WORK_DIR STREQUAL "" OR
    (EXISTS "${CITIZENSDK_TEST_WORK_DIR}" AND NOT IS_DIRECTORY "${CITIZENSDK_TEST_WORK_DIR}"))
   message(FATAL_ERROR "CITIZENSDK_TEST_WORK_DIR must name a task-exclusive absolute directory")
 endif()
-# Flutter 测试只编译适配层，连接安装的 Host/Core；原生 14 项仍走下方分支。
+# Flutter 测试编译适配层及钱包真实纯参数校验器，运行态连接安装的
+# Host/Core，不重建核心；原生 14 项仍走下方分支。
 if(TARGET citizen_sdk_plugin)
   set(CITIZENSDK_WINDOWS_FLUTTER_CONTRACT_TESTS
     citizen_sdk_flutter_codec_test
@@ -31,6 +32,12 @@ if(TARGET citizen_sdk_plugin)
   target_link_libraries(citizensdk_windows_flutter_test_support PUBLIC advapi32)
   foreach(test_name IN LISTS CITIZENSDK_WINDOWS_FLUTTER_CONTRACT_TESTS)
     add_executable(${test_name} "${test_name}.cc")
+    if(test_name STREQUAL "citizen_sdk_flutter_wallet_flow_test")
+      target_sources(${test_name} PRIVATE
+        ../src/citizen_sdk_wallet_validation.cc
+        ../src/citizen_sdk_input_limits.cc
+        ../src/citizen_sdk_host_record.cc)
+    endif()
     citizensdk_configure_flutter_target(${test_name})
     target_link_libraries(${test_name} PRIVATE citizensdk_windows_flutter_test_support)
     target_compile_definitions(${test_name} PRIVATE

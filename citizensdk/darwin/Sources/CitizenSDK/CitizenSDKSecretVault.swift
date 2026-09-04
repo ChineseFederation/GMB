@@ -56,11 +56,15 @@ internal final class CitizenSDKAcceptedVaultOperation: @unchecked Sendable {
 internal final class CitizenSDKSecretVault: @unchecked Sendable {
     private static let dekBytes = 32
     private let secureStore: CitizenSDKSecureStore
+    private let applicationID: String
     private let queue = DispatchQueue(label: "org.citizen.sdk.apple-vault", qos: .userInitiated)
     private let operationLock = NSLock()
     private var pendingUnwraps: Set<UInt64> = []
 
-    init(secureStore: CitizenSDKSecureStore) { self.secureStore = secureStore }
+    init(secureStore: CitizenSDKSecureStore, applicationID: String) throws {
+        self.applicationID = try CitizenSDKRecordKey.applicationID(applicationID)
+        self.secureStore = secureStore
+    }
 
     func availability() -> CitizenSDKVaultAvailability {
         #if targetEnvironment(simulator)
@@ -90,6 +94,14 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
     }
 
     func ensureWalletKEK(walletIndex: UInt32, generation: Data, provisioningOperationID: Data) throws {
+        try secureStore.withVaultLock {
+            try ensureWalletKEKLocked(walletIndex: walletIndex, generation: generation,
+                                      provisioningOperationID: provisioningOperationID)
+        }
+    }
+
+    private func ensureWalletKEKLocked(walletIndex: UInt32, generation: Data,
+                                       provisioningOperationID: Data) throws {
         try CitizenSDKChecks.require(walletIndex == 0, "only wallet index 0 is supported")
         try CitizenSDKChecks.require(generation.count == 16 && provisioningOperationID.count == 16,
                                      "wallet KEK identity is malformed")
@@ -109,11 +121,13 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
     }
 
     func hasWalletKEK(walletIndex: UInt32, generation: Data) throws -> Bool {
-        guard try secureStore.isGenerationActive(walletIndex: walletIndex, generation: generation) else { return false }
-        guard let key = try copyPrivateKey(walletIndex: walletIndex, generation: generation,
-                                           context: nil, allowInteraction: false) else { return false }
-        try requireSecureEnclaveKey(key)
-        return true
+        try secureStore.withVaultLock {
+            guard try secureStore.isGenerationActive(walletIndex: walletIndex, generation: generation) else { return false }
+            guard let key = try copyPrivateKey(walletIndex: walletIndex, generation: generation,
+                                               context: nil, allowInteraction: false) else { return false }
+            try requireSecureEnclaveKey(key)
+            return true
+        }
     }
 
     /// Encrypts directly from the exact Rust-owned borrowed DEK view.
@@ -121,24 +135,26 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
                  plaintext: UnsafeRawBufferPointer) throws -> Data {
         try CitizenSDKChecks.require(plaintext.count == Self.dekBytes && plaintext.baseAddress != nil,
                                      "DEK must be an exact Rust-owned 32-byte view")
-        try ensureWalletKEK(walletIndex: walletIndex, generation: generation,
-                            provisioningOperationID: provisioningOperationID)
-        guard let privateKey = try copyPrivateKey(walletIndex: walletIndex, generation: generation,
-                                                  context: nil, allowInteraction: false),
-              let publicKey = SecKeyCopyPublicKey(privateKey) else {
-            throw CitizenSDKError(.keyInvalidated, "wallet KEK is unavailable")
+        return try secureStore.withVaultLock {
+            try ensureWalletKEKLocked(walletIndex: walletIndex, generation: generation,
+                                      provisioningOperationID: provisioningOperationID)
+            guard let privateKey = try copyPrivateKey(walletIndex: walletIndex, generation: generation,
+                                                      context: nil, allowInteraction: false),
+                  let publicKey = SecKeyCopyPublicKey(privateKey) else {
+                throw CitizenSDKError(.keyInvalidated, "wallet KEK is unavailable")
+            }
+            let algorithm = SecKeyAlgorithm.eciesEncryptionCofactorX963SHA256AESGCM
+            guard SecKeyIsAlgorithmSupported(publicKey, .encrypt, algorithm) else {
+                throw CitizenSDKError(.unsupported, "Secure Enclave ECIES wrapping is unavailable")
+            }
+            let borrowed = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: plaintext.baseAddress!),
+                                count: plaintext.count, deallocator: .none) as CFData
+            var failure: Unmanaged<CFError>?
+            guard let wrapped = SecKeyCreateEncryptedData(publicKey, algorithm, borrowed, &failure) else {
+                throw mapSecurityError(failure?.takeRetainedValue(), fallback: "wallet DEK wrapping failed")
+            }
+            return wrapped as Data
         }
-        let algorithm = SecKeyAlgorithm.eciesEncryptionCofactorX963SHA256AESGCM
-        guard SecKeyIsAlgorithmSupported(publicKey, .encrypt, algorithm) else {
-            throw CitizenSDKError(.unsupported, "Secure Enclave ECIES wrapping is unavailable")
-        }
-        let borrowed = Data(bytesNoCopy: UnsafeMutableRawPointer(mutating: plaintext.baseAddress!),
-                            count: plaintext.count, deallocator: .none) as CFData
-        var failure: Unmanaged<CFError>?
-        guard let wrapped = SecKeyCreateEncryptedData(publicKey, algorithm, borrowed, &failure) else {
-            throw mapSecurityError(failure?.takeRetainedValue(), fallback: "wallet DEK wrapping failed")
-        }
-        return wrapped as Data
     }
 
     /// Authenticates once and copies the DEK straight into Rust-owned output.
@@ -211,17 +227,19 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
                                      "wallet KEK retirement identity is malformed")
         // The durable tombstone is the irreversible commit point. A crash or
         // late ensure can never resurrect this generation.
-        try secureStore.retireGeneration(walletIndex: walletIndex, generation: generation,
-                                         operationID: cleanupOperationID)
-        let tag = try CitizenSDKRecordKey.keychainTag(walletIndex: walletIndex, generation: generation)
-        let status = SecItemDelete(keyQuery(tag: tag, context: nil, allowInteraction: false) as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw CitizenSDKError(.storage, "retired wallet KEK could not be removed from Keychain")
+        try secureStore.withVaultLock {
+            try secureStore.retireGeneration(walletIndex: walletIndex, generation: generation,
+                                             operationID: cleanupOperationID)
+            let tag = try CitizenSDKRecordKey.keychainTag(applicationID: applicationID, walletIndex: walletIndex, generation: generation)
+            let status = SecItemDelete(keyQuery(tag: tag, context: nil, allowInteraction: false) as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else {
+                throw CitizenSDKError(.storage, "retired wallet KEK could not be removed from Keychain")
+            }
         }
     }
 
     private func createPrivateKey(walletIndex: UInt32, generation: Data) throws {
-        let tag = try CitizenSDKRecordKey.keychainTag(walletIndex: walletIndex, generation: generation)
+        let tag = try CitizenSDKRecordKey.keychainTag(applicationID: applicationID, walletIndex: walletIndex, generation: generation)
         var accessError: Unmanaged<CFError>?
         guard let access = SecAccessControlCreateWithFlags(
             nil,
@@ -251,7 +269,7 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
 
     private func copyPrivateKey(walletIndex: UInt32, generation: Data, context: LAContext?,
                                 allowInteraction: Bool) throws -> SecKey? {
-        let tag = try CitizenSDKRecordKey.keychainTag(walletIndex: walletIndex, generation: generation)
+        let tag = try CitizenSDKRecordKey.keychainTag(applicationID: applicationID, walletIndex: walletIndex, generation: generation)
         var query = keyQuery(tag: tag, context: context, allowInteraction: allowInteraction)
         query[kSecReturnRef] = true
         query[kSecMatchLimit] = kSecMatchLimitOne

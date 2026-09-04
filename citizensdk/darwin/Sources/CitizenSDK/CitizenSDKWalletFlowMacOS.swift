@@ -105,10 +105,8 @@ private final class CitizenSDKWalletViewControllerMacOS: NSViewController {
     private func beginOperation() {
         do {
             let passwordText = password.stringValue
-            guard !passwordText.isEmpty else { throw CitizenSDKError(.invalidArgument, "请输入钱包密码") }
-            if case .create = request, passwordText != passwordConfirmation.stringValue {
-                throw CitizenSDKError(.invalidArgument, "两次输入的钱包密码不一致")
-            }
+            try citizenSDKValidateWalletPassword(passwordText, confirmation: passwordConfirmation.stringValue,
+                                                 request: request)
             let passwordBuffer = try citizenSDKSensitiveText(passwordText, label: "password")
             password.stringValue = ""; passwordConfirmation.stringValue = ""
             switch request {

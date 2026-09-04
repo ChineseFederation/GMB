@@ -1118,7 +1118,7 @@ fn wallet_transfer_commits_pending_before_watch_then_persists_explicit_rejection
         state.records()[0].status(),
         HistoryTransactionStatus::PoolRejected { .. }
     ));
-    assert_eq!(completed.hash(), transaction_hash);
+    assert_eq!(completed.transaction_hash(), transaction_hash);
     assert!(matches!(
         completed.resolution(),
         WalletTransferResolution::PoolRejected { .. }

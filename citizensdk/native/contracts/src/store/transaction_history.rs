@@ -4,7 +4,8 @@ use std::collections::BTreeSet;
 
 use crate::{
     AccountId32, ContractError, ContractErrorCode, ContractFuture, ContractResult,
-    ExecutionConclusion, FinalizedBlockRef, Hash32, VerifiedBlockRef,
+    ExecutionConclusion, FinalizedBlockRef, Hash32, RuntimeVersion, SignedExtrinsic,
+    VerifiedBlockRef,
 };
 
 /// 99 个任意 Runtime bytes 经标准 UTF-8 lossy 投影后的最坏展示字节数。
@@ -101,6 +102,10 @@ impl HistoryTransactionStatus {
 pub struct TransactionHistoryRecord {
     account_id: AccountId32,
     transaction_hash: Hash32,
+    signed_extrinsic: SignedExtrinsic,
+    block: VerifiedBlockRef,
+    runtime_version: RuntimeVersion,
+    genesis_hash: Hash32,
     nonce: u64,
     destination_account_id: AccountId32,
     amount_fen: u128,
@@ -111,7 +116,7 @@ pub struct TransactionHistoryRecord {
 }
 
 impl TransactionHistoryRecord {
-    /// 构造参数逐项对应已验证 Dart `PendingSubmittedTransaction` 的不可省略持久字段。
+    /// 提交事实与完整授权在同一记录中构造；不允许只有 txHash 而缺少恢复字节的记录。
     #[allow(clippy::too_many_arguments)]
     pub fn try_new(
         account_id: AccountId32,
@@ -123,8 +128,20 @@ impl TransactionHistoryRecord {
         status: HistoryTransactionStatus,
         created_at_millis: u64,
         updated_at_millis: u64,
+        signed_extrinsic: SignedExtrinsic,
+        block: VerifiedBlockRef,
+        runtime_version: RuntimeVersion,
+        genesis_hash: Hash32,
     ) -> ContractResult<Self> {
         let remark = remark.into();
+        // 当前唯一 V4 转账含固定签名、nonce 与最多 99-byte 备注，远小于 1024 bytes。
+        // 此公开授权字节必须与 Pending 同次落盘；不能只留下无法恢复的交易哈希。
+        if signed_extrinsic.as_bytes().len() > 1024 {
+            return Err(ContractError::new(
+                ContractErrorCode::InvalidArgument,
+                "持久转账 extrinsic 超过 1024 bytes 上限",
+            ));
+        }
         if amount_fen == 0 || remark.len() > crate::MAX_TRANSFER_REMARK_BYTES {
             return Err(ContractError::new(
                 ContractErrorCode::InvalidArgument,
@@ -146,6 +163,10 @@ impl TransactionHistoryRecord {
         Ok(Self {
             account_id,
             transaction_hash,
+            signed_extrinsic,
+            block,
+            runtime_version,
+            genesis_hash,
             nonce,
             destination_account_id,
             amount_fen,
@@ -162,6 +183,20 @@ impl TransactionHistoryRecord {
 
     pub const fn transaction_hash(&self) -> Hash32 {
         self.transaction_hash
+    }
+
+    /// 仅供 Rust 存储与重试恢复；绑定层的历史展示不得投影完整授权字节。
+    pub const fn signed_extrinsic(&self) -> &SignedExtrinsic {
+        &self.signed_extrinsic
+    }
+    pub const fn block(&self) -> VerifiedBlockRef {
+        self.block
+    }
+    pub const fn runtime_version(&self) -> RuntimeVersion {
+        self.runtime_version
+    }
+    pub const fn genesis_hash(&self) -> Hash32 {
+        self.genesis_hash
     }
 
     pub const fn nonce(&self) -> u64 {
@@ -200,6 +235,10 @@ impl TransactionHistoryRecord {
             || self.destination_account_id != other.destination_account_id
             || self.amount_fen != other.amount_fen
             || self.remark != other.remark
+            || self.signed_extrinsic != other.signed_extrinsic
+            || self.block != other.block
+            || self.runtime_version != other.runtime_version
+            || self.genesis_hash != other.genesis_hash
         {
             return Err(ContractError::new(
                 ContractErrorCode::Integrity,
@@ -231,6 +270,10 @@ impl TransactionHistoryRecord {
             status,
             self.created_at_millis,
             updated_at_millis,
+            self.signed_extrinsic.clone(),
+            self.block,
+            self.runtime_version,
+            self.genesis_hash,
         )
     }
 }

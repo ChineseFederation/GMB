@@ -114,7 +114,13 @@ pub fn resolve_capabilities(
         } else if !probe.supported {
             Some(CapabilityReason::BuildUnsupported)
         } else if !probe.available {
-            Some(CapabilityReason::DeviceUnavailable)
+            // available=false 也用于“宿主探测尚未完成”。探测器给出的准确原因
+            // 优先于默认设备原因，避免把未知状态误报成实体设备故障。
+            Some(
+                probe
+                    .not_ready_reason
+                    .unwrap_or(CapabilityReason::DeviceUnavailable),
+            )
         } else if !probe.enabled {
             Some(CapabilityReason::HostDisabled)
         } else if !probe.runtime_ready {

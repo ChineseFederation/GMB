@@ -58,6 +58,10 @@ Runner 中临时改号成 `1.0.0`，未来升级也必须先提交准确版本�
 
 ## CitizenSDK 自有 Rust Core 与产品 ABI
 
+第 12 步新增的原授权恢复、事件容量预留、平台线程/宿主隔离和 Linux DMS 修复属于 SDK
+自有代码加固，不宣称来自 CitizenApp 的逐字节副本。链资产、sr25519 实现与上游 smoldot
+算法源码本批不改；SDK 发布器继续逐项固定实际变更后的自有源码、文档与测试摘要。
+
 `native/contracts`、`native/engine` 与 `native/ffi` 是 CitizenSDK 自有实现，不是 CitizenApp
 或 smoldot 上游逐字节副本。contracts 固定 `VerifiedChainClient`、`ChainSigner`、
 `SecretVault`、十项能力状态、钱包公开模型与五类职责明确的状态仓储；engine 实现能力解析、
@@ -104,7 +108,7 @@ smoldot provider、准确 Runtime nonce 和唯一 signer，并只接受 typed Va
 
 根 `LICENSE` 是 CitizenSDK 组件许可证入口，明确 SDK 自有代码、smoldot Dart/FFI 与
 smoldot PoW 的适用许可证边界，SHA-256 为
-`85cbc4861f93949326d45a484db8df26125af2c19ba78b35f2a9e51bcaa5042a`；它还完整重现 Apache-2.0
+`e18cd42a76f530deefa3db97a1b2728eccbfc4d24a2057eef36e5eb73c96b58f`；它还完整重现 Apache-2.0
 原文，使过滤掉 `native` 源码目录的 Hosted 包仍携带适用条款。正式候选同时保留并固定
 两份权威法律原文：`LICENSE-GPL-3.0` 与
 `citizenapp/smoldot/pow/LICENSE` 逐字节一致，SHA-256 为
@@ -152,7 +156,7 @@ formatter 归一外不改行为；发布器继续对迁移闭集逐文件固定�
 `target` 命令不代表 CitizenSDK 当前交付合同，也不得作为 SDK 构建指引。CitizenSDK 当前产品
 ABI 投影覆盖 Android、iOS 与 macOS。当前 Android ABI 为 `arm64-v8a`；iOS 设备与模拟器变体
 及 macOS 的 Apple machine slice 架构值为 `arm64`。本机宿主测试库与全部生成记录只能写入
-`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；Linux 合同测试由
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；Linux 合同测试由
 `CITIZENSDK_TEST_WORK_DIR` 显式接收现有 `0700` 目录且没有 `/tmp` fallback。远程 Runner 也
 必须由统一流程显式注入其 checkout 外的任务独占构建根，不能让测试自行选择临时目录。
 legacy `libsmoldot.dylib` 仅允许 macOS `arm64` 差分测试；
@@ -175,7 +179,9 @@ FFI 来源是 `citizenapp/smoldot/ffi`。以下文件保持来源字节：
 
 来源独有的 `src/chat_mls.rs` 没有复制。SDK 新增 README、legacy 头文件合同与范围守卫测试。
 `native/smoldot/ffi/Cargo.lock` 从 CitizenApp 已验证锁文件机械裁掉 OpenMLS、聊天与账户加密
-闭包；所有保留的 registry 包继续使用来源锁中的准确 name/version/checksum，不引入新身份。
+闭包；所有保留的 registry 包继续使用来源锁中的准确 name/version/checksum。SDK signer 通过
+contracts 使用 `blake2 0.10.6`，这是来源 FFI 锁之外唯一新增的 registry 身份，不得误写成
+“没有新增身份”。
 SDK 锁文件 SHA-256 为
 `117c9ca6ad5cb034c8fc5792028d9085dbc6483194e1aae25123b536c8c0cddb`。
 
@@ -208,7 +214,7 @@ verified finalized 锚沿 exact parent hash 回溯，逐头核对响应 hash、S
 
 该目录 10 个普通文件作为 `SOURCE_SHA256.json` 的独立 `provider/sdk_only` 单元固定；来源
 清单当前 SHA-256 为
-`a2b0278ca4b91ea0e9e150850fd28e5e8338a2ae53619c6792122cd9a4d44349`。Release 还从根锁递归解析
+`1e24c80cac3c2ba693194cb8e9588aa73e85324c4a6d8538ffe38369590d34e3`。Release 还从根锁递归解析
 Provider 的 smoldot registry 图，要求其 name/version/checksum 与 PoW 已验证锁完全一致。
 
 ## 产品 C ABI
@@ -240,9 +246,15 @@ Android 候选注入 `libcitizensdk.so` 与 `libcitizensdk_jni.so`，并生成�
 来源是 `citizenapp/smoldot/pow`，上游提交与本地 PoW 改动清单见
 `native/smoldot/UPSTREAM.md`。
 
-`pow/light-base` 的 18 个生产文件中 17 个逐字节复制；`src/lib.rs` 单独登记为适配文件，只给
-现有 typed storage batch 增加与证明状态根绑定的准确 block number/hash 结果，原兼容方法继续
-返回相同值列表。SDK 另增说明和能力/来源闭集测试。该层保留数据库、网络、JSON-RPC、runtime、
+`pow/light-base/src/platform/default.rs`、`pow/lib/src/chain_spec/tests.rs` 与
+`pow/lib/src/sync/warp_sync.rs` 已恢复为当前 CitizenApp 来源的逐字节副本，并以新的目标摘要
+固定在 `SOURCE_SHA256.json`。三者不再以格式或 import 顺序差异冒充 byte-identical；
+清单自身摘要为
+`1e24c80cac3c2ba693194cb8e9588aa73e85324c4a6d8538ffe38369590d34e3`。
+
+`pow/light-base` 的 18 个生产文件中 17 个逐字节复制；`src/lib.rs` 单独登记为适配文件，集中
+实现 typed storage snapshot、准确 best Runtime nonce 和 proof-backed finalized ancestry，
+原兼容方法继续返回相同值列表。SDK 另增说明和能力/来源闭集测试。该层保留数据库、网络、JSON-RPC、runtime、
 同步、交易池和平台编排。
 
 `pow/lib` 收编轻客户端需要的 chain、chain-spec、finality、header、verify、trie、executor、
@@ -346,7 +358,8 @@ extrinsic 定位及 runtime 执行结果；这些是 CitizenSDK 自有合同测�
 CAS/provisioning/exact cleanup 实现 prepare/commit create、import/add/delete/reconcile，秘密不离开 Rust
 buffer。交易构造固定 pallet `4` / call `0`、V4、immortal、tip `0`、CitizenChain genesis 与
 同块 runtime；构造对象保持 Engine 私有，唯一钱包 `transfer_with_remark` 先完整持久化
-source/destination/amount/remark/nonce 与本地 extrinsic hash，确认 pending CAS 成功后才进入
+source/destination/amount/remark/nonce、本地 extrinsic hash、完整 signed extrinsic 及构造
+block/runtime_version/genesis_hash，确认 pending CAS 成功后才进入
 provider。raw submit-and-watch 仅属于无钱包纯链组合，因为 provider watch 本身会广播；组合
 任一钱包组件后该入口在 provider 前关闭。终态令牌不可分离地绑定 txHash 与同 index System
 结论；finalized 流水拒绝自转，
@@ -587,7 +600,8 @@ Android `:citizen_sdk:testDebugUnitTest` JUnit 与 iOS 模拟器 XCTest；只编
 的某次最终验收结果。本轮 Apple 执行记录是：iOS 设备与模拟器变体两组测试 bundle
 编译通过；本机无 Simulator runtime，因此未执行 iOS XCTest；macOS Core 50 项与 Flutter
 adapter 22 项 XCTest 0 失败，1 项真机硬件用例跳过；normal/supervisor smoke 通过。
-当前 TataConsole Flow 尚未集成本闭集，本步没有运行远程 CI、正式 Release、Hosted 上传或 Git。
+TataConsole Flow 已集成 Apple/Hosted 与五平台 Release 闭集；本轮仅执行本机闭集，
+没有运行远程 CI、正式 Release、Hosted 上传或 Git。
 
 本轮完整本机闭集还包括：Android AAR 构建通过；Apple 单一 XCFramework 的 iOS 设备与
 模拟器变体及 macOS 三个 Apple `arm64` machine slice 构建通过；Hosted 17 文件分析 0 问题；完整

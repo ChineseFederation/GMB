@@ -11,11 +11,13 @@ internal final class CitizenSDKHostBridge {
     private var secureVTable = citizensdk_host_secure_store_v1_t()
     private var vaultVTable = citizensdk_host_secret_vault_v1_t()
 
-    init(root: URL? = nil) throws {
-        let base = try root ?? Self.defaultRoot()
+    init(root: URL? = nil, applicationID: String? = Bundle.main.bundleIdentifier) throws {
+        // 即使测试显式指定存储目录，也必须提供有效宿主身份；校验失败不得创建任何文件。
+        let applicationID = try CitizenSDKRecordKey.applicationID(applicationID)
+        let base = try root ?? Self.defaultRoot(applicationID: applicationID)
         publicStore = try CitizenSDKPublicStore(directory: base.appendingPathComponent("public", isDirectory: true))
         secureStore = try CitizenSDKSecureStore(directory: base.appendingPathComponent("secure", isDirectory: true))
-        vault = CitizenSDKSecretVault(secureStore: secureStore)
+        vault = try CitizenSDKSecretVault(secureStore: secureStore, applicationID: applicationID)
         configureVTables()
     }
 
@@ -72,12 +74,19 @@ internal final class CitizenSDKHostBridge {
         vaultVTable.retire_wallet_kek = citizenSDKVaultRetire
     }
 
-    private static func defaultRoot() throws -> URL {
+    static func storageRoot(applicationSupport: URL, applicationID: String?) throws -> URL {
+        let applicationID = try CitizenSDKRecordKey.applicationID(applicationID)
+        return applicationSupport.appendingPathComponent(applicationID, isDirectory: true)
+            .appendingPathComponent("citizensdk/v1", isDirectory: true)
+    }
+
+    private static func defaultRoot(applicationID: String) throws -> URL {
         guard let applicationSupport = FileManager.default.urls(for: .applicationSupportDirectory,
                                                                  in: .userDomainMask).first else {
             throw CitizenSDKError(.storage, "Apple application-support directory is unavailable")
         }
-        let root = applicationSupport.appendingPathComponent("citizensdk/v1", isDirectory: true)
+        // 沙盒外的 macOS Application Support 由同用户共享，必须先按宿主分区。
+        let root = try storageRoot(applicationSupport: applicationSupport, applicationID: applicationID)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true

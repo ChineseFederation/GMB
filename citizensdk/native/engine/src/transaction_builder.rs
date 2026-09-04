@@ -14,6 +14,7 @@ use citizen_sdk_contracts::{
 use subxt_core::{
     config::{substrate::H256, SubstrateConfig, SubstrateExtrinsicParamsBuilder},
     dynamic::Value,
+    ext::codec::{Compact, Decode},
     tx::{self, ClientState, RuntimeVersion as SubxtRuntimeVersion, TransactionVersion},
     utils::{AccountId32 as SubxtAccountId32, MultiSignature},
     Metadata,
@@ -48,6 +49,109 @@ impl BuiltTransferWithRemark {
     pub(crate) const fn signed(&self) -> &SignedTransactionBuild {
         &self.signed
     }
+}
+
+/// 从持久公开授权恢复前逐项验真；重新构造的是验签载荷，绝不调用 sign 或请求新 nonce。
+pub(crate) async fn validate_recorded_transfer(
+    chain_client: &dyn VerifiedChainClient,
+    signer: &dyn ChainSigner,
+    record: &citizen_sdk_contracts::TransactionHistoryRecord,
+) -> Result<(), EngineError> {
+    let identity = verified_identity(chain_client).await?;
+    // Immortal 的 CheckMortality additional_signed 是 genesis，而不是原 best hash。
+    // 唯一恢复验签路径使用当前已验证 best 的同版本 Runtime；原构造块仅保留追踪事实，
+    // 不要求轻节点重开后仍可查询孤块。Runtime 版本改变则保留原授权并失败关闭。
+    let best = chain_client.get_best_head().await?;
+    let context = verified_runtime_context(chain_client, best).await?;
+    if identity.genesis_hash() != record.genesis_hash()
+        || context.version() != record.runtime_version()
+        || crate::signed_extrinsic_hash(&context, record.signed_extrinsic())?
+            != record.transaction_hash()
+    {
+        return Err(EngineError::contract(
+            ContractErrorCode::Integrity,
+            "持久交易的 genesis、Runtime 或 extrinsic hash 不一致",
+        ));
+    }
+    let call = TransferWithRemarkCall::try_new(
+        record.destination_account_id(),
+        record.amount_fen(),
+        record.remark(),
+    )?;
+    let metadata = decode_metadata_strict(context.metadata())?;
+    let call_data = validate_and_encode_call(&metadata, &call)?;
+    if tx::suggested_version(&metadata)
+        .map_err(|error| EngineError::InvalidMetadata(error.to_string()))?
+        != TransactionVersion::V4
+    {
+        return Err(EngineError::contract(
+            ContractErrorCode::Unsupported,
+            "持久交易的 Runtime 不支持已验证的 signed extrinsic V4",
+        ));
+    }
+    let state = ClientState::<SubstrateConfig> {
+        genesis_hash: H256::from(identity.genesis_hash().into_bytes()),
+        runtime_version: SubxtRuntimeVersion {
+            spec_version: context.version().spec_version(),
+            transaction_version: context.version().transaction_version(),
+        },
+        metadata,
+    };
+    let partial = tx::create_v4_signed(
+        &ExactCallData(call_data),
+        &state,
+        SubstrateExtrinsicParamsBuilder::<SubstrateConfig>::new()
+            .immortal()
+            .nonce(record.nonce())
+            .tip(0)
+            .build(),
+    )
+    .map_err(|error| EngineError::InvalidMetadata(error.to_string()))?;
+    // V4: Compact(length), version, MultiAddress::Id, AccountId32,
+    // MultiSignature::Sr25519, signature。后续全部字节由官方 Subxt 重编码逐字节比较。
+    let mut body = record.signed_extrinsic().as_bytes();
+    let length = Compact::<u32>::decode(&mut body)
+        .map_err(|_| {
+            EngineError::contract(ContractErrorCode::Integrity, "持久 extrinsic 长度无效")
+        })?
+        .0;
+    if length as usize != body.len()
+        || body.len() < 99
+        || body[0] != 0x84
+        || body[1] != 0
+        || body[34] != 1
+    {
+        return Err(EngineError::contract(
+            ContractErrorCode::Integrity,
+            "持久 extrinsic 不是准确 sr25519 V4",
+        ));
+    }
+    let mut signature = [0_u8; 64];
+    signature.copy_from_slice(&body[35..99]);
+    let signing_message = partial.signer_payload();
+    let encoded = partial
+        .sign_with_account_and_signature(
+            SubxtAccountId32(record.account_id().into_bytes()),
+            &MultiSignature::Sr25519(signature),
+        )
+        .into_encoded();
+    if encoded != record.signed_extrinsic().as_bytes()
+        || !signer
+            .verify(
+                citizen_sdk_contracts::Sr25519PublicKey::from_bytes(
+                    record.account_id().into_bytes(),
+                ),
+                signing_message,
+                citizen_sdk_contracts::Sr25519Signature::from_bytes(signature),
+            )
+            .await?
+    {
+        return Err(EngineError::contract(
+            ContractErrorCode::Integrity,
+            "持久 extrinsic 的账户、nonce、调用参数或 sr25519 签名不一致",
+        ));
+    }
+    Ok(())
 }
 
 /// Engine 内部完整转账构造器。

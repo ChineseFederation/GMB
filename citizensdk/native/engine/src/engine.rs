@@ -584,6 +584,52 @@ impl CitizenEngine {
             history_runtime
                 .initialize_accounts(&[source_account_id], &guard)
                 .await?;
+            // 在访问金库和读取新 nonce 之前寻找已持久授权。同参数重试只恢复该字节，
+            // 包括取消、进程退出和 CAS 已落盘但调用未返回的窗口。
+            if let Some(record) = history
+                .resumable_transfer(source_account_id, destination, amount_fen, &remark)
+                .await?
+            {
+                crate::wallet_transfer_watch::reconcile_before_rebroadcast(
+                    self.components.chain_client().as_ref(),
+                    &history_runtime,
+                    &history,
+                    &guard,
+                    source_account_id,
+                )
+                .await?;
+                let (_, current) = history
+                    .require_submission_snapshot(source_account_id, record.transaction_hash())
+                    .await?;
+                record.require_same_submission_facts(&current)?;
+                // 同步已证明终态时不再要求读取构造 Runtime，也绝不重新广播。
+                if matches!(
+                    current.status(),
+                    citizen_sdk_contracts::HistoryTransactionStatus::Pending
+                        | citizen_sdk_contracts::HistoryTransactionStatus::InBlock { .. }
+                ) {
+                    let signer = self.components.signer().ok_or_else(|| {
+                        EngineError::CapabilityUnavailable("chain_signer_missing".to_owned())
+                    })?;
+                    crate::transaction_builder::validate_recorded_transfer(
+                        self.components.chain_client().as_ref(),
+                        signer.as_ref(),
+                        &current,
+                    )
+                    .await?;
+                }
+                return watch_recorded_transfer(
+                    self.components.chain_client().as_ref(),
+                    &history_runtime,
+                    &history,
+                    &guard,
+                    &observer,
+                    source_account_id,
+                    record.transaction_hash(),
+                    record.signed_extrinsic().clone(),
+                )
+                .await;
+            }
             let built = service
                 .build_transfer_with_remark(
                     self.components.chain_client().as_ref(),
@@ -616,6 +662,10 @@ impl CitizenEngine {
                     built.call().destination(),
                     built.call().amount_fen(),
                     built.call().remark(),
+                    built.signed().extrinsic().clone(),
+                    built.signed().payload().block(),
+                    built.signed().payload().runtime_version(),
+                    built.signed().payload().genesis_hash(),
                 )
                 .await?;
 

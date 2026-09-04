@@ -87,6 +87,23 @@ fn duplicate_or_missing_probes_fail_closed() {
 }
 
 #[test]
+fn unavailable_probe_preserves_an_explicit_not_ready_reason() {
+    let mut probes = all_ready();
+    let wallet = probe_mut(&mut probes, CapabilityName::WalletProfile);
+    wallet.available = false;
+    wallet.runtime_ready = false;
+    wallet.not_ready_reason = Some(CapabilityReason::DependencyNotReady);
+    let snapshot = resolve_capabilities(9, probes)
+        .unwrap_or_else(|error| panic!("capability resolution failed: {error}"));
+    assert_eq!(
+        snapshot
+            .status(CapabilityName::WalletProfile)
+            .and_then(|status| status.reason()),
+        Some(CapabilityReason::DependencyNotReady)
+    );
+}
+
+#[test]
 fn tracker_advances_only_for_a_complete_semantic_change() {
     let mut tracker = CapabilityTracker::new();
     assert!(tracker.current().is_none());

@@ -3,15 +3,13 @@
 package org.citizen.sdk.internal
 
 import org.citizen.sdk.*
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** One private JNI owner; no native identity is returned by a public method. */
 internal class CitizenSdkNative private constructor(
     assets: CitizenSdkAssets,
     hostServices: CitizenSdkHostServices,
 ) : AutoCloseable {
-    private val callGate = Any()
-    private val closed = AtomicBoolean(false)
+    private val calls = CitizenSdkNativeCalls()
     private val bridge = nativeCreate(
         hostServices,
         assets.manifest,
@@ -80,11 +78,8 @@ internal class CitizenSdkNative private constructor(
     fun copyPreparedMnemonic(token: Long): ByteArray = call { nativeCopyPreparedMnemonic(it, token) }
     fun commitPreparedWallet(token: Long): Long = call { nativeCommitPreparedWallet(it, token) }
     fun releasePreparedWallet(token: Long) {
-        synchronized(callGate) {
-            // A successful Core destroy releases every uncommitted prepared
-            // wallet, so a late secure-Activity teardown is already satisfied.
-            if (!closed.get()) nativeReleasePreparedWallet(bridge, token)
-        }
+        // 只有成功 destroy 才能把迟到的释放视为已完成；closing 仍明确拒绝。
+        if (!calls.isClosed()) call { nativeReleasePreparedWallet(it, token) }
     }
 
     @Suppress("unused") // Called only by citizensdk_jni.
@@ -134,20 +129,15 @@ internal class CitizenSdkNative private constructor(
     }
 
     override fun close() {
-        synchronized(callGate) {
-            if (closed.get()) return
+        calls.close {
             nativeDestroy(bridge)
-            closed.set(true)
             router = null
             eventSink = null
         }
     }
 
-    /** Pins the Java-side bridge identity against concurrent destroy. */
-    private inline fun <T> call(block: (Long) -> T): T = synchronized(callGate) {
-        check(!closed.get()) { "CitizenSDK native bridge is closed" }
-        block(bridge)
-    }
+    /** JNI 调用持有短期 lease；等待 Rust 回调屏障时不持有重入调用需要的锁。 */
+    private fun <T> call(block: (Long) -> T): T = calls.call { block(bridge) }
 
     private fun flattenAccounts(values: Array<ByteArray>): ByteArray =
         ByteArray(values.size * 32).also { output ->
@@ -222,5 +212,43 @@ internal class CitizenSdkNative private constructor(
 
         @JvmStatic
         internal external fun completeVaultUnwrap(nativeBridge: Long, hostOperationId: Long, errorCode: Int)
+    }
+}
+
+/** 唯一 native 调用/销毁准入状态。失败后保持 closing，只允许精确重试销毁。 */
+internal class CitizenSdkNativeCalls {
+    private val gate = Any()
+    private var active = 0
+    private var closing = false
+    private var destroying = false
+    private var closed = false
+
+    fun isClosed(): Boolean = synchronized(gate) { closed }
+
+    fun <T> call(body: () -> T): T {
+        synchronized(gate) {
+            check(!closing && !closed) { "CitizenSDK native bridge is closing or closed" }
+            active += 1
+        }
+        try { return body() }
+        finally { synchronized(gate) { active -= 1 } }
+    }
+
+    fun close(destroy: () -> Unit) {
+        synchronized(gate) {
+            if (closed) return
+            if (destroying || active != 0) throw CitizenSdkException(
+                CitizenSdkErrorCode.BUSY, "CitizenSDK native call or close is active",
+            )
+            closing = true
+            destroying = true
+        }
+        try {
+            // 禁止在 gate 内等待 callback-clear：回调可能同步重入 call/close。
+            destroy()
+            synchronized(gate) { closed = true }
+        } finally {
+            synchronized(gate) { destroying = false }
+        }
     }
 }

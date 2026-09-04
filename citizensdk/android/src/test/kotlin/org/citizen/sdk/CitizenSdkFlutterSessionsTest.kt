@@ -6,8 +6,32 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CountDownLatch
 
 class CitizenSdkFlutterSessionsTest {
+    @Test
+    fun `transfer progress cannot overtake an early event while bind drains`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val delivered = mutableListOf<String>()
+        val buffer = CitizenSdkOrderedTransferBuffer<String> { _, value ->
+            synchronized(delivered) { delivered += value }
+            if (value == "E1") {
+                entered.countDown()
+                check(release.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            }
+        }
+        buffer.accept("E1")
+        val binder = Thread { buffer.bind("operation") }
+        binder.start()
+        assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+        buffer.accept("E2")
+        release.countDown()
+        binder.join(2_000)
+        assertFalse(binder.isAlive)
+        assertEquals(listOf("E1", "E2"), synchronized(delivered) { delivered.toList() })
+    }
+
     @Test
     fun `request sequence is strictly contiguous and never advances on rejection`() {
         val gate = CitizenSdkFlutterSequenceGate()

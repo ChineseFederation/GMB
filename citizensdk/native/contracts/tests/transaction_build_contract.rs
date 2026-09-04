@@ -167,12 +167,37 @@ fn history_moves_only_toward_verified_chain_evidence() {
         HistoryTransactionStatus::Pending,
         100,
         100,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84])
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        citizen_sdk_contracts::VerifiedBlockRef::best(
+            citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+            1,
+        ),
+        citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+        citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
     ));
     assert_eq!(
         submitted.destination_account_id(),
         AccountId32::from_bytes([9; 32])
     );
     assert_eq!(submitted.amount_fen(), 123);
+    assert_eq!(submitted.signed_extrinsic().as_bytes(), &[0x04, 0x84]);
+    assert!(TransactionHistoryRecord::try_new(
+        account,
+        hash,
+        3,
+        submitted.destination_account_id(),
+        123,
+        "fixture",
+        HistoryTransactionStatus::Pending,
+        100,
+        100,
+        value_or_panic(SignedExtrinsic::try_new(vec![1; 1025])),
+        submitted.block(),
+        submitted.runtime_version(),
+        submitted.genesis_hash()
+    )
+    .is_err());
     assert_eq!(submitted.remark(), "fixture");
     assert_eq!(submitted.status().persisted_name(), Some("pending"));
     let block = VerifiedBlockRef::best(Hash32::from_bytes([6; 32]), 8);
@@ -218,6 +243,14 @@ fn history_moves_only_toward_verified_chain_evidence() {
         pool_rejected,
         200,
         200,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84])
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        citizen_sdk_contracts::VerifiedBlockRef::best(
+            citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+            1,
+        ),
+        citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+        citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
     ));
     assert!(submitted.require_same_submission_facts(&duplicate).is_ok());
     let conflict = value_or_panic(TransactionHistoryRecord::try_new(
@@ -230,6 +263,14 @@ fn history_moves_only_toward_verified_chain_evidence() {
         HistoryTransactionStatus::Pending,
         100,
         100,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84])
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        citizen_sdk_contracts::VerifiedBlockRef::best(
+            citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+            1,
+        ),
+        citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+        citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
     ));
     assert!(submitted.require_same_submission_facts(&conflict).is_err());
     assert!(HistoryTransactionStatus::try_pool_rejected(" ").is_err());
@@ -250,6 +291,14 @@ fn history_moves_only_toward_verified_chain_evidence() {
         ),
         100,
         101,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84])
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        citizen_sdk_contracts::VerifiedBlockRef::best(
+            citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+            1
+        ),
+        citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+        citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
     )
     .is_err());
 

@@ -127,7 +127,72 @@ class InspectableSQLiteStore final : public citizen_sdk::linux::SQLiteStore {
       return value;
     });
   }
+
+  void write_value(uint8_t value,
+                   const citizen_sdk::linux::test::ProcessPipe *ready = nullptr,
+                   const citizen_sdk::linux::test::ProcessPipe *proceed = nullptr) {
+    (void)transaction([&](sqlite3 *database) {
+      Statement statement(database,
+          "INSERT INTO contract_record(identity,value) VALUES(1,?1) "
+          "ON CONFLICT(identity) DO UPDATE SET value=excluded.value");
+      statement.bind(1, citizen_sdk::linux::Bytes{value});
+      statement.step_done();
+      // 故意在 BEGIN IMMEDIATE 与 COMMIT 之间挂起真实 writer。
+      if (ready != nullptr && proceed != nullptr) {
+        ready->send();
+        proceed->receive();
+      }
+      return 0;
+    });
+  }
+
+  uint8_t value() {
+    return read([](sqlite3 *database) {
+      Statement statement(database, "SELECT value FROM contract_record WHERE identity=1");
+      assert(statement.step_row_or_done());
+      const auto bytes = statement.bytes(0, 1);
+      assert(bytes.size() == 1 && !statement.step_row_or_done());
+      return bytes[0];
+    });
+  }
 };
+
+void verify_active_writer(const std::filesystem::path &directory, bool secure) {
+  using citizen_sdk::linux::test::ProcessPipe;
+  const auto shm = directory /
+      (secure ? "secure-contract.sqlite3-shm" : "public-contract.sqlite3-shm");
+  { InspectableSQLiteStore initial(directory, secure); initial.write_value(1); }
+  ProcessPipe ready, proceed;
+  const pid_t writer = ::fork();
+  assert(writer >= 0);
+  if (writer == 0) {
+    ::alarm(15);
+    InspectableSQLiteStore store(directory, secure);
+    store.write_value(2, &ready, &proceed);
+    ready.send();
+    proceed.receive();
+    store.close();
+    ::_exit(0);
+  }
+  ready.receive();
+  const auto before = citizen_sdk::linux::test::read_shm(shm);
+  {
+    InspectableSQLiteStore reader(directory, secure);
+    assert(reader.value() == 1);  // writer 未提交，reader 必须保留已有快照。
+    const auto after = citizen_sdk::linux::test::read_shm(shm);
+    assert(before.size() == after.size());
+    assert(std::equal(before.begin(), before.begin() + 96, after.begin()));
+    citizen_sdk::linux::test::assert_shared_dms(shm);
+    proceed.send();
+    ready.receive();
+    assert(reader.value() == 2);
+    assert(reader.text_pragma("PRAGMA integrity_check") == "ok");
+  }
+  proceed.send();
+  citizen_sdk::linux::test::wait_for_child(writer);
+  InspectableSQLiteStore reopened(directory, secure);
+  assert(reopened.value() == 2);
+}
 
 void verify_pragmas(const std::filesystem::path &directory, bool secure) {
   InspectableSQLiteStore store(directory, secure);
@@ -150,6 +215,14 @@ int main() {
   using citizen_sdk::linux::PublicStore;
 
   citizen_sdk::linux::test::TempDirectory temporary("public-store");
+  const auto recovery = temporary.path() / "public-wal-recovery";
+  citizen_sdk::linux::test::verify_wal_processes<PublicStore>(
+      recovery, "public-state-v1.sqlite3", &PublicStore::chain_database_load,
+      &PublicStore::chain_database_compare_and_swap);
+  assert(read_text_pragma(recovery / "public-state-v1.sqlite3",
+                         "PRAGMA integrity_check") == "ok");
+  verify_active_writer(temporary.path() / "public-active-writer", false);
+  verify_active_writer(temporary.path() / "secure-active-writer", true);
   const auto directory = temporary.path() / "state";
   {
     PublicStore store(directory);

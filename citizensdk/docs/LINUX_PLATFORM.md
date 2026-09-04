@@ -88,7 +88,7 @@ CI/Release，不能只凭 ELF 结构、头文件或版本声明视为已取得�
 
 这些运行库由发布构造器从源码树外注入；`/Users/rhett/GMB/citizensdk` 永远不保存生成的
 `.so`、CMake cache、`build/` 或 `target/`。本机 CitizenSDK 生成状态只能进入
-`/Users/rhett/TATA/tataconsole/target/citizensdk` 下由任务独占的工作目录；GitHub runner 使用
+`/Users/rhett/TATA/target/GMB/citizensdk/SDK` 下由任务独占的工作目录；GitHub runner 使用
 统一工作流的 checkout 外独占目录，不照搬本机绝对路径。
 Linux 合同测试配置必须通过
 `-DCITIZENSDK_TEST_WORK_DIR=<绝对路径>` 显式注入其中一个已经存在、有效 UID 所有且权限精确
@@ -131,6 +131,10 @@ CAS 必须跨进程共享、耐久且强原子；
 拒绝符号链接、hardlink、非普通文件和越界组件；最终 public/secure 目录及 DB、WAL、SHM
 必须由进程有效 UID 拥有，三个文件的 link count 必须精确为 1。目录强制为 `0700`，主 DB、
 WAL 与 SHM 的既有普通文件必须经 no-follow fd 收紧为 `0600` 并复核同一 inode 后才可使用。
+SHM 使用 SQLite 官方锁区及 DMS 字节：每个连接在映射前取得 OFD 共享 DMS 并保持到
+unmap/close。仅首次连接成功取得独占 DMS 后才把 SHM 截为 3 字节，由 SQLite 从 WAL
+重建索引；其他活动连接存在时禁止截断。关闭时删除 SHM 也先升级独占并复核 inode。
+该过程不删除数据库或 WAL，锁竞争明确返回 busy。
 SQLite 只能通过 CitizenSDK 自有的 openat 型 VFS 使用已经验证并持有的目录 fd；主库、rollback
 journal、WAL 与 SHM 的创建、打开、访问、删除和锁定都必须相对该 fd 完成，并在使用前后复核
 节点类型、有效 UID、link count 和 inode。不得再把 `/proc/self/fd` 路径或其它可被替换的绝对

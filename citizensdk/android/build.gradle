@@ -2,9 +2,9 @@ group = 'org.citizen.sdk'
 version = '1.0.0'
 
 def sdkProductRoot = project.projectDir.parentFile.canonicalFile
-def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
+def tataConsoleTargetRoot = file('/Users/rhett/TATA/target').canonicalFile
 def localCitizenSdkRoots = {
-    def roots = [new File(tataConsoleTargetRoot, 'citizensdk').canonicalFile]
+    def roots = [new File(tataConsoleTargetRoot, 'GMB/citizensdk/SDK').canonicalFile]
     def taskWorkValue = System.getenv('TATA_CONSOLE_WORK_DIR')
     if (taskWorkValue != null && !taskWorkValue.trim().isEmpty()) {
         def taskWork = file(taskWorkValue).canonicalFile

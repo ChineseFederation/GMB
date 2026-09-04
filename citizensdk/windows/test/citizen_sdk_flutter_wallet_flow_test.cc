@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "citizen_sdk_flutter_wallet_flow.hpp"
+#include "citizen_sdk_host_record.hpp"
+#include "citizen_sdk_wallet_validation.hpp"
 #include "citizen_sdk_flutter_test_support.hpp"
 
 #ifdef NDEBUG
@@ -18,6 +20,36 @@ using citizen_sdk::WalletFlowStatus;
 using citizen_sdk::flutter::DecodedRequest;
 using citizen_sdk::flutter::FlutterWalletFlows;
 using citizen_sdk::flutter::Method;
+
+namespace {
+
+// 与公开 C++ 门面的字段投影一致，并实际调用 Host 生产校验器；不再让
+// mock presenter 仅比较 kind、却漏掉会在 Host 被拒绝的 word_count。
+citizen_sdk::windows::ValidatedWalletRequest validate_contract(
+    const citizen_sdk::WalletFlowRequest &request) {
+  citizensdk_wallet_flow_request_v1_t native{};
+  native.struct_size = sizeof(native);
+  native.abi_version = CITIZENSDK_HOST_ABI_VERSION;
+  native.kind = static_cast<uint32_t>(request.kind);
+  native.word_count = request.word_count;
+  native.account_indices = request.account_indices.empty()
+                               ? nullptr : request.account_indices.data();
+  native.account_index_count = static_cast<uint32_t>(request.account_indices.size());
+  return citizen_sdk::windows::validate_wallet_request(native);
+}
+
+void expect_host_rejection(const citizen_sdk::WalletFlowRequest &request) {
+  bool rejected = false;
+  try {
+    (void)validate_contract(request);
+  } catch (const citizen_sdk::windows::HostError &error) {
+    rejected = error.code() == CITIZENSDK_ERROR_INVALID_ARGUMENT;
+  }
+  assert(rejected);
+}
+
+}  // namespace
+
 
 int main() {
   std::vector<std::function<void()>> queue;
@@ -32,6 +64,12 @@ int main() {
   create.word_count = 24;
   auto contract = FlutterWalletFlows::contract(create);
   assert(contract.kind == WalletFlowKind::Create && contract.word_count == 24);
+  assert(validate_contract(contract).word_count == CITIZENSDK_WALLET_WORDS_24);
+  auto twelve = create;
+  twelve.word_count = 12;
+  assert(validate_contract(FlutterWalletFlows::contract(twelve)).word_count ==
+         CITIZENSDK_WALLET_WORDS_12);
+  assert(citizen_sdk::WalletFlowRequest{}.word_count == 12);
 
   int completions = 0;
   // Deliberately complete before the presenter returns. The production bridge
@@ -39,6 +77,7 @@ int main() {
   flows.launch(create,
     [](const auto &request, auto completion) {
       assert(request.kind == WalletFlowKind::Create);
+      assert(validate_contract(request).word_count == CITIZENSDK_WALLET_WORDS_24);
       completion({WalletFlowStatus::Completed, CITIZENSDK_OK});
       completion({WalletFlowStatus::Failed, CITIZENSDK_ERROR_INTERNAL});
       return [] {};
@@ -61,6 +100,8 @@ int main() {
   flows.launch(imported,
     [&](const auto &request, auto completion) {
       assert(request.kind == WalletFlowKind::Import);
+      assert(request.word_count == 0 && request.account_indices.empty());
+      assert(validate_contract(request).kind == CITIZENSDK_WALLET_FLOW_IMPORT);
       late = std::move(completion);
       return [&] { cancelled = true; };
     },
@@ -83,6 +124,26 @@ int main() {
   contract = FlutterWalletFlows::contract(add);
   assert(contract.kind == WalletFlowKind::AddAccounts);
   assert(contract.account_indices == add.indices);
+  assert(contract.word_count == 0);
+  const auto validated_add = validate_contract(contract);
+  assert(validated_add.kind == CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS);
+  assert(validated_add.word_count == 0 && validated_add.account_indices == add.indices);
+
+  // 保持 Host 的严格拒绝合同，不能通过放宽校验掩盖适配层污染。
+  auto contaminated = FlutterWalletFlows::contract(imported);
+  contaminated.word_count = 12;
+  expect_host_rejection(contaminated);
+  contaminated = contract;
+  contaminated.word_count = 24;
+  expect_host_rejection(contaminated);
+  contaminated = contract;
+  contaminated.account_indices = {1, 1};
+  expect_host_rejection(contaminated);
+  contaminated.account_indices = {};
+  expect_host_rejection(contaminated);
+  contaminated = FlutterWalletFlows::contract(create);
+  contaminated.account_indices = {1};
+  expect_host_rejection(contaminated);
 
   auto invalid = create;
   invalid.word_count = 15;

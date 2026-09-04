@@ -24,8 +24,8 @@ if(CITIZENSDK_TEST_WORK_DIR STREQUAL "" OR
     "CITIZENSDK_TEST_WORK_DIR must be an existing task-exclusive absolute directory")
 endif()
 
-# Flutter 路径只重用适配层生产源码，仍链接同版已安装 Host/Core。
-# 不运行 Host 源码重编译，不下载测试框架或建立第二份核心。
+# Flutter 路径重用适配层，钱包回归额外编译真实纯参数校验器；运行态
+# 仍链接同版已安装 Host/Core，不重建 Host/Core 或下载测试框架。
 if(TARGET citizen_sdk_plugin)
   set(CITIZENSDK_LINUX_FLUTTER_CONTRACT_TESTS
     citizen_sdk_flutter_codec_test
@@ -49,6 +49,12 @@ if(TARGET citizen_sdk_plugin)
     $<$<BOOL:${CITIZENSDK_WARNINGS_AS_ERRORS}>:-Werror>)
   foreach(test_name IN LISTS CITIZENSDK_LINUX_FLUTTER_CONTRACT_TESTS)
     add_executable(${test_name} "${test_name}.cc")
+    if(test_name STREQUAL "citizen_sdk_flutter_wallet_flow_test")
+      target_sources(${test_name} PRIVATE
+        ../src/citizen_sdk_wallet_validation.cc
+        ../src/citizen_sdk_input_limits.cc
+        ../src/citizen_sdk_host_record.cc)
+    endif()
     target_link_libraries(${test_name} PRIVATE citizensdk_linux_flutter_test_support)
     target_compile_definitions(${test_name} PRIVATE
       CITIZENSDK_LINUX_TEST_SOURCE_DIR="${CMAKE_CURRENT_LIST_DIR}/..")

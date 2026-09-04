@@ -8,12 +8,10 @@ import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
-import java.util.concurrent.atomic.AtomicReference
 
 /** Owns public Flutter session identities without exposing Core ownership IDs. */
 internal class CitizenSdkFlutterSequenceGate {
@@ -23,6 +21,50 @@ internal class CitizenSdkFlutterSequenceGate {
         if (next != last + 1) return false
         last = next
         return true
+    }
+}
+
+/** 线性化绑定前后的进度；同一时刻只有一个锁外派发者。 */
+internal class CitizenSdkOrderedTransferBuffer<T>(
+    private val deliver: (String, T) -> Unit,
+) {
+    private val gate = Any()
+    private val pending = ArrayDeque<T>()
+    private var operationId: String? = null
+    private var draining = false
+
+    fun bind(value: String) {
+        synchronized(gate) {
+            check(operationId == null)
+            operationId = value
+            if (draining || pending.isEmpty()) return
+            draining = true
+        }
+        drain(value, deliver)
+    }
+
+    fun accept(value: T) {
+        val bound = synchronized(gate) {
+            pending.addLast(value)
+            val current = operationId
+            if (current == null || draining) return
+            draining = true
+            current
+        }
+        drain(bound, deliver)
+    }
+
+    private fun drain(bound: String, deliver: (String, T) -> Unit) {
+        while (true) {
+            val value = synchronized(gate) {
+                if (pending.isEmpty()) {
+                    draining = false
+                    return
+                }
+                pending.removeFirst()
+            }
+            deliver(bound, value)
+        }
     }
 }
 
@@ -507,25 +549,18 @@ internal class CitizenSdkFlutterSessions(context: Context) : EventChannel.Stream
         private val session: Session,
         private val requestSequence: Long,
     ) {
-        private val operationId = AtomicReference<String?>()
-        private val early = ConcurrentLinkedQueue<CitizenSdkEvents.Event.TransferProgress>()
+        private val ordered = CitizenSdkOrderedTransferBuffer<CitizenSdkEvents.Event.TransferProgress>(::forward)
 
         fun bind(value: String) {
-            check(operationId.compareAndSet(null, value))
-            while (true) forward(early.poll() ?: break)
+            ordered.bind(value)
         }
 
         fun accept(progress: CitizenSdkEvents.Event.TransferProgress) {
-            if (operationId.get() == null) {
-                early += progress
-                if (operationId.get() == null) return
-                if (!early.remove(progress)) return
-            }
-            forward(progress)
+            ordered.accept(progress)
         }
 
-        private fun forward(progress: CitizenSdkEvents.Event.TransferProgress) {
-            if (progress.operationId != operationId.get()) return
+        private fun forward(bound: String, progress: CitizenSdkEvents.Event.TransferProgress) {
+            if (progress.operationId != bound) return
             emit(
                 session,
                 "transferProgress",

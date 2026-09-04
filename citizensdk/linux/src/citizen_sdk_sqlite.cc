@@ -688,6 +688,39 @@ class OpenAtSQLiteVfs final {
   static int sector_size(sqlite3_file *) noexcept { return 4096; }
   static int device_characteristics(sqlite3_file *) noexcept { return 0; }
 
+  // SQLite Unix VFS 的官方 WAL 锁区及 dead-man-switch 字节。OFD 锁
+  // 绑定本连接的描述符，同进程另一个 SQLiteStore 关闭不会释放它。
+  static constexpr off_t UNIX_SHM_BASE = (22 + SQLITE_SHM_NLOCK) * 4;
+  static constexpr off_t UNIX_SHM_DMS = UNIX_SHM_BASE + SQLITE_SHM_NLOCK;
+
+  static int initialize_shared_memory(FileState &state) noexcept {
+    if (!shared_memory_matches_path(state)) return SQLITE_IOERR_SHMOPEN;
+    struct flock lock {};
+    lock.l_type = F_WRLCK;
+    lock.l_whence = SEEK_SET;
+    lock.l_start = UNIX_SHM_DMS;
+    lock.l_len = 1;
+    int result;
+    do { result = ::fcntl(state.shared_memory_descriptor, F_OFD_GETLK, &lock); }
+    while (result != 0 && errno == EINTR);
+    if (result != 0) return SQLITE_IOERR_SHMLOCK;
+    if (lock.l_type == F_WRLCK) return SQLITE_BUSY;
+    if (lock.l_type == F_UNLCK) {
+      const int code = set_lock(state.shared_memory_descriptor, F_WRLCK,
+                                UNIX_SHM_DMS, 1);
+      if (code != SQLITE_OK) return code;
+      // 只有独占 DMS 证明不存在存活连接后才清除非持久 WAL 索引。
+      // 与官方 Unix VFS 一样截为 3 字节，让 SQLite 从 WAL 重建；
+      // 数据库和 WAL 始终保留，不能拿旧 SHM 的自洽校验代替恢复。
+      if (!shared_memory_matches_path(state)) return SQLITE_IOERR_SHMOPEN;
+      do { result = ::ftruncate(state.shared_memory_descriptor, 3); }
+      while (result != 0 && errno == EINTR);
+      if (result != 0) return SQLITE_IOERR_SHMSIZE;
+    }
+    // 获取/降级为共享 DMS 后一直持有至 unmap/close，禁止先解锁再 mmap。
+    return set_lock(state.shared_memory_descriptor, F_RDLCK, UNIX_SHM_DMS, 1);
+  }
+
   static int shared_memory_map(sqlite3_file *value, int page,
                                int page_size, int extend,
                                void volatile **out_mapping) noexcept {
@@ -717,6 +750,12 @@ class OpenAtSQLiteVfs final {
         state->shared_memory_descriptor = state->owner->open_named(
             state->shared_memory_name.c_str(), open_flags);
         if (state->shared_memory_descriptor < 0) return SQLITE_IOERR_SHMOPEN;
+        const int code = initialize_shared_memory(*state);
+        if (code != SQLITE_OK) {
+          (void)::close(state->shared_memory_descriptor);
+          state->shared_memory_descriptor = -1;
+          return code;
+        }
         state->shared_memory_page_size = page_size;
       }
       if (!shared_memory_matches_path(*state)) return SQLITE_IOERR_SHMOPEN;
@@ -778,7 +817,7 @@ class OpenAtSQLiteVfs final {
       type = sharing == SQLITE_SHM_EXCLUSIVE ? F_WRLCK : F_RDLCK;
     }
     const int code = set_lock(state->shared_memory_descriptor, type,
-                              static_cast<off_t>(offset),
+                              UNIX_SHM_BASE + static_cast<off_t>(offset),
                               static_cast<off_t>(count));
     if (code == SQLITE_BUSY) return SQLITE_BUSY;
     return code == SQLITE_OK ? SQLITE_OK : SQLITE_IOERR_SHMLOCK;
@@ -801,19 +840,34 @@ class OpenAtSQLiteVfs final {
       }
     }
     state->mappings.clear();
+    int result = SQLITE_OK;
+    if (delete_file != 0 && !state->shared_memory_name.empty()) {
+      if (!owned_path) {
+        result = SQLITE_IOERR_DELETE;
+      } else if (state->shared_memory_descriptor >= 0) {
+        // 不能先关闭 DMS 再 unlink：另一进程可能已接入相同 SHM。
+        // 有存活连接时保留文件；成功升级独占后仍需重新核对路径身份。
+        const int code = set_lock(state->shared_memory_descriptor, F_WRLCK,
+                                  UNIX_SHM_DMS, 1);
+        if (code == SQLITE_OK) {
+          if (!shared_memory_matches_path(*state)) {
+            result = SQLITE_IOERR_DELETE;
+          } else {
+            result = delete_callback(&state->owner->vfs_,
+                                      state->shared_memory_name.c_str(), 1);
+            if (result == SQLITE_IOERR_DELETE_NOENT) result = SQLITE_OK;
+          }
+        } else if (code != SQLITE_BUSY) {
+          result = SQLITE_IOERR_SHMLOCK;
+        }
+      }
+    }
     if (state->shared_memory_descriptor >= 0) {
       (void)::close(state->shared_memory_descriptor);
       state->shared_memory_descriptor = -1;
     }
-    if (delete_file != 0 && !state->shared_memory_name.empty() && !owned_path) {
-      return SQLITE_IOERR_DELETE;
-    }
-    if (delete_file != 0 && !state->shared_memory_name.empty()) {
-      const int code = delete_callback(&state->owner->vfs_,
-                                       state->shared_memory_name.c_str(), 1);
-      if (code != SQLITE_OK && code != SQLITE_IOERR_DELETE_NOENT) return code;
-    }
-    return SQLITE_OK;
+    state->shared_memory_page_size = 0;
+    return result;
   }
 
   static int fetch_file(sqlite3_file *, sqlite3_int64, int,

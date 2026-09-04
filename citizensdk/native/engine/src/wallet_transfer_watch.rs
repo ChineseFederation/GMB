@@ -135,12 +135,6 @@ impl WalletTransferWatchResult {
         self.transaction_hash
     }
 
-    /// 与 [`citizen_sdk_contracts::SubmittedExtrinsic`] 的只读命名保持迁移期一致；本结果
-    /// 仍然只会在明确终态后返回，不能据此恢复旧的“提交即成功”语义。
-    pub const fn hash(&self) -> Hash32 {
-        self.transaction_hash
-    }
-
     pub const fn resolution(&self) -> &WalletTransferResolution {
         &self.resolution
     }
@@ -170,19 +164,62 @@ pub(crate) async fn watch_recorded_transfer(
     signed_extrinsic: SignedExtrinsic,
 ) -> Result<WalletTransferWatchResult, EngineError> {
     guard.ensure_current()?;
-    history
-        .require_recorded_before_broadcast(transaction_hash)
-        .await?;
-    guard.ensure_current()?;
-    let (pending_state, _) = history
+    let (pending_state, record) = history
         .require_submission_snapshot(account_id, transaction_hash)
         .await?;
     guard.ensure_current()?;
+    if pending_state
+        .records()
+        .iter()
+        .filter(|item| item.transaction_hash() == transaction_hash)
+        .count()
+        != 1
+    {
+        return Err(integrity("广播哈希必须精确对应唯一持久记录"));
+    }
+    if record.signed_extrinsic() != &signed_extrinsic {
+        return Err(integrity("广播字节与原子持久的 signed extrinsic 不一致"));
+    }
+    // 恢复期间或并行扫描已经取得终态时直接返回，不把已完成交易再次送入交易池。
+    let terminal = match record.status() {
+        HistoryTransactionStatus::Execution(conclusion) => Some((
+            WalletTransferResolution::Finalized(conclusion.clone()),
+            WalletTransferWatchStage::Finalized {
+                conclusion: conclusion.clone(),
+            },
+        )),
+        HistoryTransactionStatus::PoolRejected { reason } => Some((
+            WalletTransferResolution::PoolRejected {
+                reason: reason.clone(),
+            },
+            WalletTransferWatchStage::PoolRejected {
+                reason: reason.clone(),
+                replacement_hash: None,
+            },
+        )),
+        _ => None,
+    };
+    if let Some((resolution, stage)) = terminal {
+        notify(
+            observer,
+            WalletTransferWatchUpdate::new(transaction_hash, stage, pending_state.clone()),
+        );
+        return Ok(WalletTransferWatchResult::new(
+            transaction_hash,
+            resolution,
+            pending_state,
+        ));
+    }
     notify(
         observer,
         WalletTransferWatchUpdate::new(
             transaction_hash,
-            WalletTransferWatchStage::Pending,
+            match record.status() {
+                HistoryTransactionStatus::InBlock { block } => {
+                    WalletTransferWatchStage::InBlock { block: *block }
+                }
+                _ => WalletTransferWatchStage::Pending,
+            },
             pending_state,
         ),
     );
@@ -390,6 +427,43 @@ pub(crate) async fn watch_recorded_transfer(
         ContractErrorCode::Network,
         "provider 交易观察流在明确终态前结束；持久 Pending/InBlock 保留",
     ))
+}
+
+/// 恢复广播前先追到本次固定 finalized 上界；既不无限追赶新块，也不跳过任何历史块。
+pub(crate) async fn reconcile_before_rebroadcast(
+    client: &dyn VerifiedChainClient,
+    runtime: &FinalizedHistoryRuntime,
+    history: &TransactionHistoryService,
+    guard: &dyn FinalizedHistoryRunGuard,
+    account_id: AccountId32,
+) -> Result<(), EngineError> {
+    guard.ensure_current()?;
+    let target = client.get_finalized_head().await?;
+    guard.ensure_current()?;
+    loop {
+        let state = history.load().await?;
+        guard.ensure_current()?;
+        let before = state
+            .cursors()
+            .iter()
+            .find(|cursor| cursor.account_id() == account_id)
+            .ok_or_else(|| invalid_state("恢复交易缺少 finalized 游标"))?
+            .last_synced_block();
+        if before.number() >= target.number() {
+            return Ok(());
+        }
+        let next = runtime.sync_batch(&[account_id], guard).await?;
+        guard.ensure_current()?;
+        let after = next
+            .cursors()
+            .iter()
+            .find(|cursor| cursor.account_id() == account_id)
+            .ok_or_else(|| invalid_state("恢复交易同步后游标消失"))?
+            .last_synced_block();
+        if after.number() <= before.number() {
+            return Err(retryable("恢复前尚不能推进 finalized 历史，保留原始授权"));
+        }
+    }
 }
 
 async fn publish_nonterminal(

@@ -115,6 +115,19 @@ internal class CitizenSDKSQLite {
         return Data(bytes: bytes, count: count)
     }
 
+    /// 持久 CAS revision 必须保持正整数；先检查 SQLite 原始类型，避免自动转换
+    /// 把畸形 TEXT/REAL 接受为数字，也避免负数到 UInt64 的运行时 trap。
+    static func revision(_ statement: OpaquePointer, _ column: Int32) throws -> UInt64 {
+        guard sqlite3_column_type(statement, column) == SQLITE_INTEGER else {
+            throw CitizenSDKError(.storage, "CitizenSDK revision is not an integer")
+        }
+        let value = sqlite3_column_int64(statement, column)
+        guard value > 0 else {
+            throw CitizenSDKError(.storage, "CitizenSDK revision is outside its valid range")
+        }
+        return UInt64(value)
+    }
+
     /// Distinguishes a legitimate end-of-result from BUSY/IO/CORRUPT. Treating
     /// every non-ROW as absence would let a failed read become a destructive
     /// first-write CAS.

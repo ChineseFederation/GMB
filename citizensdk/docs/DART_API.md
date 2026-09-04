@@ -176,6 +176,11 @@ txHash、`Ready`、`Broadcast`、`InBlock` 或 provider `Finalized` 都不等于
 `Usurped` 保留替代交易哈希。取消、断网、dropped/retracted 或 timeout 不会删除
 已持久的 Pending/InBlock 事实。
 
+同账户有未决记录时，以相同 destination、amount 和 remark 再次调用此入口恢复原交易，
+不读取新 nonce、不再次解锁或签名。Core 先同步 finalized 历史；原交易已经执行则返回
+核验终态，否则仅恢复已持久化的完整授权字节。不同参数返回 Conflict。取消观察不撤销
+链上交易；未决交易收敛后，相同参数可以表示另一笔新交易。恢复字节不会返回 Dart。
+
 finalized 历史使用：
 
 ```dart

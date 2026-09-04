@@ -1,12 +1,34 @@
 import Foundation
 import SQLite3
+import Darwin
+
+/// Shares the in-process half of the vault lock between every store opened on
+/// the same app-private directory. `flock` below supplies the process boundary.
+private final class CitizenSDKVaultLockRegistry: @unchecked Sendable {
+    private let guardLock = NSLock()
+    private var locks: [String: NSLock] = [:]
+
+    func lock(for path: String) -> NSLock {
+        guardLock.lock()
+        defer { guardLock.unlock() }
+        if let existing = locks[path] { return existing }
+        let created = NSLock()
+        locks[path] = created
+        return created
+    }
+}
 
 /// Wallet profile, authenticated ciphertext and permanent vault tombstones.
-internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
+internal final class CitizenSDKSecureStore: CitizenSDKSQLite, @unchecked Sendable {
     static let generationActive: Int64 = 1
     static let generationRetired: Int64 = 2
+    private static let vaultLockRegistry = CitizenSDKVaultLockRegistry()
+    private let vaultLockFile: URL
+    private let vaultProcessLock: NSLock
 
     init(directory: URL) throws {
+        vaultLockFile = directory.appendingPathComponent("vault.lock", isDirectory: false)
+        vaultProcessLock = Self.vaultLockRegistry.lock(for: vaultLockFile.standardizedFileURL.path)
         try super.init(
             directory: directory,
             fileName: "secure-state-v1.sqlite3",
@@ -24,7 +46,7 @@ internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
             let statement = try Self.prepare(database, "SELECT revision, record FROM wallet_profile WHERE wallet_index = 0")
             defer { sqlite3_finalize(statement) }
             if try Self.stepRowOrDone(statement) {
-                return .present(.walletProfile, revision: UInt64(sqlite3_column_int64(statement, 0)), record: Self.data(statement, 1))
+                return .present(.walletProfile, revision: try Self.revision(statement, 0), record: Self.data(statement, 1))
             }
             return .absent(.walletProfile)
         }
@@ -35,7 +57,7 @@ internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
         return try transaction { database in
             let query = try Self.prepare(database, "SELECT revision FROM wallet_profile WHERE wallet_index = 0")
             defer { sqlite3_finalize(query) }
-            let actual = try Self.stepRowOrDone(query) ? UInt64(sqlite3_column_int64(query, 0)) : 0
+            let actual = try Self.stepRowOrDone(query) ? try Self.revision(query, 0) : 0
             guard actual == expected else { return .failure(.walletProfile, .conflict) }
             let next = expected + 1
             let write = try Self.prepare(database, "INSERT OR REPLACE INTO wallet_profile(wallet_index, revision, record) VALUES(0, ?, ?)")
@@ -56,7 +78,7 @@ internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
             defer { sqlite3_finalize(statement) }
             try Self.bind(statement, 1, key)
             if try Self.stepRowOrDone(statement) {
-                return .present(.encryptedSecretBlob, revision: UInt64(sqlite3_column_int64(statement, 0)), record: Self.data(statement, 1))
+                return .present(.encryptedSecretBlob, revision: try Self.revision(statement, 0), record: Self.data(statement, 1))
             }
             return .absent(.encryptedSecretBlob)
         }
@@ -72,7 +94,7 @@ internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
             let query = try Self.prepare(database, "SELECT revision FROM encrypted_secret WHERE record_key = ?")
             defer { sqlite3_finalize(query) }
             try Self.bind(query, 1, key)
-            let actual = try Self.stepRowOrDone(query) ? UInt64(sqlite3_column_int64(query, 0)) : 0
+            let actual = try Self.stepRowOrDone(query) ? try Self.revision(query, 0) : 0
             guard actual == expected else { return .failure(.encryptedSecretBlob, .conflict) }
             let next = expected + 1
             let write = try Self.prepare(database, "INSERT OR REPLACE INTO encrypted_secret(record_key, revision, record) VALUES(?, ?, ?)")
@@ -117,6 +139,33 @@ internal final class CitizenSDKSecureStore: CitizenSDKSQLite {
             try Self.bind(query, 1, key)
             return try Self.stepRowOrDone(query) && sqlite3_column_int64(query, 0) == Self.generationActive
         }
+    }
+
+    /// Serializes the durable generation record and the corresponding physical
+    /// Keychain mutation across store instances and app processes.
+    func withVaultLock<T>(_ body: () throws -> T) throws -> T {
+        vaultProcessLock.lock()
+        defer { vaultProcessLock.unlock() }
+
+        let descriptor = Darwin.open(vaultLockFile.path, O_CREAT | O_RDWR | O_NOFOLLOW,
+                                     mode_t(S_IRUSR | S_IWUSR))
+        guard descriptor >= 0 else {
+            throw CitizenSDKError(.storage, "vault lock could not be opened")
+        }
+        defer { _ = Darwin.close(descriptor) }
+
+        var status = stat()
+        guard fstat(descriptor, &status) == 0,
+              (status.st_mode & mode_t(S_IFMT)) == mode_t(S_IFREG),
+              status.st_nlink == 1 else {
+            throw CitizenSDKError(.storage, "vault lock is not a private regular file")
+        }
+        while flock(descriptor, LOCK_EX) != 0 {
+            if errno == EINTR { continue }
+            throw CitizenSDKError(.storage, "vault lock could not be acquired")
+        }
+        defer { _ = flock(descriptor, LOCK_UN) }
+        return try body()
     }
 
     /// Tombstone is committed before physical Keychain deletion.

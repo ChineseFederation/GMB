@@ -37,6 +37,9 @@ const FIXTURE_EXTRINSIC: &[u8] = &[0x0c, 0x84, 0x01, 0x02];
 #[derive(Debug)]
 struct MemoryHistoryStore {
     state: Mutex<TransactionHistoryState>,
+    fail_after_write: AtomicBool,
+    fail_next_load: AtomicBool,
+    fail_before_write: AtomicBool,
 }
 
 impl Default for MemoryHistoryStore {
@@ -46,6 +49,9 @@ impl Default for MemoryHistoryStore {
                 TransactionHistoryState::try_new(0, Vec::new(), Vec::new(), Vec::new())
                     .expect("空历史状态有效"),
             ),
+            fail_after_write: AtomicBool::new(false),
+            fail_next_load: AtomicBool::new(false),
+            fail_before_write: AtomicBool::new(false),
         }
     }
 }
@@ -58,7 +64,15 @@ impl MemoryHistoryStore {
 
 impl TransactionHistoryStore for MemoryHistoryStore {
     fn load(&self) -> ContractFuture<'_, TransactionHistoryState> {
-        Box::pin(async move { Ok(self.state.lock().unwrap().clone()) })
+        Box::pin(async move {
+            if self.fail_next_load.swap(false, Ordering::SeqCst) {
+                return Err(ContractError::new(
+                    ContractErrorCode::Storage,
+                    "测试回读中断",
+                ));
+            }
+            Ok(self.state.lock().unwrap().clone())
+        })
     }
 
     fn compare_and_swap(
@@ -67,6 +81,12 @@ impl TransactionHistoryStore for MemoryHistoryStore {
         next: TransactionHistoryState,
     ) -> ContractFuture<'_, TransactionHistoryState> {
         Box::pin(async move {
+            if self.fail_before_write.swap(false, Ordering::SeqCst) {
+                return Err(ContractError::new(
+                    ContractErrorCode::Storage,
+                    "测试写前中断",
+                ));
+            }
             let mut state = self.state.lock().unwrap();
             if state.revision() != expected_revision {
                 return Err(ContractError::new(
@@ -75,6 +95,13 @@ impl TransactionHistoryStore for MemoryHistoryStore {
                 ));
             }
             *state = next.clone();
+            if self.fail_after_write.swap(false, Ordering::SeqCst) {
+                self.fail_next_load.store(true, Ordering::SeqCst);
+                return Err(ContractError::new(
+                    ContractErrorCode::Storage,
+                    "测试写后中断",
+                ));
+            }
             Ok(next)
         })
     }
@@ -133,6 +160,7 @@ struct FakeChainClient {
     expected_extrinsic: Vec<u8>,
     history_store: Arc<MemoryHistoryStore>,
     watch_saw_pending: AtomicBool,
+    reject_best_runtime: bool,
 }
 
 impl FakeChainClient {
@@ -150,6 +178,7 @@ impl FakeChainClient {
             expected_extrinsic: FIXTURE_EXTRINSIC.to_vec(),
             history_store: store,
             watch_saw_pending: AtomicBool::new(false),
+            reject_best_runtime: false,
         }
     }
 }
@@ -221,6 +250,14 @@ impl VerifiedChainClient for FakeChainClient {
         &self,
         block: VerifiedBlockRef,
     ) -> ContractFuture<'_, RuntimeContext> {
+        if self.reject_best_runtime && !block.is_finalized() {
+            return Box::pin(async {
+                Err(ContractError::new(
+                    ContractErrorCode::Unavailable,
+                    "测试 best Runtime 已不可读；finalized 同步可继续",
+                ))
+            });
+        }
         let metadata = self.metadata.clone();
         Box::pin(
             async move { RuntimeContext::try_new(block, RuntimeVersion::new(100, 12), metadata) },
@@ -325,6 +362,13 @@ impl Harness {
                 destination,
                 123_456,
                 "CitizenSDK production Runtime fixture",
+                signed.clone(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -489,6 +533,13 @@ fn disconnect_and_nondefinitive_watch_failures_keep_the_durable_account_gate() {
                     account(0x33),
                     1,
                     "must remain gated",
+                    harness.signed.clone(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .unwrap_err();
@@ -533,6 +584,293 @@ fn provider_error_notifies_interruption_and_observer_panic_cannot_abort_terminal
             result.resolution(),
             WalletTransferResolution::PoolRejected { .. }
         ));
+    });
+}
+
+#[test]
+fn restart_reconciles_finalized_transaction_without_broadcasting_it_again() {
+    block_on(async {
+        let harness = Harness::new(vec![Ok(ExtrinsicWatchEvent::Invalid)]).await;
+        // Pending 已持久但首个 watch 尚未创建，模拟取消/退出后的重新打开。
+        crate::wallet_transfer_watch::reconcile_before_rebroadcast(
+            harness.client.as_ref(),
+            &harness.runtime,
+            &harness.history,
+            &AlwaysRunning,
+            harness.account_id,
+        )
+        .await
+        .unwrap();
+        let observer = Arc::new(RecordingObserver::default());
+        let result = harness.watch(observer).await.unwrap();
+        assert!(matches!(
+            result.resolution(),
+            WalletTransferResolution::Finalized(_)
+        ));
+        assert!(
+            harness.client.watch_events.lock().unwrap().is_some(),
+            "finalized 历史已证明执行，必须不创建 submit-and-watch"
+        );
+        assert_eq!(
+            harness.store.snapshot().records()[0].signed_extrinsic(),
+            &harness.signed
+        );
+    });
+}
+
+#[test]
+fn pool_terminal_and_changed_authorized_bytes_never_rebroadcast() {
+    block_on(async {
+        let harness = Harness::new(vec![Ok(ExtrinsicWatchEvent::Invalid)]).await;
+        let result = harness
+            .watch(Arc::new(RecordingObserver::default()))
+            .await
+            .unwrap();
+        assert!(matches!(
+            result.resolution(),
+            WalletTransferResolution::PoolRejected { .. }
+        ));
+        // Fake provider 对第二次 watch 会 panic；复用终态必须只读本机结果。
+        assert!(harness
+            .watch(Arc::new(RecordingObserver::default()))
+            .await
+            .is_ok());
+        let mut changed = Harness::new(Vec::new()).await;
+        changed.signed = SignedExtrinsic::try_new(vec![0x84]).unwrap();
+        assert!(changed
+            .watch(Arc::new(RecordingObserver::default()))
+            .await
+            .is_err());
+        assert!(changed.client.watch_events.lock().unwrap().is_some());
+    });
+}
+
+#[test]
+fn public_engine_resumes_outbox_after_failed_write_receipt_without_wallet_or_new_nonce() {
+    use citizen_sdk_contracts as c;
+    // 任一钱包/秘密访问都会使测试失败；恢复必须只使用已经持久的公开授权。
+    struct NoWallet;
+    impl c::WalletProfileStore for NoWallet {
+        fn load(&self) -> c::ContractFuture<'_, c::WalletState> {
+            panic!("恢复不得读取钱包秘密入口");
+        }
+        fn compare_and_swap(
+            &self,
+            _: u64,
+            _: c::WalletState,
+        ) -> c::ContractFuture<'_, c::WalletState> {
+            panic!("恢复不得改钱包");
+        }
+    }
+    impl c::EncryptedSecretBlobStore for NoWallet {
+        fn load(&self, _: c::SecretRef) -> c::ContractFuture<'_, c::EncryptedSecretBlobSnapshot> {
+            panic!("恢复不得读取秘密");
+        }
+        fn compare_and_swap(
+            &self,
+            _: c::SecretRef,
+            _: u64,
+            _: c::EncryptedSecretBlobState,
+        ) -> c::ContractFuture<'_, c::EncryptedSecretBlobSnapshot> {
+            panic!("恢复不得写秘密");
+        }
+    }
+    impl c::SecretVault for NoWallet {
+        fn availability(&self) -> c::ContractFuture<'_, c::VaultAvailability> {
+            panic!("恢复不得调用金库");
+        }
+        fn seal(
+            &self,
+            _: [u8; 16],
+            _: c::SecretRef,
+            _: c::SecretBuffer,
+        ) -> c::ContractFuture<'_, c::EncryptedSecretEnvelope> {
+            panic!("恢复不得封装秘密");
+        }
+        fn open(
+            &self,
+            _: c::SecretRef,
+            _: c::EncryptedSecretEnvelope,
+        ) -> c::ContractFuture<'_, c::SecretBuffer> {
+            panic!("恢复不得解锁秘密");
+        }
+        fn has_wallet_key(&self, _: u32, _: c::VaultGeneration) -> c::ContractFuture<'_, bool> {
+            panic!("恢复不得查询金库");
+        }
+        fn delete_wallet_key(
+            &self,
+            _: [u8; 16],
+            _: u32,
+            _: c::VaultGeneration,
+        ) -> c::ContractFuture<'_, ()> {
+            panic!("恢复不得删除金库");
+        }
+    }
+    struct Nonce(AtomicBool);
+    impl c::AccountNonceSource for Nonce {
+        fn account_next_index(
+            &self,
+            account_id: AccountId32,
+            best: VerifiedBlockRef,
+        ) -> c::ContractFuture<'_, c::AccountNonce> {
+            assert!(self.0.load(Ordering::SeqCst), "恢复不得请求新 nonce");
+            Box::pin(async move {
+                c::AccountNonce::try_new(&ChainIdentity::citizenchain(), best, account_id, 9)
+            })
+        }
+    }
+    impl WalletClock for NoWallet {
+        fn now_millis(&self) -> c::ContractResult<u64> {
+            Ok(1)
+        }
+    }
+    block_on(async {
+        for finalized in [false, true] {
+            let store = Arc::new(MemoryHistoryStore::default());
+            let history = TransactionHistoryService::new(store.clone(), Arc::new(NoWallet));
+            let nonce = Arc::new(Nonce(AtomicBool::new(true)));
+            let signer = Arc::new(citizen_signer::Sr25519SoftwareSigner);
+            let secret = c::SecretBuffer::try_new(vec![0x71; 32]).unwrap();
+            use c::ChainSigner;
+            let source =
+                AccountId32::from_bytes(*signer.public_key(&secret).await.unwrap().as_bytes());
+            let mut client =
+                FakeChainClient::new(0, vec![Ok(ExtrinsicWatchEvent::Invalid)], store.clone());
+            let built = crate::transaction_builder::TransactionBuilder::new(
+                &client,
+                nonce.as_ref(),
+                signer.as_ref(),
+            )
+            .build_transfer_with_remark(&secret, source, account(0x72), 1, "resume")
+            .await
+            .unwrap();
+            drop(secret);
+            nonce.0.store(false, Ordering::SeqCst);
+            client.expected_extrinsic = built.signed().extrinsic().as_bytes().to_vec();
+            let hash = signed_extrinsic_hash(
+                &client
+                    .get_runtime_context_at(built.signed().payload().block())
+                    .await
+                    .unwrap(),
+                built.signed().extrinsic(),
+            )
+            .unwrap();
+            if finalized {
+                client.head = 1;
+                *client.body.lock().unwrap() = vec![built.signed().extrinsic().as_bytes().to_vec()];
+                client.reject_best_runtime = true;
+            }
+            history.ensure_cursors(&[source], block(0)).await.unwrap();
+            let persist = || {
+                history.record_pending_before_broadcast(
+                    source,
+                    hash,
+                    9,
+                    account(0x72),
+                    1,
+                    "resume",
+                    built.signed().extrinsic().clone(),
+                    built.signed().payload().block(),
+                    built.signed().payload().runtime_version(),
+                    built.signed().payload().genesis_hash(),
+                )
+            };
+            store.fail_before_write.store(true, Ordering::SeqCst);
+            assert!(persist().await.is_err());
+            assert!(store.snapshot().records().is_empty());
+            let runtime = FinalizedHistoryRuntime::new(
+                Arc::new(FakeChainClient::new(0, Vec::new(), store.clone())),
+                history.clone(),
+            );
+            let observer: Arc<dyn WalletTransferObserver> = Arc::new(RecordingObserver::default());
+            assert!(watch_recorded_transfer(
+                &client,
+                &runtime,
+                &history,
+                &AlwaysRunning,
+                &observer,
+                source,
+                hash,
+                built.signed().extrinsic().clone()
+            )
+            .await
+            .is_err());
+            assert!(
+                client.watch_events.lock().unwrap().is_some(),
+                "写前失败不得广播"
+            );
+            store.fail_after_write.store(true, Ordering::SeqCst);
+            assert!(persist().await.is_err(), "写后回读也失败，调用者看到中断");
+            assert_eq!(
+                store.snapshot().records()[0].signed_extrinsic(),
+                built.signed().extrinsic()
+            );
+            let client = Arc::new(client);
+            let components = crate::EngineComponents::new(
+                client.clone(),
+                Some(signer),
+                Some(Arc::new(NoWallet)),
+                None,
+                None,
+                Some(Arc::new(NoWallet)),
+                Some(store.clone()),
+                Some(Arc::new(NoWallet)),
+            )
+            .with_account_nonce_source(nonce);
+            let engine = crate::CitizenEngine::new(components);
+            engine
+                .update_capabilities(
+                    c::CapabilityName::ALL
+                        .into_iter()
+                        .map(crate::CapabilityProbe::ready)
+                        .collect(),
+                )
+                .unwrap();
+            engine.begin_provider_start().unwrap();
+            engine.complete_provider_start().await.unwrap();
+            let conflict = engine
+                .transfer_with_remark_and_watch(
+                    source,
+                    account(0x72),
+                    2,
+                    "resume".to_owned(),
+                    observer.clone(),
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(conflict, EngineError::Contract(ref error) if error.code() == ContractErrorCode::Conflict)
+            );
+            assert!(client.watch_events.lock().unwrap().is_some());
+            let result = engine
+                .transfer_with_remark_and_watch(
+                    source,
+                    account(0x72),
+                    1,
+                    "resume".to_owned(),
+                    observer,
+                )
+                .await
+                .unwrap();
+            assert_eq!(result.transaction_hash(), hash);
+            assert_eq!(result.history().records()[0].nonce(), 9);
+            if finalized {
+                assert!(matches!(
+                    result.resolution(),
+                    WalletTransferResolution::Finalized(_)
+                ));
+                assert!(
+                    client.watch_events.lock().unwrap().is_some(),
+                    "finalized 已证明终态，不能读取 best Runtime 或重广播"
+                );
+            } else {
+                assert!(client.watch_saw_pending.load(Ordering::SeqCst));
+                assert!(matches!(
+                    result.resolution(),
+                    WalletTransferResolution::PoolRejected { .. }
+                ));
+            }
+        }
     });
 }
 

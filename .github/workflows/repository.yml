@@ -63,6 +63,8 @@ permissions:
 
 jobs:
   flow:
+    # 中文注释：产品阶段只由中央登记投影到同一个 flow；SDK 的四阶段 Release
+    # 不增加入口、触发器或产品作业，租约和冻结提交逐次原样传入。
     name: 统一流程
     uses: ./.github/workflows/flow.yml
     permissions:

@@ -37,6 +37,8 @@ internal class CitizenSdkHardwareVault(
     private val secureStore: CitizenSdkSecureStore,
 ) {
     private val activities = CitizenSdkActivityRegistry()
+    // 仅由主线程访问；每个 prompt 的取消与销毁观察者都拥有同一 terminal owner。
+    private val prompts = IdentityHashMap<FragmentActivity, MutableSet<() -> Unit>>()
 
     fun attachActivity(value: FragmentActivity) {
         activities.attach(value)
@@ -44,6 +46,14 @@ internal class CitizenSdkHardwareVault(
 
     fun detachActivity(value: FragmentActivity) {
         activities.detach(value)
+        dispatchAuthentication {
+            prompts[value]?.toList()?.forEach { it() }
+        }
+    }
+
+    /** AndroidX Fragment/Biometric 的唯一 UI 调度入口，调用者可以来自 Rust worker。 */
+    internal fun dispatchAuthentication(operation: () -> Unit) {
+        ContextCompat.getMainExecutor(context).execute(operation)
     }
 
     fun whenActivityReady(callback: () -> Unit): AutoCloseable = activities.whenResumed(callback)
@@ -80,6 +90,16 @@ internal class CitizenSdkHardwareVault(
         generation: ByteArray,
         provisioningOperationId: ByteArray,
     ) {
+        secureStore.withVaultLock {
+            ensureWalletKekLocked(walletIndex, generation, provisioningOperationId)
+        }
+    }
+
+    private fun ensureWalletKekLocked(
+        walletIndex: Int,
+        generation: ByteArray,
+        provisioningOperationId: ByteArray,
+    ) {
         require(walletIndex == 0) { "only wallet index 0 is supported" }
         if (!secureStore.ensureGeneration(walletIndex, generation, provisioningOperationId)) {
             throw VaultFailure(CitizenSdkErrorCode.KEY_INVALIDATED, "wallet generation is retired")
@@ -92,12 +112,14 @@ internal class CitizenSdkHardwareVault(
 
     @Synchronized
     fun hasWalletKek(walletIndex: Int, generation: ByteArray): Boolean {
-        if (!secureStore.isGenerationActive(walletIndex, generation)) return false
-        val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
-        val keyStore = keyStore()
-        if (!keyStore.containsAlias(alias)) return false
-        requireHardwareKey(alias)
-        return true
+        return secureStore.withVaultLock {
+            if (!secureStore.isGenerationActive(walletIndex, generation)) return@withVaultLock false
+            val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
+            val keyStore = keyStore()
+            if (!keyStore.containsAlias(alias)) return@withVaultLock false
+            requireHardwareKey(alias)
+            true
+        }
     }
 
     /** Reads the exact Rust-owned 32-byte direct view; it never creates a plaintext array. */
@@ -111,21 +133,23 @@ internal class CitizenSdkHardwareVault(
         require(plaintextDek.isDirect && plaintextDek.remaining() == DEK_BYTES) {
             "DEK must be an exact direct 32-byte Rust view"
         }
-        ensureWalletKek(walletIndex, generation, provisioningOperationId)
-        val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
-        val publicKey = keyStore().getCertificate(alias)?.publicKey
-            ?: throw VaultFailure(CitizenSdkErrorCode.KEY_INVALIDATED, "wallet KEK is unavailable")
-        // Rebuild the public key without AndroidKeyStore restrictions. Only the
-        // private unwrap path requires hardware and biometric authorization.
-        val unrestricted = KeyFactory.getInstance(publicKey.algorithm)
-            .generatePublic(X509EncodedKeySpec(publicKey.encoded))
-        val cipher = Cipher.getInstance(RSA_TRANSFORM).apply {
-            init(Cipher.ENCRYPT_MODE, unrestricted, oaepSpec())
+        return secureStore.withVaultLock {
+            ensureWalletKekLocked(walletIndex, generation, provisioningOperationId)
+            val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
+            val publicKey = keyStore().getCertificate(alias)?.publicKey
+                ?: throw VaultFailure(CitizenSdkErrorCode.KEY_INVALIDATED, "wallet KEK is unavailable")
+            // Rebuild the public key without AndroidKeyStore restrictions. Only the
+            // private unwrap path requires hardware and biometric authorization.
+            val unrestricted = KeyFactory.getInstance(publicKey.algorithm)
+                .generatePublic(X509EncodedKeySpec(publicKey.encoded))
+            val cipher = Cipher.getInstance(RSA_TRANSFORM).apply {
+                init(Cipher.ENCRYPT_MODE, unrestricted, oaepSpec())
+            }
+            val output = ByteArray(cipher.getOutputSize(DEK_BYTES))
+            val written = cipher.doFinal(plaintextDek.asReadOnlyBuffer(), ByteBuffer.wrap(output))
+            check(written == output.size) { "wrapped DEK length is not canonical" }
+            output
         }
-        val output = ByteArray(cipher.getOutputSize(DEK_BYTES))
-        val written = cipher.doFinal(plaintextDek.asReadOnlyBuffer(), ByteBuffer.wrap(output))
-        check(written == output.size) { "wrapped DEK length is not canonical" }
-        return output
     }
 
     /**
@@ -159,52 +183,64 @@ internal class CitizenSdkHardwareVault(
                 throw VaultFailure(CitizenSdkErrorCode.KEY_INVALIDATED, "wallet KEK was invalidated", error)
             }
 
-            val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-            fun completeOnce(code: CitizenSdkErrorCode) {
-                if (completed.compareAndSet(false, true)) completion(code.value)
-            }
-            val callback = object : BiometricPrompt.AuthenticationCallback() {
-                override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                    clearDirect(plaintextDekOut)
-                    wrappedDek.fill(0)
-                    completeOnce(mapAuthenticationError(errorCode))
+            // Rust worker 只准备密码学对象；Fragment、prompt 创建/启动/取消全部回主线程。
+            dispatchAuthentication {
+                var prompt: BiometricPrompt? = null
+                var observer: DefaultLifecycleObserver? = null
+                var cancel: (() -> Unit)? = null
+                val accepted = CitizenSdkVaultOperation(plaintextDekOut, wrappedDek) { code ->
+                    observer?.let { host.lifecycle.removeObserver(it) }
+                    cancel?.let { prompts[host]?.remove(it) }
+                    if (prompts[host]?.isEmpty() == true) prompts.remove(host)
+                    completion(code)
                 }
-
-                override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
-                    try {
-                        val authenticated = result.cryptoObject?.cipher
-                            ?: throw VaultFailure(CitizenSdkErrorCode.INTEGRITY, "biometric cipher is missing")
-                        val source = ByteBuffer.wrap(wrappedDek)
-                        val destination = plaintextDekOut.duplicate()
-                        val written = authenticated.doFinal(source, destination)
-                        if (written != DEK_BYTES) {
-                            clearDirect(plaintextDekOut)
-                            throw VaultFailure(CitizenSdkErrorCode.INTEGRITY, "unwrapped DEK length is invalid")
-                        }
-                        completeOnce(CitizenSdkErrorCode.OK)
-                    } catch (_: KeyPermanentlyInvalidatedException) {
-                        clearDirect(plaintextDekOut)
-                        completeOnce(CitizenSdkErrorCode.KEY_INVALIDATED)
-                    } catch (_: Throwable) {
-                        clearDirect(plaintextDekOut)
-                        completeOnce(CitizenSdkErrorCode.INTEGRITY)
-                    } finally {
-                        wrappedDek.fill(0)
+                try {
+                    // 排队期间宿主可能已销毁、暂停或被替换，不能沿用 worker 的就绪快照。
+                    if (activities.currentResumed() !== host || host.supportFragmentManager.isStateSaved) {
+                        accepted.finish { CitizenSdkErrorCode.AUTHENTICATION_REQUIRED }
+                        return@dispatchAuthentication
                     }
-                }
+                    val callback = object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                            accepted.finish { mapAuthenticationError(errorCode) }
+                        }
 
-                override fun onAuthenticationFailed() {
-                    // The system prompt remains active; this is not terminal.
+                        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                            accepted.finish {
+                                try {
+                                    val authenticated = result.cryptoObject?.cipher
+                                        ?: throw VaultFailure(CitizenSdkErrorCode.INTEGRITY, "biometric cipher is missing")
+                                    val written = authenticated.doFinal(ByteBuffer.wrap(wrappedDek), plaintextDekOut.duplicate())
+                                    if (written == DEK_BYTES) CitizenSdkErrorCode.OK else CitizenSdkErrorCode.INTEGRITY
+                                } catch (_: KeyPermanentlyInvalidatedException) {
+                                    CitizenSdkErrorCode.KEY_INVALIDATED
+                                } catch (_: Throwable) { CitizenSdkErrorCode.INTEGRITY }
+                            }
+                        }
+                    }
+                    prompt = BiometricPrompt(host, ContextCompat.getMainExecutor(host), callback)
+                    cancel = {
+                        // 先结束 buffer 借用，再取消 UI；迟到的系统回调不能再次访问 Rust 内存。
+                        accepted.finish { CitizenSdkErrorCode.AUTHENTICATION_CANCELLED }
+                        prompt?.cancelAuthentication()
+                    }
+                    observer = object : DefaultLifecycleObserver {
+                        override fun onDestroy(owner: LifecycleOwner) { cancel?.invoke() }
+                    }
+                    prompts.getOrPut(host) { LinkedHashSet() }.add(cancel!!)
+                    host.lifecycle.addObserver(observer!!)
+                    val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                        .setTitle("验证身份")
+                        .setSubtitle("解锁公民钱包以继续")
+                        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                        .setNegativeButtonText("取消")
+                        .build()
+                    prompt!!.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+                } catch (_: Throwable) {
+                    accepted.finish { CitizenSdkErrorCode.INTERNAL }
+                    prompt?.cancelAuthentication()
                 }
             }
-            val prompt = BiometricPrompt(host, ContextCompat.getMainExecutor(host), callback)
-            val promptInfo = BiometricPrompt.PromptInfo.Builder()
-                .setTitle("验证身份")
-                .setSubtitle("解锁公民钱包以继续")
-                .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
-                .setNegativeButtonText("取消")
-                .build()
-            prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
         } catch (error: Throwable) {
             clearDirect(plaintextDekOut)
             wrappedDek.fill(0)
@@ -220,10 +256,13 @@ internal class CitizenSdkHardwareVault(
     ) {
         // The permanent tombstone is the commit point. Physical deletion comes
         // afterward, so a crash or late ensure cannot resurrect this key.
-        secureStore.retireGeneration(walletIndex, generation, cleanupOperationId)
-        val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
-        val keyStore = keyStore()
-        if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias)
+        secureStore.withVaultLock {
+            secureStore.retireGeneration(walletIndex, generation, cleanupOperationId)
+            val alias = CitizenSdkRecordKey.hardwareAlias(walletIndex, generation)
+            val keyStore = keyStore()
+            if (keyStore.containsAlias(alias)) keyStore.deleteEntry(alias)
+            check(!keyStore.containsAlias(alias)) { "retired wallet KEK still exists" }
+        }
     }
 
     private fun generateHardwareKey(alias: String) {
@@ -331,6 +370,31 @@ internal class CitizenSdkHardwareVault(
         const val VAULT_NO_STRONG_AUTH = 2
         const val VAULT_UNSUPPORTED = 3
         const val VAULT_UNAVAILABLE = 4
+    }
+}
+
+/** 先独占 terminal 权再碰 buffer；完成后所有迟到/重复回调均不得读写借用地址。 */
+internal class CitizenSdkVaultOperation(
+    private val output: ByteBuffer,
+    private val wrapped: ByteArray,
+    private val completion: (Int) -> Unit,
+) {
+    private val gate = Any()
+    private var finished = false
+
+    fun finish(operation: () -> CitizenSdkErrorCode) {
+        val code = synchronized(gate) {
+            if (finished) return
+            finished = true
+            val result = try { operation() } catch (_: Throwable) { CitizenSdkErrorCode.INTERNAL }
+            if (result != CitizenSdkErrorCode.OK) {
+                val bytes = output.duplicate()
+                while (bytes.hasRemaining()) bytes.put(0)
+            }
+            wrapped.fill(0)
+            result
+        }
+        completion(code.value)
     }
 }
 

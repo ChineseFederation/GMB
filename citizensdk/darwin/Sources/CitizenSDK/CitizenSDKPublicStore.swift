@@ -66,7 +66,7 @@ internal final class CitizenSDKPublicStore: CitizenSDKSQLite {
             defer { sqlite3_finalize(statement) }
             try Self.bind(statement, 1, Int64(domain.rawValue))
             if try Self.stepRowOrDone(statement) {
-                return .present(domain, revision: UInt64(sqlite3_column_int64(statement, 0)), record: Self.data(statement, 1))
+                return .present(domain, revision: try Self.revision(statement, 0), record: Self.data(statement, 1))
             }
             return .absent(domain)
         }
@@ -79,7 +79,7 @@ internal final class CitizenSDKPublicStore: CitizenSDKSQLite {
             let query = try Self.prepare(database, "SELECT revision FROM singleton_records WHERE domain = ?")
             defer { sqlite3_finalize(query) }
             try Self.bind(query, 1, Int64(domain.rawValue))
-            let actual = try Self.stepRowOrDone(query) ? UInt64(sqlite3_column_int64(query, 0)) : 0
+            let actual = try Self.stepRowOrDone(query) ? try Self.revision(query, 0) : 0
             guard actual == expected else { return .failure(domain, .conflict) }
             let next = expected + 1
             let write = try Self.prepare(database, "INSERT OR REPLACE INTO singleton_records(domain, revision, record) VALUES(?, ?, ?)")

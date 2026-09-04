@@ -31,6 +31,7 @@ struct DispatchState {
 struct EnqueueState {
     next_sequence: u64,
     reserved_completions: u64,
+    queued: usize,
 }
 
 /// One mandatory completion-event capacity unit reserved before an async
@@ -89,9 +90,15 @@ impl EventDispatcher {
             Condvar::new(),
         ));
         let thread_state = Arc::clone(&state);
+        let enqueue = Arc::new(Mutex::new(EnqueueState {
+            next_sequence: 1,
+            reserved_completions: 0,
+            queued: 0,
+        }));
+        let thread_enqueue = Arc::clone(&enqueue);
         let join = thread::Builder::new()
             .name("citizensdk-events".to_owned())
-            .spawn(move || dispatch_loop(receiver, thread_state))
+            .spawn(move || dispatch_loop(receiver, thread_state, thread_enqueue))
             .map_err(|error| {
                 FfiError::internal(format!("failed to start event dispatcher: {error}"))
             })?;
@@ -99,10 +106,7 @@ impl EventDispatcher {
             sender,
             state,
             join: Mutex::new(Some(join)),
-            enqueue: Arc::new(Mutex::new(EnqueueState {
-                next_sequence: 1,
-                reserved_completions: 0,
-            })),
+            enqueue,
         })
     }
 
@@ -154,37 +158,12 @@ impl EventDispatcher {
         result: CitizenSdkResultHandle,
         capability_revision: u64,
     ) -> FfiResult<()> {
-        // Sequence reservation and queue insertion share one producer lock.
-        // The callback never takes this lock, so bounded backpressure cannot
-        // create a callback/control lock cycle.
-        let mut enqueue = self
-            .enqueue
-            .lock()
-            .map_err(|_| FfiError::internal("event enqueue state is poisoned"))?;
-        let generation = self.current_generation()?;
-        let (sequence, following) = reserve_unreserved_sequence(&enqueue)?;
-        self.sender
-            .send(DispatchMessage::Event {
-                event: CitizenSdkEvent {
-                    struct_size: std::mem::size_of::<CitizenSdkEvent>() as u32,
-                    abi_version: CITIZENSDK_ABI_VERSION,
-                    event_type: event_type as u32,
-                    reserved: 0,
-                    sequence,
-                    request_id,
-                    result,
-                    capability_revision,
-                },
-                callback_generation: generation,
-            })
-            .map_err(|_| FfiError::internal("event dispatcher disconnected"))?;
-        enqueue.next_sequence = following;
-        Ok(())
+        // 所有非预留事件均即时入队；禁止持有生产者锁等待回调释放容量。
+        self.try_send(event_type, request_id, result, capability_revision)
     }
 
     /// Non-critical stream updates never grow memory without bound. A full
-    /// queue reports the stable QueueFull code; the request then emits its
-    /// mandatory completion through the blocking `send` path.
+    /// queue reports QueueFull. 已接收请求的完成事件使用独立预留的真实槽位。
     pub fn try_send(
         &self,
         event_type: CitizenSdkEventType,
@@ -198,6 +177,7 @@ impl EventDispatcher {
             .map_err(|_| FfiError::internal("event enqueue state is poisoned"))?;
         let generation = self.current_generation()?;
         let (sequence, following) = reserve_unreserved_sequence(&enqueue)?;
+        ensure_capacity(&enqueue)?;
         self.sender
             .try_send(DispatchMessage::Event {
                 event: CitizenSdkEvent {
@@ -222,6 +202,7 @@ impl EventDispatcher {
                 }
             })?;
         enqueue.next_sequence = following;
+        enqueue.queued += 1;
         Ok(())
     }
 
@@ -232,12 +213,15 @@ impl EventDispatcher {
             .enqueue
             .lock()
             .map_err(|_| FfiError::internal("event enqueue state is poisoned"))?;
+        self.current_generation()?;
         let remaining = remaining_sequences(enqueue.next_sequence);
         if enqueue.reserved_completions >= remaining {
             return Err(FfiError::internal(
                 "event sequence space cannot reserve another request completion",
             ));
         }
+        // 预留的是有界队列真实容量，不仅是 sequence。普通事件不能占用它。
+        ensure_capacity(&enqueue)?;
         enqueue.reserved_completions = enqueue
             .reserved_completions
             .checked_add(1)
@@ -287,7 +271,7 @@ impl EventDispatcher {
         let generation = self.current_generation()?;
         let (sequence, following) = reserve_sequence(enqueue.next_sequence)?;
         self.sender
-            .send(DispatchMessage::Event {
+            .try_send(DispatchMessage::Event {
                 event: CitizenSdkEvent {
                     struct_size: std::mem::size_of::<CitizenSdkEvent>() as u32,
                     abi_version: CITIZENSDK_ABI_VERSION,
@@ -302,6 +286,7 @@ impl EventDispatcher {
             })
             .map_err(|_| FfiError::internal("event dispatcher disconnected"))?;
         enqueue.next_sequence = following;
+        enqueue.queued += 1;
         enqueue.reserved_completions -= 1;
         reservation.committed = true;
         Ok(())
@@ -360,10 +345,12 @@ impl EventDispatcher {
 
         // Serialize the terminal marker after producers which already passed
         // the active-state gate.
-        let _enqueue = self
+        let enqueue = self
             .enqueue
             .lock()
             .map_err(|_| FfiError::internal("event enqueue state is poisoned"))?;
+        // active=false 已拒绝生产者；消费者归还槽位也需要 enqueue，故等待前释放。
+        drop(enqueue);
         let _ = self.sender.send(DispatchMessage::Shutdown);
         let join = self
             .join
@@ -376,6 +363,16 @@ impl EventDispatcher {
         }
         Ok(())
     }
+}
+
+fn ensure_capacity(state: &EnqueueState) -> FfiResult<()> {
+    if state.queued + state.reserved_completions as usize >= EVENT_QUEUE_CAPACITY {
+        return Err(FfiError::new(
+            crate::abi::CitizenSdkErrorCode::QueueFull,
+            "CitizenSDK event queue is full",
+        ));
+    }
+    Ok(())
 }
 
 fn reserve_sequence(next: u64) -> FfiResult<(u64, u64)> {
@@ -402,6 +399,7 @@ fn reserve_unreserved_sequence(state: &EnqueueState) -> FfiResult<(u64, u64)> {
 fn dispatch_loop(
     receiver: mpsc::Receiver<DispatchMessage>,
     state: Arc<(Mutex<DispatchState>, Condvar)>,
+    enqueue: Arc<Mutex<EnqueueState>>,
 ) {
     if let Ok(mut guard) = state.0.lock() {
         guard.dispatcher_thread = Some(thread::current().id());
@@ -417,6 +415,12 @@ fn dispatch_loop(
         else {
             return;
         };
+        // 先归还出队槽位，随后才获取回调状态；任何宿主回调均不持有这两把锁。
+        if let Ok(mut guard) = enqueue.lock() {
+            guard.queued -= 1;
+        } else {
+            return;
+        }
         let registration = {
             let Ok(mut guard) = state.0.lock() else {
                 return;
@@ -534,6 +538,105 @@ mod tests {
         dispatcher
             .shutdown()
             .unwrap_or_else(|error| panic!("dispatcher shutdown failed: {error:?}"));
+    }
+
+    #[test]
+    fn completion_slots_are_bounded_and_released_before_acceptance() {
+        let dispatcher = EventDispatcher::new().unwrap();
+        let mut reservations: Vec<_> = (0..EVENT_QUEUE_CAPACITY)
+            .map(|_| dispatcher.reserve_completion().unwrap())
+            .collect();
+        assert_eq!(
+            dispatcher.reserve_completion().err().unwrap().code,
+            CitizenSdkErrorCode::QueueFull
+        );
+        assert_eq!(
+            dispatcher
+                .send(CitizenSdkEventType::WatchUpdate, 0, 0, 0)
+                .unwrap_err()
+                .code,
+            CitizenSdkErrorCode::QueueFull
+        );
+        drop(reservations.pop());
+        let restored = dispatcher.reserve_completion().unwrap();
+        drop(restored);
+        drop(reservations);
+        dispatcher.shutdown().unwrap();
+        assert!(dispatcher.reserve_completion().is_err());
+    }
+
+    struct ReentrantContext {
+        dispatcher: Arc<EventDispatcher>,
+        entered: mpsc::Sender<()>,
+        release: Mutex<mpsc::Receiver<()>>,
+        result: mpsc::Sender<CitizenSdkErrorCode>,
+        first: AtomicBool,
+    }
+
+    unsafe extern "C" fn reserve_from_callback(context: *mut c_void, _: *const CitizenSdkEvent) {
+        // SAFETY: 测试在关闭 dispatcher 后才释放上下文。
+        let context = unsafe { &*context.cast::<ReentrantContext>() };
+        if context.first.swap(false, Ordering::SeqCst) {
+            context.entered.send(()).unwrap();
+            context.release.lock().unwrap().recv().unwrap();
+            let code = context.dispatcher.reserve_completion().err().unwrap().code;
+            context.result.send(code).unwrap();
+        }
+    }
+
+    #[test]
+    fn full_queue_completion_and_callback_reentry_never_wait_on_each_other() {
+        let dispatcher = Arc::new(EventDispatcher::new().unwrap());
+        let completion = dispatcher.reserve_completion().unwrap();
+        let (entered, entered_rx) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let (result, result_rx) = mpsc::channel();
+        let context = Box::new(ReentrantContext {
+            dispatcher: Arc::clone(&dispatcher),
+            entered,
+            release: Mutex::new(release_rx),
+            result,
+            first: AtomicBool::new(true),
+        });
+        dispatcher
+            .set_callback(
+                Some(reserve_from_callback),
+                (&*context as *const ReentrantContext).cast_mut().cast(),
+            )
+            .unwrap();
+        dispatcher
+            .send(CitizenSdkEventType::WatchUpdate, 0, 0, 0)
+            .unwrap();
+        entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        for _ in 1..EVENT_QUEUE_CAPACITY {
+            dispatcher
+                .try_send(CitizenSdkEventType::WatchUpdate, 0, 0, 0)
+                .unwrap();
+        }
+        assert_eq!(
+            dispatcher
+                .try_send(CitizenSdkEventType::WatchUpdate, 0, 0, 0)
+                .unwrap_err()
+                .code,
+            CitizenSdkErrorCode::QueueFull
+        );
+        // 回调仍被屏障阻塞，预留完成必须立即入队，不能等消费者继续运行。
+        let producer = Arc::clone(&dispatcher);
+        let (completed, completed_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            completed
+                .send(producer.send_reserved_completion(completion, 1, 0))
+                .unwrap();
+        });
+        let sent = completed_rx.recv_timeout(Duration::from_secs(2));
+        release.send(()).unwrap();
+        assert!(sent.unwrap().is_ok());
+        assert_eq!(
+            result_rx.recv_timeout(Duration::from_secs(2)).unwrap(),
+            CitizenSdkErrorCode::QueueFull
+        );
+        worker.join().unwrap();
+        dispatcher.shutdown().unwrap();
     }
 
     #[test]
@@ -787,14 +890,20 @@ mod tests {
                 scope.spawn(move || {
                     barrier.wait();
                     for index in 0..EVENTS_PER_PRODUCER {
-                        dispatcher
-                            .send(
+                        loop {
+                            match dispatcher.send(
                                 CitizenSdkEventType::CapabilitiesChanged,
                                 (producer * EVENTS_PER_PRODUCER + index) as u64,
                                 0,
                                 0,
-                            )
-                            .unwrap_or_else(|error| panic!("concurrent send failed: {error:?}"));
+                            ) {
+                                Ok(()) => break,
+                                Err(error) if error.code == CitizenSdkErrorCode::QueueFull => {
+                                    std::thread::yield_now()
+                                }
+                                Err(error) => panic!("concurrent send failed: {error:?}"),
+                            }
+                        }
                     }
                 });
             }

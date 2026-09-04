@@ -17,6 +17,46 @@ use citizen_sdk_contracts::{
 const HEADER_LEN: usize = 56;
 
 #[test]
+fn pending_outbox_round_trips_complete_authorization_and_rejects_missing_bytes() {
+    let record = citizen_sdk_contracts::TransactionHistoryRecord::try_new(
+        AccountId32::from_bytes([1; 32]),
+        Hash32::from_bytes([2; 32]),
+        3,
+        AccountId32::from_bytes([4; 32]),
+        5,
+        "resume",
+        citizen_sdk_contracts::HistoryTransactionStatus::Pending,
+        6,
+        6,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84])
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        VerifiedBlockRef::best(Hash32::from_bytes([7; 32]), 8),
+        RuntimeVersion::new(100, 12),
+        citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+    )
+    .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    let state = TransactionHistoryState::try_new(1, Vec::new(), vec![record], Vec::new())
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    let encoded = encode_transaction_history_state(&state)
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    assert_eq!(
+        decode_transaction_history_state(&encoded)
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        state
+    );
+    let payload = decode_host_record(HostRecordDomain::TransactionHistory, &encoded)
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"))
+        .payload();
+    // 删除完整授权字段并重新计算外层摘要也不能解成合法记录；不允许只剩哈希的格式。
+    let mut truncated = payload.to_vec();
+    truncated.truncate(truncated.len() - (4 + 2 + 41 + 8 + 32 + 4));
+    truncated.extend_from_slice(&0_u32.to_le_bytes());
+    let invalid = encode_host_record(HostRecordDomain::TransactionHistory, &truncated)
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    assert!(decode_transaction_history_state(&invalid).is_err());
+}
+
+#[test]
 fn v1_wire_layout_has_a_frozen_cross_language_vector() {
     let encoded = encode_host_record(HostRecordDomain::WalletProfile, b"citizen")
         .unwrap_or_else(|error| panic!("golden encode failed: {error}"));

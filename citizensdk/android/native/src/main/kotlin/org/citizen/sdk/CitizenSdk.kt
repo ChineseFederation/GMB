@@ -30,6 +30,8 @@ class CitizenSdk private constructor(
 
     private val lifecycleGate = Any()
     private val closed = AtomicBoolean(false)
+    private val closing = AtomicBoolean(false)
+    private var closeActive = false
     private val hostServices = CitizenSdkHostServices(context.applicationContext)
     private val native = CitizenSdkNative.create(
         assets = CitizenSdkAssets.load(context.applicationContext),
@@ -333,35 +335,37 @@ class CitizenSdk private constructor(
      * its secure Activity or managed secret buffers are still owned.
      */
     override fun close() {
-        while (true) {
-            awaitReadinessQuiescenceForClose()
-            val completed = synchronized(lifecycleGate) {
-                if (closed.get()) return
-                if (readinessInFlight || readinessRetryPending) return@synchronized false
+        synchronized(lifecycleGate) {
+            if (closed.get()) return
+            if (closeActive) throw CitizenSdkException(CitizenSdkErrorCode.BUSY, "CitizenSDK close is active")
+            // 不在事件回调线程等待后续事件完成；未静止时拒绝，调用方在终态后重试。
+            if (readinessInFlight || readinessRetryPending) throw CitizenSdkException(
+                CitizenSdkErrorCode.BUSY, "CitizenSDK capability refresh is active",
+            )
+            if (!closing.get()) {
                 requests.requireIdle()
                 CitizenSdkWalletFlowCoordinator.requireCloseReady(this)
-                val actual = native.lifecycle()
-                if (CitizenSdkClosePolicy.validate(actual) == CitizenSdkClosePolicy.Decision.ALREADY_DISPOSED) {
-                    return
-                }
-                native.close()
-                // Core destroy is the authoritative cleanup of every prepared
-                // mnemonic. Resolve any process-retained wallet-flow cleanup
-                // owner now; never guess that a live-bridge INVALID_HANDLE is
-                // equivalent to successful secret destruction.
-                CitizenSdkWalletFlowCoordinator.onCoreDestroyed(this)
-                requests.close()
-                eventListener = null
-                try {
-                    hostServices.close()
-                } finally {
-                    // Native destruction is the irreversible commit point.
-                    lifecycle = CitizenSdkLifecycle.DISPOSED
-                    closed.set(true)
-                }
-                true
+                CitizenSdkClosePolicy.validate(native.lifecycle())
             }
-            if (completed) return
+            closing.set(true)
+            closeActive = true
+        }
+        try {
+            // 回调可以同步重入公开门面。屏障期间只保留 closing 状态，不占 lifecycleGate。
+            native.close()
+            // Core destroy 是 prepared mnemonic 清理的唯一成功依据。
+            CitizenSdkWalletFlowCoordinator.onCoreDestroyed(this)
+            requests.close()
+            eventListener = null
+            try {
+                hostServices.close()
+            } finally {
+                // Native destruction is the irreversible commit point.
+                lifecycle = CitizenSdkLifecycle.DISPOSED
+                closed.set(true)
+            }
+        } finally {
+            synchronized(lifecycleGate) { closeActive = false }
         }
     }
 
@@ -385,7 +389,7 @@ class CitizenSdk private constructor(
 
     private fun readinessChanged() {
         synchronized(lifecycleGate) {
-            if (closed.get()) return
+            if (closed.get() || closing.get()) return
             check(readinessDesiredGeneration != Long.MAX_VALUE) {
                 "CitizenSDK readiness generation space is exhausted"
             }
@@ -397,7 +401,7 @@ class CitizenSdk private constructor(
 
     /** Starts at most one refresh and preserves the newest requested edge. */
     private fun ensureReadinessRefreshLocked() {
-        if (closed.get() || readinessInFlight ||
+        if (closed.get() || closing.get() || readinessInFlight ||
             readinessAppliedGeneration == readinessDesiredGeneration
         ) return
         val targetGeneration = readinessDesiredGeneration
@@ -463,21 +467,6 @@ class CitizenSdk private constructor(
                 throw unwrapCompletion(error)
             }
             if (synchronized(lifecycleGate) { closed.get() || readinessSettledLocked() }) return
-        }
-    }
-
-    /** A terminal refresh failure does not make Core destruction unsafe. */
-    private fun awaitReadinessQuiescenceForClose() {
-        while (true) {
-            val barrier = synchronized(lifecycleGate) {
-                if (closed.get() || (!readinessInFlight && !readinessRetryPending)) return
-                readinessBarrierLocked()
-            }
-            runCatching { barrier.get() }
-            if (synchronized(lifecycleGate) {
-                    closed.get() || (!readinessInFlight && !readinessRetryPending)
-                }
-            ) return
         }
     }
 
@@ -588,7 +577,7 @@ class CitizenSdk private constructor(
     }
 
     private fun requireOpen() {
-        check(!closed.get()) { "CitizenSdk is closed" }
+        check(!closed.get() && !closing.get()) { "CitizenSdk is closing or closed" }
     }
 
     companion object {

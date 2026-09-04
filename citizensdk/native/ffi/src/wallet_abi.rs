@@ -750,7 +750,8 @@ pub unsafe extern "C" fn citizensdk_sign_wallet_payload(
 /// Drives the Engine's complete submit-and-watch future until a proven terminal
 /// result, unless the host cancels the accepted request first. Dropping the
 /// future on cancellation does not roll back the Engine's durable
-/// `Pending`/`InBlock` record; a later reconciliation/watch can resume from it.
+/// `Pending`/`InBlock` record. 同参数再次调用 transfer 会核验并恢复原始授权字节，
+/// 先同步 finalized 证据再决定是否重广播，不重新签名或更换 nonce。
 async fn wallet_transfer_or_cancellation<F>(
     transfer: F,
     cancellation: RequestCancellation,
@@ -774,7 +775,8 @@ where
 /// Builds, signs, records-before-broadcast, submits and verifies one transfer.
 /// No signed extrinsic bytes are returned to the host. The complete terminal
 /// watch uses the dedicated long-lived pool and may be cancelled without
-/// clearing an already durable `Pending`/`InBlock` record.
+/// clearing an already durable `Pending`/`InBlock` record. 已持久的完整授权与构造事实
+/// 同次 CAS 写入；恢复不会把取消误作撤回，也不会从交易哈希重造另一笔转账。
 ///
 /// # Safety
 /// Account IDs/views are borrowed only for this call; output is writable.

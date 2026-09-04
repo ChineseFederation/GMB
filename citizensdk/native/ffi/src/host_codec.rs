@@ -714,6 +714,11 @@ fn encode_history_record(
     encode_history_status(writer, record.status())?;
     writer.u64(record.created_at_millis());
     writer.u64(record.updated_at_millis());
+    writer.bytes(record.signed_extrinsic().as_bytes(), 1024)?;
+    encode_block(writer, record.block());
+    writer.u32(record.runtime_version().spec_version());
+    writer.u32(record.runtime_version().transaction_version());
+    writer.fixed(record.genesis_hash().as_bytes());
     Ok(())
 }
 
@@ -730,6 +735,11 @@ fn decode_history_record(
         decode_history_status(reader)?,
         reader.u64()?,
         reader.u64()?,
+        citizen_sdk_contracts::SignedExtrinsic::try_new(reader.bytes(1024)?)
+            .map_err(|_| model_integrity("persisted signed extrinsic is invalid"))?,
+        decode_block(reader)?,
+        RuntimeVersion::new(reader.u32()?, reader.u32()?),
+        Hash32::from_bytes(reader.fixed()?),
     )
     .map_err(|_| model_integrity("persisted transaction record is invalid"))
 }

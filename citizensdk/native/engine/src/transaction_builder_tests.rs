@@ -335,6 +335,110 @@ fn production_sr25519_signer_stays_inside_rust_and_verifies_the_built_payload() 
     assert!(verifies);
     assert_eq!(build.signed().payload().signer_account_id(), source);
     assert!(!build.signed().extrinsic_bytes().is_empty());
+
+    let record = citizen_sdk_contracts::TransactionHistoryRecord::try_new(
+        source,
+        crate::signed_extrinsic_hash(
+            &RuntimeContext::try_new(
+                client.best,
+                build.signed().payload().runtime_version(),
+                client.metadata.clone(),
+            )
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+            build.signed().extrinsic(),
+        )
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+        9,
+        destination,
+        1,
+        "Rust-only secret",
+        citizen_sdk_contracts::HistoryTransactionStatus::Pending,
+        1,
+        1,
+        build.signed().extrinsic().clone(),
+        build.signed().payload().block(),
+        build.signed().payload().runtime_version(),
+        build.signed().payload().genesis_hash(),
+    )
+    .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    futures::executor::block_on(crate::transaction_builder::validate_recorded_transfer(
+        &client, &signer, &record,
+    ))
+    .unwrap_or_else(|error| panic!("持久授权无秘密核验失败: {error}"));
+    let mut current_client = BuildClient::from_vector(&vector);
+    current_client.best =
+        VerifiedBlockRef::best(Hash32::from_bytes([0x43; 32]), client.best.number() + 1);
+    current_client.runtime_block = current_client.best;
+    // provider 现在只返回新 best 的准确 context；请求原 best 会得到锚不匹配错误。
+    futures::executor::block_on(crate::transaction_builder::validate_recorded_transfer(
+        &current_client,
+        &signer,
+        &record,
+    ))
+    .unwrap_or_else(|error| {
+        panic!("原 best 不可读但同 Runtime 的 immortal 授权必须可恢复: {error}")
+    });
+    for mutation in 0..8 {
+        let mut bytes = record.signed_extrinsic().as_bytes().to_vec();
+        if mutation == 0 || mutation == 7 {
+            bytes[40] ^= 1;
+        }
+        let extrinsic =
+            SignedExtrinsic::try_new(bytes).unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+        let hash = if mutation == 7 {
+            // 存储方即使把外层哈希一起改对，仍必须被原始 sr25519 签名核验拒绝。
+            crate::signed_extrinsic_hash(
+                &RuntimeContext::try_new(
+                    record.block(),
+                    record.runtime_version(),
+                    client.metadata.clone(),
+                )
+                .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+                &extrinsic,
+            )
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}"))
+        } else {
+            record.transaction_hash()
+        };
+        let changed = citizen_sdk_contracts::TransactionHistoryRecord::try_new(
+            if mutation == 1 { destination } else { source },
+            hash,
+            if mutation == 2 { 10 } else { 9 },
+            destination,
+            if mutation == 3 { 2 } else { 1 },
+            if mutation == 4 {
+                "changed"
+            } else {
+                record.remark()
+            },
+            citizen_sdk_contracts::HistoryTransactionStatus::Pending,
+            1,
+            1,
+            extrinsic,
+            record.block(),
+            if mutation == 5 {
+                RuntimeVersion::new(
+                    record.runtime_version().spec_version() + 1,
+                    record.runtime_version().transaction_version(),
+                )
+            } else {
+                record.runtime_version()
+            },
+            if mutation == 6 {
+                Hash32::from_bytes([0; 32])
+            } else {
+                record.genesis_hash()
+            },
+        )
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+        assert!(
+            futures::executor::block_on(crate::transaction_builder::validate_recorded_transfer(
+                &client, &signer, &changed
+            ))
+            .is_err(),
+            "篡改种类 {mutation} 必须失败关闭"
+        );
+    }
 }
 
 #[test]

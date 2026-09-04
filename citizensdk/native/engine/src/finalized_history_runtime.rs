@@ -377,7 +377,7 @@ fn project_transfers(
                 transfer.amount_fen,
                 block,
                 transfer.event_record_index,
-                Some(transfer.extrinsic_index),
+                transfer.extrinsic_index,
                 transfer.source_pallet,
                 transfer.remark_bytes.as_deref(),
             )?;

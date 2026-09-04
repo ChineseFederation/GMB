@@ -17,7 +17,7 @@ Substrate v14 runtime metadata 快照，SHA-256 为
 - `2c4d04a69ff994622877786d481dc4780b7a32795e5f7cfa070ae4acb72679ef`
 
 生成时把 `/Users/rhett/GMB/citizenchain` 只读复制到
-`/Users/rhett/TATA/tataconsole/target/citizensdk/.work`，临时 example 直接调用生产
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK`，临时 example 直接调用生产
 `Runtime::metadata_at_version(14)`，并以生产 `RuntimeEvent` 编码
 `Vec<EventRecord<RuntimeEvent, H256>>`。事件固定为：同一 extrinsic index 0 的
 `Balances.Transfer`、`OnchainTransaction.TransferWithRemark` 与
@@ -32,6 +32,6 @@ Substrate v14 runtime metadata 快照，SHA-256 为
 
 复现时必须继续在上述 TataConsole 隔离目录中使用 CitizenChain 固定 `Cargo.lock` 和
 `rust-toolchain.toml`，把 `CARGO_TARGET_DIR` 指向
-`/Users/rhett/TATA/tataconsole/target/citizensdk/.work/runtime-fixture/cargo-target`，连续生成两次并逐字节比较 metadata、events 后
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK/runtime-fixture/cargo-target`，连续生成两次并逐字节比较 metadata、events 后
 再更新两份 SHA。不得为生成夹具修改真实 CitizenChain runtime，也不得把 Cargo 产物写入
 CitizenSDK 源码树。这两份文件只证明生产 metadata/event 的 SCALE 解码合同，不是随包链资产。

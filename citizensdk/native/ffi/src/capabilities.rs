@@ -401,6 +401,15 @@ mod tests {
             wallet.not_ready_reason,
             Some(CapabilityReason::DependencyNotReady)
         );
+        let snapshot = CapabilityTracker::new()
+            .update(probes.clone())
+            .unwrap_or_else(|error| panic!("configured wallet snapshot failed: {error}"));
+        assert_eq!(
+            snapshot
+                .status(CapabilityName::WalletProfile)
+                .and_then(|value| value.reason()),
+            Some(CapabilityReason::DependencyNotReady)
+        );
 
         let chain = probes
             .iter()

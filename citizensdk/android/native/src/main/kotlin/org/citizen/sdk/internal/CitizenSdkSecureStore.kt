@@ -3,10 +3,16 @@ package org.citizen.sdk.internal
 import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
 import java.io.File
+import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.attribute.BasicFileAttributes
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.withLock
 
 /** Wallet public profile, authenticated ciphertext and permanent vault tombstones. */
-internal class CitizenSdkSecureStore(directory: File) :
+internal class CitizenSdkSecureStore(private val directory: File) :
     CitizenSdkSqlite(directory, "secure-state-v1.sqlite3") {
     override fun createSchema(database: SQLiteDatabase) {
         database.execSQL(
@@ -156,6 +162,29 @@ internal class CitizenSdkSecureStore(directory: File) :
         generationState(database, CitizenSdkRecordKey.walletGeneration(walletIndex, generation)) == STATE_ACTIVE
     }
 
+    /** 同进程统一 owner 加操作系统文件锁，覆盖数据库状态与物理 Keystore 的跨进程副作用。 */
+    fun <T> withVaultLock(body: () -> T): T {
+        val file = File(directory, "vault.lock")
+        val path = file.toPath()
+        val processLock = vaultLocks.computeIfAbsent(file.absolutePath) { ReentrantLock() }
+        return processLock.withLock {
+            if (Files.isSymbolicLink(path)) throw IllegalStateException("CitizenSDK vault lock is a link")
+            RandomAccessFile(file, "rw").use { owner ->
+                file.setReadable(false, false); file.setWritable(false, false)
+                file.setReadable(true, true); file.setWritable(true, true)
+                val attributes = Files.readAttributes(
+                    path,
+                    BasicFileAttributes::class.java,
+                    LinkOption.NOFOLLOW_LINKS,
+                )
+                check(attributes.isRegularFile && !attributes.isSymbolicLink) {
+                    "CitizenSDK vault lock is not a regular file"
+                }
+                owner.channel.lock().use { body() }
+            }
+        }
+    }
+
     /** Tombstone commits before the caller attempts physical Keystore deletion. */
     fun retireGeneration(
         walletIndex: Int,
@@ -194,6 +223,7 @@ internal class CitizenSdkSecureStore(directory: File) :
     ).use { cursor -> if (cursor.moveToFirst()) cursor.getInt(0) to cursor.getBlob(1) else null }
 
     companion object {
+        private val vaultLocks = ConcurrentHashMap<String, ReentrantLock>()
         internal const val STATE_ACTIVE = 1
         internal const val STATE_RETIRED = 2
     }

@@ -15,8 +15,11 @@ linux_source_root="$sdk_dir/linux"
 windows_source_root="$sdk_dir/windows"
 apple_asset_root="$sdk_dir/assets/citizenchain"
 target_name="${1:-all}"
-tata_console_target_root="/Users/rhett/TATA/tataconsole/target"
-citizensdk_target_root="$tata_console_target_root/citizensdk"
+# 六个显式参数表示消费最终包；没有参数的原生构建仍由各平台原入口负责。
+hosted_consumer=false
+if [[ "$#" -gt 1 ]]; then hosted_consumer=true; fi
+tata_console_target_root="/Users/rhett/TATA/target"
+citizensdk_target_root="$tata_console_target_root/GMB/citizensdk/SDK"
 tata_console_work_root="$tata_console_target_root/.work"
 ios_deployment_target=16.0
 macos_deployment_target=13.0
@@ -56,18 +59,21 @@ windows_path_preflight() {
   done
 }
 
-if [[ "$target_name" == Windows ]]; then windows_path_preflight; fi
-
 assert_safe_directory_path() {
   local path="$1" label="$2" component current=''
   local -a components
   [[ -n "$path" && "$path" == /* && "$path" != */ && "$path" != *//* ]] \
     || fail "$label 必须使用不含重复分隔符的绝对规范路径：${path:-<empty>}"
   IFS='/' read -r -a components <<<"$path"
+  # 先验证完整词法路径，再检查既存祖先。不能在第一个不存在的目录处停止词法检查，
+  # 否则 `missing/../target` 会绕过零写预检，直到平台工具检查才失败。
   for component in "${components[@]}"; do
     [[ -n "$component" ]] || continue
     [[ "$component" != . && "$component" != .. ]] \
       || fail "$label 禁止包含 . 或 .. 路径段：$path"
+  done
+  for component in "${components[@]}"; do
+    [[ -n "$component" ]] || continue
     current="$current/$component"
     [[ ! -L "$current" ]] || fail "$label 的既存路径祖先禁止使用符号链接：$current"
     if [[ -e "$current" && ! -d "$current" ]]; then
@@ -83,6 +89,19 @@ canonical_directory() {
   assert_safe_directory_path "$path" "$label"
   mkdir -p "$path"
   (cd "$path" && pwd -P)
+}
+
+# 两个输出必须在任何 mkdir 前一起通过；这样第二个参数无效时，第一个参数也不会留下目录。
+output_paths_preflight() {
+  local work="${CITIZENSDK_WORK_DIR:-}" output="${CITIZENSDK_NATIVE_OUTPUT_DIR:-}" path
+  for path in "$work" "$output"; do
+    [[ -n "$path" ]] || fail "缺少 CitizenSDK 工作或产物目录"
+    assert_safe_directory_path "$path" "CitizenSDK 输出目录"
+    case "$path/" in "$sdk_dir/"*) fail "工作目录或产物目录位于 CitizenSDK 源码树：$path" ;; esac
+  done
+  [[ "$work" != "$output" ]] || fail "工作目录与产物目录不能相同"
+  case "$work/" in "$output/"*) fail "工作目录不能位于产物目录内" ;; esac
+  case "$output/" in "$work/"*) fail "产物目录不能位于工作目录内" ;; esac
 }
 
 local_build_path_is_allowed() {
@@ -103,6 +122,9 @@ local_build_path_is_allowed() {
   esac
 }
 
+if [[ "$target_name" == Windows ]]; then windows_path_preflight; fi
+output_paths_preflight
+
 # 中文注释：CitizenSDK 自身任务使用固定产品目录；宿主本机任务只允许把 SDK
 # 中间状态放进当前中央工作目录的 citizensdk 子目录，绝不借此放宽到源码树或任意路径。
 if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
@@ -113,7 +135,7 @@ if [[ "${GITHUB_ACTIONS:-}" != true ]]; then
   done
 fi
 
-if [[ "$target_name" == macOS ]]; then
+if [[ "$target_name" == macOS || "$hosted_consumer" == true ]]; then
   # Hosted 输入互斥检查必须早于首次写入；只接受调用方已准备的本机/Runner 受控容器。
   work_dir="${CITIZENSDK_WORK_DIR:-}"
   output_dir="${CITIZENSDK_NATIVE_OUTPUT_DIR:-}"
@@ -213,7 +235,7 @@ assert_readonly_static_archive() {
 }
 
 cargo_target_dir="$work_dir/cargo"
-if [[ "$target_name" != macOS ]]; then
+if [[ "$target_name" != macOS && "$hosted_consumer" != true ]]; then
   prepare_safe_directory "$work_dir" "$cargo_target_dir" "Cargo target 目录"
 fi
 export CARGO_TARGET_DIR="$cargo_target_dir"
@@ -1510,6 +1532,7 @@ run_final_apple_consumer_smoke() {
   local framework framework_root
   local smoke_root="$work_dir/apple-consumer-smoke"
   local source="$smoke_root/CitizenSDKConsumerSmoke.swift"
+  local bundle_plist="$smoke_root/Info.plist"
   local executable="$smoke_root/CitizenSDKConsumerSmoke"
   local sdk_path swiftc architectures linked citizen_links
   local expected_install_name='@rpath/CitizenSDK.framework/Versions/A/CitizenSDK'
@@ -1619,6 +1642,17 @@ private enum CitizenSDKConsumerSmoke {
     }
 }
 SWIFT
+  prepare_safe_output_file "$work_dir" "$bundle_plist" "Apple 消费者 smoke Bundle 元数据"
+  cat >"$bundle_plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>org.citizen.sdk.consumer-smoke</string>
+</dict>
+</plist>
+PLIST
   sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
   swiftc="$(xcrun --sdk macosx --find swiftc)"
   prepare_safe_output_file "$work_dir" "$executable" "Apple 消费者 smoke 可执行文件"
@@ -1632,6 +1666,10 @@ SWIFT
     -target arm64-apple-macosx13.0 \
     -F "$framework_root" \
     -framework CitizenSDK \
+    -Xlinker -sectcreate \
+    -Xlinker __TEXT \
+    -Xlinker __info_plist \
+    -Xlinker "$bundle_plist" \
     -Xlinker -rpath \
     -Xlinker "$framework_root" \
     -o "$executable"
@@ -2467,6 +2505,7 @@ build_linux_flutter_consumer() (
   local readelf_bin="$6" nm_bin="$7" flutter_source="${CITIZENSDK_FLUTTER_ROOT:-}"
   local cache_source="${PUB_CACHE:-}" root tool_root cache_root sdk_stage runner dart_bin
   local arch flutter_build bundle path output status unshare_bin
+  local package="${8:-}" candidate="${9:-$sdk_dir}"
   case "$platform" in LinuxARM) arch=arm64 ;; LinuxAMD) arch=x64 ;; *) fail "未登记的 Linux 平台：$platform" ;; esac
   for path in ninja clang clang++ unshare timeout realpath perl; do
     command -v "$path" >/dev/null 2>&1 || fail "$platform Flutter 验收缺少已预装工具：$path"
@@ -2508,14 +2547,16 @@ build_linux_flutter_consumer() (
   # 仅复制调用方显式提供的工具/缓存，全部锁、package_config 与构建记录留本轮中央根。
   cp -a "$flutter_source/." "$tool_root/"
   cp -a "$cache_source/." "$cache_root/"
-  cp -a "$sdk_dir/." "$sdk_stage/"
+  cp -a "${package:-$sdk_dir}/." "$sdk_stage/"
   chmod 0700 "$tool_root" "$cache_root" "$sdk_stage"
   verify_linux_tool_tree "$tool_root" "$platform Flutter 工具副本"
   verify_linux_tool_tree "$cache_root" "$platform PUB_CACHE 副本"
   [[ -z "$(find "$sdk_stage" -type l -print -quit)" ]] || fail "$platform SDK 验收副本禁止符号链接"
   # 候选消费者与发布包使用完全相同的 linux/ 安装前缀；本机构建只注入
   # 当前平台，双平台共有文件的原子合并由唯一 release 打包器负责。
-  copy_linux_install "$prefix" "$sdk_stage/linux" "$platform" "$work_dir"
+  if [[ -z "$package" ]]; then
+    copy_linux_install "$prefix" "$sdk_stage/linux" "$platform" "$work_dir"
+  fi
   export FLUTTER_ROOT="$tool_root" PUB_CACHE="$cache_root"
   export XDG_CONFIG_HOME="$root/config" XDG_CACHE_HOME="$root/cache"
   export XDG_DATA_HOME="$root/data" XDG_STATE_HOME="$root/state" TMPDIR="$root/tmp"
@@ -2542,20 +2583,20 @@ build_linux_flutter_consumer() (
     'environment:' '  sdk: ">=3.8.0 <4.0.0"' 'dependencies:' '  flutter:' \
     '    sdk: flutter' '  citizen_sdk:' '    path: ../citizen_sdk' \
     'flutter:' '  uses-material-design: true' >"$runner/pubspec.yaml"
-  cp "$sdk_dir/pubspec.lock" "$runner/pubspec.lock"
-  cp "$linux_source_root/test/citizen_sdk_flutter_consumer.dart" "$runner/lib/main.dart"
+  cp "$candidate/pubspec.lock" "$runner/pubspec.lock"
+  cp "$candidate/linux/test/citizen_sdk_flutter_consumer.dart" "$runner/lib/main.dart"
   # 只改生成的 runner CMake 装配。保留官方 generated registrant 和自动插件发现；
   # 父级 enable_testing 让六个 adapter 合同能被顶层 CTest 实际枚举到。
   for path in "$root/test-state"; do
     case "$path" in *'"'*|*';'*|*'$'*|*'\'*|*$'\n'*|*$'\r'*) fail "Flutter CMake 路径含不允许的语法字符" ;; esac
   done
-  CITIZENSDK_ADAPTER_TEST_ROOT="$root/test-state" \
+  CITIZENSDK_ADAPTER_TEST_ROOT="$root/test-state" CITIZENSDK_HOSTED_PACKAGE="$package" \
     perl -0777 -i -pe '
       # 官方模板沿用 Dart project name 中的下划线，但 Host application_id
       # 的既有安全合同只允许字母数字与分隔点；只修验证 runner 的公开身份。
       s/^set\(APPLICATION_ID "org\.citizen\.citizensdk_consumer"\)$/set(APPLICATION_ID "org.citizensdk.flutterconsumer")/m == 1
         or die "Unexpected official runner application identity\n";
-      my $settings = "set(CITIZENSDK_BUILD_TESTS ON)\n" .
+      my $settings = length($ENV{CITIZENSDK_HOSTED_PACKAGE}) ? "" : "set(CITIZENSDK_BUILD_TESTS ON)\n" .
         "set(CITIZENSDK_TEST_WORK_DIR \"$ENV{CITIZENSDK_ADAPTER_TEST_ROOT}\")\n" .
         "enable_testing()\n";
       s/^include\(flutter\/generated_plugins.cmake\)/$settings . $&/me == 1
@@ -2566,10 +2607,14 @@ build_linux_flutter_consumer() (
     "${flutter[@]}" build linux --release --no-pub --target-platform="linux-$arch")
   flutter_build="$runner/build/linux/$arch/release"
   bundle="$flutter_build/bundle"
-  verify_linux_ctest_inventory "$ctest_bin" "$flutter_build" LinuxFlutter 6
-  LD_LIBRARY_PATH="$sdk_stage/linux/lib/$platform:$runner/linux/flutter/ephemeral" \
-    "$ctest_bin" --test-dir "$flutter_build" --build-config Release \
-      -L '^LinuxFlutter$' --no-tests=error --output-on-failure
+  # 内部适配层合同属于原生构建阶段；最终 Hosted 只消费公开插件与运行件，
+  # 绝不把审计测试补入发布包，也不重新构建 Host/Core。
+  if [[ -z "$package" ]]; then
+    verify_linux_ctest_inventory "$ctest_bin" "$flutter_build" LinuxFlutter 6
+    LD_LIBRARY_PATH="$sdk_stage/linux/lib/$platform:$runner/linux/flutter/ephemeral" \
+      "$ctest_bin" --test-dir "$flutter_build" --build-config Release \
+        -L '^LinuxFlutter$' --no-tests=error --output-on-failure
+  fi
   verify_linux_flutter_elf "$platform" "$bundle" "$sdk_stage/linux" "$readelf_bin" "$nm_bin"
   verify_linux_runtime_resolution "$bundle/citizensdk_consumer" "$bundle/lib"
   # 不使用 flutter run 的“已启动”退出状态代替消费者结果；只运行最终bundle。
@@ -2952,12 +2997,12 @@ verify_windows_install() {
 }
 
 verify_windows_consumer_inventory() {
-  local build="$1" prefix="$2" state="$3" inventory
+  local build="$1" prefix="$2" state="$3" configuration="${4:-Release}" inventory
   inventory="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
     -C Release --show-only=json-v1)" || fail "Windows 消费者 CTest 清单读取失败"
   MSYS2_ARG_CONV_EXCL='*' node -e '
     const fs=require("fs"), p=require("path");
-    const [text,build,prefix,state]=process.argv.slice(1), data=JSON.parse(text);
+    const [text,build,prefix,state,configuration]=process.argv.slice(1), data=JSON.parse(text);
     const expected=[
       ["CitizenSDK.Windows.CConsumer","citizen_sdk_c_consumer.exe"],
       ["CitizenSDK.Windows.CppConsumer","citizen_sdk_cpp_consumer.exe"]
@@ -2966,7 +3011,7 @@ verify_windows_consumer_inventory() {
     const names=data.tests.map(x=>x.name).sort();
     if(JSON.stringify(names)!==JSON.stringify(expected.map(x=>x[0]))) throw Error("Windows consumer exact test set drift");
     const identity=x=>process.platform==="win32"?p.resolve(x).toLowerCase():p.resolve(x);
-    const runtime=p.join(build,"Release"), assets=p.join(prefix,"share","citizensdk","citizenchain");
+    const runtime=p.join(build,configuration), assets=p.join(prefix,"share","citizensdk","citizenchain");
     function ordinaryFile(path) {
       let current=p.parse(path).root;
       for(const part of p.relative(current,path).split(p.sep)) {
@@ -2994,13 +3039,13 @@ verify_windows_consumer_inventory() {
       ordinaryFile(actual); ordinaryFile(expected);
       if(!fs.readFileSync(actual).equals(fs.readFileSync(expected))) throw Error("Windows consumer DLL bytes drift");
     }
-  ' "$inventory" "$(cygpath -m "$build")" "$(cygpath -m "$prefix")" "$(cygpath -m "$state")" \
+  ' "$inventory" "$(cygpath -m "$build")" "$(cygpath -m "$prefix")" "$(cygpath -m "$state")" "$configuration" \
     || fail "Windows 消费者必须是准确两个真实程序及同版运行库"
 }
 
 run_windows_consumers() {
-  local build="$1" prefix="$2" state="$3" output
-  verify_windows_consumer_inventory "$build" "$prefix" "$state"
+  local build="$1" prefix="$2" state="$3" configuration="${4:-Release}" output
+  verify_windows_consumer_inventory "$build" "$prefix" "$state" "$configuration"
   # 同时检查 CTest 真实退出码和两个程序各自唯一成功行，不能用标记掩盖失败。
   output="$(MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
     -C Release --no-tests=error --verbose 2>&1)" || {
@@ -3361,6 +3406,7 @@ POWERSHELL
 
 build_windows_flutter_consumer() (
   local build_root="$1" prefix="$2" software_version="$3"
+  local package="${4:-}" candidate="${5:-$sdk_dir}"
   local flutter_source="${CITIZENSDK_FLUTTER_ROOT:-}" cache_source="${PUB_CACHE:-}"
   local root="$build_root/flutter" tool_root cache_root sdk_stage runner dart_bin build bundle test_state
   [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] \
@@ -3387,7 +3433,7 @@ build_windows_flutter_consumer() (
   # Flutter 官方 backend 仍执行其副本 assemble 链路；不改官方 registrant。
   MSYS2_ARG_CONV_EXCL='*' node - "$(cygpath -m "$flutter_source")" "$(cygpath -m "$cache_source")" \
     "$(cygpath -m "$tool_root")" "$(cygpath -m "$cache_root")" \
-    "$(cygpath -m "$sdk_dir")" "$(cygpath -m "$sdk_stage")" <<'NODE'
+    "$(cygpath -m "${package:-$sdk_dir}")" "$(cygpath -m "$sdk_stage")" <<'NODE'
 const fs=require('fs'), path=require('path'), url=require('url');
 const [source,cache,tool,copyCache,sdk,stage]=process.argv.slice(2);
 for(const [from,to] of [[source,tool],[sdk,stage]]) {
@@ -3408,6 +3454,7 @@ for(const item of config.packages) {
 }
 fs.writeFileSync(path.join(tool,'packages/flutter_tools/.dart_tool/package_config.json'),JSON.stringify(config));
 NODE
+  if [[ -z "$package" ]]; then
   MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$(cygpath -m "$sdk_dir")" \
     "$(cygpath -m "$prefix")" "$(cygpath -m "$sdk_stage")" <<'NODE'
 import {pathToFileURL} from 'node:url';
@@ -3418,6 +3465,7 @@ release.copyWindowsNativeArtifact(source,prefix,stage);
 release.assertWindowsReleaseProjection(stage);
 release.assertHostedRuntimeWindowsProjection(stage,{allowInjectedWindowsArtifacts:true});
 NODE
+  fi
   # 不设置 HOME、APPDATA、LOCALAPPDATA 或 KnownFolder。工具自身 profile 状态
   # 只属于已授权的一次性 runner 用户；依赖、工具副本和 TEMP 始终留本轮 work。
   export FLUTTER_ROOT="$(cygpath -m "$tool_root")" PUB_CACHE="$(cygpath -m "$cache_root")"
@@ -3431,9 +3479,9 @@ NODE
   MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" create --offline --no-pub --platforms=windows \
     --project-name=citizensdk_consumer --org=org.citizen "$(cygpath -m "$runner")"
   MSYS2_ARG_CONV_EXCL='*' node - "$(cygpath -m "$runner")" "$(cygpath -m "$test_state")" \
-    "$(cygpath -m "$sdk_dir")" "$software_version" <<'NODE'
+    "$(cygpath -m "$candidate")" "$software_version" "$package" <<'NODE'
 const fs=require('fs'),path=require('path');
-const [runner,state,source,version]=process.argv.slice(2);
+const [runner,state,source,version,hosted]=process.argv.slice(2);
 if(/[";$\\\r\n]/.test(state)) throw Error('Windows CMake test path is unsafe');
 fs.writeFileSync(path.join(runner,'pubspec.yaml'),`name: citizensdk_consumer\npublish_to: none\nversion: ${version}\nenvironment:\n  sdk: ">=3.8.0 <4.0.0"\ndependencies:\n  flutter:\n    sdk: flutter\n  citizen_sdk:\n    path: ../citizen_sdk\nflutter:\n  uses-material-design: true\n`);
 fs.copyFileSync(path.join(source,'pubspec.lock'),path.join(runner,'pubspec.lock'));
@@ -3442,17 +3490,19 @@ const cmake=path.join(runner,'windows/CMakeLists.txt');
 const text=fs.readFileSync(cmake,'utf8'), target='include(flutter/generated_plugins.cmake)';
 if(text.split(target).length!==2) throw Error('Windows official generated plugin include is not unique');
 fs.writeFileSync(cmake,text.replace(target,
-  'set(CITIZENSDK_APPLICATION_ID "org.citizensdk.flutterconsumer")\nset(CITIZENSDK_BUILD_TESTS ON)\n'+
-  `set(CITIZENSDK_TEST_WORK_DIR "${state}")\nenable_testing()\n${target}`));
+  'set(CITIZENSDK_APPLICATION_ID "org.citizensdk.flutterconsumer")\n'+
+  (hosted ? '' : `set(CITIZENSDK_BUILD_TESTS ON)\nset(CITIZENSDK_TEST_WORK_DIR "${state}")\nenable_testing()\n`)+target));
 NODE
   (cd "$runner" && MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" pub get --offline)
   (cd "$runner" && MSYS2_ARG_CONV_EXCL='*' "${flutter[@]}" build windows --release --no-pub)
-  cmp -s "$sdk_dir/pubspec.yaml" "$sdk_stage/pubspec.yaml" \
+  cmp -s "$candidate/pubspec.yaml" "$sdk_stage/pubspec.yaml" \
     || fail "Windows Flutter 不允许改写 SDK pubspec 注册"
   build="$runner/build/windows/x64"; bundle="$build/runner/Release"
-  verify_windows_flutter_inventory "$build" "$test_state" "$prefix"
-  MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
-    -C Release --no-tests=error --output-on-failure
+  if [[ -z "$package" ]]; then
+    verify_windows_flutter_inventory "$build" "$test_state" "$prefix"
+    MSYS2_ARG_CONV_EXCL='*' ctest --test-dir "$(cygpath -m "$build")" \
+      -C Release --no-tests=error --output-on-failure
+  fi
   MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$(cygpath -m "$sdk_dir")" \
     "$(cygpath -m "$prefix")" "$(cygpath -m "$bundle")" <<'NODE'
 import {pathToFileURL} from 'node:url';
@@ -3621,13 +3671,239 @@ verify_outputs() {
   echo "CitizenSDK Android AAR、iOS/macOS XCFramework 与 legacy macOS 宿主测试合同通过"
 }
 
+hosted_preflight() {
+  [[ "$#" == 7 ]] || fail "Hosted 消费需要平台和 candidate、audit、hosted、flutter、pub-cache、tool-path"
+  local platform="$1" candidate="$2" audit="$3" hosted="$4" flutter="$5" cache="$6" tool_path="$7"
+  local path central="${RUNNER_TEMP:-}/citizensdk" first second
+  [[ "${GITHUB_ACTIONS:-}" == true && "${RUNNER_ENVIRONMENT:-}" == github-hosted ]] \
+    || fail "跨平台最终包消费只允许一次性 GitHub Hosted Runner"
+  case "$platform:$(uname -s):$(uname -m)" in
+    Android:Linux:*|Android:Darwin:arm64|iOS:Darwin:arm64|LinuxARM:Linux:aarch64|LinuxAMD:Linux:x86_64|Windows:MINGW*:x86_64|Windows:MSYS*:x86_64) ;;
+    *) fail "Hosted 消费宿主与平台不一致" ;;
+  esac
+  [[ "${GMB_SOURCE_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || fail "Hosted 消费缺少准确源码提交"
+  if [[ "$platform" == Windows ]]; then central="$(cygpath -u "$RUNNER_TEMP")/citizensdk"; fi
+  assert_readonly_dependency_directory "$central" "Hosted Runner 根"
+  assert_readonly_dependency_directory "$sdk_dir" "Hosted 校验器源码"
+  case "$central/" in "$sdk_dir/"*) fail "Hosted 工作根位于源码内" ;; esac
+  case "$sdk_dir/" in "$central/"*) fail "Hosted 源码位于工作根内" ;; esac
+  for path in "$candidate" "$flutter" "$cache" "$work_dir" "$output_dir"; do
+    assert_readonly_dependency_directory "$path" "Hosted 输入目录"
+    assert_descendant_path "$central" "$path" "Hosted 输入目录"
+  done
+  for path in "$audit" "$hosted"; do
+    assert_descendant_path "$central" "$path" "Hosted 输入归档"
+    assert_readonly_dependency_directory "$(dirname "$path")" "Hosted 输入父目录"
+    [[ -f "$path" && ! -L "$path" ]] || fail "Hosted 输入归档不是普通文件"
+  done
+  local -a inputs=("$candidate" "$audit" "$hosted" "$flutter" "$cache" "$work_dir" "$output_dir")
+  for ((first=0; first<${#inputs[@]}; first++)); do
+    for ((second=first+1; second<${#inputs[@]}; second++)); do
+      case "${inputs[first]}/" in "${inputs[second]}/"*) fail "Hosted 输入互相交叠" ;; esac
+      case "${inputs[second]}/" in "${inputs[first]}/"*) fail "Hosted 输入互相交叠" ;; esac
+    done
+  done
+  # Windows/APFS 的路径别名必须按真实路径再次拒绝，不能只比较 Shell 文本。
+  local check_root="$central" item
+  local -a check_inputs=("${inputs[@]}")
+  if [[ "$platform" == Windows ]]; then
+    check_root="$(cygpath -m "$central")"
+    for ((first=0; first<${#check_inputs[@]}; first++)); do check_inputs[first]="$(cygpath -m "${check_inputs[first]}")"; done
+  fi
+  MSYS2_ARG_CONV_EXCL='*' node - "$check_root" "${check_inputs[@]}" <<'NODE' || fail "Hosted 输入真实路径漂移"
+const fs=require('fs'),path=require('path');
+const [root,...inputs]=process.argv.slice(2).map(value=>path.resolve(value));
+const real=fs.realpathSync.native(root);
+for(const input of inputs) {
+  if(fs.realpathSync.native(input)!==path.join(real,path.relative(root,input))) throw Error('Hosted input path alias');
+}
+NODE
+  [[ -n "$tool_path" && "$tool_path" != :* && "$tool_path" != *: && "$tool_path" != *::* ]] \
+    || fail "Hosted 工具 PATH 含空项"
+  local -a paths
+  IFS=: read -r -a paths <<<"$tool_path"
+  for path in "${paths[@]}"; do
+    assert_readonly_dependency_directory "$path" "Hosted 工具 PATH"
+    case "$work_dir/" in "$path/"*) fail "Hosted 工具 PATH 包含输出" ;; esac
+    case "$path/" in "$work_dir/"*) fail "Hosted 工具 PATH 来自输出" ;; esac
+  done
+}
+
+# 只由唯一发布器验真和展开同一 Hosted 字节；本阶段不调用 Cargo、安装件注入器
+# 或源码 Host 构建。测试来源保留在已验真的审计候选，发布包自身不可补入测试。
+build_hosted_consumer() (
+  hosted_preflight "$@"
+  local platform="$1" candidate="$2" audit="$3" hosted="$4" flutter="$5" cache="$6" tool_path="$7"
+  local root="$work_dir/$platform" package="$work_dir/$platform/package" version incremental_root
+  local source="$sdk_dir" candidate_native="$candidate" audit_native="$audit" hosted_native="$hosted" package_native="$package"
+  [[ ! -e "$root" && ! -L "$root" ]] || fail "Hosted 消费目录必须全新"
+  prepare_safe_directory "$work_dir" "$root" "Hosted 消费目录"
+  incremental_root="${CITIZENSDK_INCREMENTAL_ROOT:-$root/incremental}"
+  if [[ -n "${CITIZENSDK_INCREMENTAL_ROOT:-}" ]]; then
+    assert_safe_directory_path "${CI_INCREMENTAL_ROOT:-}" "Hosted CI 缓存根"
+    assert_safe_directory_path "$incremental_root" "Hosted CI 增量目录"
+    assert_descendant_path "$CI_INCREMENTAL_ROOT" "$incremental_root" "Hosted CI 增量目录"
+    [[ -d "$incremental_root" && ! -L "$incremental_root" ]] \
+      || fail "Hosted CI 增量目录必须由中央缓存准备"
+  else
+    prepare_safe_directory "$root" "$incremental_root" "Hosted Release 全量目录"
+  fi
+  if [[ "$platform" == Windows ]]; then
+    source="$(cygpath -m "$source")"; candidate_native="$(cygpath -m "$candidate")"
+    audit_native="$(cygpath -m "$audit")"; hosted_native="$(cygpath -m "$hosted")"; package_native="$(cygpath -m "$package")"
+  fi
+  version="$(MSYS2_ARG_CONV_EXCL='*' node --input-type=module - "$source" "$candidate_native" \
+    "$audit_native" "$hosted_native" "$package_native" <<'NODE'
+import {pathToFileURL} from 'node:url';
+import {join,resolve} from 'node:path';
+const [source,candidate,audit,hosted,output]=process.argv.slice(2).map(value=>resolve(value));
+const {verifyCitizenSdkHosted}=await import(pathToFileURL(join(source,'scripts/release.mjs')));
+const manifest=verifyCitizenSdkHosted({candidatePath:candidate,archivePath:audit,
+  hostedArchivePath:hosted,outputPath:output,expectedGitSha:process.env.GMB_SOURCE_SHA});
+process.stdout.write(manifest.software_version);
+NODE
+)" || fail "Hosted 唯一候选、审计归档或包字节验证失败"
+  export CITIZENSDK_FLUTTER_ROOT="$flutter" PUB_CACHE="$cache" PATH="$tool_path"
+  case "$platform" in
+    LinuxARM|LinuxAMD)
+      local prefix="$package/linux" build="$incremental_root/${platform,,}/cmake" state="$root/test-state"
+      prepare_safe_directory "$work_dir" "$state" "Hosted 原生测试状态"
+      prepare_safe_directory "$incremental_root" "$build" "Hosted CMake 增量目录"
+      chmod 0700 "$state"
+      # 候选已经逐字节验真。固定 checkout 测试源码使 CMake 能跨 CI run
+      # 复用对象；动态安装前缀仍只指向本轮唯一候选。Release 根始终全新。
+      cmake -S "$sdk_dir/linux/test" -B "$build" -DCMAKE_BUILD_TYPE=Release \
+        -DCITIZENSDK_CONSUMER_PREFIX="$prefix" -DCITIZENSDK_PLATFORM="$platform" \
+        -DCITIZENSDK_CONSUMER_VERSION="$version" -DCITIZENSDK_TEST_WORK_DIR="$state"
+      cmake --build "$build" --config Release --parallel --target citizen_sdk_c_consumer citizen_sdk_cpp_consumer
+      verify_linux_runtime_resolution "$build/citizen_sdk_c_consumer" "$prefix/lib/$platform"
+      verify_linux_runtime_resolution "$build/citizen_sdk_cpp_consumer" "$prefix/lib/$platform"
+      verify_linux_ctest_inventory "$(command -v ctest)" "$build" LinuxConsumer 2
+      ctest --test-dir "$build" --build-config Release -L '^LinuxConsumer$' --no-tests=error --output-on-failure
+      build_linux_flutter_consumer "$platform" "$root" "$prefix" "$(command -v cmake)" \
+        "$(command -v ctest)" "$(command -v readelf)" "$(command -v nm)" "$package" "$candidate"
+      ;;
+    Windows)
+      local prefix="$package/windows" build="$incremental_root/windows/cmake" state="$root/consumer-state"
+      prepare_safe_directory "$incremental_root" "$build" "Hosted CMake 增量目录"
+      MSYS2_ARG_CONV_EXCL='*' cmake -S "$(cygpath -m "$sdk_dir/windows/test")" \
+        -B "$(cygpath -m "$build")" -G 'Visual Studio 17 2022' -A x64 \
+        -DCITIZENSDK_CONSUMER_PREFIX="$(cygpath -m "$prefix")" -DCITIZENSDK_PLATFORM=Windows \
+        -DCITIZENSDK_CONSUMER_VERSION="$version" -DCITIZENSDK_TEST_WORK_DIR="$(cygpath -m "$state")" \
+        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE="$(cygpath -m "$build/release")" \
+        -DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE="$(cygpath -m "$build/release")" \
+        -DCMAKE_ARCHIVE_OUTPUT_DIRECTORY_RELEASE="$(cygpath -m "$build/release")"
+      MSYS2_ARG_CONV_EXCL='*' cmake --build "$(cygpath -m "$build")" --config Release
+      run_windows_consumers "$build" "$prefix" "$state" release
+      build_windows_flutter_consumer "$root" "$prefix" "$version" "$package" "$candidate"
+      ;;
+    Android|iOS) build_mobile_hosted_consumer "$platform" "$root" "$package" "$candidate" "$version" ;;
+  esac
+  echo "CitizenSDK $platform 最终 Hosted 包消费通过"
+)
+
+build_mobile_hosted_consumer() (
+  local platform="$1" root="$2" package="$3" candidate="$4" version="$5"
+  local runner="$root/consumer" flutter_root="$CITIZENSDK_FLUTTER_ROOT" dart_bin native_platform incremental_root
+  local -a flutter
+  dart_bin="$flutter_root/bin/cache/dart-sdk/bin/dart"
+  [[ -x "$dart_bin" ]] || fail "移动 Hosted 缺少已预装 Dart"
+  node - "$flutter_root" "$PUB_CACHE" <<'NODE' || fail "移动 Hosted Flutter 工具配置越出显式输入"
+const fs=require('fs'),path=require('path'),url=require('url');
+const [flutter,cache]=process.argv.slice(2);
+const config=path.join(flutter,'packages/flutter_tools/.dart_tool/package_config.json');
+for(const file of [config,path.join(flutter,'bin/cache/flutter_tools.snapshot'),path.join(flutter,'bin/cache/dart-sdk/bin/dart')]) {
+  if(!fs.lstatSync(file).isFile() || fs.realpathSync.native(file)!==file) throw Error('Mobile Hosted tool path alias');
+}
+const value=JSON.parse(fs.readFileSync(config,'utf8'));
+if(value.configVersion!==2 || !Array.isArray(value.packages) || value.packages.length===0) throw Error('Mobile Hosted tool configuration missing');
+for(const item of value.packages) {
+  const root=url.fileURLToPath(new URL(item.rootUri,url.pathToFileURL(config)));
+  const resolved=path.resolve(root);
+  if(![flutter,cache].some(parent=>resolved.startsWith(parent+path.sep)) || fs.realpathSync.native(resolved)!==resolved) {
+    throw Error('Mobile Hosted tool dependency outside explicit Flutter/Pub inputs');
+  }
+}
+NODE
+  flutter=("$dart_bin" "--packages=$flutter_root/packages/flutter_tools/.dart_tool/package_config.json"
+    "$flutter_root/bin/cache/flutter_tools.snapshot" --no-version-check --suppress-analytics)
+  case "$platform" in Android) native_platform=android ;; iOS) native_platform=ios ;; *) fail "未登记的移动 Hosted 平台" ;; esac
+  export FLUTTER_SUPPRESS_ANALYTICS=true
+  incremental_root="${CITIZENSDK_INCREMENTAL_ROOT:-$root/incremental}"
+  prepare_safe_directory "$incremental_root" "$incremental_root/$platform" "移动 Hosted 增量目录"
+  unset FLUTTER_TOOL_ARGS FLUTTER_ANALYTICS_LOG_FILE FLUTTER_STORAGE_BASE_URL \
+    PUB_HOSTED_URL DART_VM_OPTIONS DART_VM_FLAGS FLUTTER_ENGINE FLUTTER_ENGINE_SRC_PATH \
+    CITIZENSDK_ANDROID_CORE_DIR
+  "${flutter[@]}" create --offline --no-pub --platforms="$native_platform" \
+    --project-name=citizensdk_consumer --org=org.citizen "$runner"
+  node - "$runner" "$candidate" "$version" <<'NODE'
+const fs=require('fs'),path=require('path');
+const [runner,candidate,version]=process.argv.slice(2);
+fs.writeFileSync(path.join(runner,'pubspec.yaml'),`name: citizensdk_consumer\npublish_to: none\nversion: ${version}\nenvironment:\n  sdk: ">=3.8.0 <4.0.0"\ndependencies:\n  flutter:\n    sdk: flutter\n  citizen_sdk:\n    path: ../package\nflutter:\n  uses-material-design: true\n`);
+fs.copyFileSync(path.join(candidate,'pubspec.lock'),path.join(runner,'pubspec.lock'));
+// 编译入口只引用正式公开 API，不引入产品业务或私有实现；没有设备运行就不宣称运行验收。
+fs.writeFileSync(path.join(runner,'lib/main.dart'),`import 'package:flutter/widgets.dart';\nimport 'package:citizen_sdk/citizen_sdk.dart';\nFuture<void> main() async { WidgetsFlutterBinding.ensureInitialized(); final sdk = await CitizenSdk.open(); await sdk.close(); }\n`);
+const project=path.join(runner,'ios/Runner.xcodeproj/project.pbxproj');
+if(fs.existsSync(project)) {
+  const text=fs.readFileSync(project,'utf8');
+  if(!text.includes('IPHONEOS_DEPLOYMENT_TARGET = ')) throw Error('iOS deployment setting missing');
+  fs.writeFileSync(project,text.replace(/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/g,'IPHONEOS_DEPLOYMENT_TARGET = 16.0;'));
+  const podfile=path.join(runner,'ios/Podfile');
+  if(fs.existsSync(podfile)) {
+    const pods=fs.readFileSync(podfile,'utf8');
+    if(!/^#?\s*platform :ios, '[0-9.]+'/m.test(pods)) throw Error('Official iOS Podfile platform setting missing');
+    fs.writeFileSync(podfile,pods.replace(/^#?\s*platform :ios, '[0-9.]+'/m,"platform :ios, '16.0'"));
+  }
+}
+const gradle=path.join(runner,'android/app/build.gradle.kts');
+if(fs.existsSync(gradle)) {
+  const text=fs.readFileSync(gradle,'utf8');
+  if(!text.includes('minSdk = flutter.minSdkVersion')) throw Error('Official Android minimum SDK setting missing');
+  // SDK 运行件已经由唯一构建器 strip；消费宿主不得再改写同包二进制。
+  fs.writeFileSync(gradle,text.replace('minSdk = flutter.minSdkVersion','minSdk = 24')+
+    '\nandroid { packaging { jniLibs { keepDebugSymbols += setOf("**/libcitizensdk.so", "**/libcitizensdk_jni.so") } } }\n');
+}
+NODE
+  (cd "$runner" && "${flutter[@]}" pub get --offline)
+  if [[ "$platform" == Android ]]; then
+    export CITIZENSDK_ANDROID_BUILD_DIR="$root/android-build"
+    export GRADLE_USER_HOME="$incremental_root/android/gradle-home"
+    mkdir -p "$GRADLE_USER_HOME"
+    (cd "$runner" && "${flutter[@]}" build apk --release --no-pub --target-platform=android-arm64)
+    local apk="$runner/build/app/outputs/flutter-apk/app-release.apk" library
+    [[ -f "$apk" && ! -L "$apk" ]] || fail "Android Hosted Release APK 缺失"
+    for library in libcitizensdk.so libcitizensdk_jni.so; do
+      cmp -s <(unzip -p "$apk" "lib/arm64-v8a/$library") "$package/android/src/main/jniLibs/arm64-v8a/$library" \
+        || fail "Android 最终 APK 的 SDK 库字节不是同一 Hosted 包"
+    done
+  else
+    (cd "$runner" && "${flutter[@]}" build ios --release --no-pub --no-codesign)
+    # iOS Simulator 不以 Debug Flutter 模式代替 Release。直接编译、链接公开 Swift
+    # 绑定与包内 Simulator slice；没有启动模拟器，因此这里只记录链接验收。
+    local framework simulator_sdk swift_source="$root/consumer.swift"
+    framework="$(resolve_xcframework_framework_slice "$package/darwin/CitizenSDK.xcframework" CitizenSDK ios simulator)"
+    simulator_sdk="$(xcrun --sdk iphonesimulator --show-sdk-path)"
+    printf '%s\n' 'import CitizenSDK' 'public func citizenSdkConsumer() throws { let sdk = try CitizenSDK.open(); try sdk.close() }' >"$swift_source"
+    xcrun --sdk iphonesimulator swiftc "$swift_source" -emit-library -O -warnings-as-errors \
+      -sdk "$simulator_sdk" -target arm64-apple-ios16.0-simulator \
+      -module-cache-path "$incremental_root/ios/module-cache" \
+      -F "$(dirname "$framework")" -framework CitizenSDK -o "$root/consumer.dylib"
+    [[ "$(xcrun lipo -archs "$root/consumer.dylib")" == arm64 ]] || fail "iOS Simulator 消费者架构漂移"
+    xcrun otool -L "$root/consumer.dylib" | grep -Fq '@rpath/CitizenSDK.framework/CitizenSDK' \
+      || fail "iOS Simulator 未链接最终包的 CitizenSDK"
+  fi
+  echo "CitizenSDK $platform 最终包宿主编译链接通过；未进行真机运行"
+)
+
 case "$target_name" in
   android) build_android ;;
   apple) build_apple ;;
   macOS) shift; build_macos_flutter_consumer "$@" ;;
-  LinuxARM) build_linux LinuxARM ;;
-  LinuxAMD) build_linux LinuxAMD ;;
-  Windows) build_windows ;;
+  Android|iOS) build_hosted_consumer "$@" ;;
+  LinuxARM|LinuxAMD)
+    if [[ "$hosted_consumer" == true ]]; then build_hosted_consumer "$@"; else build_linux "$target_name"; fi ;;
+  Windows)
+    if [[ "$hosted_consumer" == true ]]; then build_hosted_consumer "$@"; else build_windows; fi ;;
   host) build_host ;;
   abi-host) build_abi_host ;;
   apple-tests) build_apple_tests ;;
@@ -3674,5 +3950,5 @@ case "$target_name" in
       "$output_dir/$CITIZENSDK_TEST_OUTPUT_RELATIVE" \
       "CitizenSDK 安全写路径测试目标"
     ;;
-  *) fail "用法：$0 [android|apple|macOS candidate audit hosted flutter pub-cache tool-path|LinuxARM|LinuxAMD|Windows|apple-tests|host|abi-host|all|verify]" ;;
+  *) fail "用法：$0 android|apple|LinuxARM|LinuxAMD|Windows|apple-tests|host|abi-host|all|verify；最终包消费：$0 Android|iOS|macOS|LinuxARM|LinuxAMD|Windows candidate audit hosted flutter pub-cache tool-path" ;;
 esac

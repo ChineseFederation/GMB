@@ -33,7 +33,7 @@ final class CitizenSDKSecretVaultTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CitizenSDKSecureStore(directory: directory)
         defer { store.close() }
-        let value = CitizenSDKSecretVault(secureStore: store).availability()
+        let value = try CitizenSDKSecretVault(secureStore: store, applicationID: "org.example.vault").availability()
         XCTAssertTrue([.available, .noStrongUserAuthentication, .unsupported, .unavailable].contains(value))
     }
 
@@ -47,7 +47,7 @@ final class CitizenSDKSecretVaultTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try CitizenSDKSecureStore(directory: directory)
         defer { store.close() }
-        XCTAssertEqual(CitizenSDKSecretVault(secureStore: store).availability(), .unsupported)
+        XCTAssertEqual(try CitizenSDKSecretVault(secureStore: store, applicationID: "org.example.vault").availability(), .unsupported)
         #else
         throw XCTSkip("Hardware vault behavior is covered by the signed device fixture")
         #endif

@@ -58,7 +58,7 @@ pub(crate) struct DecodedFinalizedTransfer {
     pub(crate) to_account_id: AccountId32,
     pub(crate) amount_fen: u128,
     pub(crate) event_record_index: u32,
-    pub(crate) extrinsic_index: u32,
+    pub(crate) extrinsic_index: Option<u32>,
     pub(crate) source_pallet: &'static str,
     pub(crate) remark: Option<String>,
     /// 仅用于把已验证 Runtime bytes 交给 finalized 历史专用构造器；不得作为 call 输入。
@@ -143,14 +143,25 @@ pub(crate) fn decode_finalized_events(
             continue;
         }
 
-        let Phase::ApplyExtrinsic(extrinsic_index) = event.phase() else {
-            return Err(EngineError::InvalidEvents(format!(
-                "{}::{} 必须属于 Phase::ApplyExtrinsic",
-                event.pallet_name(),
-                event.variant_name()
-            )));
+        // Balances 可以由 on_initialize/on_finalize 产生，不得把这些合法流水
+        // 错绑到某个 extrinsic；执行终态和带备注调用仍必须有准确的调用 index。
+        let extrinsic_index = match event.phase() {
+            Phase::ApplyExtrinsic(index) => Some(index),
+            Phase::Initialization | Phase::Finalization if event.pallet_name() == "Balances" => {
+                None
+            }
+            _ => {
+                return Err(EngineError::InvalidEvents(format!(
+                    "{}::{} 必须属于 Phase::ApplyExtrinsic",
+                    event.pallet_name(),
+                    event.variant_name()
+                )))
+            }
         };
         if relevant_outcome {
+            let extrinsic_index = extrinsic_index.ok_or_else(|| {
+                EngineError::InvalidEvents("System 终态缺少 extrinsic index".to_owned())
+            })?;
             if outcome_indices.insert(extrinsic_index, ()).is_some() {
                 return Err(EngineError::InvalidEvents(format!(
                     "extrinsic index {extrinsic_index} 存在多个 System 执行终态"
@@ -207,7 +218,7 @@ pub(crate) fn decode_finalized_events(
 fn decode_balances_transfer(
     fields: &Composite<u32>,
     event_record_index: u32,
-    extrinsic_index: u32,
+    extrinsic_index: Option<u32>,
 ) -> Result<DecodedFinalizedTransfer, EngineError> {
     let values = require_named_fields(fields, &["from", "to", "amount"], "Balances::Transfer")?;
     let from_account_id = decode_account_id(values[0], "Balances::Transfer.from")?;
@@ -229,7 +240,7 @@ fn decode_balances_transfer(
 fn decode_transfer_with_remark(
     fields: &Composite<u32>,
     event_record_index: u32,
-    extrinsic_index: u32,
+    extrinsic_index: Option<u32>,
 ) -> Result<DecodedFinalizedTransfer, EngineError> {
     let values = require_named_fields(
         fields,

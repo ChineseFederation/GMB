@@ -278,7 +278,12 @@ internal enum CitizenSdkFlutterCodec {
         return output
     }
     private static func bytes(_ raw: Any?, maximum: Int) throws -> Data {
-        guard let value = raw as? FlutterStandardTypedData, value.data.count <= maximum else {
+        guard let value = raw as? FlutterStandardTypedData,
+              // FlutterStandardDataTypeUInt8 is the first NS_ENUM case.  Compare
+              // the raw value because Flutter SDK releases have exposed
+              // different Swift spellings for this Objective-C enum member.
+              value.type.rawValue == 0,
+              value.data.count <= maximum else {
             throw failure(.invalidArgument, "Invalid byte tuple")
         }
         return value.data

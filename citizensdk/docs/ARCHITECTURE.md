@@ -2,6 +2,12 @@
 
 ## 单一产品原则
 
+第 12 步 P1 加固不改变分层：交易原授权与 Pending 原子持久化、恢复协调及 hook 流水
+语义归 Engine/Contracts；有界完成槽位归 FFI；生物识别线程、应用数据命名空间和 SQLite
+DMS 归平台 Provider。CI/Release 继续使用中央 citizensdk 唯一流程，不建立第二套构建器。
+P2 加固同时固定跨进程 Vault 临界区、持久 revision 解码、准确 capability 原因、唯一交易
+hash 名称以及绑定层事件/字节类型合同；这些修复不改变分层或新增业务能力。
+
 CitizenSDK 是一个产品、一个版本和一条分发链。轻节点、钱包和 signer 是内部能力层，
 不拆成可独立发布的第二套 SDK。产品级唯一 C ABI 已在第 3 步建立；最终 Flutter/Dart、
 Swift、Kotlin/Java 与 C/C++ 都只通过该 ABI 使用 Rust Engine。
@@ -326,9 +332,8 @@ Dart 生成的 `.dart_tool`
 包实现成两个源码真源。Release 还会验证指定
 成功 CI 的 workflow、显示标题、产品目标、成功状态与准确 source SHA，不读取、下载或比较
 CI 资产，并从同一提交重新构建；不以跨 Runner 归档字节必然一致作为发布成立条件。
-当前 TataConsole Flow 尚未同步 Apple 三 slice、单一 XCFramework 与本步测试闭集，
-所以本步没有运行远程 CI、正式 Release 或 Hosted 上传；现有 Flow 的集成留给
-任务卡后续统一流程/控制台步骤。
+TataConsole Flow 已同步 Apple 三个技术 slice、单一 XCFramework 与本步测试闭集；
+流程接线不等于远程 CI、正式 Release 或 Hosted 上传已经实际运行，运行结果仍以对应记录为准。
 
 测试执行合同要求根 Flutter 包一次发现并执行全部根测试及已经迁入的 smoldot 测试，不再把
 历史的 230 项与 51 项当成两套独立门禁；统一使用 `flutter test --timeout=2m`，以覆盖其中

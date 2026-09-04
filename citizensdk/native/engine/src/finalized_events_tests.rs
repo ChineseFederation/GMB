@@ -35,7 +35,7 @@ fn production_fixture_decodes_exact_transfers_and_both_system_outcomes() {
     assert_eq!(decoded.transfers().len(), 2);
     let balances = &decoded.transfers()[0];
     assert_eq!(balances.event_record_index, 0);
-    assert_eq!(balances.extrinsic_index, 0);
+    assert_eq!(balances.extrinsic_index, Some(0));
     assert_eq!(balances.source_pallet, "Balances");
     assert_eq!(balances.from_account_id.as_bytes(), &[0x11; 32]);
     assert_eq!(balances.to_account_id.as_bytes(), &[0x22; 32]);
@@ -44,7 +44,7 @@ fn production_fixture_decodes_exact_transfers_and_both_system_outcomes() {
 
     let business = &decoded.transfers()[1];
     assert_eq!(business.event_record_index, 1);
-    assert_eq!(business.extrinsic_index, 0);
+    assert_eq!(business.extrinsic_index, Some(0));
     assert_eq!(business.source_pallet, "OnchainTransaction");
     assert_eq!(business.from_account_id, balances.from_account_id);
     assert_eq!(business.to_account_id, balances.to_account_id);
@@ -213,7 +213,7 @@ fn runtime_remark_accepts_99_raw_invalid_bytes_but_rejects_100() {
         transfer.amount_fen,
         block,
         transfer.event_record_index,
-        Some(transfer.extrinsic_index),
+        transfer.extrinsic_index,
         transfer.source_pallet,
         Some(&accepted_raw),
     )
@@ -250,7 +250,7 @@ fn runtime_remark_accepts_99_raw_invalid_bytes_but_rejects_100() {
             transfer.amount_fen,
             block,
             transfer.event_record_index,
-            Some(transfer.extrinsic_index),
+            transfer.extrinsic_index,
             transfer.source_pallet,
             Some(&rejected_raw),
         )
@@ -285,6 +285,44 @@ fn system_only_event_never_slides_unknown_bytes_into_a_transfer() {
         decoded.outcome(0),
         Some(DecodedSystemOutcome::Success)
     ));
+}
+
+#[test]
+fn initialization_and_finalization_balances_preserve_absent_extrinsic_index() {
+    let block = finalized_block(0x96, 96);
+    let context = runtime(block, METADATA_HEX);
+    let events = Events::<SubstrateConfig>::decode_from(
+        hex_bytes(EVENTS_HEX),
+        decode_metadata_strict(context.metadata())
+            .unwrap_or_else(|error| panic!("测试夹具失败: {error}")),
+    );
+    let records: Vec<_> = events.iter().map(Result::unwrap).collect();
+    // SCALE Phase::ApplyExtrinsic 占 5 字节；其它两个官方 phase 只占一字节。
+    let mut bytes = Compact(6_u32).encode();
+    for phase in [Phase::Initialization, Phase::Finalization] {
+        bytes.extend(phase.encode());
+        bytes.extend_from_slice(&records[0].bytes()[5..]);
+    }
+    for record in &records {
+        bytes.extend_from_slice(record.bytes());
+    }
+    let decoded = decode_finalized_events(block, &context, &bytes)
+        .unwrap_or_else(|error| panic!("测试夹具失败: {error}"));
+    assert_eq!(decoded.transfers().len(), 4);
+    assert_eq!(decoded.transfers()[0].extrinsic_index, None);
+    assert_eq!(decoded.transfers()[1].extrinsic_index, None);
+    assert_eq!(decoded.transfers()[2].extrinsic_index, Some(0));
+    assert!(matches!(
+        decoded.outcome(0),
+        Some(DecodedSystemOutcome::Success)
+    ));
+    // 没有 index 的业务事件、成功和失败都不能用于确定执行结果。
+    for record in &records[1..] {
+        let mut invalid = Compact(1_u32).encode();
+        invalid.extend(Phase::Initialization.encode());
+        invalid.extend_from_slice(&record.bytes()[5..]);
+        assert!(decode_finalized_events(block, &context, &invalid).is_err());
+    }
 }
 
 fn runtime(block: FinalizedBlockRef, metadata_hex: &str) -> RuntimeContext {

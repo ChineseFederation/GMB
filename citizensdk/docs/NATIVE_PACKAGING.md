@@ -1,5 +1,38 @@
 # CitizenSDK 原生产物与候选打包
 
+## SDK CI/Release 依赖接线
+
+固定 Flutter 提交先引导对应 Dart，Pub 预加载显式使用其实际 dart/dart.exe。中央预加载
+仍限定登记 task 的缓存目录；SDK 仅把原锁中的官方包和已核验摘要投影到本作业缓存，
+不复制凭据、任意缓存条目或符号链接。CI 沿用统一增量缓存，Release 使用本次全新
+CARGO_HOME 和 target，CARGO_INCREMENTAL=0；Linux fetch 与断网容器使用同一个已挂载根。
+Release 来源参数是 `--pipeline gmb.citizensdk.sdk.ci`，不是 workflow 文件名；独立核对
+准确 `.github/workflows/repository.yml`、成功状态、显示标题、冻结 SHA 与源码版本。
+
+## 同源汇总与同包消费
+
+中央产品流程采用五宿主构建 → macOS 汇总 → 五宿主同包消费，Release 再接正式发布阶段。
+CI 使用统一增量缓存：原生阶段复用 Cargo，中间消费者复用 Pub、Gradle、CMake 对象与 Apple
+module cache；最终库、消费者程序、证据和钱包测试状态先清除且不入缓存。Release 只复用已
+验证官方工具原件，原生件和消费者均在本轮全新根中全量重建，不取 CI 编译件。
+Apple 作业同时覆盖 iOS 与 macOS，LinuxARM、LinuxAMD 始终是两个独立原生作业。
+
+阶段 0 的 USTAR 包携带 `phase0.json`，绑定 `source_sha`、`software_version`、`run_id`、
+`run_attempt`、`job`、`platforms` 和逐文件摘要；五份证明必须来自本次冻结运行。
+汇总使用标准归档解析器，先检查闭集再写普通文件，最后按本 SDK 发布器导出的唯一
+Apple 链接合同重建五条 framework 内部链接。任何缺项、混版、覆盖、硬链接或路径越界失败。
+完整候选和 Hosted 字节只由 `scripts/release.mjs` 生成/验真，不存在第二份打包算法。
+
+最终消费者参数统一为：
+
+    scripts/build-native.sh <Android|iOS|macOS|LinuxARM|LinuxAMD|Windows> \
+      <candidate> <audit.tgz> <hosted.tar.gz> <flutter> <pub-cache> <tool-path>
+
+输入位于调用方准备的互斥工作路径。消费者从 Hosted 包加载正式运行件，测试源码只读对应
+审计候选，不往 Hosted 补测试，也不重新构建 Core。桌面运行公开消费者；Android 核对最终
+ARM64 Release APK 的两份 SDK 库与 Hosted 字节相同；iOS 构建 device Release 宿主和
+Simulator ARM64 Swift 链接。后两项不声称真机运行，也不要求上传应用商店签名凭据。
+
 ## 静态依赖准备与证据（第 10.5 步）
 
 中央唯一来源为 TataConsole 的 flows/gmb/shared/dependencies.json 内
@@ -213,7 +246,7 @@ CMake 的 Config 前缀、完整导入目标与 Release 属性按官方生成指
 已经得到完整依赖溯源。合成 ELF 测试仅证明这些检查有效，不证明平台执行或 TPM 功能。
 
 本机 Linux 构建与测试状态必须写入
-`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下的任务独占工作目录；GitHub runner 使用统一
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK` 下的任务独占工作目录；GitHub runner 使用统一
 工作流的 checkout 外独占目录，不照搬本机绝对路径。第 7.1 步只固定源码
 和 Release 源文件反向闭集；上述 Linux 安装、ELF、GLIBC、TPM 和两种机器运行门禁尚未执行，
 第 7.4 步候选 manifest 合同已同步为 Android、iOS、macOS、LinuxARM、LinuxAMD；这是源码
@@ -270,8 +303,8 @@ iOS 两种变体、XCFramework 其他位置和候选其他目录不允许任何�
 
 ## 本机 TataConsole
 
-CitizenSDK 的永久最终容器为 `/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，
-永久工作容器为 `/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK`。
+CitizenSDK 的永久最终容器为 `/Users/rhett/TATA/target/GMB/citizensdk/SDK`，
+永久工作容器为 `/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK`。
 唯一 `release.mjs` 对 native 输入、候选输出和归档路径只接受上述两根的严格后代；拒绝
 永久根自身、旧根、相邻仓库/产品/平台、伪前缀、非规范路径及既存链接。只核验本次命中的
 根存在且为普通目录，不要求未使用的另一个根存在。GitHub 的隔离路径分支保持不变。
@@ -409,13 +442,14 @@ Flutter SDK 与 `polkadart_keyring`；legacy/差分依赖是 dev-only，不进�
 `linux/CMakeLists.txt` 与 `windows/CMakeLists.txt` 已统一冻结为 `1.0.0`。发布器要求五者、请求软件版本及候选 manifest
 完全一致；版本升级必须先形成新的
 源码提交，不能只向 Release 输入另一个版本。本步骤不执行 Hosted 上传，在首次发布完成前
-不得宣称已经可由 `citizen_sdk: ^1.0.0` 获取。不设独立发布按钮，不接公民网下载，也不更新
+不得宣称已经可由 `citizen_sdk: ^1.0.0` 获取。正式发布由 TataConsole 的 SDK 发布按钮触发；
+不接公民网下载，也不更新
 CitizenServe/CitizenWeb/Cloudflare 下载指针。Android、iOS、macOS、Linux 与 Windows 源码投影均使用同一
 产品 ABI。此前已完成 Android AAR、Apple 单一 XCFramework、本机 Apple 编译、macOS XCTest
 和最终 smoke；本机无
 Simulator runtime 和真实 Apple 移动设备，因此不声称 iOS XCTest 已运行或真机硬件金库
-已验收。当前 TataConsole Flow 已接阶段 0 原生入口，完整候选闭集汇总尚待下一步，也未运行远程 CI、正式 Release、
-Hosted 上传或 Git。
+已验收。当前 TataConsole Flow 已接阶段 0 原生入口、完整候选闭集汇总、同包消费与正式发布阶段，
+但尚未运行的远程 CI、正式 Release、Hosted 上传或 Git 不能记为通过。
 
 Linux 第 7.1 步源码已进入 GitHub 审计候选的受控源闭集，第 7.2 步已完成 Flutter adapter 源码，
 第 7.4 步已把 `.pubignore`、pubspec、默认公开入口、manifest 与候选投影原子同步。正式分发
@@ -521,7 +555,7 @@ Package.swift。Flutter 的 Xcode backend 会再次调用 bin/dart、bin/flutter
 来源、状态隔离或失败门禁；第 9.2 步本机开发范围可收尾，但不代表远程验收或发布完成。
 
 第 10.3 步的目录预检由同一构建器按执行环境选择：本机固定
-`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK/citizensdk`；当
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK/citizensdk`；当
 `GITHUB_ACTIONS=true` 时固定 `RUNNER_TEMP/citizensdk`，必须提供 GitHub 官方
 `RUNNER_TEMP`、`GITHUB_WORKSPACE`，且 SDK 来源是该 checkout 的严格子目录。
 受控根与 checkout/SDK 源树在任一方向都不得交叠。根、输入目录和工作/输出容器须预先存在，

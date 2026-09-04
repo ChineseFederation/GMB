@@ -4,6 +4,16 @@ import XCTest
 private final class CitizenSDKWalletRegistryProbe: @unchecked Sendable { }
 
 final class CitizenSDKWalletFlowTests: XCTestCase {
+    func testOptionalPasswordUsesSameValidationForBothApplePresenters() {
+        for request in [CitizenSDKWalletFlowRequest.create(wordCount: 12), .importWallet, .addAccounts(indices: [1])] {
+            XCTAssertNoThrow(try citizenSDKValidateWalletPassword("", confirmation: nil, request: request))
+            XCTAssertNoThrow(try citizenSDKValidateWalletPassword("", confirmation: "", request: request))
+        }
+        XCTAssertThrowsError(try citizenSDKValidateWalletPassword("", confirmation: "x", request: .create(wordCount: 12)))
+        XCTAssertThrowsError(try citizenSDKValidateWalletPassword("x", confirmation: nil, request: .create(wordCount: 24)))
+        XCTAssertNoThrow(try citizenSDKValidateWalletPassword("x", confirmation: "x", request: .create(wordCount: 24)))
+    }
+
     func testRequestValidationRunsBeforePresentation() {
         XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 12)))
         XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 24)))

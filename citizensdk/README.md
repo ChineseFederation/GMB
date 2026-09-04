@@ -1,5 +1,9 @@
 # 公民SDK（CitizenSDK）
 
+当前未发布版本已补充未决交易原授权恢复、有界完成事件预留、Android 关闭/认证边界、
+Apple 宿主数据隔离及 Linux SHM 恢复。恢复沿用同一个高层转账入口，不新增业务 API。
+本机测试不等于跨平台硬件或正式发布验收，准确结果与未完成项以任务卡为准。
+
 CitizenSDK 是 GMB 根目录下的独立公民链客户端产品，向宿主应用提供同一套公民链轻节点、
 无根热钱包、sr25519 本地签名和链上交易能力。源码唯一目录是
 `/Users/rhett/GMB/citizensdk`，Dart 包名为 `citizen_sdk`，产品 ID 为 `citizensdk`。
@@ -29,6 +33,17 @@ await sdk.close();
 
 `open()` 只创建 session，不会隐式启动轻节点；若 session 已处于 `running`，调用 `close()` 前
 必须先成功 `stop()`，以完成 checkpoint 和有序停止。
+
+## 完整包验证与分发
+
+CI 使用各平台增量构建，再把同一源码、版本和运行的原生件汇总为一份完整 SDK，最后由
+各平台消费同一份 Hosted 包。Release 全量重建同样的闭包，全部验收通过后才形成一次
+GitHub Release；正式资产仍为 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`。
+pub.dev 上传继续通过塔塔控制台的 SDK 发布按钮，不在 GitHub 工作流中保存上传凭据。
+
+最终包检查包括桌面公开消费者运行、Android ARM64 Release APK 的双库字节核对，以及
+iOS device Release 宿主和 Simulator ARM64 Swift 链接。移动端构建通过不等于真机验证；
+源码中的流程定义也不等于已经发布成功，实际执行结果以对应 CI/Release 记录为准。
 
 Rust 路径已经建立 `native/contracts`、`native/engine`、真实
 `native/smoldot/provider` 和产品级唯一 `native/ffi`。根 `include/citizensdk.h` 只公开
@@ -273,8 +288,8 @@ CitizenSDK 最终统一流程合同使用 `公民SDK · CI · SDK` 与
 成功状态和准确 `source_sha`，不读取、下载或比较 CI 资产；随后从同一源码提交重新执行依赖
 检查、测试、原生构建和候选生成。这是独立重建与重新验证，不把不同 Runner 的归档字节
 天然相同作为前提。
-第 10.6 步已将既有原生入口接入 TataConsole CI 阶段 0；尚未运行远程 CI 或正式 Release。
-完整候选汇总与同包消费仍待后续阶段，不把阶段 0 作业成功当作完整 SDK 分发验收。
+TataConsole 现已接通五宿主原生阶段、同源汇总、五宿主同包消费和 Release 发布阶段；
+尚未运行的远程 CI 或正式 Release 仍不能写成通过，单个阶段成功也不能冒充完整 SDK 验收。
 
 根包已消除本地 `path`/`git` 依赖，目标 Hosted 依赖形式固定为
 `citizen_sdk: ^1.0.0`。统一 CI 与 Release 的目标合同是在 Android/Apple/Linux/Windows 同版原生投影注入唯一正式候选之后执行官方
@@ -321,11 +336,12 @@ TPM2-TSS 4.2.0，以及 Windows 的 SQLite 3.53.4。中央既有依赖入口负�
 保留。只完成本机源码、格式和拒绝路径验证，尚未运行真实 Linux/Windows 编译或完整矩阵。
 第 10.6 步已接入 Action/remote-jobs 的五宿主阶段 0：Android、共享 iOS/macOS 的 Apple、
 LinuxARM、LinuxAMD、Windows，仍只有 `gmb.citizensdk.sdk.ci` 一条 SDK 路由。
-各作业复用统一 CI 增量缓存，只缓存 Cargo/Pub 中间状态；最终库、证据及安装现场不缓存。
+各作业复用统一 CI 增量缓存，缓存 Cargo/Pub 及消费者 Gradle/CMake/Apple module 中间状态；
+最终库、消费者程序、证据及安装现场不缓存。
 官方工具原件复用中央摘要对象库，Linux 使用固定 Debian 用户态保持 GLIBC 2.31；
 不改 SDK 构建器或产品功能。阶段件绑定 run/attempt、源码 SHA 和 SDK version，不能跨轮拼包。
-阶段 1 唯一候选/审计、阶段 2 同包消费者及 Release 多宿主编排尚未接完；本机受控测试
-不代表平台真实编译、硬件金库或发布验收。Linux 独立权限策略的实际加载仍须确认。
+阶段 1 唯一候选/审计、阶段 2 同包消费者及 Release 多宿主编排已经接线；本机受控测试
+仍不代表平台真实编译、硬件金库或发布验收。Linux 独立权限策略的实际加载仍须远端确认。
 
 GitHub Release 继续生成 `citizensdk.tgz`、`citizensdk-release.json`、`SHA256SUMS`，其中
 tgz 候选合同保留完整源码、测试、锁文件、文档与 Android/iOS/macOS 原生投影，并纳入 Linux
@@ -338,12 +354,12 @@ Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 
 输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 `arm64-v8a` SO。两种分发读取
 同一源码提交和同一注入后候选。Linux Hosted 精确保留 38 项：26 项安装件及 12 项插件输入，
 排除 Host 私有源码、测试及构建模板，不在应用中重编 Host/Core。Windows Hosted 同样精确保留
-33 项：21 项安装件及 12 项插件输入。CitizenSDK 不设置独立“发布”按钮，也不接入
-公民网下载。
+33 项：21 项安装件及 12 项插件输入。CitizenSDK 使用 TataConsole 的 SDK 发布按钮执行
+正式发布流程；不接入公民网下载。
 
 本机 CitizenSDK 最终产物容器固定为
-`/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK`，工作状态容器固定为
-`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK`。唯一发布器只接受两者的严格
+`/Users/rhett/TATA/target/GMB/citizensdk/SDK`，工作状态容器固定为
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK`。唯一发布器只接受两者的严格
 子路径，不允许把永久容器本身作为写入目标；拒绝旧路径、越界、穿越和链接。
 第 9.1 步只补发布器的 Hosted 归档验真，不修改原生构建器、控制台事务或 GitHub 流程。
 本地打包快照由准确的已提交 Git `HEAD` 导出；
@@ -356,7 +372,7 @@ Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 
 第 7.1 步没有运行 Linux 编译与 CTest、Dart/Flutter/Cargo 测试、Git、远程 CI、Release 或
 Hosted 上传，也没有生成任何 Linux 原生产物；只运行获准的 Node Release 来源合同测试与
 脚本语法检查，不能据此声称 Linux 运行验证通过。后续本机 Linux 验证状态只能写入
-`/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；GitHub runner 使用统一工作流
+`/Users/rhett/TATA/target/.work/GMB/citizensdk/SDK` 下的任务独占目录；GitHub runner 使用统一工作流
 的 checkout 外独占目录，不照搬本机绝对路径。Linux CTest 配置必须用 `CITIZENSDK_TEST_WORK_DIR`
 显式注入对应工作区中已存在、有效 UID 所有且权限
 为 `0700` 的绝对工作根；测试不回退到 `/tmp`、当前目录或用户目录。

@@ -175,7 +175,7 @@
         },
         {
           "path": "src/platform/default.rs",
-          "sha256": "e529306ba8713b1f9afae25f60c87365037ad9073a7b1c9deb9c8de147b04aa9"
+          "sha256": "4a939115b8500ccd1ad219950143301acdca7683db4acfbaec7b524b9d06a2fd"
         },
         {
           "path": "src/platform/with_prefix.rs",
@@ -319,7 +319,7 @@
         },
         {
           "path": "src/chain_spec/tests.rs",
-          "sha256": "56e14104dc995106f89ab779e8cfc616e763a69326ac1cbe814acd51dfcc4ae7"
+          "sha256": "ddf724df4365695304bb81f0275c7229354742702ed42f5226a47494e7bc7de0"
         },
         {
           "path": "src/chain_spec/tests/example.json",
@@ -727,7 +727,7 @@
         },
         {
           "path": "src/sync/warp_sync.rs",
-          "sha256": "61a9c6d4c594dad918fb6c13b7661e10664ebce9353a2682e0822dc3b038178e"
+          "sha256": "948cb43b4b943288a603e432221ca18611d916ceece00e38ced2c2b8d0fe871d"
         },
         {
           "path": "src/transactions.rs",

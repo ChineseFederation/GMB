@@ -72,6 +72,19 @@ final class CitizenSDKFlutterCodecTests: XCTestCase {
         }
     }
 
+    func testSigningBytesRejectNonUInt8TypedData() throws {
+        let account = "0x" + String(repeating: "11", count: 32)
+        let prefix: [Any?] = [NSNumber(value: 1), "session", NSNumber(value: 1), account]
+        XCTAssertNoThrow(try CitizenSdkFlutterCodec.decode(
+            method: "signWalletPayload",
+            arguments: prefix + [FlutterStandardTypedData(bytes: Data([1, 2, 3, 4]))]
+        ))
+        XCTAssertThrowsError(try CitizenSdkFlutterCodec.decode(
+            method: "signWalletPayload",
+            arguments: prefix + [FlutterStandardTypedData(int32: Data([1, 0, 0, 0]))]
+        ))
+    }
+
     func testU128FailurePreservesSessionAndSequence() {
         let hash = "0x" + String(repeating: "00", count: 32)
         XCTAssertThrowsError(try CitizenSdkFlutterCodec.decode(

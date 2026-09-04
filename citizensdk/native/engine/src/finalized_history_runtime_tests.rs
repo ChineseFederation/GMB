@@ -501,6 +501,13 @@ fn same_index_outcome_transfer_dedupe_and_replay_are_atomic() {
                 receiver,
                 123_456,
                 "CitizenSDK production Runtime fixture",
+                signed.clone(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -541,6 +548,87 @@ fn same_index_outcome_transfer_dedupe_and_replay_are_atomic() {
 }
 
 #[test]
+fn mixed_phases_commit_pending_outcome_and_all_hook_transfers_atomically() {
+    use subxt_core::{
+        config::SubstrateConfig,
+        events::{Events, Phase},
+        ext::codec::{Compact, Encode},
+    };
+    block_on(async {
+        let metadata = hex_bytes(METADATA_HEX);
+        let decoded = Events::<SubstrateConfig>::decode_from(
+            hex_bytes(EVENTS_HEX),
+            crate::system_events::decode_metadata_strict(&metadata).unwrap(),
+        );
+        let events: Vec<_> = decoded.iter().map(Result::unwrap).collect();
+        let mut mixed = Compact(6_u32).encode();
+        for phase in [Phase::Initialization, Phase::Finalization] {
+            mixed.extend(phase.encode());
+            mixed.extend_from_slice(&events[0].bytes()[5..]);
+        }
+        for event in &events {
+            mixed.extend_from_slice(event.bytes());
+        }
+        let store = Arc::new(MemoryHistoryStore::default());
+        let history = TransactionHistoryService::new(store.clone(), Arc::new(TestClock::default()));
+        let runtime = FinalizedHistoryRuntime::new(
+            Arc::new(FakeChainClient {
+                head: 1,
+                metadata: metadata.clone(),
+                events: mixed,
+                missing_events_at: None,
+                stop_at_block_request: None,
+                running: Arc::new(AtomicBool::new(true)),
+                block_requests: Arc::new(AtomicUsize::new(0)),
+            }),
+            history.clone(),
+        );
+        let accounts = [account(0x11), account(0x22), account(0x99)];
+        let guard = TestGuard(Arc::new(AtomicBool::new(true)));
+        history.ensure_cursors(&accounts, block(0)).await.unwrap();
+        let context =
+            RuntimeContext::try_new(block(1).verified(), RuntimeVersion::new(100, 12), metadata)
+                .unwrap();
+        let signed = SignedExtrinsic::try_new(vec![0x0c, 0x84, 0x01, 0x02]).unwrap();
+        history
+            .record_pending_before_broadcast(
+                accounts[0],
+                signed_extrinsic_hash(&context, &signed).unwrap(),
+                0,
+                accounts[1],
+                123_456,
+                "CitizenSDK production Runtime fixture",
+                signed,
+                context.block(),
+                context.version(),
+                ChainIdentity::citizenchain().genesis_hash(),
+            )
+            .await
+            .unwrap();
+        let state = runtime.sync_batch(&accounts, &guard).await.unwrap();
+        assert!(state.records()[0].status().is_chain_terminal());
+        assert!(state
+            .cursors()
+            .iter()
+            .all(|cursor| cursor.last_synced_block() == block(1)));
+        assert_eq!(state.transfers().len(), 5);
+        assert_eq!(
+            state
+                .transfers()
+                .iter()
+                .filter(|record| record.extrinsic_index().is_none())
+                .count(),
+            4
+        );
+        assert!(state
+            .transfers()
+            .iter()
+            .all(|record| record.tracked_account_id() != accounts[2]));
+        assert_eq!(runtime.sync_batch(&accounts, &guard).await.unwrap(), state);
+    });
+}
+
+#[test]
 fn typed_watch_only_persists_in_block_invalid_and_usurped() {
     block_on(async {
         let harness = Harness::new(1, None, None);
@@ -556,6 +644,13 @@ fn typed_watch_only_persists_in_block_invalid_and_usurped() {
                     destination,
                     10,
                     "watch",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .unwrap();

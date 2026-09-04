@@ -135,6 +135,13 @@ fn pending_is_committed_before_broadcast_and_same_hash_requires_identical_facts(
                 destination,
                 1_234,
                 "before broadcast",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .expect("写后异常回读一致时 pending 必须收敛");
@@ -178,6 +185,13 @@ fn pending_is_committed_before_broadcast_and_same_hash_requires_identical_facts(
                 destination,
                 1_234,
                 "before broadcast",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .expect("完全相同的广播重试应幂等");
@@ -195,6 +209,13 @@ fn pending_is_committed_before_broadcast_and_same_hash_requires_identical_facts(
                     destination,
                     1_235,
                     "before broadcast",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .expect_err("同 txHash 不得改写金额等提交事实"),
@@ -211,7 +232,21 @@ fn same_account_pending_is_durable_single_flight_but_other_accounts_remain_indep
         let sender = account(0x51);
         harness
             .service
-            .record_pending_before_broadcast(sender, hash(1), 7, account(0x61), 10, "first")
+            .record_pending_before_broadcast(
+                sender,
+                hash(1),
+                7,
+                account(0x61),
+                10,
+                "first",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+            )
             .await
             .unwrap();
 
@@ -225,6 +260,13 @@ fn same_account_pending_is_durable_single_flight_but_other_accounts_remain_indep
                     account(0x62),
                     20,
                     "same nonce must not race",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .expect_err("同账户第二条未决交易必须在 durable CAS 门被拒绝"),
@@ -240,6 +282,13 @@ fn same_account_pending_is_durable_single_flight_but_other_accounts_remain_indep
                 account(0x63),
                 30,
                 "different account",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .expect("不同账户可以各自持有一条未决交易");
@@ -265,6 +314,13 @@ fn concurrent_same_account_candidates_allow_exactly_one_pending_winner() {
                 account(0x64),
                 u128::from(value),
                 "concurrent",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             ))
         }));
     }
@@ -292,7 +348,21 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
         let pool_sender = account(0x54);
         harness
             .service
-            .record_pending_before_broadcast(pool_sender, hash(6), 1, account(0x65), 10, "pool")
+            .record_pending_before_broadcast(
+                pool_sender,
+                hash(6),
+                1,
+                account(0x65),
+                10,
+                "pool",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+            )
             .await
             .unwrap();
         harness
@@ -311,7 +381,21 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
         assert_contract_code(
             harness
                 .service
-                .record_pending_before_broadcast(pool_sender, hash(6), 1, account(0x65), 10, "pool")
+                .record_pending_before_broadcast(
+                    pool_sender,
+                    hash(6),
+                    1,
+                    account(0x65),
+                    10,
+                    "pool",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+                )
                 .await
                 .expect_err("同 txHash 的 PoolRejected 不能伪装成 Pending 重试"),
             ContractErrorCode::InvalidState,
@@ -325,6 +409,13 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
                 account(0x66),
                 20,
                 "after pool rejection",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .expect("PoolRejected 不再阻塞同账户下一笔");
@@ -340,6 +431,13 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
                 account(0x67),
                 30,
                 "executed",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -375,6 +473,13 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
                     account(0x67),
                     30,
                     "executed",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .expect_err("同 txHash 的 Execution 不能伪装成 Pending 重试"),
@@ -389,6 +494,13 @@ fn pool_rejected_and_verified_execution_release_the_account_pending_gate() {
                 account(0x68),
                 40,
                 "after execution",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .expect("finalized Execution 不再阻塞同账户下一笔");
@@ -410,6 +522,13 @@ fn in_block_hash_is_non_terminal_but_cannot_be_rebroadcast_or_recreated_as_pendi
                 account(0x69),
                 50,
                 "in block",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -440,6 +559,13 @@ fn in_block_hash_is_non_terminal_but_cannot_be_rebroadcast_or_recreated_as_pendi
                     account(0x69),
                     50,
                     "in block",
+                    citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                    citizen_sdk_contracts::VerifiedBlockRef::best(
+                        citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                        1,
+                    ),
+                    citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                    citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
                 )
                 .await
                 .expect_err("同 txHash 的 InBlock 不能倒退为 Pending"),
@@ -456,7 +582,21 @@ fn in_block_is_not_success_and_only_explicit_pool_rejection_is_persisted() {
         let transaction_hash = hash(4);
         harness
             .service
-            .record_pending_before_broadcast(sender, transaction_hash, 1, account(5), 8, "")
+            .record_pending_before_broadcast(
+                sender,
+                transaction_hash,
+                1,
+                account(5),
+                8,
+                "",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+            )
             .await
             .unwrap();
 
@@ -510,7 +650,21 @@ fn finalized_success_and_failure_require_exact_block_and_extrinsic_index() {
         let failure_hash = hash(9);
         harness
             .service
-            .record_pending_before_broadcast(sender, success_hash, 2, account(10), 20, "ok")
+            .record_pending_before_broadcast(
+                sender,
+                success_hash,
+                2,
+                account(10),
+                20,
+                "ok",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+            )
             .await
             .unwrap();
         harness
@@ -522,6 +676,13 @@ fn finalized_success_and_failure_require_exact_block_and_extrinsic_index() {
                 account(11),
                 30,
                 "fail",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -628,6 +789,13 @@ fn finalized_execution_hash_must_match_exactly_one_pending_record() {
                 account(3),
                 10,
                 "first",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -640,6 +808,13 @@ fn finalized_execution_hash_must_match_exactly_one_pending_record() {
                 account(4),
                 20,
                 "duplicate-hash",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -692,6 +867,13 @@ fn finalized_commit_deduplicates_events_and_pending_claims_sender_atomically() {
                 receiver,
                 500,
                 "two-sided",
+                citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap(),
+                citizen_sdk_contracts::VerifiedBlockRef::best(
+                    citizen_sdk_contracts::Hash32::from_bytes([1; 32]),
+                    1,
+                ),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
             )
             .await
             .unwrap();
@@ -938,6 +1120,73 @@ fn transfer(
         remark,
     )
     .expect("合法 finalized transfer fixture")
+}
+
+#[test]
+fn durable_outbox_survives_write_then_error_and_service_restart() {
+    block_on(async {
+        let store = Arc::new(MemoryHistoryStore::default());
+        let service =
+            TransactionHistoryService::new(store.clone(), Arc::new(IncrementingClock::default()));
+        let signed = citizen_sdk_contracts::SignedExtrinsic::try_new(vec![0x04, 0x84]).unwrap();
+        store.fail_next_after_write();
+        service
+            .record_pending_before_broadcast(
+                account(1),
+                hash(2),
+                3,
+                account(4),
+                5,
+                "resume",
+                signed.clone(),
+                VerifiedBlockRef::best(hash(6), 7),
+                citizen_sdk_contracts::RuntimeVersion::new(100, 12),
+                citizen_sdk_contracts::ChainIdentity::citizenchain().genesis_hash(),
+            )
+            .await
+            .unwrap();
+        drop(service);
+        let restarted =
+            TransactionHistoryService::new(store.clone(), Arc::new(IncrementingClock::default()));
+        let record = restarted
+            .resumable_transfer(account(1), account(4), 5, "resume")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.signed_extrinsic(), &signed);
+        assert_eq!(record.nonce(), 3);
+        assert_eq!(record.transaction_hash(), hash(2));
+        assert!(restarted
+            .resumable_transfer(account(1), account(4), 6, "resume")
+            .await
+            .is_err());
+        assert!(restarted
+            .resumable_transfer(account(1), account(4), 5, "other")
+            .await
+            .is_err());
+        restarted
+            .mark_in_block(account(1), hash(2), VerifiedBlockRef::best(hash(8), 8))
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted
+                .resumable_transfer(account(1), account(4), 5, "resume")
+                .await
+                .unwrap()
+                .unwrap()
+                .signed_extrinsic(),
+            &signed
+        );
+        restarted
+            .mark_pool_rejected(account(1), hash(2), "Invalid")
+            .await
+            .unwrap();
+        assert!(restarted
+            .resumable_transfer(account(1), account(4), 5, "resume")
+            .await
+            .unwrap()
+            .is_none());
+    });
 }
 
 fn account(byte: u8) -> AccountId32 {

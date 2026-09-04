@@ -2,6 +2,19 @@
 
 ## 1.0.0 - Unreleased
 
+- 第 12 步 P2 修复：Android/Apple 以进程内锁和 OS 文件锁原子覆盖 generation
+  tombstone 与物理 KEK；Apple 拒绝非正整数 revision，能力快照保留明确未就绪原因。
+  删除交易 watch 的重复 `hash()` 名称，修复 Android Flutter 进度交错和 Apple Flutter
+  非 UInt8 typed-data 接纳。恢复三份 CitizenApp byte-identical 来源，校正锁文件、许可和
+  来源摘要。CI 消费构建使用已登记增量目录，Release 仍全量；Hosted 保留现场测试和原生
+  双路径零写预检同步加固。不改变 C ABI、链协议、sr25519 或公开平台集合。
+
+- 第 12 步 P1 修复：完整 signed extrinsic 与 Pending 原子保存、同参数恢复原授权；
+  支持无 extrinsic index 的合法 Balances hook 流水；完成事件预留真实队列容量。
+  修复 Android 生物识别主线程与关闭重入、Apple 宿主数据/金库隔离和可选空密码、
+  Linux/Windows 导入参数、Linux WAL/SHM 活锁恢复及 SDK CI/Release 依赖接线。
+  不改变公民链算法、签名 context、70 项 Core ABI 或产品平台集合；不代表已发布。
+
 - 第 9.2 步完成官方 Hosted 解包包的 macOS Flutter Release 消费验收实现及本机原生编译。
   新增公开 `CitizenSdk` 消费测试，沿用唯一构建器/发布器；测试来源闭集增至 197 文件。
   归档、构建和消费者分别使用单层隔离；保留失败诊断，插件来源按目录身份核对。

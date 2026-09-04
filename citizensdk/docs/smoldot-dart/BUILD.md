@@ -17,7 +17,7 @@ Local callers must provide both `CITIZENSDK_WORK_DIR` and
 `CITIZENSDK_NATIVE_OUTPUT_DIR` as absolute descendants of:
 
 ```text
-/Users/rhett/TATA/tataconsole/target/citizensdk
+/Users/rhett/TATA/target/GMB/citizensdk/SDK
 ```
 
 The script also places `CARGO_TARGET_DIR`, module caches, Gradle state,

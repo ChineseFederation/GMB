@@ -102,6 +102,12 @@ int main() {
   using namespace citizen_sdk::linux;
 
   citizen_sdk::linux::test::TempDirectory temporary("secure-store");
+  const auto recovery = temporary.path() / "secure-wal-recovery";
+  citizen_sdk::linux::test::verify_wal_processes<SecureStore>(
+      recovery, "secure-state-v1.sqlite3", &SecureStore::wallet_profile_load,
+      &SecureStore::wallet_profile_compare_and_swap);
+  assert(read_text_pragma(recovery / "secure-state-v1.sqlite3",
+                         "PRAGMA integrity_check") == "ok");
   const auto directory = temporary.path() / "state";
   {
     SecureStore store(directory);
