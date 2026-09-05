@@ -102,6 +102,7 @@ typedef uint32_t citizensdk_result_kind_t;
 
 typedef uint32_t citizensdk_wallet_word_count_t;
 #define CITIZENSDK_WALLET_WORDS_12 UINT32_C(12)
+#define CITIZENSDK_WALLET_WORDS_18 UINT32_C(18)
 #define CITIZENSDK_WALLET_WORDS_24 UINT32_C(24)
 
 typedef uint32_t citizensdk_wallet_origin_t;

@@ -125,7 +125,7 @@ CITIZENSDK_NATIVE_OUTPUT_DIR=<原生产物目录>
 `darwin/Sources/CitizenSDK` Swift 源码、根产品头、Privacy Manifest 与完整 CitizenChain 资产组合为一个
 `CitizenSDK.xcframework`。其闭集只有 iOS 设备变体、iOS 模拟器变体与 macOS；三个
 Apple machine slice 的架构元数据均为 `arm64`；
-每个 slice 精确导出产品头声明的 70 个符号，并拒绝 `smoldot_*`、`citizen_sr25519_*`、
+每个 slice 精确导出产品头声明的 73 个符号，并拒绝 `smoldot_*`、`citizen_sr25519_*`、
 `account_crypto_*` 和其它架构。
 
 legacy `libsmoldot.dylib` 只允许作为源码树外的 macOS `arm64` 差分测试宿主库生成；它绝不进入
@@ -136,7 +136,7 @@ XCFramework、Hosted 或 GitHub 候选。其 `LC_ID_DYLIB` 是编译工作区的
 `include/citizensdk.h` 逐项比较，同时用 C11/C++17 编译合同核对全部公开布局；任何
 `smoldot_*`、`citizen_sr25519_*` 或 `account_crypto_*` 泄露都会失败。它只写入调用者指定的
 外部 `abi-host/` 目录，不加入 `all`，也不进入 Android/Apple 正式候选。
-产品 ABI v1 的闭集是原 36 个符号保持不变并追加 34 个符号，总计 70 个；构建产物与头文件
+产品 ABI v1 的闭集是原 36 个符号保持不变并追加 37 个符号，总计 73 个；构建产物与头文件
 任一缺失、额外或重复都必须失败关闭。
 
 Android Core 在进入 Gradle 前由固定 NDK 的 `llvm-strip --strip-unneeded` 显式处理一次；该同一
@@ -200,7 +200,7 @@ linux/lib/LinuxAMD/libcitizensdk.so
 linux/lib/LinuxAMD/libcitizensdk_host.so
 ```
 
-Core 必须精确导出 70 个根 `citizensdk_*`；Host 只装配 typed stores、TPM/认证、SDK-owned
+Core 必须精确导出 73 个根 `citizensdk_*`；Host 只装配 typed stores、TPM/认证、SDK-owned
 钱包流程和生命周期，不复制 smoldot、signer 或 Engine。Host 只能按 SONAME 依赖 Core 一次，
 两库不得出现绝对 `DT_NEEDED` 或构建机 RPATH/RUNPATH。CMake 公开目标固定为
 `CitizenSDK::Core` 与 `CitizenSDK::Host`，C++ convenience API 保持 header-only，不引入跨

@@ -42,11 +42,12 @@ APP_DATA_DIR="$HOME/Library/Application Support/gmb.dev"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CHAIN_ROOT="$(dirname "$SCRIPT_DIR")"   # citizenchain/
 GMB_REPOSITORY_ROOT="$(dirname "$CHAIN_ROOT")"
-GENESIS_STATE_RESOURCE_DIR="$CHAIN_ROOT/node/resources/genesis-state"
 
-# 在杀进程、清库之前先完成工具链校验与锁定依赖安装；准备失败不得触碰运行数据。
-# 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
+# 在杀进程、清库之前先校验中央任务身份和工具，依赖只在本任务目录离线安装。
+# 本脚本不会自行创建任务或选择用户工具；未由控制台提供准确环境时立即失败。
 source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
+NODE_FRONTEND_DIST="$TATA_CONSOLE_WORK_DIR/node-frontend"
+ONCHINA_BUILD_DIST="$TATA_CONSOLE_WORK_DIR/onchina-frontend/dist"
 
 cleanup() {
     echo ""
@@ -80,14 +81,13 @@ rm -rf "$DB_DIR"
 echo "==> 删除链上中国平台运行时 PG 数据(重新 initdb,数据后续从链重投影):$ONCHINA_PGDATA"
 rm -rf "$ONCHINA_PGDATA"
 echo "    已清库(node-key/keystore/tls 节点身份保留;china.sqlite 源数据不动)"
-mkdir -p "$GENESIS_STATE_RESOURCE_DIR"
 
 # ── 3. onchina 控制台 dev 配置 ──
 # 启动节点不需要任何机构鉴权/身份;此处仅准备链上中国平台手动启动所需资源(内嵌 PG + 前端 + china.sqlite)。
 echo "==> 构建 onchina 二进制 + 前端..."
 ( cd "$CHAIN_ROOT" && cargo build -p onchina )
 echo "==> 构建链上中国平台前端产物..."
-( cd "$CHAIN_ROOT/onchina/frontend" && npm run build )
+( cd "$ONCHINA_FRONTEND_PROJECT" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
 PG_PREFIX=""
 for v in postgresql@17 postgresql@16 postgresql@15 postgresql; do
     if p="$(brew --prefix "$v" 2>/dev/null)" && [ -x "$p/bin/initdb" ]; then PG_PREFIX="$p"; break; fi
@@ -102,7 +102,7 @@ else
     echo "    [warn] 未找到本机 PostgreSQL(brew install postgresql@16);链上中国平台仍可起但缺 DB,功能受限。"
 fi
 export ONCHINA_CHINA_DB="$CHAIN_ROOT/onchina/src/cid/china/china.sqlite"
-export ONCHINA_FRONTEND_DIST="$CHAIN_ROOT/onchina/frontend/dist"
+export ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST"
 export ONCHINA_ENABLE_TLS=1
 export ONCHINA_TLS_DIR="$APP_DATA_DIR/onchina-tls"
 # 公权机构目录只允许从链上投影到本地缓存;clean-run 不再打开旧本地生成开关。
@@ -126,5 +126,6 @@ else
     echo "    注意:需冻结创世 = 现网创世、且有可达 bootnode;本机为唯一节点时同步不到对等数据。"
 fi
 cd "$CHAIN_ROOT/node"
-# 使用 frontend/package-lock.json 固定的仓库 CLI，开发入口与正式构建共用同一版本真源。
-node frontend/node_modules/@tauri-apps/cli/tauri.js dev -- --locked
+# 开发钩子也显式在任务内的前端运行，不能把 npm 状态写回原始仓库。
+tauri_override="$(node -e 'process.stdout.write(JSON.stringify({build:{beforeDevCommand:{script:"npm run dev",cwd:process.argv[1]},frontendDist:process.argv[2]}}))' "$NODE_FRONTEND_PROJECT" "$NODE_FRONTEND_DIST")"
+node "$NODE_FRONTEND_PROJECT/node_modules/@tauri-apps/cli/tauri.js" dev --config "$tauri_override" -- --locked

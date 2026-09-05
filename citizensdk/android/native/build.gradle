@@ -2,7 +2,24 @@ group = 'org.citizen.sdk'
 version = rootProject.version
 
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+// 与Flutter库共用独立入口已选定的AGP及内置Kotlin，不另选版本。
+
+// 只供独立AAR工程读取中央选版；正式Flutter插件不依赖此模块或控制台目录。
+def cmakeVersion = providers.exec {
+    commandLine 'node', '--input-type=module', '-e', '''
+import { join, isAbsolute } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const root = process.env.TATA_WORKSPACE_ROOT || process.env.TATA_ROOT;
+const flows = process.env.TATA_CONSOLE_FLOW_ROOT || (root && join(root, 'tataconsole', 'flows'));
+if (!flows || !isAbsolute(flows)) throw Error('CitizenSDK独立Android缺少中央流程绝对路径');
+const { readCmake } = await import(pathToFileURL(join(flows, '..', 'tools', 'android.mjs')));
+const platform = process.platform === 'darwin' ? 'macos'
+  : process.platform === 'win32' ? 'windows'
+  : process.platform === 'linux' && process.arch === 'arm64' ? 'linux-arm'
+  : process.platform === 'linux' && process.arch === 'x64' ? 'linux-amd' : null;
+console.log(readCmake(platform).version);
+'''
+}.standardOutput.asText.get().trim()
 
 def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
 def localCitizenSdkRoots = {
@@ -78,9 +95,8 @@ android {
     externalNativeBuild {
         cmake {
             path = file('src/main/cpp/CMakeLists.txt')
-            version = '3.22.1'
-            // Keep CMake state outside this module's disposable buildDir while
-            // still remaining inside the caller-controlled central root.
+            version = cmakeVersion
+            // CMake状态属于调用方当前任务，不写入源码或其它任务目录。
             buildStagingDirectory = new File(normalizedTarget, 'native-cmake')
         }
     }
@@ -98,14 +114,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-        freeCompilerArgs += ['-Xjvm-default=all']
-    }
     buildFeatures {
         buildConfig = false
     }
-    packagingOptions {
+    packaging {
         jniLibs {
             useLegacyPackaging = false
             excludes += [
@@ -122,9 +134,16 @@ android {
     }
 }
 
-// Unconditional `include ':native'` must not break an ordinary Flutter
-// consumer that does not build the AAR. The explicit native tasks fail before
-// work when their two production inputs were not configured.
+// 两种分发面保持相同JVM目标与接口默认实现，不重复旧字符串编译参数。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        jvmDefault = org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode.NO_COMPATIBILITY
+    }
+}
+
+// 独立settings登记native模块；显式原生任务在执行前验证两个生产输入。
+// Flutter宿主只引入根库模块，不执行此独立子工程。
 tasks.configureEach { task ->
     if (task.name == 'preBuild') {
         task.doFirst {

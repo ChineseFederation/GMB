@@ -46,11 +46,11 @@ Pod::Spec.new do |s|
   s.description      = <<-DESC
 CitizenApp 热端原生库:smoldot 轻节点、sr25519 原生签名与账户数据加密。
                        DESC
-  s.homepage         = 'https://github.com/ChineseFederation/GMB'
+  s.homepage         = 'https://github.com/VoyagerRhett/GMB'
   s.license          = { :type => 'Apache-2.0' }
   s.author           = { 'voyager_rhett' => 'chinanation@icloud.com' }
   # Podfile 的 :path 决定本机实际来源；这里仅提供 CocoaPods 要求的合法来源元数据。
-  s.source           = { :git => 'https://github.com/ChineseFederation/GMB.git' }
+  s.source           = { :git => 'https://github.com/VoyagerRhett/GMB.git' }
   s.platform         = :ios, '16.0'
   s.static_framework = true
 

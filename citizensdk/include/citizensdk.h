@@ -126,6 +126,22 @@ CITIZENSDK_API citizensdk_error_code_t citizensdk_get_account_nonce(
 CITIZENSDK_API citizensdk_error_code_t citizensdk_get_best_fee_snapshot(
     citizensdk_handle_t handle, citizensdk_request_id_t *out_request_id);
 
+/* SDK 安全界面的同步纯校验，不需要已启动实例，不写钱包或金库。
+ * 输入为最多 1024 字节的 UTF-8，不含 NUL 终止符；不返回密码或助记词。
+ * 空密码有效；非空原文及 NFKD 后按同一派生规则校验。
+ * 助记词必须匹配显式选择的 12、18 或 24 词及 English BIP-39 checksum。
+ * 错误通过既有 last_error 返回，只说明原因/位置，不回显输入。 */
+CITIZENSDK_API citizensdk_error_code_t citizensdk_validate_wallet_password(
+    citizensdk_bytes_view_t password);
+CITIZENSDK_API citizensdk_error_code_t citizensdk_validate_wallet_mnemonic(
+    citizensdk_bytes_view_t mnemonic, citizensdk_wallet_word_count_t word_count);
+/* 前缀仅接受小写 ASCII，空前缀返回空。最多六个官方词表候选，以 LF 分隔，
+ * 无尾随 LF/NUL。NULL/0 查询字节数；容量不足仅写 out_required，不部分写。
+ * 候选是公开词表内容，不是输入、助记词或规范化密码的回传。 */
+CITIZENSDK_API citizensdk_error_code_t citizensdk_wallet_word_suggestions(
+    citizensdk_bytes_view_t prefix, uint8_t *buffer, uint64_t capacity,
+    uint64_t *out_required);
+
 /* Wallet secret inputs are borrowed only for the accepting call and copied
  * immediately into Rust zeroizing buffers. They are raw UTF-8 bytes without a
  * NUL terminator. No mini-secret/private key or standalone signed extrinsic is

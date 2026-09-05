@@ -6,9 +6,9 @@ Pod::Spec.new do |spec|
 CitizenSDK projects one Rust Core and one stable C ABI through a native Swift
 API and a secret-free Flutter adapter for iOS and macOS.
                        DESC
-  spec.homepage         = 'https://github.com/ChineseFederation/GMB/tree/main/citizensdk'
+  spec.homepage         = 'https://github.com/VoyagerRhett/GMB/tree/main/citizensdk'
   spec.license          = { :file => '../LICENSE' }
-  spec.author           = { 'ChineseFederation' => 'opensource@chinesefederation.org' }
+  spec.author           = { 'VoyagerRhett' => 'chinanation@icloud.com' }
   spec.source           = { :path => '.' }
   spec.ios.deployment_target = '16.0'
   spec.osx.deployment_target = '13.0'

@@ -231,7 +231,7 @@ internal class CitizenSdkHardwareVault(
                     host.lifecycle.addObserver(observer!!)
                     val promptInfo = BiometricPrompt.PromptInfo.Builder()
                         .setTitle("验证身份")
-                        .setSubtitle("解锁公民钱包以继续")
+                        .setSubtitle("授权 CitizenSDK 钱包操作以继续")
                         .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
                         .setNegativeButtonText("取消")
                         .build()

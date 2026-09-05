@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-const EXPECTED_EXPORTS: [&str; 70] = [
+const EXPECTED_EXPORTS: [&str; 73] = [
     "citizensdk_abi_version",
     "citizensdk_add_wallet_accounts",
     "citizensdk_cancel_request",
@@ -70,6 +70,9 @@ const EXPECTED_EXPORTS: [&str; 70] = [
     "citizensdk_transfer_with_remark",
     "citizensdk_unsubscribe_capability_changes",
     "citizensdk_verify_transaction_at",
+    "citizensdk_validate_wallet_password",
+    "citizensdk_validate_wallet_mnemonic",
+    "citizensdk_wallet_word_suggestions",
     "citizensdk_watch_extrinsic",
 ];
 
@@ -156,7 +159,7 @@ fn header_declarations(header: &str) -> BTreeMap<String, String> {
 }
 
 #[test]
-fn rust_and_c_publish_exactly_the_frozen_seventy_product_symbols() {
+fn rust_and_c_publish_exactly_the_reviewed_product_symbols() {
     let expected: BTreeSet<_> = EXPECTED_EXPORTS
         .iter()
         .map(|name| (*name).to_owned())
@@ -164,7 +167,7 @@ fn rust_and_c_publish_exactly_the_frozen_seventy_product_symbols() {
     let mut rust = rust_exports(include_str!("../src/lib.rs"));
     let wallet = rust_exports(include_str!("../src/wallet_abi.rs"));
     assert_eq!(rust.len(), 36, "base Rust export count changed");
-    assert_eq!(wallet.len(), 34, "wallet Rust export count changed");
+    assert_eq!(wallet.len(), 37, "wallet Rust export count changed");
     for export in wallet {
         assert!(
             rust.insert(export.clone()),
@@ -175,14 +178,14 @@ fn rust_and_c_publish_exactly_the_frozen_seventy_product_symbols() {
         .into_keys()
         .collect();
 
-    assert_eq!(rust.len(), 70, "Rust export count changed");
-    assert_eq!(header.len(), 70, "C declaration count changed");
+    assert_eq!(rust.len(), 73, "Rust export count changed");
+    assert_eq!(header.len(), 73, "C declaration count changed");
     assert_eq!(rust, expected, "Rust export set changed");
     assert_eq!(header, expected, "C declaration set changed");
 }
 
 #[test]
-fn product_header_has_only_the_three_reviewed_mnemonic_crossings() {
+fn product_header_has_only_the_reviewed_mnemonic_crossings() {
     let declarations = header_declarations(include_str!("../../../include/citizensdk.h"));
     let mnemonic_crossings: BTreeSet<_> = declarations
         .iter()
@@ -195,6 +198,7 @@ fn product_header_has_only_the_three_reviewed_mnemonic_crossings() {
             "citizensdk_add_wallet_accounts",
             "citizensdk_import_wallet",
             "citizensdk_prepared_wallet_copy_mnemonic",
+            "citizensdk_validate_wallet_mnemonic",
         ])
     );
 

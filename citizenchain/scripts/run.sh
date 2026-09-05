@@ -1,35 +1,30 @@
 #!/usr/bin/env bash
-# TataConsole 本机产品启动入口：只构建并运行本机优化软件，不清库，继续使用
-# 【冻结 SSOT】(node/chainspecs/citizenchain.plain.json)续跑现有开发数据。
-# 单元测试和开发者手工 Debug 不走本入口；需要清理开发数据或 fresh 链时改用 clean-run.sh。
-#
-# 启动后:节点自动挖矿;链上中国平台需在节点设置页手动启动,统一入口 https://onchina.local:8964。
-# 平台登录与节点启动**解耦**:本机构管理员用冷钱包扫码、对链上 Active 管理员集合
-# 鉴权(3b)即可登录;不是本机构管理员就不用管,也没有任何机构权限。
+# TataConsole 节点本机 Build 入口：只构建、签名验真并替换中央成功产物。
+# 本入口不启动或停止节点，不修改链数据；启动由控制台独立 Start 流程负责。
+# 测试、手工调试和清库不走本入口。
 set -euo pipefail
 
 MACOS_APP_BUNDLE=''
 MACOS_APP_PENDING=0
 
 cleanup() {
+    local result="${1:-1}"
+    trap - EXIT INT TERM HUP
+    # 唯一成功路径会撤销 trap；其余提前退出必须失败，避免 Bash 参数展开错误被清理返回值吞掉。
+    [[ "$result" != 0 ]] || result=1
     # 只清理本轮尚未通过完整签名验收的固定 App；历史成功归档和用户数据均不触碰。
     if [[ "${MACOS_APP_PENDING:-0}" == 1 \
         && -n "${TARGET_DIR:-}" \
         && "${MACOS_APP_BUNDLE:-}" == "$TARGET_DIR/release/bundle/macos/citizenchain.app" ]]; then
         rm -rf -- "$MACOS_APP_BUNDLE"
     fi
-    echo ""
-    echo "==> 正在关闭节点 + 链上中国平台 + 内嵌 PG..."
-    pkill -f "citizenchain" 2>/dev/null || true
-    pkill -f "target/release/onchina" 2>/dev/null || true
-    lsof -ti:5173 2>/dev/null | xargs kill -9 2>/dev/null || true
-    if [ -n "${ONCHINA_PG_BIN_DIR:-}" ] && [ -n "${ONCHINA_PG_DATA_DIR:-}" ] && [ -d "${ONCHINA_PG_DATA_DIR:-}" ]; then
-        "$ONCHINA_PG_BIN_DIR/pg_ctl" stop -D "$ONCHINA_PG_DATA_DIR" -m fast >/dev/null 2>&1 || true
-    fi
-    sleep 1
-    echo "    已关闭"
+    # Build 不启动节点或 PG；校验失败不得停止其它任务或用户已运行的实例。
+    exit "$result"
 }
-trap cleanup EXIT INT TERM HUP
+trap 'cleanup "$?"' EXIT
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+trap 'cleanup 129' HUP
 
 # macOS 产品 App 只接受今后唯一的新团队 Developer ID；禁止按枚举顺序选证书，
 # 否则 Apple Development 或其它团队身份可能被静默当成塔塔控制台运行软件的签名。
@@ -122,21 +117,18 @@ INCREMENTAL_CACHE_DIR="${TATA_CONSOLE_INCREMENTAL_CACHE_DIR:?公民链本机编�
 }
 TARGET_DIR="$INCREMENTAL_CACHE_DIR/cargo-target"
 export CARGO_TARGET_DIR="$TARGET_DIR"
-export npm_config_cache="$INCREMENTAL_CACHE_DIR/npm"
 NODE_FRONTEND_DIST="$TATA_CONSOLE_WORK_DIR/node-frontend"
 ONCHINA_BUILD_DIST="$TATA_CONSOLE_WORK_DIR/onchina-frontend/dist"
 PACKAGE_RESOURCES="$TATA_CONSOLE_WORK_DIR/resources"
 ARTIFACT_DIR="$TATA_CONSOLE_TARGET_ROOT/GMB/citizenchain-node/macos"
-GENESIS_STATE_RESOURCE_DIR="$REPO_ROOT/node/resources/genesis-state"
 
-# 读取仓库统一依赖真源中的精确 Node.js 版本和 npm lockfile。
-# 必须 source，使 prepare-toolchain.sh 通过 nvm 选择的 Node.js 留在本进程中。
+# 校验 Worker 注入的中央工具，并在当前任务目录离线安装原始锁文件中的依赖。
 source "$GMB_REPOSITORY_ROOT/scripts/prepare-toolchain.sh"
 
 # 本机Build脚本只使用当前工作区源码构建 runtime WASM，禁止接受外部 WASM 覆盖。
 unset WASM_FILE
 # Cargo/Tauri 的 release profile 只是本机优化配置；gmb.dev 是本机开发数据隔离环境。
-# 本任务不迁移、不删除正式 gmb 数据，也不让塔塔控制台启动的软件争用正式安装版 RocksDB。
+# 本任务不修改正式 gmb 数据，也不让塔塔控制台启动的软件争用正式安装版 RocksDB。
 export CITIZENCHAIN_DATA_PROFILE=dev
 mkdir -p "$TARGET_DIR" "$npm_config_cache" "$PACKAGE_RESOURCES/onchina-bin" "$PACKAGE_RESOURCES/onchina-frontend"
 
@@ -148,7 +140,9 @@ mkdir -p "$TARGET_DIR" "$npm_config_cache" "$PACKAGE_RESOURCES/onchina-bin" "$PA
 echo "==> 构建 OnChina 本机优化二进制 + 前端..."
 ( cd "$REPO_ROOT" && CARGO_INCREMENTAL=1 cargo build --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
-( cd "$REPO_ROOT/onchina/frontend" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
+( cd "$ONCHINA_FRONTEND_PROJECT" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
+echo "==> 构建节点前端产物..."
+( cd "$NODE_FRONTEND_PROJECT" && CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" npm run build )
 cp "$TARGET_DIR/release/onchina" "$PACKAGE_RESOURCES/onchina-bin/onchina"
 cp -R "$ONCHINA_BUILD_DIST" "$PACKAGE_RESOURCES/onchina-frontend/dist"
 PG_PREFIX=""
@@ -178,9 +172,9 @@ echo "    节点Build产物目录: $TARGET_DIR"
 echo "    本机运行数据目录: $HOME/Library/Application Support/gmb.dev"
 echo "==> 链上中国平台:节点设置页点击「启动」后访问 https://onchina.local:8964"
 
-# ── 启动 ──
+# ── 构建与签名封装 ──
 cd "$REPO_ROOT/node"
-echo "==> 启动公民链..."
+echo "==> 构建公民链..."
 if [[ "$(uname -s)" == "Darwin" ]]; then
     require_macos_signing_identity || {
         echo "    [error] 未找到唯一允许的新团队 Developer ID：$MACOS_SIGNING_IDENTITY" >&2
@@ -189,20 +183,21 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     export APPLE_SIGNING_IDENTITY="$MACOS_SIGNING_IDENTITY"
     macos_profile="$(resolve_macos_profile)"
     echo "    使用新团队 Developer ID 构建带摄像头权限的本机优化 App"
-    # 使用 frontend/package-lock.json 固定的仓库 CLI；禁止回退到本机全局 cargo-tauri 造成版本漂移。
+    # 使用当前任务按原始 lockfile 安装的 CLI，不能读取源码 node_modules 或全局 CLI。
     app_bundle="$TARGET_DIR/release/bundle/macos/citizenchain.app"
     MACOS_APP_BUNDLE="$app_bundle"
     # Tauri 2 的 build 默认使用优化 profile；--debug 才会切换为调试产物。
     # 编译与封装分离，时间戳瞬时失败时只重试封装签名，不重复整轮 Rust 编译。
-    tauri_override="$(python3 -c 'import json,sys; print(json.dumps({"build":{"frontendDist":sys.argv[1]},"bundle":{"resources":{sys.argv[2]+"/":"",sys.argv[3]+"/":"",sys.argv[4]:"china.sqlite"}}}))' "$NODE_FRONTEND_DIST" "$PACKAGE_RESOURCES" "$REPO_ROOT/node/resources" "$REPO_ROOT/onchina/src/cid/china/china.sqlite")"
+    # 前端已在私有工程完成构建；清除 Tauri 的源码 npm 钩子，避免重复构建或回写主仓。
+    tauri_override="$(python3 -c 'import json,sys; print(json.dumps({"build":{"beforeBuildCommand":None,"frontendDist":sys.argv[1]},"bundle":{"resources":{sys.argv[2]+"/":"",sys.argv[3]+"/":"",sys.argv[4]:"china.sqlite"}}}))' "$NODE_FRONTEND_DIST" "$PACKAGE_RESOURCES" "$REPO_ROOT/node/resources" "$REPO_ROOT/onchina/src/cid/china/china.sqlite")"
     CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=1 \
-        node frontend/node_modules/@tauri-apps/cli/tauri.js build --config "$tauri_override" \
+        node "$NODE_FRONTEND_PROJECT/node_modules/@tauri-apps/cli/tauri.js" build --config "$tauri_override" \
         --no-bundle --ci -- --locked
     MACOS_APP_PENDING=1
     bundle_macos_app() {
         rm -rf -- "$app_bundle"
         CITIZENCHAIN_FRONTEND_DIST="$NODE_FRONTEND_DIST" CARGO_INCREMENTAL=1 \
-            node frontend/node_modules/@tauri-apps/cli/tauri.js bundle --config "$tauri_override" \
+            node "$NODE_FRONTEND_PROJECT/node_modules/@tauri-apps/cli/tauri.js" bundle --config "$tauri_override" \
             --bundles app --ci
     }
     run_with_macos_timestamp_retry "Tauri App 封装签名" bundle_macos_app
@@ -290,6 +285,6 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
     trap - EXIT INT TERM HUP
     echo "    CitizenChain Node macOS中央产物构建完成；Build不会启动节点"
 else
-    echo "    [error] TataConsole 本机产品启动入口只支持 macOS；其它平台请使用正式安装包" >&2
+    echo "    [error] 本入口只负责 macOS Build；其它平台使用控制台对应本机编译检查" >&2
     exit 1
 fi

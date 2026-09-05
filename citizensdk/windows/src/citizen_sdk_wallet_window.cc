@@ -3,6 +3,7 @@
 #include <windows.h>
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstring>
 #include <exception>
 #include <limits>
@@ -15,9 +16,15 @@ namespace citizen_sdk::windows {
 namespace {
 constexpr int kMnemonic = 100;
 constexpr int kPassword = 101;
-constexpr int kConfirmation = 102;
 constexpr int kBackup = 103;
+constexpr int kSuggestions = 104;
+constexpr int kWordCount = 105;
+constexpr int kNextAccount = 106;
+constexpr int kAccountIndices = 107;
+constexpr int kSuggestionApply = 108;
+constexpr int kMnemonicState = 109;
 constexpr int kAction = IDOK;
+constexpr UINT kMnemonicChanged = WM_APP + 31;
 constexpr std::size_t kInputUnits = input_limits::kMaximumUnlockPasswordBytes;
 
 HINSTANCE module_for(WNDPROC procedure) {
@@ -167,15 +174,27 @@ struct SensitiveInput::Impl final {
             self->size -= count;
             secure_zero(self->text.data() + self->size, count * sizeof(wchar_t));
             InvalidateRect(hwnd, nullptr, TRUE);
+            if (GetDlgCtrlID(hwnd) == kMnemonic)
+              PostMessageW(GetParent(hwnd), kMnemonicChanged, 0, 0);
           }
           return 0;
         }
         if (wp == L'\r') {
-          if (self->multiline) self->append(L'\n');
-          else PostMessageW(GetParent(hwnd), WM_COMMAND, IDOK, 0);
+          if (self->multiline) {
+            self->append(L'\n');
+            // 回车同样会改变助记词分词；必须刷新词数、校验和与末词候选。
+            if (GetDlgCtrlID(hwnd) == kMnemonic)
+              PostMessageW(GetParent(hwnd), kMnemonicChanged, 0, 0);
+          } else {
+            PostMessageW(GetParent(hwnd), WM_COMMAND, IDOK, 0);
+          }
           return 0;
         }
-        if (wp >= 0x20 && wp <= 0xffff) self->append(static_cast<wchar_t>(wp));
+        if (wp >= 0x20 && wp <= 0xffff) {
+          self->append(static_cast<wchar_t>(wp));
+          if (GetDlgCtrlID(hwnd) == kMnemonic)
+            PostMessageW(GetParent(hwnd), kMnemonicChanged, 0, 0);
+        }
         return 0;
       case WM_UNICHAR:
         if (wp == UNICODE_NOCHAR) return TRUE;
@@ -187,6 +206,8 @@ struct SensitiveInput::Impl final {
           self->append(static_cast<wchar_t>(0xd800 + (scalar >> 10)));
           self->append(static_cast<wchar_t>(0xdc00 + (scalar & 0x3ff)));
         }
+        if (GetDlgCtrlID(hwnd) == kMnemonic)
+          PostMessageW(GetParent(hwnd), kMnemonicChanged, 0, 0);
         return 0;
       case WM_PAINT: {
         PAINTSTRUCT paint{};
@@ -267,6 +288,95 @@ SensitiveBuffer SensitiveInput::take_utf8() {
     return result;
   } catch (...) { clear(); throw; }
 }
+
+std::string SensitiveInput::word_suggestions() const {
+  require(std::this_thread::get_id() == impl_->ui_thread && impl_->hwnd != nullptr,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK sensitive input is unavailable");
+  std::size_t begin = impl_->size;
+  while (begin != 0 && impl_->text[begin - 1] != L' ' &&
+         impl_->text[begin - 1] != L'\n' && impl_->text[begin - 1] != L'\t') --begin;
+  if (begin == impl_->size) return {};
+  const std::size_t count = impl_->size - begin;
+  if (count > input_limits::kMaximumUnlockPasswordBytes) return {};
+  SensitiveBuffer prefix(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    const wchar_t value = impl_->text[begin + index];
+    if (value < L'a' || value > L'z') return {};
+    prefix.data()[index] = static_cast<uint8_t>(value);
+  }
+  const citizensdk_bytes_view_t view{prefix.data(), count};
+  uint64_t required = 0;
+  if (citizensdk_wallet_word_suggestions(view, nullptr, 0, &required) !=
+          CITIZENSDK_OK || required == 0 || required > 256) return {};
+  std::string result(static_cast<std::size_t>(required), '\0');
+  if (citizensdk_wallet_word_suggestions(
+          view, reinterpret_cast<uint8_t *>(result.data()), result.size(),
+          &required) != CITIZENSDK_OK || required != result.size()) return {};
+  for (char &value : result) if (value == '\n') value = ' ';
+  return result;
+}
+
+std::string SensitiveInput::mnemonic_status(
+    citizensdk_wallet_word_count_t word_count) const {
+  require(std::this_thread::get_id() == impl_->ui_thread && impl_->hwnd != nullptr,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK sensitive input is unavailable");
+  uint32_t words = 0;
+  bool separated = true;
+  for (std::size_t index = 0; index < impl_->size; ++index) {
+    const wchar_t value = impl_->text[index];
+    const bool whitespace = value == L' ' || value == L'\n' ||
+                            value == L'\t' || value == L'\r';
+    if (!whitespace && separated) ++words;
+    separated = whitespace;
+  }
+  SensitiveBuffer utf8;
+  if (impl_->size != 0) {
+    const int required = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+        impl_->text.data(), static_cast<int>(impl_->size), nullptr, 0, nullptr, nullptr);
+    require(required > 0 && static_cast<std::size_t>(required) <=
+                input_limits::kMaximumUnlockPasswordBytes,
+            CITIZENSDK_ERROR_INVALID_ARGUMENT,
+            "CitizenSDK mnemonic input is invalid");
+    utf8 = SensitiveBuffer(static_cast<std::size_t>(required));
+    require(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS,
+                impl_->text.data(), static_cast<int>(impl_->size),
+                reinterpret_cast<char *>(utf8.data()), required, nullptr, nullptr) == required,
+            CITIZENSDK_ERROR_INTERNAL,
+            "CitizenSDK mnemonic input conversion failed");
+  }
+  const bool checksum = words == word_count &&
+      citizensdk_validate_wallet_mnemonic(
+          {utf8.data(), static_cast<uint64_t>(utf8.size())}, word_count) == CITIZENSDK_OK;
+  return "当前 " + std::to_string(words) + " / 选择 " +
+      std::to_string(word_count) + (checksum ? "；校验和有效" : "；校验和尚未通过");
+}
+
+void SensitiveInput::replace_last_word(const std::string &word) {
+  require(std::this_thread::get_id() == impl_->ui_thread && impl_->hwnd != nullptr,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK sensitive input is unavailable");
+  require(!impl_->read_only && !word.empty() && word.size() <= 64,
+          CITIZENSDK_ERROR_INVALID_ARGUMENT,
+          "CitizenSDK mnemonic suggestion is invalid");
+  for (const char value : word)
+    require(value >= 'a' && value <= 'z', CITIZENSDK_ERROR_INVALID_ARGUMENT,
+            "CitizenSDK mnemonic suggestion is invalid");
+  std::size_t begin = impl_->size;
+  while (begin != 0 && impl_->text[begin - 1] != L' ' &&
+         impl_->text[begin - 1] != L'\n' && impl_->text[begin - 1] != L'\t') --begin;
+  require(begin + word.size() <= kInputUnits, CITIZENSDK_ERROR_INVALID_ARGUMENT,
+          "CitizenSDK mnemonic suggestion exceeds the input limit");
+  secure_zero(impl_->text.data() + begin,
+              (impl_->size - begin) * sizeof(wchar_t));
+  for (std::size_t index = 0; index < word.size(); ++index)
+    impl_->text[begin + index] = static_cast<wchar_t>(word[index]);
+  impl_->size = begin + word.size();
+  InvalidateRect(impl_->hwnd, nullptr, TRUE);
+  PostMessageW(GetParent(impl_->hwnd), kMnemonicChanged, 0, 0);
+}
+
 void SensitiveInput::set_utf8(const SensitiveBuffer &value) {
   require(std::this_thread::get_id() == impl_->ui_thread && impl_->hwnd != nullptr,
           CITIZENSDK_ERROR_UNAVAILABLE, "CitizenSDK sensitive input is unavailable");
@@ -283,6 +393,8 @@ void SensitiveInput::set_utf8(const SensitiveBuffer &value) {
     require(count > 0, CITIZENSDK_ERROR_INVALID_ARGUMENT, "sensitive display is not UTF-8");
     impl_->size = static_cast<std::size_t>(count);
     InvalidateRect(impl_->hwnd, nullptr, TRUE);
+    if (GetDlgCtrlID(impl_->hwnd) == kMnemonic)
+      PostMessageW(GetParent(impl_->hwnd), kMnemonicChanged, 0, 0);
   } catch (...) { clear(); throw; }
 }
 
@@ -290,13 +402,18 @@ struct WalletWindow::Impl final {
   WindowLease parent;
   HWND hwnd{};
   HWND status{};
+  HWND suggestions{};
+  HWND suggestion_apply{};
+  HWND mnemonic_state{};
+  HWND word_count{};
+  HWND next_account{};
+  HWND account_indices{};
   HWND backup{};
   HWND action_button{};
   HINSTANCE module{};
   std::wstring class_name;
   std::unique_ptr<SensitiveInput> mnemonic;
   std::unique_ptr<SensitiveInput> password;
-  std::unique_ptr<SensitiveInput> confirmation;
   Action action;
   Action cancel;
   citizensdk_wallet_flow_kind_t kind{};
@@ -304,17 +421,17 @@ struct WalletWindow::Impl final {
   bool destroying{};
   bool owner_disabled{};
   bool busy{};
+  bool password_reentry_required{};
   ~Impl() {
-    if ((hwnd != nullptr || registered || mnemonic || password || confirmation) &&
+    if ((hwnd != nullptr || registered || mnemonic || password) &&
         !parent.on_ui_thread()) std::terminate();
-    if (hwnd != nullptr || mnemonic || password || confirmation) destroy();
-    confirmation.reset(); password.reset(); mnemonic.reset();
+    if (hwnd != nullptr || mnemonic || password) destroy();
+    password.reset(); mnemonic.reset();
     if (registered && !UnregisterClassW(class_name.c_str(), module)) std::terminate();
   }
   void clear() noexcept {
     if (mnemonic) mnemonic->clear();
     if (password) password->clear();
-    if (confirmation) confirmation->clear();
   }
   void restore_owner() noexcept {
     if (owner_disabled && parent.valid() && parent.get() != nullptr) {
@@ -343,6 +460,55 @@ struct WalletWindow::Impl final {
         const int identity = LOWORD(wp);
         if (identity == IDCANCEL) { const auto callback = self->cancel; callback(); return 0; }
         if (identity == kAction && !self->busy) { const auto callback = self->action; callback(); return 0; }
+        if (identity == kNextAccount && self->account_indices != nullptr) {
+          const bool next = SendMessageW(self->next_account, BM_GETCHECK, 0, 0) == BST_CHECKED;
+          EnableWindow(self->account_indices, next ? FALSE : TRUE);
+          return 0;
+        }
+        if (identity == kSuggestionApply && self->mnemonic && self->suggestions) {
+          const LRESULT selected = SendMessageW(self->suggestions, CB_GETCURSEL, 0, 0);
+          if (selected != CB_ERR) {
+            const LRESULT length = SendMessageW(self->suggestions, CB_GETLBTEXTLEN,
+                                                selected, 0);
+            if (length > 0 && length <= 64) {
+              std::wstring word(static_cast<std::size_t>(length) + 1, L'\0');
+              SendMessageW(self->suggestions, CB_GETLBTEXT, selected,
+                           reinterpret_cast<LPARAM>(word.data()));
+              std::string ascii;
+              ascii.reserve(static_cast<std::size_t>(length));
+              for (int index = 0; index < length; ++index)
+                ascii.push_back(static_cast<char>(word[static_cast<std::size_t>(index)]));
+              self->mnemonic->replace_last_word(ascii);
+            }
+          }
+          return 0;
+        }
+        if (identity == kWordCount && self->mnemonic)
+          PostMessageW(hwnd, kMnemonicChanged, 0, 0);
+      }
+      if (message == kMnemonicChanged && self->suggestions != nullptr && self->mnemonic) {
+        const LRESULT selected_words = SendMessageW(self->word_count, CB_GETCURSEL, 0, 0);
+        const citizensdk_wallet_word_count_t count = selected_words == 1
+            ? CITIZENSDK_WALLET_WORDS_18
+            : selected_words == 2 ? CITIZENSDK_WALLET_WORDS_24
+                                  : CITIZENSDK_WALLET_WORDS_12;
+        const std::wstring state = public_text(self->mnemonic->mnemonic_status(count));
+        SetWindowTextW(self->mnemonic_state, state.c_str());
+        const std::string candidates = self->mnemonic->word_suggestions();
+        SendMessageW(self->suggestions, CB_RESETCONTENT, 0, 0);
+        std::size_t begin = 0;
+        while (begin < candidates.size()) {
+          const std::size_t end = candidates.find(' ', begin);
+          const std::string word = candidates.substr(begin, end - begin);
+          const std::wstring wide = public_text(word);
+          SendMessageW(self->suggestions, CB_ADDSTRING, 0,
+                       reinterpret_cast<LPARAM>(wide.c_str()));
+          if (end == std::string::npos) break;
+          begin = end + 1;
+        }
+        if (!candidates.empty()) SendMessageW(self->suggestions, CB_SETCURSEL, 0, 0);
+        EnableWindow(self->suggestion_apply, candidates.empty() ? FALSE : TRUE);
+        return 0;
       }
       if (message == WM_CLOSE) { const auto callback = self->cancel; callback(); return 0; }
       if (message == WM_DESTROY) {
@@ -350,7 +516,12 @@ struct WalletWindow::Impl final {
         const bool notify = !self->destroying;
         const auto callback = self->cancel;
         self->hwnd = nullptr;
-        self->status = nullptr; self->backup = nullptr; self->action_button = nullptr;
+        self->status = nullptr; self->suggestions = nullptr;
+        self->suggestion_apply = nullptr;
+        self->mnemonic_state = nullptr;
+        self->word_count = nullptr;
+        self->next_account = nullptr; self->account_indices = nullptr;
+        self->backup = nullptr; self->action_button = nullptr;
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         self->restore_owner();
         // callback 可完成 flow 并销毁当前 C++ 对象；此后绝不再读取 self。
@@ -374,30 +545,67 @@ WalletWindow::WalletWindow(WindowLease parent, const ValidatedWalletRequest &req
   impl_->class_name = L"CitizenSDK.Wallet." + std::to_wstring(reinterpret_cast<UINT_PTR>(impl_.get()));
   register_class(impl_->class_name, impl_->module, Impl::procedure);
   impl_->registered = true;
-  impl_->hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, impl_->class_name.c_str(), L"公民钱包",
-      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 600, 650,
+  impl_->hwnd = CreateWindowExW(WS_EX_DLGMODALFRAME, impl_->class_name.c_str(), L"CitizenSDK 钱包",
+      WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU, CW_USEDEFAULT, CW_USEDEFAULT, 620, 800,
       static_cast<HWND>(impl_->parent.get()), nullptr, impl_->module, impl_.get());
   require(impl_->hwnd != nullptr, CITIZENSDK_ERROR_UNAVAILABLE, "CitizenSDK wallet window is unavailable");
   require(SetWindowDisplayAffinity(impl_->hwnd, WDA_EXCLUDEFROMCAPTURE) != FALSE,
           CITIZENSDK_ERROR_UNAVAILABLE, "CitizenSDK sensitive display protection is unavailable");
-  impl_->status = control(impl_->hwnd, impl_->module, L"STATIC", L"", SS_LEFT, 0, 20, 18, 550, 70);
-  impl_->mnemonic = std::make_unique<SensitiveInput>(impl_->hwnd, kMnemonic, 20, 95, 550, 220, false, true);
-  control(impl_->hwnd, impl_->module, L"STATIC", L"可选的助记词派生密码（不是设备金库口令）", SS_LEFT, 0, 20, 330, 550, 24);
-  impl_->password = std::make_unique<SensitiveInput>(impl_->hwnd, kPassword, 20, 358, 550, 45, true, false);
-  impl_->confirmation = std::make_unique<SensitiveInput>(impl_->hwnd, kConfirmation, 20, 413, 550, 45, true, false);
+  impl_->status = control(impl_->hwnd, impl_->module, L"STATIC", L"", SS_LEFT, 0, 20, 18, 570, 90);
+  impl_->mnemonic = std::make_unique<SensitiveInput>(impl_->hwnd, kMnemonic, 20, 115, 570, 180, false, true);
+  impl_->mnemonic_state = control(impl_->hwnd, impl_->module, L"STATIC",
+      L"当前 0 / 选择 12；校验和尚未通过", SS_LEFT, kMnemonicState,
+      20, 300, 570, 24);
+  impl_->suggestions = control(impl_->hwnd, impl_->module, L"COMBOBOX", L"",
+      CBS_DROPDOWNLIST | WS_TABSTOP, kSuggestions, 20, 330, 360, 150);
+  impl_->suggestion_apply = control(impl_->hwnd, impl_->module, L"BUTTON",
+      L"使用所选候选", BS_PUSHBUTTON | WS_TABSTOP, kSuggestionApply,
+      395, 330, 195, 34);
+  EnableWindow(impl_->suggestion_apply, FALSE);
+  control(impl_->hwnd, impl_->module, L"STATIC", L"助记词数量", SS_LEFT, 0, 20, 370, 120, 24);
+  impl_->word_count = control(impl_->hwnd, impl_->module, L"COMBOBOX", L"",
+      CBS_DROPDOWNLIST | WS_TABSTOP, kWordCount, 150, 365, 120, 120);
+  for (const wchar_t *count : {L"12", L"18", L"24"})
+    SendMessageW(impl_->word_count, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(count));
+  const uint32_t selected_words = request.word_count == 0 ? 12 : request.word_count;
+  const int selected = selected_words == 12 ? 0 : selected_words == 18 ? 1 : selected_words == 24 ? 2 : -1;
+  require(selected >= 0, CITIZENSDK_ERROR_INVALID_ARGUMENT,
+          "CitizenSDK wallet word count is unsupported");
+  SendMessageW(impl_->word_count, CB_SETCURSEL, selected, 0);
+  const auto initial_state = public_text(impl_->mnemonic->mnemonic_status(selected_words));
+  SetWindowTextW(impl_->mnemonic_state, initial_state.c_str());
+  control(impl_->hwnd, impl_->module, L"STATIC", L"钱包密码（选填）", SS_LEFT, 0, 20, 410, 570, 24);
+  impl_->password = std::make_unique<SensitiveInput>(impl_->hwnd, kPassword, 20, 438, 570, 45, true, false);
+  impl_->next_account = control(impl_->hwnd, impl_->module, L"BUTTON",
+      L"自动添加下一个可用账户索引", BS_AUTOCHECKBOX | WS_TABSTOP,
+      kNextAccount, 20, 495, 570, 30);
+  impl_->account_indices = control(impl_->hwnd, impl_->module, L"EDIT", L"",
+      WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL, kAccountIndices, 20, 530, 570, 34);
+  std::wstring initial_indices;
+  for (std::size_t index = 0; index < request.account_indices.size(); ++index) {
+    if (index != 0) initial_indices += L',';
+    initial_indices += std::to_wstring(request.account_indices[index]);
+  }
+  SetWindowTextW(impl_->account_indices, initial_indices.c_str());
   impl_->backup = control(impl_->hwnd, impl_->module, L"BUTTON", L"我已在离线安全位置备份助记词",
-      BS_AUTOCHECKBOX | WS_TABSTOP, kBackup, 20, 475, 550, 30);
+      BS_AUTOCHECKBOX | WS_TABSTOP, kBackup, 20, 595, 570, 30);
   impl_->action_button = control(impl_->hwnd, impl_->module, L"BUTTON", L"", BS_DEFPUSHBUTTON | WS_TABSTOP,
-      kAction, 320, 535, 250, 40);
-  control(impl_->hwnd, impl_->module, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL, 20, 535, 130, 40);
+      kAction, 340, 680, 250, 40);
+  control(impl_->hwnd, impl_->module, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL, 20, 680, 130, 40);
   if (request.kind == CITIZENSDK_WALLET_FLOW_CREATE) {
     SetWindowTextW(impl_->status, L"助记词只在本设备生成，显示后必须离线备份。\n设备 TPM 金库口令将在提交时由 CitizenSDK 单独询问。");
     SetWindowTextW(impl_->action_button, L"生成钱包");
     ShowWindow(static_cast<HWND>(impl_->mnemonic->native_handle()), SW_HIDE);
+    ShowWindow(impl_->mnemonic_state, SW_HIDE);
+    ShowWindow(impl_->suggestions, SW_HIDE);
+    ShowWindow(impl_->suggestion_apply, SW_HIDE);
   } else {
-    SetWindowTextW(impl_->status, L"助记词与派生密码只在本机 CitizenSDK 原生界面和 Rust Core 内使用。");
+    SetWindowTextW(impl_->status, L"助记词与钱包密码只在本机 CitizenSDK 原生界面和 Rust Core 内使用。");
     SetWindowTextW(impl_->action_button, request.kind == CITIZENSDK_WALLET_FLOW_IMPORT ? L"导入钱包" : L"添加账户");
-    ShowWindow(static_cast<HWND>(impl_->confirmation->native_handle()), SW_HIDE);
+  }
+  if (request.kind != CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS) {
+    ShowWindow(impl_->next_account, SW_HIDE);
+    ShowWindow(impl_->account_indices, SW_HIDE);
   }
   ShowWindow(impl_->backup, SW_HIDE);
 }
@@ -430,6 +638,8 @@ void WalletWindow::set_error(const std::string &message) {
   SetWindowTextW(impl_->status, text.c_str());
   EnableWindow(impl_->action_button, TRUE);
   impl_->busy = false;
+  // 错误重试若仍为空，必须由用户明确确认，不能把清空/未输入静默当作选择。
+  impl_->password_reentry_required = true;
 }
 void WalletWindow::show_prepared_mnemonic(const SensitiveBuffer &mnemonic) {
   require(on_ui_thread() && impl_->hwnd != nullptr && impl_->parent.valid(),
@@ -437,11 +647,17 @@ void WalletWindow::show_prepared_mnemonic(const SensitiveBuffer &mnemonic) {
   impl_->mnemonic->set_utf8(mnemonic);
   impl_->mnemonic->set_read_only(true);
   ShowWindow(static_cast<HWND>(impl_->mnemonic->native_handle()), SW_SHOW);
+  ShowWindow(impl_->mnemonic_state, SW_SHOW);
   ShowWindow(impl_->backup, SW_SHOW);
   ShowWindow(static_cast<HWND>(impl_->password->native_handle()), SW_HIDE);
-  ShowWindow(static_cast<HWND>(impl_->confirmation->native_handle()), SW_HIDE);
+  ShowWindow(impl_->word_count, SW_HIDE);
+  ShowWindow(impl_->suggestions, SW_HIDE);
+  ShowWindow(impl_->suggestion_apply, SW_HIDE);
+  ShowWindow(impl_->next_account, SW_HIDE);
+  ShowWindow(impl_->account_indices, SW_HIDE);
   SetWindowTextW(impl_->action_button, L"确认备份并创建");
-  SetWindowTextW(impl_->status, L"请离线备份助记词并确认。CitizenSDK 不会再次显示它。");
+  SetWindowTextW(impl_->status,
+      L"请断网抄写并在离线安全位置核对助记词。热钱包不保存助记词，关闭后无法再次显示。若使用了非空钱包密码，还必须单独记住；不同密码会得到不同账户。设备 TPM 认证是独立的金库保护，不是钱包密码。");
   EnableWindow(impl_->action_button, TRUE);
   impl_->busy = false;
 }
@@ -449,19 +665,95 @@ bool WalletWindow::backup_confirmed() const noexcept {
   return on_ui_thread() && impl_->backup != nullptr &&
       SendMessageW(impl_->backup, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
+citizensdk_wallet_word_count_t WalletWindow::word_count() const {
+  require(on_ui_thread() && impl_->word_count != nullptr,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK wallet word count control is unavailable");
+  const LRESULT selected = SendMessageW(impl_->word_count, CB_GETCURSEL, 0, 0);
+  if (selected == 0) return CITIZENSDK_WALLET_WORDS_12;
+  if (selected == 1) return CITIZENSDK_WALLET_WORDS_18;
+  if (selected == 2) return CITIZENSDK_WALLET_WORDS_24;
+  throw HostError(CITIZENSDK_ERROR_INVALID_ARGUMENT,
+                  "请选择 12、18 或 24 个助记词");
+}
+bool WalletWindow::use_next_account() const noexcept {
+  return on_ui_thread() && impl_->next_account != nullptr &&
+      SendMessageW(impl_->next_account, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+std::vector<uint32_t> WalletWindow::account_indices() const {
+  require(on_ui_thread() && impl_->account_indices != nullptr,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK account index control is unavailable");
+  const int length = GetWindowTextLengthW(impl_->account_indices);
+  require(length >= 0 && length <= 32768, CITIZENSDK_ERROR_INVALID_ARGUMENT,
+          "指定账户索引输入过长");
+  std::wstring text(static_cast<std::size_t>(length) + 1, L'\0');
+  require(GetWindowTextW(impl_->account_indices, text.data(), length + 1) == length,
+          CITIZENSDK_ERROR_UNAVAILABLE,
+          "CitizenSDK account index control is unavailable");
+  std::vector<uint32_t> values;
+  const wchar_t *cursor = text.data();
+  while (*cursor != L'\0') {
+    const wchar_t *end = cursor;
+    while (*end != L'\0' && *end != L',') ++end;
+    uint32_t value = 0;
+    // wchar_t 不是 char，逐字符收敛到 ASCII 后再解析，禁止区域设置放宽格式。
+    std::string ascii;
+    ascii.reserve(static_cast<std::size_t>(end - cursor));
+    for (const wchar_t *item = cursor; item != end; ++item) {
+      require(*item >= L'0' && *item <= L'9', CITIZENSDK_ERROR_INVALID_ARGUMENT,
+              "指定账户索引必须是以逗号分隔的 1...1989 整数");
+      ascii.push_back(static_cast<char>(*item));
+    }
+    const auto exact = std::from_chars(ascii.data(), ascii.data() + ascii.size(), value);
+    require(exact.ec == std::errc{} && exact.ptr == ascii.data() + ascii.size(),
+            CITIZENSDK_ERROR_INVALID_ARGUMENT,
+            "指定账户索引必须是以逗号分隔的 1...1989 整数");
+    values.push_back(value);
+    if (*end == L',') {
+      require(end[1] != L'\0', CITIZENSDK_ERROR_INVALID_ARGUMENT,
+              "指定账户索引不能以逗号结尾");
+      cursor = end + 1;
+    } else {
+      cursor = end;
+    }
+  }
+  input_limits::validate_wallet_indices(values.data(),
+      static_cast<uint32_t>(values.size()));
+  return values;
+}
 SensitiveBuffer WalletWindow::take_mnemonic() {
   auto value = impl_->mnemonic->take_utf8();
   require(!value.empty(), CITIZENSDK_ERROR_INVALID_ARGUMENT, "wallet mnemonic input is empty");
   return value;
 }
-SensitiveBuffer WalletWindow::take_password(bool require_confirmation) {
+SensitiveBuffer WalletWindow::take_password() {
   auto first = impl_->password->take_utf8();
-  auto second = impl_->confirmation->take_utf8();
-  if (require_confirmation) {
-    require(first.size() == second.size() &&
-                (first.empty() || std::memcmp(first.data(), second.data(), first.size()) == 0),
-            CITIZENSDK_ERROR_INVALID_ARGUMENT, "wallet derivation passwords do not match");
+  const citizensdk_error_code_t validation = citizensdk_validate_wallet_password(
+      {first.data(), static_cast<uint64_t>(first.size())});
+  require(validation == CITIZENSDK_OK, validation,
+          "钱包密码不符合 CitizenSDK 派生规则");
+  if (!first.empty()) {
+    if (impl_->kind != CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS) {
+      const int response = MessageBoxW(impl_->hwnd,
+          L"非空钱包密码不会被保存；忘记它或输入不同密码会得到不同账户。是否继续？",
+          L"确认非空钱包密码风险", MB_ICONWARNING | MB_YESNO | MB_DEFBUTTON2);
+      require(impl_->hwnd != nullptr, CITIZENSDK_ERROR_UNAVAILABLE,
+              "钱包窗口已在风险确认期间关闭");
+      require(response == IDYES,
+              CITIZENSDK_ERROR_INVALID_ARGUMENT,
+              "已取消使用非空钱包密码");
+    }
+  } else if (impl_->password_reentry_required) {
+    const int response = MessageBoxW(impl_->hwnd,
+        L"当前钱包密码为空。确认本次明确使用空钱包密码继续重试？",
+        L"确认空钱包密码", MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON2);
+    require(impl_->hwnd != nullptr, CITIZENSDK_ERROR_UNAVAILABLE,
+            "钱包窗口已在空密码确认期间关闭");
+    require(response == IDYES, CITIZENSDK_ERROR_INVALID_ARGUMENT,
+            "请重新输入钱包密码，或明确确认使用空钱包密码");
   }
+  impl_->password_reentry_required = false;
   return first;
 }
 void WalletWindow::clear_secrets() noexcept { impl_->clear(); }

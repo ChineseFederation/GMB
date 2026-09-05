@@ -8,6 +8,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include "citizen_sdk_input_limits.hpp"
 
 namespace citizen_sdk::windows {
 namespace {
@@ -64,6 +65,24 @@ ResultOutcome inspect_result(citizensdk_result_handle_t result) {
 
 citizensdk_bytes_view_t view(const SensitiveBuffer &buffer) {
   return {buffer.data(), static_cast<uint64_t>(buffer.size())};
+}
+
+std::string last_error_or(const char *fallback) {
+  uint64_t required = 0;
+  if (citizensdk_last_error_copy(nullptr, 0, &required) != CITIZENSDK_OK ||
+      required == 0 || required > 65536) return fallback;
+  std::vector<uint8_t> bytes(static_cast<std::size_t>(required));
+  if (citizensdk_last_error_copy(bytes.data(), bytes.size(), &required) !=
+          CITIZENSDK_OK || required != bytes.size()) return fallback;
+  return std::string(bytes.begin(), bytes.end());
+}
+
+void validate_mnemonic(const SensitiveBuffer &mnemonic,
+                       citizensdk_wallet_word_count_t word_count) {
+  const citizensdk_error_code_t code =
+      citizensdk_validate_wallet_mnemonic(view(mnemonic), word_count);
+  if (code != CITIZENSDK_OK)
+    throw HostError(code, last_error_or("助记词或校验和不正确"));
 }
 
 }  // namespace
@@ -124,14 +143,15 @@ void WalletFlow::action() {
 }
 
 void WalletFlow::begin_prepare() {
-  SensitiveBuffer password = window_->take_password(true);
+  SensitiveBuffer password = window_->take_password();
+  const citizensdk_wallet_word_count_t word_count = window_->word_count();
   window_->set_busy("正在本设备生成钱包…");
   const auto self = shared_from_this();
   citizensdk_request_id_t request = 0;
   operation_in_flight_.store(true);
   const citizensdk_error_code_t code = host_->submit_private(
       [&](citizensdk_request_id_t *out) {
-        return citizensdk_prepare_wallet_creation(host_->sdk(), request_.word_count,
+        return citizensdk_prepare_wallet_creation(host_->sdk(), word_count,
                                                    view(password), out);
       },
       [self](citizensdk_result_handle_t result) noexcept {
@@ -211,7 +231,12 @@ void WalletFlow::receive_prepare(citizensdk_result_handle_t result) noexcept {
             CITIZENSDK_ERROR_INTEGRITY);
         return;
       }
-      self->finish(CITIZENSDK_WALLET_FLOW_FAILED, final_code);
+      if (self->cancel_requested_.load()) {
+        self->finish(CITIZENSDK_WALLET_FLOW_CANCELLED, CITIZENSDK_OK);
+      } else {
+        self->show_error(final_code,
+            "钱包生成准备失败；钱包密码已清除，请重新选择空密码或重新输入");
+      }
       return;
     }
     if (self->cancel_requested_.load()) {
@@ -298,7 +323,52 @@ void WalletFlow::commit_prepared() {
 
 void WalletFlow::begin_import_or_add() {
   SensitiveBuffer mnemonic = window_->take_mnemonic();
-  SensitiveBuffer password = window_->take_password(false);
+  validate_mnemonic(mnemonic, window_->word_count());
+  SensitiveBuffer password = window_->take_password();
+  auto owned_mnemonic = std::make_shared<SensitiveBuffer>(std::move(mnemonic));
+  auto owned_password = std::make_shared<SensitiveBuffer>(std::move(password));
+  if (request_.kind != CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS ||
+      !window_->use_next_account()) {
+    std::vector<uint32_t> indices;
+    if (request_.kind == CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS)
+      indices = window_->account_indices();
+    submit_import_or_add(std::move(owned_mnemonic), std::move(owned_password),
+                         std::move(indices));
+    return;
+  }
+
+  window_->set_busy("正在读取钱包账户以选择下一个索引…");
+  operation_in_flight_.store(true);
+  const auto self = shared_from_this();
+  citizensdk_request_id_t request = 0;
+  const citizensdk_error_code_t code = host_->submit_private(
+      [&](citizensdk_request_id_t *out) {
+        return citizensdk_get_wallet_profile(host_->sdk(), out);
+      },
+      [self, owned_mnemonic, owned_password](
+          citizensdk_result_handle_t result) noexcept {
+        self->receive_next_account(result, owned_mnemonic, owned_password);
+      },
+      &request);
+  if (code != CITIZENSDK_OK) {
+    operation_in_flight_.store(false);
+    owned_mnemonic->clear(); owned_password->clear();
+    if (request != 0) {
+      finish(CITIZENSDK_WALLET_FLOW_FAILED, code);
+      return;
+    }
+    show_error(code, "无法读取钱包账户；助记词与钱包密码已清除，请重新输入");
+  }
+}
+
+void WalletFlow::submit_import_or_add(
+    std::shared_ptr<SensitiveBuffer> mnemonic,
+    std::shared_ptr<SensitiveBuffer> password,
+    std::vector<uint32_t> account_indices) {
+  if (request_.kind == CITIZENSDK_WALLET_FLOW_ADD_ACCOUNTS) {
+    input_limits::validate_wallet_indices(account_indices.data(),
+        static_cast<uint32_t>(account_indices.size()));
+  }
   window_->set_busy(request_.kind == CITIZENSDK_WALLET_FLOW_IMPORT
                         ? "正在本设备导入钱包…" : "正在本设备添加账户…");
   irreversible_.store(true);
@@ -308,20 +378,19 @@ void WalletFlow::begin_import_or_add() {
   const citizensdk_error_code_t code = host_->submit_private(
       [&](citizensdk_request_id_t *out) {
         if (request_.kind == CITIZENSDK_WALLET_FLOW_IMPORT) {
-          return citizensdk_import_wallet(host_->sdk(), view(mnemonic),
-                                          view(password), out);
+          return citizensdk_import_wallet(host_->sdk(), view(*mnemonic),
+                                          view(*password), out);
         }
         return citizensdk_add_wallet_accounts(
-            host_->sdk(), view(mnemonic), view(password),
-            request_.account_indices.data(),
-            static_cast<uint32_t>(request_.account_indices.size()), out);
+            host_->sdk(), view(*mnemonic), view(*password),
+            account_indices.data(), static_cast<uint32_t>(account_indices.size()), out);
       },
       [self](citizensdk_result_handle_t result) noexcept {
         self->receive_terminal(result);
       },
       &request);
-  mnemonic.clear();
-  password.clear();
+  mnemonic->clear();
+  password->clear();
   if (code != CITIZENSDK_OK) {
     operation_in_flight_.store(false);
     if (request != 0) {
@@ -329,7 +398,84 @@ void WalletFlow::begin_import_or_add() {
       return;
     }
     irreversible_.store(false);
-    throw HostError(code, "CitizenSDK wallet operation was rejected");
+    show_error(code, "钱包操作被拒绝；助记词与钱包密码已清除，请重新输入");
+  }
+}
+
+void WalletFlow::receive_next_account(
+    citizensdk_result_handle_t result,
+    std::shared_ptr<SensitiveBuffer> mnemonic,
+    std::shared_ptr<SensitiveBuffer> password) noexcept {
+  ResultLease result_owner(result);
+  ResultOutcome outcome{CITIZENSDK_ERROR_INTERNAL, "无法读取钱包账户"};
+  uint32_t next = 0;
+  try {
+    outcome = inspect_result(result);
+    if (outcome.code == CITIZENSDK_OK) {
+      citizensdk_wallet_profile_info_t profile{};
+      profile.struct_size = sizeof(profile); profile.abi_version = 1;
+      outcome.code = citizensdk_result_get_wallet_profile(result, &profile);
+      if (outcome.code == CITIZENSDK_OK && profile.present == 0)
+        outcome = {CITIZENSDK_ERROR_NOT_READY, "当前设备尚未创建或导入钱包"};
+      uint32_t count = 0;
+      if (outcome.code == CITIZENSDK_OK)
+        outcome.code = citizensdk_result_get_wallet_account_count(result, &count);
+      if (outcome.code == CITIZENSDK_OK && count != profile.account_count)
+        outcome = {CITIZENSDK_ERROR_INTEGRITY,
+                   "钱包资料与账户列表数量不一致"};
+      bool anchor = false;
+      uint32_t maximum = 0;
+      for (uint32_t index = 0; outcome.code == CITIZENSDK_OK && index < count; ++index) {
+        citizensdk_wallet_account_info_t account{};
+        account.struct_size = sizeof(account); account.abi_version = 1;
+        uint64_t ss58 = 0, name = 0;
+        outcome.code = citizensdk_result_get_wallet_account(
+            result, index, &account, nullptr, 0, &ss58, nullptr, 0, &name);
+        if (outcome.code == CITIZENSDK_OK) {
+          anchor = anchor || account.index == 0;
+          maximum = std::max(maximum, account.index);
+        }
+      }
+      if (outcome.code == CITIZENSDK_OK && (!anchor || maximum >= 1989))
+        outcome = {CITIZENSDK_ERROR_INVALID_STATE,
+                   "钱包账户索引已损坏或没有可用的下一个索引"};
+      if (outcome.code == CITIZENSDK_OK) next = maximum + 1;
+    }
+  } catch (...) {
+    outcome.code = map_exception();
+  }
+  if (result_owner.release() != CITIZENSDK_OK)
+    outcome = {CITIZENSDK_ERROR_INTEGRITY, "钱包账户结果无法安全释放"};
+  try {
+    const auto self = shared_from_this();
+    if (!window_->invoke([self, outcome, next, mnemonic, password] {
+          self->operation_in_flight_.store(false);
+          if (self->finished_.load()) { mnemonic->clear(); password->clear(); return; }
+          if (self->cancel_requested_.load()) {
+            mnemonic->clear(); password->clear();
+            self->finish(CITIZENSDK_WALLET_FLOW_CANCELLED, CITIZENSDK_OK);
+            return;
+          }
+          if (outcome.code != CITIZENSDK_OK) {
+            mnemonic->clear(); password->clear();
+            if (outcome.code == CITIZENSDK_ERROR_INTEGRITY) {
+              self->finish(CITIZENSDK_WALLET_FLOW_FAILED, outcome.code);
+              return;
+            }
+            self->show_error(outcome.code, outcome.message +
+                "；助记词与钱包密码已清除，请重新输入");
+            return;
+          }
+          self->submit_import_or_add(mnemonic, password, {next});
+        })) {
+      operation_in_flight_.store(false);
+      mnemonic->clear(); password->clear();
+      finish(CITIZENSDK_WALLET_FLOW_FAILED, CITIZENSDK_ERROR_UNAVAILABLE);
+    }
+  } catch (...) {
+    operation_in_flight_.store(false);
+    mnemonic->clear(); password->clear();
+    finish(CITIZENSDK_WALLET_FLOW_FAILED, map_exception());
   }
 }
 
@@ -353,6 +499,15 @@ void WalletFlow::receive_terminal(citizensdk_result_handle_t result) noexcept {
           if (self->finished_.load()) return;
           if (outcome.code == CITIZENSDK_OK) {
             self->finish(CITIZENSDK_WALLET_FLOW_COMPLETED, CITIZENSDK_OK);
+          } else if (self->request_.kind != CITIZENSDK_WALLET_FLOW_CREATE &&
+                     outcome.code != CITIZENSDK_ERROR_INTEGRITY) {
+            self->irreversible_.store(false);
+            if (self->cancel_requested_.load()) {
+              self->finish(CITIZENSDK_WALLET_FLOW_CANCELLED, CITIZENSDK_OK);
+            } else {
+              self->show_error(outcome.code, outcome.message +
+                  "；助记词与钱包密码已清除，请重新输入");
+            }
           } else {
             self->finish(CITIZENSDK_WALLET_FLOW_FAILED, outcome.code);
           }

@@ -52,11 +52,91 @@ fn portable_u128_round_trips_boundary_values() {
 }
 
 #[test]
-fn wallet_word_count_accepts_only_the_two_frozen_values() {
+fn wallet_word_count_accepts_only_the_three_supported_values() {
     assert!(wallet_word_count(CitizenSdkWalletWordCount::Words12 as u32).is_ok());
+    assert!(wallet_word_count(CitizenSdkWalletWordCount::Words18 as u32).is_ok());
     assert!(wallet_word_count(CitizenSdkWalletWordCount::Words24 as u32).is_ok());
-    for invalid in [0, 11, 13, 23, 25, u32::MAX] {
+    for invalid in [0, 11, 13, 15, 21, 23, 25, u32::MAX] {
         assert!(wallet_word_count(invalid).is_err());
+    }
+}
+
+#[test]
+fn synchronous_wallet_input_never_needs_a_runtime_or_returns_secrets() {
+    fn view(bytes: &[u8]) -> CitizenSdkBytesView {
+        CitizenSdkBytesView {
+            data: bytes.as_ptr(),
+            len: bytes.len() as u64,
+        }
+    }
+    // SAFETY: every input/output buffer remains valid for the entire synchronous call.
+    unsafe {
+        assert_eq!(super::citizensdk_validate_wallet_password(view(b"")), 0);
+        assert_eq!(
+            super::citizensdk_validate_wallet_password(view(b"abcdef")),
+            0
+        );
+        for rejected in [b"short".as_slice(), b"abcdef ", &[0xff]] {
+            assert_eq!(
+                super::citizensdk_validate_wallet_password(view(rejected)),
+                CitizenSdkErrorCode::InvalidArgument.as_i32()
+            );
+        }
+        let mut required = u64::MAX;
+        assert_eq!(
+            super::citizensdk_wallet_word_suggestions(
+                view(b"aban"),
+                std::ptr::null_mut(),
+                0,
+                &mut required
+            ),
+            0
+        );
+        assert_eq!(required, 7);
+        let mut output = [0xa5; 16];
+        assert_eq!(
+            super::citizensdk_wallet_word_suggestions(
+                view(b"aban"),
+                output.as_mut_ptr(),
+                6,
+                &mut required
+            ),
+            CitizenSdkErrorCode::InvalidArgument.as_i32()
+        );
+        assert_eq!(output, [0xa5; 16]);
+        assert_eq!(required, 7);
+        assert_eq!(
+            super::citizensdk_wallet_word_suggestions(
+                view(b"aban"),
+                output.as_mut_ptr(),
+                16,
+                &mut required
+            ),
+            0
+        );
+        assert_eq!(&output[..7], b"abandon");
+        assert_eq!(output[7], 0xa5);
+        assert_ne!(
+            super::citizensdk_wallet_word_suggestions(
+                view(b"A"),
+                output.as_mut_ptr(),
+                16,
+                &mut required
+            ),
+            0
+        );
+        assert_eq!(required, 0);
+        assert_ne!(
+            super::citizensdk_wallet_word_suggestions(
+                view(b"a"),
+                output.as_mut_ptr(),
+                16,
+                std::ptr::null_mut()
+            ),
+            0
+        );
+        assert_ne!(super::citizensdk_validate_wallet_mnemonic(view(b""), 18), 0);
+        assert_ne!(super::citizensdk_validate_wallet_mnemonic(view(b""), 15), 0);
     }
 }
 

@@ -402,6 +402,57 @@ pub unsafe extern "C" fn citizensdk_get_best_fee_snapshot(
 }
 
 #[no_mangle]
+/// 同步复用派生密码校验，不返回规范化密码，不创建持久化状态。
+///
+/// # Safety
+/// `password` 在调用期间必须按声明长度可读。
+pub unsafe extern "C" fn citizensdk_validate_wallet_password(password: CitizenSdkBytesView) -> i32 {
+    ffi_status(|| {
+        let password = secret_utf8(password, "wallet password", MAX_WALLET_SECRET_INPUT_BYTES)?;
+        citizen_sdk_engine::validate_wallet_password(&password)?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// 同步复用 English BIP-39 输入校验；错误不回显单词。
+///
+/// # Safety
+/// `mnemonic` 在调用期间必须按声明长度可读。
+pub unsafe extern "C" fn citizensdk_validate_wallet_mnemonic(
+    mnemonic: CitizenSdkBytesView,
+    word_count: u32,
+) -> i32 {
+    ffi_status(|| {
+        let word_count = wallet_word_count(word_count)?;
+        let mnemonic = secret_utf8(mnemonic, "wallet mnemonic", MAX_WALLET_SECRET_INPUT_BYTES)?;
+        citizen_sdk_engine::validate_wallet_mnemonic(&mnemonic, word_count)?;
+        Ok(())
+    })
+}
+
+#[no_mangle]
+/// 同步查询本地官方词表，最多六词，以 LF 分隔且无尾随 LF/NUL。
+/// 容量不足时不部分写入；查询所需长度不要求提供输出缓冲区。
+///
+/// # Safety
+/// `prefix` 必须可读；`out_required` 必须可写；非空输出缓冲按容量可写。
+pub unsafe extern "C" fn citizensdk_wallet_word_suggestions(
+    prefix: CitizenSdkBytesView,
+    buffer: *mut u8,
+    capacity: u64,
+    out_required: *mut u64,
+) -> i32 {
+    ffi_status(|| {
+        require_output(out_required, "out_required")?;
+        ptr::write(out_required, 0);
+        let prefix = secret_utf8(prefix, "wallet word prefix", MAX_WALLET_SECRET_INPUT_BYTES)?;
+        let words = citizen_sdk_engine::wallet_word_suggestions(&prefix)?;
+        copy_to_host(words.join("\n"), buffer, capacity, out_required)
+    })
+}
+
+#[no_mangle]
 /// Loads the current public wallet profile without exporting any secret.
 ///
 /// # Safety
@@ -1402,8 +1453,9 @@ const fn u128_to_abi(value: u128) -> CitizenSdkU128 {
 fn wallet_word_count(value: u32) -> FfiResult<WalletWordCount> {
     match value {
         value if value == CitizenSdkWalletWordCount::Words12 as u32 => Ok(WalletWordCount::Words12),
+        value if value == CitizenSdkWalletWordCount::Words18 as u32 => Ok(WalletWordCount::Words18),
         value if value == CitizenSdkWalletWordCount::Words24 as u32 => Ok(WalletWordCount::Words24),
-        _ => Err(FfiError::invalid("wallet word count must be 12 or 24")),
+        _ => Err(FfiError::invalid("wallet word count must be 12, 18 or 24")),
     }
 }
 

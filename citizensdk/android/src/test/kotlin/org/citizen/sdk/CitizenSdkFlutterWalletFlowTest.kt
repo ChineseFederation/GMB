@@ -12,10 +12,12 @@ import java.util.concurrent.atomic.AtomicReference
 class CitizenSdkFlutterWalletFlowTest {
     @Test
     fun `wallet requests project only public choices into the sdk owned activity`() {
-        val create = CitizenSdkFlutterWalletFlow.contractRequest(
-            CitizenSdkFlutterCodec.Request.CreateWallet("session", 1, 24),
-        ) as CitizenSdkWalletFlowContract.Request.Create
-        assertEquals(24, create.wordCount)
+        for (count in listOf(12, 18, 24)) {
+            val create = CitizenSdkFlutterWalletFlow.contractRequest(
+                CitizenSdkFlutterCodec.Request.CreateWallet("session", 1, count),
+            ) as CitizenSdkWalletFlowContract.Request.Create
+            assertEquals(count, create.wordCount)
+        }
 
         val imported = CitizenSdkFlutterWalletFlow.contractRequest(
             CitizenSdkFlutterCodec.Request.Empty("importWallet", "session", 2),

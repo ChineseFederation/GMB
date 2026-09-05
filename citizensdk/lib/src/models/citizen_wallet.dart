@@ -4,8 +4,10 @@ import 'citizen_account.dart';
 
 enum CitizenWalletOrigin { created, imported }
 
+/// SDK 安全界面可选的 BIP39 词数；数值直接作为原生合同，不使用枚举序号。
 enum CitizenWalletWordCount {
   words12(12),
+  words18(18),
   words24(24);
 
   const CitizenWalletWordCount(this.value);

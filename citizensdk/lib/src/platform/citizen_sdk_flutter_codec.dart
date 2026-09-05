@@ -500,8 +500,8 @@ final class CitizenSdkFlutterCodec {
       case 'createWallet':
         _expectLength(fields, 1, 'createWallet fields');
         final wordCount = _positiveInt(fields[0], 'wordCount');
-        if (wordCount != 12 && wordCount != 24) {
-          throw _decodeFailure('wordCount 只能是 12 或 24');
+        if (wordCount != 12 && wordCount != 18 && wordCount != 24) {
+          throw _decodeFailure('wordCount 只能是 12、18 或 24');
         }
         return;
       case 'addWalletAccounts':

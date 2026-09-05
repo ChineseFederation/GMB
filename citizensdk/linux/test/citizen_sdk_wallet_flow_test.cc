@@ -38,6 +38,19 @@ citizensdk_wallet_flow_request_v1_t request(
 }  // namespace
 
 int main() {
+  assert(citizensdk_validate_wallet_password({nullptr, 0}) == CITIZENSDK_OK);
+  const uint8_t prefix[] = {'a', 'b', 'a', 'n'};
+  uint64_t required = 0;
+  assert(citizensdk_wallet_word_suggestions(
+             {prefix, sizeof(prefix)}, nullptr, 0, &required) == CITIZENSDK_OK);
+  assert(required == 7);
+  uint8_t candidate[7]{};
+  assert(citizensdk_wallet_word_suggestions(
+             {prefix, sizeof(prefix)}, candidate, sizeof(candidate), &required) ==
+         CITIZENSDK_OK);
+  assert(std::string(reinterpret_cast<char *>(candidate), sizeof(candidate)) ==
+         "abandon");
+
   const citizen_sdk::WalletFlowRequest public_default{};
   assert(public_default.kind == citizen_sdk::WalletFlowKind::Create);
   assert(public_default.word_count == 12);
@@ -50,8 +63,15 @@ int main() {
   create24.word_count = CITIZENSDK_WALLET_WORDS_24;
   assert(!rejected(create24));
   auto create18 = create12;
-  create18.word_count = 18;
-  assert(rejected(create18));
+  create18.word_count = CITIZENSDK_WALLET_WORDS_18;
+  assert(citizen_sdk::linux::validate_wallet_request(create18).word_count ==
+         CITIZENSDK_WALLET_WORDS_18);
+  auto create15 = create12;
+  create15.word_count = 15;
+  assert(rejected(create15));
+  auto create21 = create12;
+  create21.word_count = 21;
+  assert(rejected(create21));
 
   uint32_t indices[] = {1, 1989};
   auto create_with_indices = create12;
@@ -106,6 +126,9 @@ int main() {
                            std::istreambuf_iterator<char>());
   for (const char *required : {
            "citizensdk_prepare_wallet_creation",
+           "citizensdk_validate_wallet_mnemonic",
+           "citizensdk_get_wallet_profile",
+           "receive_next_account",
            "citizensdk_prepared_wallet_copy_mnemonic",
            "citizensdk_commit_wallet_creation",
            "citizensdk_prepared_wallet_release",
@@ -136,6 +159,17 @@ int main() {
     assert(source.find(required) != std::string::npos);
   }
   assert(source.find("getAccountPrivateKey") == std::string::npos);
+  assert(source.find("take_password(true)") == std::string::npos);
+  assert(source.find("request_.account_indices.data()") == std::string::npos);
+  assert(source.find("window_->use_next_account()") != std::string::npos);
+  assert(source.find("window_->account_indices()") != std::string::npos);
+  const auto import_begin = source.find("void WalletFlow::begin_import_or_add()");
+  const auto mnemonic_validation = source.find("validate_mnemonic(mnemonic", import_begin);
+  const auto password_take = source.find("window_->take_password()", import_begin);
+  assert(import_begin != std::string::npos &&
+         mnemonic_validation != std::string::npos &&
+         password_take != std::string::npos &&
+         mnemonic_validation < password_take);
 
   // prepared handle 的 release 失败不能抹掉唯一所有者或提前释放钱包
   // lifecycle token；supervisor 只有在 Core 确认 release 后才收口 flow。
@@ -171,8 +205,28 @@ int main() {
   for (const char *required : {"g_main_current_source()",
                                "g_source_set_ready_time(",
                                "return G_SOURCE_CONTINUE",
+                               "gtk_text_iter_equal(&cursor, &end)",
+                               "gtk_text_buffer_get_selection_bounds(",
+                               "gtk_text_buffer_insert_at_cursor",
+                               "citizensdk_wallet_word_suggestions",
+                               "citizensdk_validate_wallet_password",
                                "if (!on_ui_thread()) std::terminate()"}) {
     assert(window_source.find(required) != std::string::npos);
   }
+  assert(window_source.find("CitizenSDK 钱包") != std::string::npos);
+  assert(window_source.find("钱包密码（选填）") != std::string::npos);
+  assert(window_source.find("使用所选离线词表候选") != std::string::npos);
+  assert(window_source.find("再次输入派生密码") == std::string::npos);
+  assert(window_source.find("公民钱包") == std::string::npos);
+  assert(window_source.find("当前钱包密码为空") != std::string::npos);
+  assert(window_source.find("校验和有效") != std::string::npos);
+  assert(window_source.find("校验和尚未通过") != std::string::npos);
+  const auto password_begin = window_source.find("SensitiveBuffer WalletWindow::take_password()");
+  const auto password_validation = window_source.find(
+      "citizensdk_validate_wallet_password", password_begin);
+  const auto risk_dialog = window_source.find("gtk_message_dialog_new", password_begin);
+  assert(password_begin != std::string::npos &&
+         password_validation != std::string::npos &&
+         risk_dialog != std::string::npos && password_validation < risk_dialog);
   return 0;
 }

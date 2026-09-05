@@ -41,7 +41,7 @@ engine 精确依赖 crates.io 官方 `subxt-core 0.43.0`；该依赖声明为
 必要适配和与其共同演进的 SDK-only Provider，不承担 Core 清单职责。
 `subxt-core 0.43.0` 的解析闭包另包含 `base58 0.2.0`（crate manifest：MIT）。这些第三方项目
 的许可证与 copyright notice 以各 crate 自身分发内容为准；根 `LICENSE-MIT` 只覆盖
-ChineseFederation/CitizenSDK 自有代码，不能冒充第三方许可证原文。
+VoyagerRhett/CitizenSDK 自有代码，不能冒充第三方许可证原文。
 
 Rust 钱包派生与短生命周期秘密处理还直接使用 `bip39 2.2.2`、`getrandom 0.2.17`、
 `hmac 0.12.1`、`pbkdf2 0.12.2`、`sha2 0.10.9`、`unicode-normalization 0.1.25`、

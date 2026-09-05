@@ -4,6 +4,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 #include "citizen_sdk_sensitive_buffer.hpp"
 #include "citizen_sdk_wallet_validation.hpp"
 #include "citizen_sdk_window.hpp"
@@ -21,6 +22,10 @@ class SensitiveInput final {
   ~SensitiveInput();
   void *native_handle() const noexcept;
   SensitiveBuffer take_utf8();
+  // Windows 安全输入没有 caret，只允许末尾输入/删除，因此候选也只替换末词。
+  std::string word_suggestions() const;
+  std::string mnemonic_status(citizensdk_wallet_word_count_t word_count) const;
+  void replace_last_word(const std::string &word);
   void set_utf8(const SensitiveBuffer &value);
   void clear() noexcept;
   void set_read_only(bool value) noexcept;
@@ -44,8 +49,13 @@ class WalletWindow final {
   void set_error(const std::string &message);
   void show_prepared_mnemonic(const SensitiveBuffer &mnemonic);
   bool backup_confirmed() const noexcept;
+  // 这些选择属于 SDK 安全窗口，不增加 Flutter/C 方法或秘密字段。
+  citizensdk_wallet_word_count_t word_count() const;
+  bool use_next_account() const noexcept;
+  std::vector<uint32_t> account_indices() const;
   SensitiveBuffer take_mnemonic();
-  SensitiveBuffer take_password(bool require_confirmation);
+  // 返回后自管输入缓冲已清零；创建/导入的非空值只确认一次风险。
+  SensitiveBuffer take_password();
   void clear_secrets() noexcept;
   bool invoke(std::function<void()> action) noexcept;
   bool on_ui_thread() const noexcept;

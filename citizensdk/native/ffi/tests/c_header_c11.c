@@ -425,6 +425,7 @@ _Static_assert(CITIZENSDK_RESULT_WALLET_TRANSFER == 16, "result kind ABI");
 _Static_assert(CITIZENSDK_RESULT_TRANSACTION_HISTORY == 17,
                "result kind ABI");
 _Static_assert(CITIZENSDK_WALLET_WORDS_12 == 12, "wallet word count ABI");
+_Static_assert(CITIZENSDK_WALLET_WORDS_18 == 18, "wallet word count ABI");
 _Static_assert(CITIZENSDK_WALLET_WORDS_24 == 24, "wallet word count ABI");
 _Static_assert(CITIZENSDK_WALLET_ORIGIN_CREATED == 1, "wallet origin ABI");
 _Static_assert(CITIZENSDK_WALLET_ORIGIN_IMPORTED == 2, "wallet origin ABI");
@@ -494,6 +495,12 @@ ABI_FUNCTION(citizensdk_get_best_fee_snapshot, citizensdk_error_code_t,
              citizensdk_handle_t, citizensdk_request_id_t *);
 ABI_FUNCTION(citizensdk_get_wallet_profile, citizensdk_error_code_t,
              citizensdk_handle_t, citizensdk_request_id_t *);
+ABI_FUNCTION(citizensdk_validate_wallet_password, citizensdk_error_code_t,
+             citizensdk_bytes_view_t);
+ABI_FUNCTION(citizensdk_validate_wallet_mnemonic, citizensdk_error_code_t,
+             citizensdk_bytes_view_t, citizensdk_wallet_word_count_t);
+ABI_FUNCTION(citizensdk_wallet_word_suggestions, citizensdk_error_code_t,
+             citizensdk_bytes_view_t, uint8_t *, uint64_t, uint64_t *);
 ABI_FUNCTION(citizensdk_prepare_wallet_creation, citizensdk_error_code_t,
              citizensdk_handle_t, citizensdk_wallet_word_count_t,
              citizensdk_bytes_view_t, citizensdk_request_id_t *);

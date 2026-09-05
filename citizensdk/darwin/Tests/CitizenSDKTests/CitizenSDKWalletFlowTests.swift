@@ -6,18 +6,22 @@ private final class CitizenSDKWalletRegistryProbe: @unchecked Sendable { }
 final class CitizenSDKWalletFlowTests: XCTestCase {
     func testOptionalPasswordUsesSameValidationForBothApplePresenters() {
         for request in [CitizenSDKWalletFlowRequest.create(wordCount: 12), .importWallet, .addAccounts(indices: [1])] {
-            XCTAssertNoThrow(try citizenSDKValidateWalletPassword("", confirmation: nil, request: request))
-            XCTAssertNoThrow(try citizenSDKValidateWalletPassword("", confirmation: "", request: request))
+            XCTAssertNoThrow(try CitizenSDKWalletInput.validatePassword(""))
+            XCTAssertFalse(CitizenSDKWalletInput.requiresRiskConfirmation(password: "", request: request))
         }
-        XCTAssertThrowsError(try citizenSDKValidateWalletPassword("", confirmation: "x", request: .create(wordCount: 12)))
-        XCTAssertThrowsError(try citizenSDKValidateWalletPassword("x", confirmation: nil, request: .create(wordCount: 24)))
-        XCTAssertNoThrow(try citizenSDKValidateWalletPassword("x", confirmation: "x", request: .create(wordCount: 24)))
+        XCTAssertThrowsError(try CitizenSDKWalletInput.validatePassword("x"))
+        XCTAssertNoThrow(try CitizenSDKWalletInput.validatePassword("abcdef"))
+        XCTAssertTrue(CitizenSDKWalletInput.requiresRiskConfirmation(password: "abcdef", request: .create(wordCount: 24)))
+        XCTAssertTrue(CitizenSDKWalletInput.requiresRiskConfirmation(password: "abcdef", request: .importWallet))
+        XCTAssertFalse(CitizenSDKWalletInput.requiresRiskConfirmation(password: "abcdef", request: .addAccounts(indices: [1])))
     }
 
     func testRequestValidationRunsBeforePresentation() {
         XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 12)))
         XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 24)))
-        XCTAssertThrowsError(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 18)))
+        XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 18)))
+        XCTAssertThrowsError(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 15)))
+        XCTAssertThrowsError(try citizenSDKValidateWalletFlowRequest(.create(wordCount: 21)))
         XCTAssertThrowsError(try citizenSDKValidateWalletFlowRequest(.addAccounts(indices: [])))
         XCTAssertThrowsError(try citizenSDKValidateWalletFlowRequest(.addAccounts(indices: [1, 1])))
         XCTAssertNoThrow(try citizenSDKValidateWalletFlowRequest(.addAccounts(indices: [1, 1_989])))

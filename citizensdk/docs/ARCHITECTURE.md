@@ -124,7 +124,7 @@ graceful stop 在任何退订、服务或 provider 停止副作用前完成同�
   绑定同一 best runtime metadata；nonce 只接受同一次
   `AccountNonceApi_account_nonce` Runtime call 携带的账户、hash、高度与值，并复核准确 best
   身份。该值不包含交易池，持久同账户 Pending/InBlock single-flight 防止本地重复使用。
-- 钱包与 signer：English BIP-39 12/24 词、可选 NFKD password、`//0..//1989` 派生，以及
+- 钱包与 signer：English BIP-39 12／18／24 词、可选 NFKD password、`//0..//1989` 派生，以及
   create/import/add/usable/rename/activate/delete/reconcile/sign。create 固定为 prepare（零持久
   写入、一次性恢复词会话）→用户确认备份→commit，消除持久钱包先于恢复词展示的崩溃窗口；
   `bip39`、password 和 NFKD 临时值均进入 zeroize 生命周期。公开事实先以 revision CAS 保存
@@ -158,7 +158,7 @@ hash 逐头回溯，核对响应 hash、完整 SCALE header hash、高度与父�
 异步重组 TOCTOU，也允许重启后补扫旧块。
 
 真实 smoldot adapter 与产品 C ABI 已形成一个 70 符号的 ABI v1：原 36 个符号及其布局、数值、
-语义保持不变，追加 34 个账户、余额/nonce/fee、钱包生命周期/多账户、通用载荷签名、高层
+语义保持不变，追加 37 个账户、余额/nonce/fee、钱包生命周期/多账户、通用载荷签名、高层
 转账和历史符号；产品头文件仍没有任意 RPC、raw signer、private-key 或 child-secret 出口。
 `citizensdk_create` 保持 session-backed chain-only；`citizensdk_create_with_host` 固定 smoldot、
 准确 Runtime nonce 和唯一 sr25519 signer，并从 host v1 取得 chain database、runtime cache、

@@ -71,9 +71,10 @@ WalletFlowRequest FlutterWalletFlows::contract(const DecodedRequest &request) {
   WalletFlowRequest value;
   switch (request.method) {
     case Method::create_wallet:
-      if (request.word_count != 12 && request.word_count != 24)
+      if (request.word_count != 12 && request.word_count != 18 &&
+          request.word_count != 24)
         throw ContractFailure(CITIZENSDK_ERROR_INVALID_ARGUMENT,
-                              "wallet word count must be 12 or 24");
+                              "wallet word count must be 12, 18, or 24");
       value.kind = WalletFlowKind::Create;
       value.word_count = request.word_count;
       break;

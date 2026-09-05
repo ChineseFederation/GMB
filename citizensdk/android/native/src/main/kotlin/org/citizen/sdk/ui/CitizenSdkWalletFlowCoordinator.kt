@@ -222,6 +222,14 @@ class CitizenSdkWalletFlowCoordinator private constructor(
                     preparationCancelRequested
                 }
                 if (failure != null) {
+                    val activity = synchronized(operationGate) {
+                        flowActivity.get()?.takeUnless { it.isDestroyed || it.isFinishing }
+                    }
+                    // prepare 没有持久化副作用，原输入仍在 SDK 控件中时才允许原页重试。
+                    if (!cancelled && activity != null) {
+                        activity.showPreparationFailure(unwrapWalletFailure(failure))
+                        return@post
+                    }
                     deliverTerminal(
                         if (cancelled) CitizenSdkWalletFlowContract.Result.Cancelled
                         else CitizenSdkWalletFlowContract.Result.Failed(

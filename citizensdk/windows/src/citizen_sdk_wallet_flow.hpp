@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 #include "citizen_sdk_host_bridge.hpp"
 #include "citizen_sdk_wallet_validation.hpp"
 #include "citizen_sdk_wallet_window.hpp"
@@ -35,6 +36,12 @@ class WalletFlow final : public std::enable_shared_from_this<WalletFlow> {
   void begin_prepare();
   void commit_prepared();
   void begin_import_or_add();
+  void submit_import_or_add(std::shared_ptr<SensitiveBuffer> mnemonic,
+                            std::shared_ptr<SensitiveBuffer> password,
+                            std::vector<uint32_t> account_indices);
+  void receive_next_account(citizensdk_result_handle_t result,
+                            std::shared_ptr<SensitiveBuffer> mnemonic,
+                            std::shared_ptr<SensitiveBuffer> password) noexcept;
   void receive_prepare(citizensdk_result_handle_t result) noexcept;
   void receive_terminal(citizensdk_result_handle_t result) noexcept;
   void finish(citizensdk_wallet_flow_status_t status,

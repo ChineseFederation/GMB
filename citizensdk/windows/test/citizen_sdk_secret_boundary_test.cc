@@ -69,5 +69,18 @@ int main() {
     oversized_rejected = error.code() == CITIZENSDK_ERROR_INVALID_ARGUMENT;
   }
   assert(oversized_rejected);
+
+  // 补全只读取自管 SensitiveInput 并调用 Rust 官方词表，不进入系统日志。
+  std::ifstream window_stream(
+      std::filesystem::path(CITIZENSDK_WINDOWS_TEST_SOURCE_DIR) / "src" /
+          "citizen_sdk_wallet_window.cc",
+      std::ios::binary);
+  assert(window_stream.good());
+  const std::string window_source(
+      (std::istreambuf_iterator<char>(window_stream)),
+      std::istreambuf_iterator<char>());
+  assert(window_source.find("citizensdk_wallet_word_suggestions") != std::string::npos);
+  for (const char *forbidden : {"printf(", "std::cout", "OutputDebugString"})
+    assert(window_source.find(forbidden) == std::string::npos);
   return 0;
 }

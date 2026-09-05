@@ -27,7 +27,7 @@ Pod::Spec.new do |s|
 CitizenWallet 冷钱包 sr25519 原生签名（schnorrkel）。全端唯一实现，
 与 CitizenApp 热端共用 shared/citizen-signer 同一份源码。
                        DESC
-  s.homepage         = 'https://github.com/ChineseFederation/GMB'
+  s.homepage         = 'https://github.com/VoyagerRhett/GMB'
   s.license          = { :type => 'MIT' }
   s.author           = { 'voyager_rhett' => 'chinanation@icloud.com' }
   s.source           = { :path => '.' }

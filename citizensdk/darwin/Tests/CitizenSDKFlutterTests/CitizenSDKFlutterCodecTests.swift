@@ -10,6 +10,17 @@ import FlutterMacOS
 #endif
 
 final class CitizenSDKFlutterCodecTests: XCTestCase {
+    func testWalletWordCountsAreExactlyTwelveEighteenTwentyFour() throws {
+        for count in [12, 18, 24] {
+            let request = try CitizenSdkFlutterCodec.decode(method: "createWallet", arguments: [1, "session", 1, count])
+            guard case let .create(_, _, actual) = request else { return XCTFail("expected create request") }
+            XCTAssertEqual(actual, UInt32(count))
+        }
+        for count in [0, 15, 21, 30] {
+            XCTAssertThrowsError(try CitizenSdkFlutterCodec.decode(method: "createWallet", arguments: [1, "session", 1, count]))
+        }
+    }
+
     func testEveryV1MethodHasOneExactPositionalShape() throws {
         XCTAssertEqual(CitizenSdkFlutterCodec.methodChannel, "citizen/sdk/core/v1")
         XCTAssertEqual(CitizenSdkFlutterCodec.eventChannel, "citizen/sdk/events/v1")

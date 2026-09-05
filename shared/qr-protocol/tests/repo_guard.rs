@@ -1391,7 +1391,11 @@ citizenchain-node-macos-v1.2.3/citizenchain-node-macOS-v1.2.3.dmg"
     let serve_source = fs::read_to_string(&serve_source_path)
         .unwrap_or_else(|e| panic!("读取 {} 失败: {e}", serve_source_path.display()));
     assert!(serve_source.contains("https://github.com/VoyagerRhett/GMB/releases/download/"));
-    assert!(!serve_source.contains("ChineseFederation/GMB"));
+    // 所有 GitHub 下载地址必须来自现行唯一仓库，不能只检查某条正确地址存在。
+    assert_eq!(
+        serve_source.matches("https://github.com/").count(),
+        serve_source.matches("https://github.com/VoyagerRhett/GMB/").count(),
+    );
 
     let swift_source_path =
         tata_console_root.join("app/Sources/CitizenChainDownloadPublisher.swift");
@@ -1410,14 +1414,17 @@ citizenchain-node-macos-v1.2.3/citizenchain-node-macOS-v1.2.3.dmg"
             swift_source_path.display()
         );
     }
+    assert_eq!(
+        swift_source.matches("https://github.com/").count(),
+        swift_source.matches("https://github.com/VoyagerRhett/GMB/").count(),
+    );
     for forbidden in [
         "\"release_tag\": input.releaseTag",
         "oldPublication[\"release_tag\"]",
-        "ChineseFederation/GMB",
     ] {
         assert!(
             !swift_source.contains(forbidden),
-            "{}: 禁止 publication wire 旧字段或旧仓库所有者 {forbidden}",
+            "{}: 禁止 publication wire 旧字段 {forbidden}",
             swift_source_path.display()
         );
     }

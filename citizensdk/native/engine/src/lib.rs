@@ -15,6 +15,7 @@ mod transaction_builder;
 mod transaction_history;
 pub mod transaction_outcome;
 mod wallet_derivation;
+mod wallet_input;
 mod wallet_service;
 mod wallet_transfer_watch;
 
@@ -28,6 +29,8 @@ mod transaction_builder_tests;
 mod transaction_history_tests;
 #[cfg(test)]
 mod wallet_derivation_tests;
+#[cfg(test)]
+mod wallet_input_tests;
 #[cfg(test)]
 mod wallet_service_tests;
 #[cfg(test)]
@@ -46,7 +49,8 @@ pub use system_events::{decode_system_outcome, DecodedDispatchFailure, DecodedSy
 pub use transaction_outcome::{
     signed_extrinsic_hash, verify_transaction_outcome, TransactionEvidence,
 };
-pub use wallet_derivation::WalletWordCount;
+pub use wallet_derivation::{validate_wallet_password, WalletWordCount};
+pub use wallet_input::{validate_wallet_mnemonic, wallet_word_suggestions};
 pub use wallet_service::PreparedWalletCreation;
 pub use wallet_transfer_watch::{
     WalletTransferObserver, WalletTransferResolution, WalletTransferWatchResult,

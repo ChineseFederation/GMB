@@ -87,7 +87,7 @@ internal enum CitizenSdkFlutterCodec {
             case "createWallet":
                 try length(4)
                 let words = try integer(tuple[3], "wordCount")
-                guard words == 12 || words == 24 else { throw failure(.invalidArgument, "wordCount must be 12 or 24") }
+                guard words == 12 || words == 18 || words == 24 else { throw failure(.invalidArgument, "wordCount must be 12, 18 or 24") }
                 return .create(session: session, sequence: sequence, wordCount: UInt32(words))
             case "addWalletAccounts":
                 try length(4)

@@ -608,6 +608,49 @@ jlong native_history_sync(JNIEnv *env, jobject, jlong raw, jbyteArray values,
   return native_history(env, raw, values, count, false);
 }
 
+// 输入检查无持久化副作用，错误消息来自 Core 固定模板，不回显秘密。
+void wallet_input_error(JNIEnv *env, int32_t code) {
+  if (code == kOk) return;
+  uint64_t required = 0;
+  std::vector<uint8_t> message;
+  if (citizensdk_last_error_copy(nullptr, 0, &required) == kOk && required < 4096) {
+    message.resize(static_cast<size_t>(required) + 1, 0);
+    if (citizensdk_last_error_copy(message.data(), required, &required) == kOk) {
+      throw_sdk(env, code, reinterpret_cast<const char *>(message.data()));
+      return;
+    }
+  }
+  throw_sdk(env, code, "Wallet input validation failed");
+}
+
+void native_validate_password(JNIEnv *env, jobject, jbyteArray input) {
+  SensitiveBytes bytes;
+  if (!take_wallet_secret(env, input, bytes.out())) return;
+  wallet_input_error(env, citizensdk_validate_wallet_password(view(bytes.value())));
+}
+
+void native_validate_mnemonic(JNIEnv *env, jobject, jbyteArray input, jint words) {
+  SensitiveBytes bytes;
+  if (!take_wallet_secret(env, input, bytes.out())) return;
+  wallet_input_error(env, citizensdk_validate_wallet_mnemonic(view(bytes.value()), static_cast<uint32_t>(words)));
+}
+
+jbyteArray native_word_suggestions(JNIEnv *env, jobject, jbyteArray input) {
+  SensitiveBytes bytes;
+  if (!take_wallet_secret(env, input, bytes.out())) return nullptr;
+  uint64_t required = 0;
+  auto code = citizensdk_wallet_word_suggestions(view(bytes.value()), nullptr, 0, &required);
+  if (code != kOk) { wallet_input_error(env, code); return nullptr; }
+  if (required > 128) { throw_sdk(env, CITIZENSDK_ERROR_INTEGRITY, "Wallet suggestions exceed limit"); return nullptr; }
+  SensitiveBytes output;
+  output.out()->resize(static_cast<size_t>(required));
+  code = citizensdk_wallet_word_suggestions(view(bytes.value()), output.out()->data(), required, &required);
+  if (code != kOk) { wallet_input_error(env, code); return nullptr; }
+  auto result = env->NewByteArray(static_cast<jsize>(required));
+  if (result != nullptr && required != 0) env->SetByteArrayRegion(result, 0, static_cast<jsize>(required), reinterpret_cast<const jbyte *>(output.value().data()));
+  return result;
+}
+
 jlong native_prepare(JNIEnv *env, jobject, jlong raw, jint words,
                      jbyteArray password_bytes) {
   auto bridge = bridge_from(env, raw);
@@ -770,6 +813,9 @@ const JNINativeMethod kMethods[] = {
     {const_cast<char *>("nativeInitializeFinalizedHistory"), const_cast<char *>("(J[BI)J"), reinterpret_cast<void *>(native_history_initialize)},
     {const_cast<char *>("nativeSyncFinalizedHistory"), const_cast<char *>("(J[BI)J"), reinterpret_cast<void *>(native_history_sync)},
     {const_cast<char *>("nativePrepareWalletCreation"), const_cast<char *>("(JI[B)J"), reinterpret_cast<void *>(native_prepare)},
+    {const_cast<char *>("nativeValidateWalletPassword"), const_cast<char *>("([B)V"), reinterpret_cast<void *>(native_validate_password)},
+    {const_cast<char *>("nativeValidateWalletMnemonic"), const_cast<char *>("([BI)V"), reinterpret_cast<void *>(native_validate_mnemonic)},
+    {const_cast<char *>("nativeWalletWordSuggestions"), const_cast<char *>("([B)[B"), reinterpret_cast<void *>(native_word_suggestions)},
     {const_cast<char *>("nativeImportWallet"), const_cast<char *>("(J[B[B)J"), reinterpret_cast<void *>(native_import)},
     {const_cast<char *>("nativeAddWalletAccounts"), const_cast<char *>("(J[B[B[I)J"), reinterpret_cast<void *>(native_add_accounts)},
     {const_cast<char *>("nativeCopyPreparedMnemonic"), const_cast<char *>("(JJ)[B"), reinterpret_cast<void *>(native_copy_prepared)},

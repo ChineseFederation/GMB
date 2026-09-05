@@ -10,7 +10,7 @@ final class CitizenSDKNativeAbiTests: XCTestCase {
         XCTAssertEqual(citizenSDKHostBytesWrappedDEK, 1)
     }
 
-    func testHeaderExportsExactlySeventyUniqueCitizenSdkSymbols() throws {
+    func testHeaderExportsExactlySeventyThreeUniqueCitizenSdkSymbols() throws {
         let testFile = URL(fileURLWithPath: #filePath)
         let sdkRoot = testFile.deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent()
@@ -24,7 +24,6 @@ final class CitizenSDKNativeAbiTests: XCTestCase {
                 $0.trimmingCharacters(in: .whitespacesAndNewlines)
             }
         })
-        XCTAssertEqual(names.count, 70)
+        XCTAssertEqual(names.count, 73)
     }
 }
-

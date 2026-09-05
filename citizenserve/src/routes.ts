@@ -318,7 +318,7 @@ async function installerDownloadRoute(path: string): Promise<Response> {
     throw new HttpError(404, "download_not_found", "下载项不存在");
   }
   const releasesResponse = await fetch(
-    "https://api.github.com/repos/ChineseFederation/GMB/releases?per_page=100",
+    "https://api.github.com/repos/VoyagerRhett/GMB/releases?per_page=100",
     {
       headers: {
         accept: "application/vnd.github+json",

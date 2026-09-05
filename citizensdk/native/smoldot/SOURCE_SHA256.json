@@ -26,7 +26,7 @@
         },
         {
           "path": "Cargo.toml",
-          "sha256": "f8d80e96a5f4fcc372d792a86af11cc52c458d39678ff2c3f9c3406f1b59e367"
+          "sha256": "7333ed0330f453d45c67c93586487575f36ead04c0d1fafd22333529b1a31d01"
         },
         {
           "path": "build.rs",
@@ -868,16 +868,17 @@
         {
           "path": "src/verify/inherents.rs",
           "sha256": "a5d6836c3513ba344310efbde88d9887d3ee95888bcb41be5e7cb2d445e711b6"
-        },
-        {
-          "path": "src/verify/pow.rs",
-          "sha256": "73a8db3c04f439755978a9f9e8bbaf7ad9e670d1c49e1ecd51195f275b737059"
         }
       ],
       "adapted": [
         {
           "path": "src/identity.rs",
           "sha256": "777ca71862123cdcbce403d104ec263e6a379f6e048f3775b3634f2fbd319019"
+        },
+        {
+          "path": "src/verify/pow.rs",
+          "sha256": "6b7a01fa40b0d85cd70b5058edbff2e862b72898806cbfc26a3527726123b0c3",
+          "reason": "仅规范化第一方版权署名，与 CitizenApp 当前同文件一致；算法未改。"
         },
         {
           "path": "src/lib.rs",

@@ -1,7 +1,7 @@
 # CitizenSDK Linux 平台合同
 
 本文固定 CitizenSDK 第 7 步的 LinuxARM、LinuxAMD 平台投影。Linux 平台不会复制或改写
-CitizenChain 轻节点、钱包、sr25519、Runtime 或交易实现；它只把根目录已经冻结的 70 个
+CitizenChain 轻节点、钱包、sr25519、Runtime 或交易实现；它只把根目录已经冻结的 73 个
 `citizensdk_*` 产品 C ABI 与宿主操作系统能力组合起来。
 
 ## 当前状态
@@ -58,7 +58,7 @@ Flutter App           │       │
                      CitizenSDK Rust Core
 ```
 
-- `libcitizensdk.so` 是唯一 Rust Core，必须精确导出根产品头声明的 70 个符号。
+- `libcitizensdk.so` 是唯一 Rust Core，必须精确导出根产品头声明的 73 个符号。
 - `libcitizensdk_host.so` 只实现 HostBridge、typed stores、TPM/认证、SDK-owned 钱包 UI 和
   生命周期装配；不得包含第二份 smoldot、signer、Engine 或 Core 导出。
 - CMake 公开导入目标固定为 `CitizenSDK::Core` 和 `CitizenSDK::Host`。
@@ -108,7 +108,7 @@ Linux 环境。
 
 ## Host 与 C ABI
 
-根产品 ABI 仍是 70 个 `citizensdk_*` 函数。Linux 薄 Host ABI v1 另外精确包含 13 个
+根产品 ABI 仍是 73 个 `citizensdk_*` 函数。Linux 薄 Host ABI v1 另外精确包含 13 个
 `citizensdk_host_*` 函数，用于 Host 创建、Core 借用、callback、父窗口、Vault 可用性、钱包
 流程、单调销毁/监督移交和错误复制；它不增加链、钱包、签名、交易或任意 RPC 的第二套语义。
 
@@ -255,7 +255,7 @@ handle/session/parameter selector；ESAPI、SYS、MU、TCTI 等软件层即使�
 Linux Host 只为恢复词备份和恢复词/password 输入提供 SDK-owned GTK 界面，不添加 CitizenApp
 导航、业务页面或另一套钱包模型。请求进入 UI 前必须完成以下同步校验：
 
-- 创建只接受 12 或 24 词；
+- 创建只接受 12、18 或 24 词；
 - 导入与追加的 `word_count` 必须为 `0`，禁止静默忽略其它 flow kind 的字段；
 - 追加账户 index 非空、唯一并位于 `1..1989`；账户 `0` 是既有锚点，不能作为追加项；
 - 恢复词、BIP-39 password 与设备金库解锁口令分别执行 UTF-8/长度门禁；

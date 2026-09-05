@@ -491,9 +491,9 @@ verify_linux_install() {
   fi
   core_symbols="$(product_header_symbols)"
   host_symbols="$(linux_host_header_symbols)"
-  [[ "$(printf '%s\n' "$core_symbols" | wc -l | tr -d ' ')" == 70 \
+  [[ "$(printf '%s\n' "$core_symbols" | wc -l | tr -d ' ')" == 73 \
       && "$(printf '%s\n' "$host_symbols" | wc -l | tr -d ' ')" == 13 ]] \
-    || fail "$platform 公开 ABI 必须精确为 70 Core / 13 Host"
+    || fail "$platform 公开 ABI 必须精确为 73 Core / 13 Host"
   verify_linux_elf_identity "$platform" "$prefix/lib/$platform/libcitizensdk.so" \
     "$prefix/lib/$platform/libcitizensdk_host.so" "$readelf_bin" "$nm_bin"
 }
@@ -837,8 +837,8 @@ verify_apple_product_abi_symbols() {
   actual="$(printf '%s\n' "$all_symbols" | grep '^citizensdk_' || true)"
   expected="$(product_header_symbols)"
   expected_count="$(printf '%s\n' "$expected" | grep -c '^citizensdk_' || true)"
-  [[ "$expected_count" == 70 ]] \
-    || fail "include/citizensdk.h 必须精确声明 70 个 citizensdk_* 函数"
+  [[ "$expected_count" == 73 ]] \
+    || fail "include/citizensdk.h 必须精确声明 73 个 citizensdk_* 函数"
   forbidden="$(printf '%s\n' "$all_symbols" \
     | grep -E '^(smoldot_|citizen_sr25519_|account_crypto_)' || true)"
   [[ -z "$forbidden" ]] \
@@ -847,11 +847,11 @@ verify_apple_product_abi_symbols() {
     local missing extra
     missing="$(comm -23 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"))"
     extra="$(comm -13 <(printf '%s\n' "$expected") <(printf '%s\n' "$actual"))"
-    fail "$label 的 citizensdk_* 与 70 函数产品头不一致；缺失=${missing:-无}；额外=${extra:-无}"
+    fail "$label 的 citizensdk_* 与 73 函数产品头不一致；缺失=${missing:-无}；额外=${extra:-无}"
   }
   # 动态 framework 同时提供 Swift API 和 C ABI。Swift public/ABI-support 符号
   # 只能属于本模块 mangling；除这组 Swift 符号外，全部外部已定义符号必须正好
-  # 是产品头中的 70 个 C ABI，Rust staticlib 及其依赖不得穿透边界。
+  # 是产品头中的 73 个 C ABI，Rust staticlib 及其依赖不得穿透边界。
   swift_symbols="$(printf '%s\n' "$all_symbols" | grep '^\$s10CitizenSDK' || true)"
   [[ -n "$swift_symbols" ]] || fail "$label 未导出 CitizenSDK Swift 模块符号"
   foreign="$(printf '%s\n' "$all_symbols" \
@@ -868,7 +868,7 @@ write_apple_exported_symbols() {
   actual="$(printf '%s\n' "$all_symbols" | grep '^citizensdk_' || true)"
   expected="$(product_header_symbols)"
   [[ "$actual" == "$expected" ]] \
-    || fail "$label 未过滤链接未完整包含 70 个 citizensdk_* 产品符号"
+    || fail "$label 未过滤链接未完整包含 73 个 citizensdk_* 产品符号"
   swift_symbols="$(printf '%s\n' "$all_symbols" | grep '^\$s10CitizenSDK' || true)"
   [[ -n "$swift_symbols" ]] || fail "$label 未过滤链接没有 CitizenSDK Swift 导出"
   prepare_safe_output_file "$work_dir" "$destination" "$label 导出允许集"
@@ -876,8 +876,8 @@ write_apple_exported_symbols() {
     printf '%s\n' "$expected"
     printf '%s\n' "$swift_symbols"
   } | sed 's/^/_/' | LC_ALL=C sort -u >"$destination"
-  [[ "$(grep -c '^_citizensdk_' "$destination" || true)" == 70 ]] \
-    || fail "$label 导出允许集没有精确 70 个 C ABI"
+  [[ "$(grep -c '^_citizensdk_' "$destination" || true)" == 73 ]] \
+    || fail "$label 导出允许集没有精确 73 个 C ABI"
 }
 
 write_framework_plist() {

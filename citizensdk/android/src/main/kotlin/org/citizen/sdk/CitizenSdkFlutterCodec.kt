@@ -125,8 +125,8 @@ internal object CitizenSdkFlutterCodec {
                 "createWallet" -> {
                     length(4)
                     val wordCount = exactInt(tuple[3], "wordCount")
-                    if (wordCount != 12 && wordCount != 24) badRequest(
-                        "wordCount must be 12 or 24",
+                    if (wordCount != 12 && wordCount != 18 && wordCount != 24) badRequest(
+                        "wordCount must be 12, 18 or 24",
                         sessionId,
                         sequence,
                     )

@@ -22,9 +22,10 @@ void validate_wallet_indices(const uint32_t *indices, uint32_t count) {
 
 void validate_word_count(citizensdk_wallet_word_count_t count) {
   require(count == CITIZENSDK_WALLET_WORDS_12 ||
+              count == CITIZENSDK_WALLET_WORDS_18 ||
               count == CITIZENSDK_WALLET_WORDS_24,
           CITIZENSDK_ERROR_INVALID_ARGUMENT,
-          "wallet word count must be 12 or 24");
+          "wallet word count must be 12, 18, or 24");
 }
 
 std::string validate_application_id(citizensdk_bytes_view_t value) {

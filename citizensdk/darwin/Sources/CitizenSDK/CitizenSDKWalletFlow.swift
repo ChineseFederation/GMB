@@ -197,8 +197,8 @@ internal func citizenSDKValidateWalletFlowRequest(_ request: CitizenSDKWalletFlo
     -> CitizenSDKWalletFlowRequest {
     switch request {
     case let .create(wordCount):
-        guard wordCount == 12 || wordCount == 24 else {
-            throw CitizenSDKError(.invalidArgument, "word count must be 12 or 24")
+        guard [12, 18, 24].contains(wordCount) else {
+            throw CitizenSDKError(.invalidArgument, "word count must be 12, 18 or 24")
         }
     case .importWallet:
         break
@@ -206,6 +206,75 @@ internal func citizenSDKValidateWalletFlowRequest(_ request: CitizenSDKWalletFlo
         _ = try CitizenSDKInputLimits.additionalIndices(indices)
     }
     return request
+}
+
+/// 两个 Apple 安全界面共用 Core 输入合同；此类型不属于宿主公开 API。
+internal enum CitizenSDKWalletInput {
+    static let wordCounts: [UInt32] = [12, 18, 24]
+    static let explanation = "热钱包不持久保存助记词，关闭后不能再次显示。请离线备份。钱包密码为选填的派生盐值，不是 App 登录密码；非空密码须单独记住，恢复时必须相同。相同助记词使用不同密码会得到不同账户。"
+    static let passwordWarning = "钱包密码参与账户派生，不是 App 登录密码。必须同时保管助记词和该密码；密码丢失无法恢复原账户。请确认已理解此风险。"
+
+    static func validatePassword(_ value: String) throws {
+        try withInput(value) { try CitizenSDKChecks.requireOK(citizensdk_validate_wallet_password($0), "钱包密码校验失败") }
+    }
+
+    static func validateMnemonic(_ value: String, wordCount: UInt32) throws {
+        try withInput(value) { try CitizenSDKChecks.requireOK(citizensdk_validate_wallet_mnemonic($0, wordCount), "助记词校验失败") }
+    }
+
+    static func suggestions(_ prefix: String) throws -> [String] {
+        try withInput(prefix) { input in
+            var required: UInt64 = 0
+            try CitizenSDKChecks.requireOK(citizensdk_wallet_word_suggestions(input, nil, 0, &required), "单词补全失败")
+            guard required <= 128 else { throw CitizenSDKError(.integrity, "单词补全结果超出限制") }
+            var output = Data(count: Int(required))
+            defer { output.resetBytes(in: 0..<output.count) }
+            let code = output.withUnsafeMutableBytes {
+                citizensdk_wallet_word_suggestions(input, $0.bindMemory(to: UInt8.self).baseAddress, UInt64($0.count), &required)
+            }
+            try CitizenSDKChecks.requireOK(code, "单词补全失败")
+            return String(decoding: output, as: UTF8.self).split(separator: "\n").map(String.init)
+        }
+    }
+
+    static func requiresRiskConfirmation(password: String, request: CitizenSDKWalletFlowRequest) -> Bool {
+        guard !password.isEmpty else { return false }
+        if case .addAccounts = request { return false }
+        return true
+    }
+
+    static func indices(_ text: String) throws -> [UInt32] {
+        let parts = text.split(whereSeparator: { $0 == "," || $0 == "，" || $0.isWhitespace })
+        let values = parts.compactMap { UInt32($0) }
+        guard values.count == parts.count else { throw CitizenSDKError(.invalidArgument, "账户编号必须为 1—1989 的整数") }
+        return try CitizenSDKInputLimits.additionalIndices(values)
+    }
+
+    static func nextIndex(_ indices: [UInt32]) throws -> [UInt32] {
+        let maximum = indices.max() ?? 0
+        guard maximum < 1_989 else { throw CitizenSDKError(.invalidArgument, "已到达最大账户编号 1989") }
+        return [maximum + 1]
+    }
+
+    /// NSTextView / UITextView 使用 UTF-16 光标；补全只替换光标所属单词，不动其他词。
+    static func completion(_ text: String, selection: NSRange) -> (range: NSRange, prefix: String)? {
+        guard selection.length == 0, let caret = Range(selection, in: text)?.lowerBound else { return nil }
+        let start = text[..<caret].lastIndex(where: { $0.isWhitespace }).map { text.index(after: $0) } ?? text.startIndex
+        guard start < caret else { return nil }
+        let end = text[caret...].firstIndex(where: { $0.isWhitespace }) ?? text.endIndex
+        return (NSRange(start..<end, in: text), String(text[start..<caret]))
+    }
+
+    private static func withInput<T>(_ value: String, body: (citizensdk_bytes_view_t) throws -> T) throws -> T {
+        let buffer = try citizenSDKSensitiveText(value, label: "wallet input")
+        defer { buffer.clear() }
+        return try buffer.withUnsafeBytes { bytes in
+            var view = citizensdk_bytes_view_t()
+            view.data = bytes.bindMemory(to: UInt8.self).baseAddress
+            view.len = UInt64(bytes.count)
+            return try body(view)
+        }
+    }
 }
 
 internal func citizenSDKFlowError(_ error: Error) -> CitizenSDKError {

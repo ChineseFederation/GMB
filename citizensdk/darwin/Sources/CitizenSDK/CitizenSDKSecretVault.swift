@@ -189,7 +189,7 @@ internal final class CitizenSDKSecretVault: @unchecked Sendable {
                         throw CitizenSDKError(.keyInvalidated, "wallet KEK is unavailable")
                     }
                     let context = LAContext()
-                    context.localizedReason = "解锁公民钱包以继续"
+                    context.localizedReason = "授权 CitizenSDK 钱包操作以继续"
                     context.touchIDAuthenticationAllowableReuseDuration = 0
                     guard let key = try self.copyPrivateKey(walletIndex: walletIndex, generation: generation,
                                                             context: context, allowInteraction: true) else {

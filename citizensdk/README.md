@@ -4,6 +4,11 @@
 Apple 宿主数据隔离及 Linux SHM 恢复。恢复沿用同一个高层转账入口，不新增业务 API。
 本机测试不等于跨平台硬件或正式发布验收，准确结果与未完成项以任务卡为准。
 
+SDK 钱包安全界面统一选择 12／18／24 词，默认 12；“钱包密码（选填）”默认空，非空只
+确认一次派生风险，不要求重复输入。创建先准备、展示助记词并确认离线备份，再提交持久化。
+SDK 不持久保存助记词，关闭后无法再次显示；非空派生密码须另行记忆，恢复必须保持相同。
+这些输入与本地补全在 SDK 原生界面完成，Dart 只获得公开账户结果。
+
 CitizenSDK 是 GMB 根目录下的独立公民链客户端产品，向宿主应用提供同一套公民链轻节点、
 无根热钱包、sr25519 本地签名和链上交易能力。源码唯一目录是
 `/Users/rhett/GMB/citizensdk`，Dart 包名为 `citizen_sdk`，产品 ID 为 `citizensdk`。
@@ -48,8 +53,8 @@ iOS device Release 宿主和 Simulator ARM64 Swift 链接。移动端构建通�
 Rust 路径已经建立 `native/contracts`、`native/engine`、真实
 `native/smoldot/provider` 和产品级唯一 `native/ffi`。根 `include/citizensdk.h` 只公开
 `citizensdk_*`。ABI v1 保持 legacy `citizensdk_create` 路径原有 36 个符号及其数值、布局和
-单请求功能语义不变，再追加 34 个类型化
-符号，总计 70 个：除生命周期、异步请求、事件、所有权、能力快照、准确区块读取、已签名
+单请求功能语义不变，再追加 37 个类型化
+符号，总计 73 个：除生命周期、异步请求、事件、所有权、能力快照、准确区块读取、已签名
 交易提交/观察、同块执行核验及 finalized database 导入导出外，还投影账户余额、准确 best
 nonce、费用、钱包生命周期/多账户、本地载荷签名、高层钱包转账和 finalized 历史。
 `citizensdk_create` 继续是兼容的 chain-only session 构造；`citizensdk_create_with_host` 通过
@@ -91,7 +96,7 @@ active cleanup 与最多 64 项 queue 均不得命中当前 profile 的 exact se
 第 4.1/4.2 步已经在 Rust Core 源码内实现并组合账户、钱包、构造和历史行为：finalized
 `System.Account` 单读/批读；同一准确 best metadata 的链上费率、最低费与存在性存款；绑定
 请求账户和 best 块的 `AccountNonceApi_account_nonce` 准确 Runtime nonce；English BIP-39
-12/24 词、可选 NFKD password、
+12／18／24 词、可选 NFKD password、
 `//0..//1989`；钱包创建、导入、追加、可用性核验、改名、切换、删除与清理重放；以及准确
 CitizenChain signed extrinsic V4 的 `transfer_with_remark` 构造。创建采用
 `prepare_wallet_creation -> 用户确认备份 -> commit_wallet_creation_after_backup` 两阶段合同：

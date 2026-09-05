@@ -285,9 +285,9 @@ const SOURCE_FIXTURE_FILES = Object.freeze({
 });
 // Release 必须保留根级许可入口和两份权威许可证原文；仅检查文件名存在会允许法律文本被替换。
 const LICENSE_SOURCE_FILES = Object.freeze({
-  'LICENSE': 'e18cd42a76f530deefa3db97a1b2728eccbfc4d24a2057eef36e5eb73c96b58f',
+  'LICENSE': '564494ff2f70f7e7a54bfdb54083d44ab95648aede04e9bfc0565d8937e16829',
   'LICENSE-GPL-3.0': 'aab56b4a581fc1c50b7c782eacf2fc8be05a47cd98e4bf4d836dd9b6dd9c86f4',
-  'LICENSE-MIT': '39d4ad97ead876b44da69d6d5a3cdc185cd109e82c508ffa5a29f65897c24e1c',
+  'LICENSE-MIT': 'c2c4f9ec96b1908f3121e63c94c9b1e8ba4a55035acb55749bf51bcef2774e18',
 });
 // Hosted Package 不建立第二份候选：官方 Dart 发布工具直接读取已注入 Android/Apple
 // 原生库的 GitHub Release 候选，并由这份固定 .pubignore 只筛出运行时闭包。
@@ -341,25 +341,25 @@ const HOSTED_DEV_DEPENDENCIES = Object.freeze({
 // 上游 smoldot/signer 符号、任意 RPC 和秘密导出接口绕过 citizensdk_* 边界。
 const PUBLIC_ABI_FILES = Object.freeze({
   'include/README.md': 'd77ccb28f2847d9d97b479d2bd6ab0c2eb246348771bc86954b5e5cc996294b7',
-  'include/citizensdk.h': '8c6f23911ab79ccb3beeeac7e646ca81eade2d01fe8b712ef98a52270d54852f',
-  'include/citizensdk_types.h': '57923cd2c0ce5b7fb360a52125f36734611e386471e5b9e147db016134c95b4d',
+  'include/citizensdk.h': '3368c2c8180cc008dae3c9d6943e459e1cd119146619e9a45a47421832f4f3c2',
+  'include/citizensdk_types.h': '2c78e66466dbfec3bca04783438fae437f70ae1aba27a8d36a836f925f87532b',
 });
 // Dart（排除已有独立来源合同的 smoldot 快照）、Android root/native 与
 // Apple darwin 生产输入构成一个反向闭集。平台测试、文档和注入的 AAR/
 // XCFramework 分别由测试、文档与候选投影合同固定，不能在本表建立第二条来源。
 const MOBILE_BINDING_SOURCE_FILE_COUNT = 119;
 const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
-  'android/build.gradle': 'b62ad7e7e76fe92281e35c19d6315e198a94846767002dc110457f9c21c46ad8',
+  'android/build.gradle': '26ac24190314f30f7f035fd1c607c4b3eee41658af9e8659cee87778b5164cfb',
   'android/gradle.properties': 'cf2c210cd35238888bb6c125c538bcadfebff01d28e97d664b83f96f31fa3160',
-  'android/native/build.gradle': '81f1f645a558bf74ae9c65445e40a6d1322d9120c3b9aeae03099c77c48be35c',
+  'android/native/build.gradle': '1ca8e4d1b480df2494f3eaf624ba687355e05dcef166d5ab6840ef4adba3f78e',
   'android/native/consumer-rules.pro': '81c0d229a083f6b87647b45708e1b19ad116a65c5eed33bf5152ac35def7f2c0',
   'android/native/src/main/AndroidManifest.xml': '4af8bd8f81dc572f010d489f9960baa1520f6d6573c7096e5d617033f876239a',
   'android/native/src/main/cpp/CMakeLists.txt': '4cdae89392703d44d47a2961588e1da9623c1f4fb8fdaa4e9517b7e941134105',
   'android/native/src/main/cpp/citizensdk_host_bridge.cpp': '23546edb5d4b2cfcccf5ad7c9bbe743d5fb994dd0b8625dbad7c815124533c3b',
   'android/native/src/main/cpp/citizensdk_host_bridge.hpp': 'a35193fb915bc1c5c5dcfe4277444f7ba710db7d3ceda4d30d4d3927bd2546d4',
-  'android/native/src/main/cpp/citizensdk_jni.cpp': '635aedc52efbc7a07c6455d8f771b3759cb5f324594bacd9732aa77a793442e5',
+  'android/native/src/main/cpp/citizensdk_jni.cpp': '811adcabdd920546ab45c093fe95d25921efff28fbaba8bdc32a8bc2ad4aa376',
   'android/native/src/main/cpp/citizensdk_jni_support.hpp': '9bd0b22a8536d2c152191ccd1ed4c39816ce9d7bb4680d6afbc5280f76e96188',
-  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdk.kt': '2ee50efc59b694f6187232f6019f60743807d01ffe02725de0dbe6c1c7becfc6',
+  'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdk.kt': '9549194dfefa6921d6ecb6cbc015c565bc2bbec8b14e053682edb151f540cb22',
   'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkError.kt': '2e286272bef5a88e9ea425083c28d4f3299f8ff203b92c21c4fefea7fd01c9e9',
   'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkEvents.kt': '5c749db2c279963599aa3cf24aa942b55abe1fdafb069f4803ec68de5de29a6a',
   'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkModels.kt': '06d233bc14f0aaf6be08dfc666f5319bef7aa354fe15c310c8188407deace231',
@@ -367,10 +367,10 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkPreparedWallet.kt': '74f08d32ce1ddeac586180d75dd80a034651da50a83387667355b7a5fd92b0ed',
   'android/native/src/main/kotlin/org/citizen/sdk/CitizenSdkRecoveryPhrase.kt': 'a2f90846b60e59fa98339a60e2b19b0c3a9c5692c8caa93038ce2116ca8cfc29',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkAssets.kt': '28e6eb8a028f5c7b5404f68ef8ef886107c6f188838bd5c0dae2d111dafa7e79',
-  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHardwareVault.kt': '7674d941b192ae54ce1e91f5cad86cd3e404428277cd1a2c902501d84b5dfef8',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHardwareVault.kt': 'c8ad16f69987d13b770cb64f41c344be85d58263900d6b16f29cb13afcc69ef8',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHostRecord.kt': '6cdb3638939976db4c1b179a5871d8de111dd4bf2a3c94eab378e281cbcc9b49',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkHostServices.kt': 'e146a12af1ebeb7aae4b5de29451b1f8d6e69478b4f721168a7538ccdf4bb161',
-  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNative.kt': '951d96f18056b82cbb89c96f18c5f95fc85d2cef35cb25640fad75b6df9d239d',
+  'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNative.kt': 'c7432fce679d9e348ba3f5c8ef82fdfdc3f797d4e133fca9fff53229325eef63',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNativeCodec.kt': 'f69f3e8db72febaadcf3e7b691a7e75d17c9ce440456385603762dfbb58ead01',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkNativeResult.kt': 'a49301c203bf71f62692b66d428c54d33a9b1e3da5e7c137a1db1ad8a7b5a01d',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkPublicStore.kt': 'd252f511c22e10c70edc4a6a7320f3c0ee94c74ce2f2babdc18203b46067f2c1',
@@ -380,18 +380,18 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkSensitiveBytes.kt': 'fe2129f7612e3cad88ed7d2f38d66d371488554238794c94d9139c95729337c6',
   'android/native/src/main/kotlin/org/citizen/sdk/internal/CitizenSdkSqlite.kt': '0d8c1546edbe7b14ba24259b97ba77349613ca9ed8dc43952397d207c7a171e4',
   'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkRecoveryContent.kt': '5de5a80491efaa7f1c7e2573bb14525446b99d466da5b5ef3b89543d85cc72df',
-  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowActivity.kt': '65a8b4d2e3334c64b9e6c5f2178f35e5b004e5e12c8fd2a89bce627403b79a06',
-  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowContract.kt': '54e02d8b77767d1ee341aa416c9d435f0a2444dddb6aad6449eb1f68a1d66e46',
-  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowCoordinator.kt': 'fb3c504300446f8b09c65678baf2dbebbd9f3f48f656885c05774adaab20f140',
-  'android/settings.gradle': '762a06e85bef782194d141d475843ef3e96488d7144b087f0012aa308601b453',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowActivity.kt': 'c5ec3b592c2505de1b79bf4a7bdcbcdd83f49b4b4f1978a325cec9c74afee2ee',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowContract.kt': '5dca45ab6aee418c09e3cfce90d56e00cdb3dcb67a5ef512c3995529e9db69ed',
+  'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowCoordinator.kt': '1c4ff98ac00e90ef8e29abc9b08789f19f89d37a004e57aa628a3791f59e2c90',
+  'android/settings.gradle': '598a529cce1cce1394e4656c1691b2ec2d9d660e3e0d778c698b97e83b81fe64',
   'android/src/main/AndroidManifest.xml': '238e29dda0ae9883bafebcd6f79de39e60837c839993ecfac3407203b5ce22ba',
-  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt': '731bb214510ec1474b505f4c97aeb2c6b02103939baa26109eb58152dd8b5573',
+  'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt': '500a1f2ce3835fc6f8f6ce8f975f2924d2258ebc3cf8232c75b3852fb3815f0e',
   'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterSessions.kt': 'b5ab0d69902d14ed8b74de23c83f05cee2320fa52ff92ad1237a6e434b4ed0a3',
   'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterWalletFlow.kt': 'cd3c960595b5bdbee8659577253ab7c3f758b4d9f080c81304561a9a4045aa51',
   'android/src/main/kotlin/org/citizen/sdk/CitizenSdkPlugin.kt': '92fe14dcf007d368f73854c2b581edd51bce157c439ee9c6b843a9a729f2938a',
   'darwin/Package.swift': '159c504cab86afb641fbef2b1fd35c59c20bbbe81d003cd7cdeec914a3ee91fc',
   'darwin/Sources/CitizenSDK/CitizenSDK-Bridging-Header.h': 'dd01912fc8a386b64dfde1000a3ff2ffbdbe620da94969389f95edbc175de04b',
-  'darwin/Sources/CitizenSDK/CitizenSDK.swift': '1600cb431f5711c3a79f670c2e7f575e2be56978783d92fe54f451903a82a9ff',
+  'darwin/Sources/CitizenSDK/CitizenSDK.swift': '9791ffaee90e0cb2f31b4066a589d7d80c426f7296c160315dcbaf568bf5ff20',
   'darwin/Sources/CitizenSDK/CitizenSDKAssets.swift': '0a674251ab01920e2d782d5cb2c0357c66693043e098c1876583c498ff4fef81',
   'darwin/Sources/CitizenSDK/CitizenSDKError.swift': '51a7f249764ff7c07ba7a75e228b9462c5bf7a5aef70b553a5d56ef12db2f9d1',
   'darwin/Sources/CitizenSDK/CitizenSDKEvents.swift': '449c39d3a33491b50acb99e4304ff42dbf23ed93fde9edbf08700ad15e745c34',
@@ -399,7 +399,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'darwin/Sources/CitizenSDK/CitizenSDKHostRecord.swift': '70d951817f68a0ca5adb55a0a82323d8919920a1605b062e042c3122b9b391d8',
   'darwin/Sources/CitizenSDK/CitizenSDKInputLimits.swift': '948aa60e444b8eb5bdf8e460529ac7648d47d4116c52d91cd60e03bce067ef67',
   'darwin/Sources/CitizenSDK/CitizenSDKModels.swift': '30009838ae9e9374255baf669f2c670dddcb1e02c035d86b3efc2cf56eb8eebf',
-  'darwin/Sources/CitizenSDK/CitizenSDKNative.swift': 'dff291dad9f3563d1f90352a1850767419bcdb301081e06e3f235305d6efb963',
+  'darwin/Sources/CitizenSDK/CitizenSDKNative.swift': '19f01d154bccdd8523bcc01477a383354a2b19dcbe13ef27f404271387f071e0',
   'darwin/Sources/CitizenSDK/CitizenSDKNativeCodec.swift': 'f5b705bbd3299773792545c8a8fb190b30de11d9faeba2d2b8f65c686edfffe8',
   'darwin/Sources/CitizenSDK/CitizenSDKOperation.swift': 'a36da7031a4775e90328c80b2ef8749a88af89759c89eec278dcdc561c803646',
   'darwin/Sources/CitizenSDK/CitizenSDKPreparedWallet.swift': 'e405d16b3a45b774400e737300bf0c6a9e0caa7990c15a53ccbc16fa7c522d10',
@@ -408,25 +408,25 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'darwin/Sources/CitizenSDK/CitizenSDKRecoveryPhrase.swift': '5600c386b88b6b17299a13e758655337ae2441e1cea4a08426bdd69ed0815a34',
   'darwin/Sources/CitizenSDK/CitizenSDKSQLite.swift': '37460d6b270ec32fdd503cc506f1195f48152527b8acf063ab1b11b8f6fa6ad5',
   'darwin/Sources/CitizenSDK/CitizenSDKScreenSecurity.swift': '8501af1dcf92faf8f62d0113bd8831569f7060cbe825994d1d2915a908469c70',
-  'darwin/Sources/CitizenSDK/CitizenSDKSecretVault.swift': 'ba1440b75b37f4f3706280de68b9a7eaed7bcc5e830ef8042690f979d7512783',
+  'darwin/Sources/CitizenSDK/CitizenSDKSecretVault.swift': '3deeeb1d61e0694a60e2011cab7a158c12921e0542865df2bbea032bb3c156fd',
   'darwin/Sources/CitizenSDK/CitizenSDKSecureStore.swift': 'ecf5be4e8cb98f80f32b737c6367996f65499e4c64fd7a31b92e24eca74d0aaf',
   'darwin/Sources/CitizenSDK/CitizenSDKSensitiveBuffer.swift': '2b92446c0fb99663105dcbe070a9bd0718ba492d807ce8ff1966d41a512ed25a',
-  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlow.swift': '62db70d6916c973578200c0f2803d93cb9d6cf55acc962a47ea6f400f497ab7e',
-  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowIOS.swift': '08c72825d0af2023f000ed984969bf26c3fa58355121924554b8a24a2d9719c6',
-  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowMacOS.swift': 'd76d5e0e067d66e5cb2db54727e1976ed8e17e7fa62c93c741f097446ed31d92',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlow.swift': '10c2da7c11092ed3349e331057c7878994bf8656f8dc8d572f6bf4661c169657',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowIOS.swift': 'e7b19f3e7dd8290cb0132f849f660b565a6f11a79cb93cf698b9705079911c56',
+  'darwin/Sources/CitizenSDK/CitizenSDKWalletFlowMacOS.swift': 'f6931ffb5fb0ea92253fc8e5f6a8726b1b092104c050350f2785e4bec15d146f',
   'darwin/Sources/CitizenSDK/PrivacyInfo.xcprivacy': 'bc417321bb94066c1bca08840349eea542c3c13e6addfc8248533791627434f3',
-  'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift': 'f7e1c07bf1eaa134e76b3aff1cfff1e79ddbba52d57e1edbbb674fd3028c340d',
+  'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterCodec.swift': 'cfbb255bbde55d0a9280fb7868948d08a1e5188ae23ecc3140b1419932c07467',
   'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterSessions.swift': 'b140687e4bfe05c61b36cf0bc4b65cab0e27c04679e384412082f9388411fdfc',
   'darwin/Sources/CitizenSDKFlutter/CitizenSdkFlutterWalletFlow.swift': 'f04698a94743284e4af0047dfd48e30ee89ff93650e013ff52f3c4b83c5843bf',
   'darwin/Sources/CitizenSDKFlutter/CitizenSdkPlugin.swift': '7d634d9c4db67486b62339a9e7f95fd99f97bc54fa3e9049be8948f5a86506e5',
-  'darwin/citizen_sdk.podspec': '0407e833b3f1d82f19b8c7ef4142e8606a848ef5bf59733ad6766eb5948158e0',
+  'darwin/citizen_sdk.podspec': '57539c378eef8206031db4a12b431b84c57ad583db77cd965aef9922949ed873',
   'lib/citizen_sdk.dart': 'bd1898ad89082355429235224e2f71f24d461e1261fdcee484c34118bf2cd72d',
   'lib/src/api/citizen_chain.dart': '1c5e919a933608cd06896d1e4538534752875ec279e79d4c62329868d610bd72',
   'lib/src/api/citizen_sdk.dart': '7bef11333e7e8ef5282144b5ed0ef54f28f531307adcfc2fef3b2a8c9cbc1336',
   'lib/src/api/citizen_sdk_error.dart': 'e26382dc9af2da918da3e4eb1921f6340b1d9edb0e8956ba2f374eb9925d3f5f',
   'lib/src/api/citizen_sdk_events.dart': 'c0117d1b2e849e826046f4f4b38fe8313f48d5ab994d58f58ebc62bd310f5cb7',
   'lib/src/api/citizen_transactions.dart': 'bc66a6c4ca6a522d5d0b19221a418e022aced230431ab14cf40da2c314d60bdd',
-  'lib/src/api/citizen_wallet.dart': '49f4f10ec1bed6ba7b8b5101b2429f362292e03c0d95dda8be162bfeaa7e4e7f',
+  'lib/src/api/citizen_wallet.dart': 'dbb1474f4285ba1ef31ed352ee018aee0f4d983758c71bee3c1e4f8053294232',
   'lib/src/crypto/account_codec.dart': 'ce72262d96193ae47da43a9f675d6141f5c565eed05bb9e9755b575d96fcbc84',
   'lib/src/crypto/citizen_signer.dart': '4745b5992a9116780184b8d87357289e32d65c9ddf904cb88db8d388ec8db161',
   'lib/src/crypto/native_sr25519.dart': '1e3819103c847a051dd9557d47b05587f715af6fcfc704a40ddcceb9eb56568d',
@@ -436,7 +436,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'lib/src/models/citizen_capability.dart': 'f5d80517cc18ccb4b026742f5d4caf2d360ba979d9abc7e3cf286a7b81ed0ee0',
   'lib/src/models/citizen_chain_state.dart': 'f1a32d30a294106a23d03a3479792d85decdf184f6d828c83bae27a56713cc89',
   'lib/src/models/citizen_transaction.dart': 'f16ed24a536254b3023b34e2fa5f7f21160aeaab83c460265f86e74e2466f94a',
-  'lib/src/models/citizen_wallet.dart': '2bf4da3e2e8fe8b833ba20175eb40acf1e54852cfe5922e90f4dcb9f99b8ea52',
+  'lib/src/models/citizen_wallet.dart': '4b6ef68ac5f0207cb81c1eccfc90d732af0faecfa8dcb9f37a6b1a2cc0bf4b0f',
   'lib/src/node/bootstrap_client.dart': '66d4d47b0d49c374c47be4d98d880718c5d8be205280f179748079c29060afbd',
   'lib/src/node/bootstrap_manifest.dart': 'a80c053de76e901a9fda3fe0c763032db8a8412570675eb020fe9c36b64d6245',
   'lib/src/node/chain_asset_manifest.dart': '6225ff05bf0a9a47721e457845a3db0ea71043b101563fd57ee2c88d687ed26b',
@@ -446,7 +446,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'lib/src/node/chain_health.dart': 'bb85e68ccf12f1d305b7834352ce4e11729e568c53e36267f04ffb1e437a7edc',
   'lib/src/node/light_client.dart': 'dda86c3cc22434d8761612cbbe311cf977fb904aafcee10be4057363fa643c78',
   'lib/src/node/sdk_log.dart': '668bcb7b520c573b8bf5cd7592337c55a8c445d6168ed7d1ee07a6fa11fc352b',
-  'lib/src/platform/citizen_sdk_flutter_codec.dart': '4921673ba75062ac4018270f38a3df0d50ac28c577a5d9da243fe5d6ef532ce1',
+  'lib/src/platform/citizen_sdk_flutter_codec.dart': 'e91257760dfd97f465c07405b6415e755b3b86d162a3a9a9aab507fbb396a004',
   'lib/src/platform/citizen_sdk_flutter_sessions.dart': 'c34155c9c7b37eb4c71cd4adb378e0811ae5825e95817f83a58a409a74e9cf10',
   'lib/src/platform/citizen_sdk_platform.dart': '295798fba26533cdbba0ec993acd215cf48889b9b744b43c2192e6566fe29f6c',
   'lib/src/platform/flutter_citizen_sdk_platform.dart': '0d53dac35a8b3da17f80be8d24503d2d903aeef416de0aa69ea2219baed7b7bc',
@@ -475,13 +475,13 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
 const WINDOWS_BINDING_SOURCE_FILES = Object.freeze({
   'windows/cmake/CitizenSDKFlutter.cmake': '9dcbbb80a62f9ef5be022e99b8270dfbd69f3af08131ff1b8c5e04d63218877d',
   'windows/include/citizen_sdk/citizen_sdk_plugin.h': 'ed4a806687c01f9be2a4c4c76dff5dd7d8676f7fe0c6860551006c3a056256ec',
-  'windows/src/citizen_sdk_flutter_codec.cc': 'a597c82b752420f58586b35b9c48c0507334a670999d8c3c2a80f4e4bffec7e3',
+  'windows/src/citizen_sdk_flutter_codec.cc': '4de5ed32c4882e7365d33fc92c538c4f6f194851fe4b1c86f5d189e56d049738',
   'windows/src/citizen_sdk_flutter_codec.hpp': '05af2bce62ef393cdba9e2811ca17606600e4f8de411ecf440d64b5c4e26322d',
   'windows/src/citizen_sdk_flutter_environment.cc': '39994758bd4b3e97f0c9433aacf36179221472b8bac394fe70e385d663eca695',
   'windows/src/citizen_sdk_flutter_environment.hpp': 'cb06688559abb17e290ed3ac1fe1e35639c050b758b86ff522bc34cc81943e3f',
   'windows/src/citizen_sdk_flutter_sessions.cc': '907467fa121d7ae4ad240fede9cda68430007a023d8581d1d9f4db89cfefd5aa',
   'windows/src/citizen_sdk_flutter_sessions.hpp': 'a0219d8fe270b77100cfa4b1fa452b85c37892c1017f1dcf999e8ce3538090f1',
-  'windows/src/citizen_sdk_flutter_wallet_flow.cc': '5530ee9fea25a77120816d370a062a06490778ba3516bc949d00f1c256a51b9f',
+  'windows/src/citizen_sdk_flutter_wallet_flow.cc': '9f99769ea6b354c03f5833ed36b03182e44a8665efcac430944a21b7c3d53a35',
   'windows/src/citizen_sdk_flutter_wallet_flow.hpp': '57bf33cf4b84783e41931dc1eea22a0dd5e9a57d12b847f579ef03d5a323fb0b',
   'windows/src/citizen_sdk_plugin.cc': 'df65715b1ac8f8eea4903bea079f128cd79b679abd7b09d965845f4c86ad2d17',
   'windows/CMakeLists.txt': 'ca0b892e54dd1e70e01ac982bf045aea44e5c69c66dcd73667b561d164e1d061',
@@ -507,7 +507,7 @@ const WINDOWS_BINDING_SOURCE_FILES = Object.freeze({
   'windows/src/citizen_sdk_host_bridge.hpp': '3614ba8518685f8a8a4915803f9ec5c8ddfcc3fbcb039489089b5f7900d4a7bb',
   'windows/src/citizen_sdk_host_record.cc': 'ef59ba6feefc4686f5d5ed619a7a5cc43d5bd4a167fae1ba4f7022da85d19c39',
   'windows/src/citizen_sdk_host_record.hpp': '9e53109d9d1c3fe31e8f591acba8ec83b869031ff831013f44599a0f80914f68',
-  'windows/src/citizen_sdk_input_limits.cc': '7147826545727da42d3b655e231c14dc079e7db9f2c2ea4082c5d60063428e09',
+  'windows/src/citizen_sdk_input_limits.cc': '4ec6953b4090cd1cda3e82dc7c314a0380e941978654a1a764860658191fdf46',
   'windows/src/citizen_sdk_input_limits.hpp': 'b7f00682ec50320c832247056b2f53ec19efc3a2fb24266660c69817b25ecb55',
   'windows/src/citizen_sdk_lifecycle.cc': '31cf403c44b29cf6f632a4457a120ea4d07ffd216ea951ad90cb2f0baa02d4de',
   'windows/src/citizen_sdk_lifecycle.hpp': '46f4bb12bd1f103f8e50e07b1a86d9c4f250dedce3a5201034cf03e9e2ca5b23',
@@ -527,12 +527,12 @@ const WINDOWS_BINDING_SOURCE_FILES = Object.freeze({
   'windows/src/citizen_sdk_sqlite.hpp': 'ff52d0f0456b0fd96a567bd7b4a46950dbbb65290e78b4d52986d56983aa7d99',
   'windows/src/citizen_sdk_user_auth.cc': 'ab2ea0f5e08511eca3b456ff2a1949f8ebb944ee91bcd39df805b8cb79db75bf',
   'windows/src/citizen_sdk_user_auth.hpp': '037c02c3e1ed32b2846d34e6a1d27b108a366cea6debbf30948f3d85188d91c1',
-  'windows/src/citizen_sdk_wallet_flow.cc': '567af30da604fe8b526a4cd908d9deb64777cd1333cc58f3fe8b9cee4bc623db',
-  'windows/src/citizen_sdk_wallet_flow.hpp': 'a22fc04969d4bb062b3cf83277472d732b0f26614ecd1943b199017cf35ed84b',
+  'windows/src/citizen_sdk_wallet_flow.cc': '30cbd073097e2654f459f9e6b26935ba87a196a666ec5d7157290c3f12756427',
+  'windows/src/citizen_sdk_wallet_flow.hpp': 'b542106b4f668b4c579f466eeb555c8e7a15ae6bfd00ab7a1be2638d3c503c69',
   'windows/src/citizen_sdk_wallet_validation.cc': 'ba27e646b0094ce86a14eb404926b8cf501a9eac0c4ee9625fcc765529072709',
   'windows/src/citizen_sdk_wallet_validation.hpp': '37187abe9c1dc07c018cdb67a5b401ad85b5f6ff6961b5c33ba44cb7b52a3716',
-  'windows/src/citizen_sdk_wallet_window.cc': 'bd9a285016fe8320e0af5f4db3eb09b4dec8838aa34c129a0277826ed5bf9764',
-  'windows/src/citizen_sdk_wallet_window.hpp': '67953d80a3fce773f391e44c52978ff9271b723ff0b313c3e3ad7d99fd6ae773',
+  'windows/src/citizen_sdk_wallet_window.cc': '5486b0c6b4b762554b613e787bd10325c43c5a4cce26b7dbdb04e878dd959c9d',
+  'windows/src/citizen_sdk_wallet_window.hpp': '39cdef2965601ffa2f706a3d3de244f01329ccf8360099d7b3047146aee10a1d',
   'windows/src/citizen_sdk_window.cc': '76673550457b05c7f75a426739cfc925e8322b98c872c3519420a465d79afe7c',
   'windows/src/citizen_sdk_window.hpp': '60fff1bbed42f818449e351e819aae65e30029b95bb27b92421f7793a1ccfa6b',
 });
@@ -561,13 +561,13 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
   'linux/include/citizen_sdk/citizensdk_host.h': 'cf8713368176b833193ebdeafff90420e5dcda72e89f143ffc580b5c2e9f34a7',
   'linux/src/citizen_sdk_assets.cc': 'b663b653299c22d62a44a7f242e1e57f2d8471408d0d3d81728bbe37929d0cb6',
   'linux/src/citizen_sdk_assets.hpp': '44d30123c623ea266030235126552e4a9334839f0d5d44adb5931f56d8b93401',
-  'linux/src/citizen_sdk_flutter_codec.cc': '27f1117512aa355e18949bbc7b4abb463141a2e69fbab22d8bf5a0b494ab3d9a',
+  'linux/src/citizen_sdk_flutter_codec.cc': '34a11055705f4dc3908ba26c7360662a6e06efe8e75e5eb78a09dd6061d4ea67',
   'linux/src/citizen_sdk_flutter_codec.hpp': 'ec91f2160fec1b4093177f410222181ccc11523f3aad4ee5d68f95b6e8576eae',
   'linux/src/citizen_sdk_flutter_environment.cc': 'ae92a0aba12371ff6dab4eb1f2834a030814224af01058871b14c60fd3e3536c',
   'linux/src/citizen_sdk_flutter_environment.hpp': 'ae7dca71b44a55d4d8aee270c94dbbd594f2b206284392ff8ee5ca8650cfe486',
   'linux/src/citizen_sdk_flutter_sessions.cc': '266fc6024ce37f3fd09ad41571f3f9130fc04fa62172556277564abd172c2edd',
   'linux/src/citizen_sdk_flutter_sessions.hpp': '00abe54d171898aa154c1c0a936f3d7fec2fd9597ac3dfd9d151ee7c10f17f8f',
-  'linux/src/citizen_sdk_flutter_wallet_flow.cc': '74131b27a69e0f11a0441bfec7e594b154775f304cd293fccf65a7c090fe39fb',
+  'linux/src/citizen_sdk_flutter_wallet_flow.cc': 'ae6e80342bad636fae365b85c4697a38584df28af5f910f71629b405236573a8',
   'linux/src/citizen_sdk_flutter_wallet_flow.hpp': '0313edebd1a10feaf1029d6ae1c91e0363153c863148f1de70eddffdf2807dd4',
   'linux/src/citizen_sdk_gtk_parent.cc': '885485999900f9d121cec35fb859abf8b378f0caa0fb674a2b909f96377cf5ba',
   'linux/src/citizen_sdk_gtk_parent.hpp': '891a3fb929951b7a51a0e76854d50aa289a72795ca90c3f8c7140292a19a8cad',
@@ -576,7 +576,7 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
   'linux/src/citizen_sdk_host_bridge.hpp': 'eafa488770fbf3d7d5722ed992f5932ab6f57c27c1cf3783b5eed46c4926ba41',
   'linux/src/citizen_sdk_host_record.cc': '68fea5575759fadbc9bd9257a32bbb00779bad9961908e76135329c3fcc110c3',
   'linux/src/citizen_sdk_host_record.hpp': 'd3c5b9cfaf91c85ee47bf86713f1299f204ef220614035257adb1c2d56be5742',
-  'linux/src/citizen_sdk_input_limits.cc': 'f01656812df1df0447be7a4a9a8fbdf40f14bf24f5b5ce447f238b8963ad7b41',
+  'linux/src/citizen_sdk_input_limits.cc': 'bcee60aea062432c44f16d71a99b2b61e4f6fd08f564c60290d21247b856ea7f',
   'linux/src/citizen_sdk_input_limits.hpp': '984f3e033ee2a918199512280217c0eb84220f313673aebe8b99454079edae9c',
   'linux/src/citizen_sdk_lifecycle.cc': '699b015d446e3de84b25a705bdde9baae5d2820c10de0a2e2e84b1905355cb05',
   'linux/src/citizen_sdk_lifecycle.hpp': 'e5251c01d91e3470caa5188b00706cb556ff3f5452413f7a639debd9cd0d4456',
@@ -599,12 +599,12 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
   'linux/src/citizen_sdk_tpm2.hpp': 'a8a7c68d743b8e662ad57a736c23ff54518e53155d72ccae9913b61964cae644',
   'linux/src/citizen_sdk_user_auth.cc': '294bc99ed0dd30303d9eb6b1bde57706c6c4a6a0ba9106f247a14530fb331f01',
   'linux/src/citizen_sdk_user_auth.hpp': 'e37f54727a9c0d2b5ef33e51ae5c857d5fc65aff09d750ffd2a39218c5184a5f',
-  'linux/src/citizen_sdk_wallet_flow.cc': 'f4f29ec018afd8fecc12277d9706224da99a506f37e6e89df8b27d53c05bc4f8',
-  'linux/src/citizen_sdk_wallet_flow.hpp': 'c15c72439549ef7cab23c018d8c08b4c8a1e22e0a9dd759b2842d191cd8c3a5e',
+  'linux/src/citizen_sdk_wallet_flow.cc': '45669676981210b3ff07239a358da836821fa65fcc383ffa5caa8fc565fe06d9',
+  'linux/src/citizen_sdk_wallet_flow.hpp': '5dfc064eb6dc937d20eba066e808213869be1aac4a18e9f40abe85b2421283c7',
   'linux/src/citizen_sdk_wallet_validation.cc': 'f433f8883d433a074e6464134fa614a89da439bec57fec9f247d0b4b23a45767',
   'linux/src/citizen_sdk_wallet_validation.hpp': '328199df424051f3a026c2c3ec61578d8de3d01368891a4c55f41708f2f05d3c',
-  'linux/src/citizen_sdk_wallet_window.cc': '3c3b778ec0248ccf91362040058aeb9a2698f4532843cdac7babf55aa9a8abdb',
-  'linux/src/citizen_sdk_wallet_window.hpp': '7839809c6a389c5a31c89befc155c9457ad20b79088ba7dd2b52b90d9d2e9eec',
+  'linux/src/citizen_sdk_wallet_window.cc': '1b012662027139233869ede9846d9dcb71c1d0960eebfea10cbd20254562146b',
+  'linux/src/citizen_sdk_wallet_window.hpp': '391493c2cf89a1e93095ffa061d1644e77307486d2186a0404881e5d86aaf543',
 });
 // 产品根说明、架构文档及平台/Dart 模块说明共同构成 33 文件文档闭集。
 // docs/smoldot-dart、测试说明、许可证、CHANGELOG、
@@ -612,10 +612,10 @@ const LINUX_BINDING_SOURCE_FILES = Object.freeze({
 // 更窄的权威来源合同固定，不能在这里建立第二套来源流程。
 const DOCUMENTATION_FILE_COUNT = 36;
 const DOCUMENTATION_SHA256 = Object.freeze({
-  'docs/WINDOWS_PLATFORM.md': 'e448e1ffae939c2160a23a2d314720d47c2c06a1f3365b581b99f31021f7f42d',
+  'docs/WINDOWS_PLATFORM.md': '7e14ee9ebf5f8cf5187db529e6e4f13cb8a80006fe87524f88053fb2bbf139e7',
   'windows/README.md': 'cf48e278842328b784bd77ece08035ac3524a569ab0ea06d36ff3940aeeae91b',
   'windows/include/README.md': '869d3e21d0a9f8d437d652769a79215f06992751d1524ac64692f811f0aedc6a',
-  'README.md': '22ad5e0fec90b7340ba7d4222593e2970be560ee2d1a98f1a72e8f661a442e60',
+  'README.md': 'ba387554cb79202923c047c4d27d0dee5f16e7b4ba67cc8bae51c0ff06c22873',
   'android/README.md': '0841a52e45a031b08a515684b65c1385cc88c793667ef68f53aba7290559471e',
   'android/native/README.md': '9316b84c0aac057d2cf1ccb081edb4a797738ba17edc3ea8b506a094051924e0',
   'android/native/src/main/cpp/README.md': 'ccbd436d19620fa3069f2407236765366358d27c8f4f72cddf0a6fd91044b289',
@@ -630,15 +630,15 @@ const DOCUMENTATION_SHA256 = Object.freeze({
   'android/src/main/kotlin/org/citizen/README.md': '1a7193606a774df8d6ad9d7c3c64dbb0b28a0cc7f6f61d0052a71726ec5400ef',
   'darwin/README.md': 'a118ecde9eb63ef48a938f7d4356b01d020d3004d6cd22d7eb537b8a7e7a07c0',
   'darwin/Sources/CitizenSDKFlutter/README.md': '1ea9d7ab3d4baaa6932c6869832d03ad39070de68b65f5267407074881ebcd96',
-  'docs/ARCHITECTURE.md': '35cf21764e1c816833a0150f8074358f7dc0ab0c41317a3dfc81f5a419f0320b',
+  'docs/ARCHITECTURE.md': 'e8e989fed533cfd780209fc3048e471a0e7a95a002a2d98eaa522b391137f635',
   'docs/C_ABI.md': '06561cadc85d40b5980e9cfb392e84c5a914fcf17db83a7fc0926592589ebb82',
   'docs/DART_API.md': '64a8fd73f1063a3276f80b1414c12a01d906f5c924314a1a6f82659e8f0d3c92',
-  'docs/LINUX_PLATFORM.md': 'ae89502ad536d35a799da72dc14b35acc7a5a691fe575a7e163b2c28074dea14',
+  'docs/LINUX_PLATFORM.md': 'a3c338ff37c782f112da826b47a3a964114bad337b7dbaa7f1057c2b844eb2f4',
   'docs/MOBILE_PLATFORM.md': 'd89e76021ed1322d9f38417b2b18f6cd0789b53dbe861f3cb2597fe18a79a546',
-  'docs/NATIVE_PACKAGING.md': '65b8a277fd5c9b6e0cdf2ef7407c8af31e018be0b407e3ed38ba346973bcab65',
-  'docs/SECURITY.md': 'ec668a5169ab6cde1dbd4517e8f898aba7702a67aad1ddb66f82f1bb1241511a',
-  'docs/SOURCE_PROVENANCE.md': '6c2bec123aa0f4525006dcc99d55435abf212e04656453e3503a4a00cec4a749',
-  'docs/WALLET_MODEL.md': '771dfebca47786dee6a4e3f6b9193e4aedf1c67b5dfdf4d195324b6719706665',
+  'docs/NATIVE_PACKAGING.md': '5bddf75590dcaeae21763596ad6dbbce004d8bcd03fbd1e1d737507f4cd933c7',
+  'docs/SECURITY.md': 'a4e282fbfaff44436823afd882f93cd18f9139b08e8231412b09afd2a7c575e4',
+  'docs/SOURCE_PROVENANCE.md': 'f0af6224cf30278c0343adb869325c6b748f65faff2fc82d3c5f8f48e6c19934',
+  'docs/WALLET_MODEL.md': '2c4ecc5c7be6bbe4b11aab32f6c3044e1d5733734c135f556bcfef873ce7e948',
   'lib/src/api/README.md': '08814d9924ae8e054e2e33401752e37d865650b1507f0a47dffcb0fe4dc3db8b',
   'lib/src/crypto/README.md': 'f5d051b65879c9d361ee42700be7c694f3d83dc28145bd3e57e573af145353a6',
   'lib/src/models/README.md': '5506efb021f3c238a8c2cc2badebc7d1f442a5352c16182e5dcd9241b0a6224a',
@@ -652,7 +652,7 @@ const DOCUMENTATION_SHA256 = Object.freeze({
 // 根 Flutter、Core Rust/FFI、smoldot provider、signer、Android、Apple、
 // Linux/Windows Host/Flutter、安装消费者与 Release 合同测试共同构成 SDK 自有 196 文件反向测试闭集。
 // 固定测试源码能阻止“删除测试后剩余测试仍全绿”或实现与金标同步漂移进入正式包。
-const SDK_TEST_CONTRACT_FILE_COUNT = 197;
+const SDK_TEST_CONTRACT_FILE_COUNT = 200;
 const SDK_TEST_CONTRACT_ROOTS = Object.freeze([
   'test',
   'native/contracts/tests',
@@ -683,20 +683,23 @@ const SDK_SCRIPT_ENTRIES = Object.freeze({
   'release.test.mjs': 'pinned-test',
 });
 const SDK_PRODUCTION_SCRIPT_FILES = Object.freeze({
-  'scripts/build-native.sh': '1fe50d13cb08ed6b673a727afd179ffdf393145a599deab494969f0df6ca8a77',
+  'scripts/build-native.sh': '2e35b416279bd98a5d28874ccaa7f11327e559669fdadfcbeee7dbdad68afc3e',
 });
 const SDK_TEST_CONTRACT_FILES = Object.freeze({
+  'native/engine/src/wallet_input_tests.rs': '62b2706a85d8456bafa59172efa9c6255d0c621523b1f119e3fb70386200d166',
+  'android/native/src/androidTest/kotlin/org/citizen/sdk/ui/CitizenSdkWalletInputTest.kt': '5890f662654e262f26390623b6200600b20280f2d3d2fb6bec7f02cca29ecea3',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKWalletInputTests.swift': '85b6d1aa8b9d2ddfac8b4cea475b3eea5a904b875c13b6123a772b26602a3a37',
   'windows/test/citizen_sdk_flutter_consumer.dart': '3fa6ba79f8a53a38830e8b89b06da871ca38204fb6814fe03c4942abe00d38c3',
   'windows/test/CitizenSDKConsumer.cmake': '025fff5bfc95a553bff57f7378372148c9d4932476c887fb84ce438e5c0e8117',
   'windows/test/citizen_sdk_c_consumer.c': 'e04e086a6d8407ffcc353bb1f57f5149acde19b11c81bffa5eb9ea9bc2daa739',
   'windows/test/citizen_sdk_cpp_consumer.cc': '269150d5748d24ed19351eca4b71e6ed45b1179da356d9066a07aed1b61ceecc',
-  'windows/test/citizen_sdk_flutter_codec_test.cc': 'af286ade04b6d3bc099b6f9b6ca515ffb9d2ecdce628bab64c7655702773d269',
+  'windows/test/citizen_sdk_flutter_codec_test.cc': '2cc3fd318521a60cdbcc935b7ce65cc15783f04b1c69b3fa3c5bd77bf07bfe8a',
   'windows/test/citizen_sdk_flutter_environment_test.cc': 'b153c2b846c74bd1c59699b4e2b0084bc322cd61d3f882b78fc910b08572ba72',
   'windows/test/citizen_sdk_flutter_plugin_test.cc': 'fa32be9c0ea8818996bd5b89dd6c33a451247fbc0a5e8f0b4cb9c05109dc9524',
   'windows/test/citizen_sdk_flutter_secret_boundary_test.cc': '5af637815c403f5fa7d45f0fcb67e0f99d0882e2b3f528fdd7d68c578abba457',
   'windows/test/citizen_sdk_flutter_sessions_test.cc': 'f701878eae5f468234f14e01e1101eeebda8cc4f8207098c6034aa25f80e5621',
   'windows/test/citizen_sdk_flutter_test_support.hpp': 'a54094df8d24cfe1176bea0e09513aecf047c1e62cf60fe2f11b1334b1dc3d49',
-  'windows/test/citizen_sdk_flutter_wallet_flow_test.cc': '6a31002e7f6c51ed2bab6cc354a30e3dfd6450b5ea78c2aae6eb304a19c8d880',
+  'windows/test/citizen_sdk_flutter_wallet_flow_test.cc': '700ad4088e3456dfcef26eb8211a01c662f0b973260d7edd3296b164bf6391fe',
   'windows/test/CMakeLists.txt': 'd6992c4dcac304d160d65ecb8df2249b9ec83867bfc1cc9b21ed7cd70cc4d886',
   'windows/test/README.md': '034b0c654e1576ea26296222379ea954a127728835ea47e472ed5090846bb076',
   'windows/test/citizen_sdk_api_contract_test.cc': '5bef6e91c00b29c07244b8429a284b1a995d4418585ad4dc4a2da4c6c51469a5',
@@ -707,13 +710,13 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'windows/test/citizen_sdk_lifecycle_test.cc': '2b8135bcebf9f37c00195669811e26b5fa585d6d687d07101c509d0436384e20',
   'windows/test/citizen_sdk_public_store_test.cc': '1b41c554acf086c9eeeba7fe2efc9e6bb04711a6f445d85ceffd1c74f6518d06',
   'windows/test/citizen_sdk_record_key_test.cc': '421e9dd2e9950c02addb9343fe12ca23f3d9c1832c4a25725420928dbc9423e1',
-  'windows/test/citizen_sdk_secret_boundary_test.cc': '69e72ac87d39672e99d24febef337565d646c1bfd390fcdbc2fd83c5a8237fe5',
+  'windows/test/citizen_sdk_secret_boundary_test.cc': '84ef2838458be86eeab028ebb4846c2240ec8b3ab64af45ce00b5ac5190e75a2',
   'windows/test/citizen_sdk_secret_vault_test.cc': '68f11d0cea1083a66fbfc6723ea92c6c3dc1243b0d2877e5874a4c5170cc791b',
   'windows/test/citizen_sdk_secure_store_test.cc': 'f4e06493a7bd9b64dc43255fb2f51ee8e7af5b8c894ffc53b775f6f9ab35b0c0',
   'windows/test/citizen_sdk_sensitive_buffer_test.cc': '23d0d8f7f28db585ff1dc6ac23d350018c7f6636adb07925f3b3891d0b4eceee',
   'windows/test/citizen_sdk_test_support.hpp': 'd128551fc1e6f8aefb9604ac88ed32cfedcc2d57c97be30995aa974e7a5ee38c',
   'windows/test/citizen_sdk_user_auth_test.cc': '18b1d3a39e0b12ab15745549965f8013a3cd3a63bc6fc89cc8430878e9c1db91',
-  'windows/test/citizen_sdk_wallet_flow_test.cc': '9577e0f709f065de21ea8d16d532a26082fffc1cf6fad460c5bf688219b9afcf',
+  'windows/test/citizen_sdk_wallet_flow_test.cc': '6ddee3884f324afe00fb8794469e8c4d6244bfc5b3a108e5a7149b4b0312a410',
   'android/native/src/androidTest/README.md': 'fc7724688dc94982b92077881caec5f5126e79c15eb7317dcde2aff8bdbdca54',
   'android/native/src/androidTest/kotlin/README.md': 'd44a06282ecd8c781d7b954acae7496a847bb8b80a1f36a7cdab5ff8c2a73cec',
   'android/native/src/androidTest/kotlin/org/README.md': '0e29cc6c8238a1e6dac76629c85a79da9e4ac8f07fae0a74ffc41f714f48c5cb',
@@ -747,24 +750,24 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'android/src/test/kotlin/README.md': 'ef036e967503cb908827489c5a2098f6f358abec5599af81b4bb7d60551ed501',
   'android/src/test/kotlin/org/README.md': 'e8d1bd08d668ab54c7facc744de1d6361d0bdac00881dda3e7ef8c0a8df3f50c',
   'android/src/test/kotlin/org/citizen/README.md': 'ef7a2cca8d60f9be88c34ba98da89514ac023056977aa4265a60eb72d7b07189',
-  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterCodecTest.kt': '98bd042948ca5a12b3f7c1ee86bd0f8c701894f2b36e465cf6c7837eced6de57',
+  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterCodecTest.kt': '7119bddc8511252b809affacb96f01782b9c4f5ef5ae5ed5b9d8bc9cdddd47ff',
   'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterSessionsTest.kt': '1653de3f233e5f0162f78bda5fde4866dd25acd80177174dd5bea345aee65b86',
-  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterWalletFlowTest.kt': '7fd69e4894919703e26d8220bb9198c67965abe5344321aa373c6d3cc46cb048',
-  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterCodecTests.swift': '6998f81ca7e8835ea2082242ae671705f8ffaa05fb923d6d5e654111c5ea3398',
+  'android/src/test/kotlin/org/citizen/sdk/CitizenSdkFlutterWalletFlowTest.kt': '2e940cfde4d896e698216f4db1054e164d6cbcb6164b5b8e0caa295a87eeff5e',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterCodecTests.swift': 'b773ad4b2b092ff20853d6d20e977b71b769d47e10621dfb0d11102d5e209e7b',
   'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterPluginTests.swift': 'd905fda42ad2303ec3fdf7e7b1e6993694747be02b2fb949de1089164aa71923',
   'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterSecretBoundaryTests.swift': '8cbf137577e52f58f532c52f3877ec1775836e180900bfe5f1b9bc6fd3816f99',
   'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterSessionsTests.swift': '1c0846a45d14d9c11ae34cd44035c462376495ca320706954b9bb4bd86d05fd1',
-  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterWalletFlowTests.swift': 'f0608acf7375703d4eadd2c16e9e127fba33486737ec9eacb1d4f71fbb5720f5',
+  'darwin/Tests/CitizenSDKFlutterTests/CitizenSDKFlutterWalletFlowTests.swift': '2a8e4d61074f974d51bb7fa18ff7a3e4d76582e65289a57d084f37ce0cf019d2',
   'darwin/Tests/CitizenSDKTests/CitizenSDKApiContractTests.swift': '34c229f12902b1e05dd98394746ad575862188150f5afba5844602a52121773c',
   'darwin/Tests/CitizenSDKTests/CitizenSDKHostOperationTests.swift': '109be3ae384db564139db63537895b0151fe29b59fc7c2370d51553e7fe5f3c5',
   'darwin/Tests/CitizenSDKTests/CitizenSDKLifecycleTests.swift': 'd5ad0c975a964018096e2e34093ffbc94e26a1717948abe6a2614d2f7ae16c7c',
-  'darwin/Tests/CitizenSDKTests/CitizenSDKNativeAbiTests.swift': '29150ee5925cd5af930847d9a1acd5acc419d6fa0249a028acf592692b1b150f',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKNativeAbiTests.swift': 'c96409ceb8ef2c4ac3516684196fd3e9690ccb4f6952bd5a392db9134cb2f183',
   'darwin/Tests/CitizenSDKTests/CitizenSDKPublicStoreTests.swift': '9ad944d046db7223a8896fdcc5f4762fd22186b9d5216161a4f58d4fceef21c9',
   'darwin/Tests/CitizenSDKTests/CitizenSDKRecordKeyTests.swift': '30891704a7d2d4fa98bf3750c9ec88370389fd4e6bdf7f4641faeb8a0873791f',
   'darwin/Tests/CitizenSDKTests/CitizenSDKSecretVaultTests.swift': 'bc9974f13a43b13160ecc8ecbcd90d0b2f17e1a50adffad3697d9006feb56ac3',
   'darwin/Tests/CitizenSDKTests/CitizenSDKSecureStoreTests.swift': 'd7581577b15dc0e053d5130845ed54c01fc8b20034c105a71736c9899763cedd',
   'darwin/Tests/CitizenSDKTests/CitizenSDKSensitiveBufferTests.swift': 'd5163c7df3fd41897dceb3f1f1e175ef4982d92918eef498e0b6817bbdb93cbc',
-  'darwin/Tests/CitizenSDKTests/CitizenSDKWalletFlowTests.swift': '157a0b0faffc33168268f7f2ca02a30a3986244492027795feec2f0df4f0ebaf',
+  'darwin/Tests/CitizenSDKTests/CitizenSDKWalletFlowTests.swift': 'f09799a51f098c67b79f447f828c0dd86a72dde0bb5696d3e4299c9c9772a83a',
   'darwin/Tests/README.md': '8754ecf2cf82e7909e6051df5906ada9fd1565ab4ae4bdf0e8a83d66fbc5d725',
   'darwin/Tests/citizen_sdk_flutter_consumer.dart': '44b4a9b132fdd52fafdf0930b7a12173bcd2e5de5477c9d1a8894ae672b5357c',
   'linux/test/CitizenSDKConsumer.cmake': '70bcb6aa7484daa5b480a9db9f8d2e556cebbdd680f7501bbc086602761c58ed',
@@ -779,20 +782,20 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'linux/test/citizen_sdk_lifecycle_test.cc': 'd891558d1096d4c2a3d9e1db7c32548e33ce4f872e062b3ef2497a680770832b',
   'linux/test/citizen_sdk_public_store_test.cc': 'c4df1a22d59630fdbfd9198cfe696a4888a379c76e781bff4675c47ee3c74b98',
   'linux/test/citizen_sdk_record_key_test.cc': '11871f6372b6983d7265fddb1714ed9b283d9ff43a9f6e782759d47dd5c74e4d',
-  'linux/test/citizen_sdk_flutter_codec_test.cc': '1097fa3a234be49e4c506dd4f93c24d59d63bcd9745af20d3321ac89cc03f801',
+  'linux/test/citizen_sdk_flutter_codec_test.cc': '9acb8aaa7cb6dc153178a871e747cc1f352078019578eba3215bc26d65b6c617',
   'linux/test/citizen_sdk_flutter_environment_test.cc': '976f79e48dbc36d36bc01a884051c1e7a5bfa49d65fc4f7c24e9b44225c77594',
   'linux/test/citizen_sdk_flutter_plugin_test.cc': '82ccb9490b01473153e7ab5725b847f6634e0b582189150b39e06aad08b2e468',
   'linux/test/citizen_sdk_flutter_secret_boundary_test.cc': 'a67b1c10d47342ca031d1ce9fd5b8f3145220132ad1b761f552ebd831a476be2',
   'linux/test/citizen_sdk_flutter_sessions_test.cc': 'f53288bc03234c620b5f5999dae51c280cbdc6df55c6009fac3f9ed9106b5782',
   'linux/test/citizen_sdk_flutter_test_support.hpp': '1b92cf8f6a6fd0df6a58d5630f72ad29578d3118f7aa886ee1b3149b86606f56',
-  'linux/test/citizen_sdk_flutter_wallet_flow_test.cc': 'da565cb731c32e902b6a10dd4ec861eb309927d91cd6c24a4b20b698393ec038',
-  'linux/test/citizen_sdk_secret_boundary_test.cc': '7aaa92c93aefee1ca5d3a87993bcb276ace9519ec28af6f99d8f6b1ce466bb31',
+  'linux/test/citizen_sdk_flutter_wallet_flow_test.cc': '9743b57340a9bd4f5149841b50c3f8cc59faa0c7f58e815689536d479e8936c0',
+  'linux/test/citizen_sdk_secret_boundary_test.cc': 'f33b93ed3b35598d495678d0751c987320a69c5dd8fcdd72159b12e829b7f270',
   'linux/test/citizen_sdk_secret_vault_test.cc': '48c7632dbf37c0787969e1ba3c4d6e35711b59d9e51ac88c3ec3c31175d6f67d',
   'linux/test/citizen_sdk_secure_store_test.cc': 'c65570ffd3350da9da2fa85854715cb66096c86c45e9165da62d34a5e477a499',
   'linux/test/citizen_sdk_sensitive_buffer_test.cc': 'e82855221fde7e20ce07ef194619c18cd1c25ed7b8c9ae5a85fd8f94256a5ec0',
   'linux/test/citizen_sdk_test_support.hpp': 'a6f440b1322d7ff24de112fb65994922c6c44d11126fbf346eb8571f6b40f732',
   'linux/test/citizen_sdk_tpm2_test.cc': '29146093852ac3a51d7925e6d9a27f042e5f136c37d58a6367de2bd119c9f8e5',
-  'linux/test/citizen_sdk_wallet_flow_test.cc': 'afb55607f7f44cd89b0e4d4fc61d10dccfe554aa99ecd4839b55754fa63be7d8',
+  'linux/test/citizen_sdk_wallet_flow_test.cc': '947a345e9613c6773ff528f6f908523014e6fa4bcc8017e78c7e29abb13bcb1f',
   'native/contracts/tests/account_contract.rs': '2f2af9930ccaba2cf73a21c1ea3593295a6e7d8633a95db05fbcb642e7c74992',
   'native/contracts/tests/capability_contract.rs': '7a94545fbf1572e127d12a4d4a9ce1478fa3dcc22fb7aa688fde747135a89f7f',
   'native/contracts/tests/chain_contract.rs': '69e216bee1d74258348f84e6b8086b474a44d6b68470bd0cef22cbfa4ed75100',
@@ -803,8 +806,8 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/engine/src/finalized_history_runtime_tests.rs': '7a11e761845d8a4985920ef39febbeafe1238915e8cda4dc541fc6b44271245d',
   'native/engine/src/transaction_builder_tests.rs': '34a429659a25e917bf6ee5b44693cb4eca9250f163f988b848fc47013d97de8a',
   'native/engine/src/transaction_history_tests.rs': '7ca9ad08af88a41a405f5f0d20bfb49cc14811a6287773c10ef5f8e7dc112617',
-  'native/engine/src/wallet_derivation_tests.rs': '6f81cc64f0f3c82d3510ea316aa04705ae40c27d53237f25293480fcfa504e5f',
-  'native/engine/src/wallet_service_tests.rs': 'f480b8a776be7d0d5c5e46b74e21e476e5b9d5590a316f4c626dc206e46fa5a0',
+  'native/engine/src/wallet_derivation_tests.rs': 'a6ab1875c821f2cfc004d8d9c1f138993078594244ba00dc70ad4d4db9ab0620',
+  'native/engine/src/wallet_service_tests.rs': 'bb88a31873a026f3516cad936012e14c6c8e6b185492bed8bbdbc03eb47d948c',
   'native/engine/src/wallet_transfer_watch_tests.rs': 'ac91c7a1e795a4ec10b161c99361d2ca46edb12abcf446dc7a5fec068bb154fb',
   'native/engine/tests/account_state.rs': '3271646a267cfb325ae4a4ccd2142975c00325383d81380d62e424822230208a',
   'native/engine/tests/capabilities.rs': '04246b662aa339518a615956a57d4ce5e31070f54d39f2def6b8a54807b3ed3b',
@@ -815,11 +818,11 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/engine/tests/transaction_outcome.rs': '24422882e1cb4f929fef69263de854f053cb45343fc5c5b4224d2e8a4e7a2946',
   'native/ffi/src/composition_tests.rs': 'ddec359df53dc28bf778ac4b035bb8b2431a131e42f2c85bbefbbcbfebe2b82e',
   'native/ffi/src/host_codec_tests.rs': '87d9ab7d4aec783312024f753999a46512923356d1bdfff6b6be2440151bf741',
-  'native/ffi/src/wallet_abi_tests.rs': '411b86c63277473e7ed8c39466713287577a89320898c79a4697350b6850c5a4',
-  'native/ffi/tests/abi_layout.rs': '5ccba7c43fdfe78c317d3ffd23de627df4af1cad13e895aae11bf7a75527113f',
+  'native/ffi/src/wallet_abi_tests.rs': '800209ed79d556563c91e3cc0eaa9b5043111ba8a8b42e5ae99e01322873893b',
+  'native/ffi/tests/abi_layout.rs': '6945397b49c13102648cbf274bef73c557f9c35e973a3027e2b62026e421656d',
   'native/ffi/tests/asset_boundary.rs': 'a0a56cba330088ce01e807ac37191195b8d90013aba895ac2c7acf98b9a6ecfe',
-  'native/ffi/tests/c_header_c11.c': '26f90252182189932277d77236d8ef50a44410b60c8fa17e30b4169f542edf73',
-  'native/ffi/tests/c_header_cpp17.cc': 'bc9e01786ef55af8ac47396960028483205207c711fb380195506065e52e9eb5',
+  'native/ffi/tests/c_header_c11.c': '44bbeb9a7b4ef3887c2fc2d74ed30a1c089752a08266242028e633764ad1694c',
+  'native/ffi/tests/c_header_cpp17.cc': '965a18810b5dd79f2f48da7e03ae86d93dfe376d54fd0b446ddff2dda7029036',
   'native/ffi/tests/capability_contract.rs': 'd0ba2b94dab377dfbead8f2c341cf1a42697189f461572ed5ce5986c5d8dca38',
   'native/ffi/tests/error_contract.rs': 'ae585490b05768b64401b1e6774789ba1beb1eede552e4d3e70a99cd1d395d91',
   'native/ffi/tests/event_contract.rs': 'e39b153cbebf7510d8f72af6692cf99ac8aec43f254bcc305dc5c741b063fd11',
@@ -827,8 +830,8 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/ffi/tests/host_provider_contract.rs': 'a1aabe53e73e31e5eefe0669c1eceb3f4f0b09f5c9d65bb2661a9c142793e209',
   'native/ffi/tests/ownership_contract.rs': 'b75c13b228598177b1f8fabaa9a2cf5b1e62d8674a5dff662fed06616308ba0e',
   'native/ffi/tests/request_contract.rs': '816038c6de732cac1b85bdd15c72bfaac7b0eec2ace307937ce410f280204e42',
-  'native/ffi/tests/symbol_contract.rs': 'f307bb95a762e0dcc618f5c92aaa5db567bc71af3ca5ba551c0734e11f5c9559',
-  'native/ffi/tests/wallet_abi_contract.rs': '845070da4704549b9bd48c460de978da6dfb0c2fb93a372d7f9fcf3afd639449',
+  'native/ffi/tests/symbol_contract.rs': '71af6cac729aab8403b24561c3a9543eec9f914b92f21a6a0a4373d365fa2fba',
+  'native/ffi/tests/wallet_abi_contract.rs': '91cdcd2bcd5d891ac076b6c24f70149b6f470b0a75eefb895d2ff28dd376dda8',
   'native/signer/tests/chain_signer_contract.rs': 'd4e53512dffab3f75ee213a08b71909dbc6c667b4b287df39cd9ac3e62824b31',
   'native/signer/tests/ffi_contract.rs': 'bf38f650394011e7f68219ee8ba435453f616281f91649634c536b8620407038',
   'native/signer/tests/legacy_parity.rs': '984a1521042d8a5b2285a43459383ef3972058db20e8f05154c1f75a2a11d70f',
@@ -836,11 +839,11 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4',
-  'scripts/release.test.mjs': '464fbde2a61c1e65b521737a323eb318c380b42ee7bdbe0da1326dd3d412e27a',
+  'scripts/release.test.mjs': '28ac244dd76df933e5b64b330eea8e47f503ff9524be8adb97567ca5d1fee9f5',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': '037b35aec6ebb55cfb05316a1e7ae595e42601c9679b602d31eca5c1b675b2b8',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',
-  'test/api/citizen_wallet_flow_test.dart': '0d6c9a8264eff89fef16610cbef9712e362b31b217c1f7109d4bfa5e341550b1',
+  'test/api/citizen_wallet_flow_test.dart': '288c738fa02405569c23ef3833500fa131cac7fd20b761c8e2c319420482c95f',
   'test/api/public_api_contract_test.dart': '731558c61da48bb35989bdf6f4267b6917bab02657d2ab191985a9f06a99bc54',
   'test/citizen_sdk_facade_test.dart': '5135b62ca569676fddf23bda0156e88ba592eed008499db0603e43c4f4aa168a',
   'test/crypto/derivation_golden_test.dart': '5d924af41c2c5b02be9fcce86f5d296a719d1396216f3357007abdeaa9e73b6e',
@@ -902,7 +905,7 @@ const SMOLDOT_DART_FILES = Object.freeze({
   'docs/smoldot-dart/example/smoldot_example.dart': '60aea4e2d738ab7702fbd056626e6647f8c23174739f3c1b7e564133c80ee2e7',
   'docs/smoldot-dart/source-analysis_options.yaml': 'e67b963f89cf75f675a0ed25d258bae038d216832c22b84782e5e3a90b8d3076',
   'docs/smoldot-dart/source-pubspec.lock': '91ad4c26c8abdf6384292e1f01f335ba7ce50443a99b01b45e2f4efa72dab25a',
-  'docs/smoldot-dart/source-pubspec.yaml': '408910b7b043d30aa29dc1f226f750f64dbee90ad343b1154478a7ee6ff3d83e',
+  'docs/smoldot-dart/source-pubspec.yaml': 'a9900ac0051914a9c2a0f6ce2491b58f007e08cf2f9b9795087be36f34cdddaf',
   'lib/src/smoldot/bindings.dart': '23a5a2add0de238ee8218238acf312193fa349c0806edb4056ff6f63b8b459eb',
   'lib/src/smoldot/chain.dart': '43f3fbc8420f61d335acb0c48ee471a7885ebbd71d320d8b820805b1537d8053',
   'lib/src/smoldot/client.dart': '916fd74c20f4daefca2e17e668e8a2fb16c59219b8f3bdd3148d10454a71ddff',
@@ -928,9 +931,10 @@ const SMOLDOT_LOCK_FILES = Object.freeze({
 });
 // 根 signer workspace 与 Flutter 包的解析闭包同样属于正式来源输入；locked 模式
 // 只能保证使用当前锁，必须再固定锁文件自身，才能阻止依赖身份随提交静默漂移。
+// Dart 锁按获批中央 Flutter 测试最小闭包解析并验真；不修改 SDK 运行依赖声明或上游实现。
 const SDK_ROOT_LOCK_FILES = Object.freeze({
   'Cargo.lock': '338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32',
-  'pubspec.lock': '358c27199fd644fc0644fe5da0a398f1c88a60666e8d6a93c658579493866836',
+  'pubspec.lock': '66b580182423c37179d8c4892e3ccb5e73a5293e7b25dfc376bc6b525edcac92',
 });
 // Cargo.lock 会按 registry package 合并整个根 workspace 的 feature。Engine 为钱包
 // 显式启用 BIP-39 NFKD 后，smoldot 闭包里的同一个 bip39 条目会多出这一项依赖；它不是
@@ -961,13 +965,15 @@ const PROVIDER_LOCK_FEATURE_UNION_EDGE_EXCEPTIONS = Object.freeze({
 // contracts、engine 与产品 ffi 是 CitizenSDK 自有、可编译的 Rust 核心。它们不能借用
 // smoldot 的来源清单：这里独立固定三个目录的 88 文件完整反向闭集，任何 build.rs、bin、
 // 示例或未登记文件都会改变编译/发布语义并因此失败关闭。
-const CORE_RUST_FILE_COUNT = 88;
+const CORE_RUST_FILE_COUNT = 90;
 const CORE_RUST_ROOTS = Object.freeze([
   'native/contracts',
   'native/engine',
   'native/ffi',
 ]);
 const CORE_RUST_FILES = Object.freeze({
+  'native/engine/src/wallet_input.rs': '1665357d083f40b8d348a0b379677728b1e3f9ec9b54aa543fd40ace1052a53f',
+  'native/engine/src/wallet_input_tests.rs': '62b2706a85d8456bafa59172efa9c6255d0c621523b1f119e3fb70386200d166',
   'native/contracts/Cargo.toml': '9bda2e7d8b80ba215bff5d0157bc7210fb0fbd891d1d16e0404f204c1c922c14',
   'native/contracts/README.md': '91fdddf0168658ed2edf433e5c9ef7220c643dc062328719121f3a7d27495f38',
   'native/contracts/src/account.rs': 'c9e128bbfecf910d574c2a8a8467214e580452a900ebc321b5c89463b09297f3',
@@ -1002,7 +1008,7 @@ const CORE_RUST_FILES = Object.freeze({
   'native/engine/src/finalized_events_tests.rs': '26348ecfbfe7994fe500c722849bac2833c38d0b3923bb3476ddaef00e41e64d',
   'native/engine/src/finalized_history_runtime.rs': '2d57803da0f9c169bdfed71acabf6c1216a433981cead45ba445f5fa2ab134fb',
   'native/engine/src/finalized_history_runtime_tests.rs': '7a11e761845d8a4985920ef39febbeafe1238915e8cda4dc541fc6b44271245d',
-  'native/engine/src/lib.rs': '1f768a8b3bedebeb9398280350aa8d2176d60b80f458b0cb4e55b83bb73a0ed5',
+  'native/engine/src/lib.rs': 'd7d2d780143b623394b2a6b4767456bcb84b745320eaf28dd9d64d6b1bda6c58',
   'native/engine/src/runtime_context.rs': '947335419cb7d814a41900c7ff6b8d6be55183a178b196a3cfe574757148b0d3',
   'native/engine/src/state_import.rs': '1308efbbc2626bfd5f9cc936a8e3c6e4984dbc6e2e2dda9dc0917b24d98eaa01',
   'native/engine/src/system_events.rs': 'c9d0837979617ee46a5aab5645fd33099cb306623218654e0ca2c8acb64c28ee',
@@ -1011,10 +1017,10 @@ const CORE_RUST_FILES = Object.freeze({
   'native/engine/src/transaction_history.rs': '5260796815506fa0fe13eba3c79b789d33026cd56e5dbf9e843117b2d0faf85b',
   'native/engine/src/transaction_history_tests.rs': '7ca9ad08af88a41a405f5f0d20bfb49cc14811a6287773c10ef5f8e7dc112617',
   'native/engine/src/transaction_outcome.rs': 'a8efac7d37f2d119ad435e3d162dcb82dd0991367ccdd40ce4aed6b73152c1ed',
-  'native/engine/src/wallet_derivation.rs': 'd54cf20571aeed9433062393311df0656d2e6357a4e8e01587efa4531f581c07',
-  'native/engine/src/wallet_derivation_tests.rs': '6f81cc64f0f3c82d3510ea316aa04705ae40c27d53237f25293480fcfa504e5f',
+  'native/engine/src/wallet_derivation.rs': 'bf0426a9f6bcc008bde8a411e1562212f240d9c9cd45f24e9cadce7060300313',
+  'native/engine/src/wallet_derivation_tests.rs': 'a6ab1875c821f2cfc004d8d9c1f138993078594244ba00dc70ad4d4db9ab0620',
   'native/engine/src/wallet_service.rs': '5fe503bdae8299da0f2b208965197567389e89dc6f9c7ec7890b3d5f9fd50f2d',
-  'native/engine/src/wallet_service_tests.rs': 'f480b8a776be7d0d5c5e46b74e21e476e5b9d5590a316f4c626dc206e46fa5a0',
+  'native/engine/src/wallet_service_tests.rs': 'bb88a31873a026f3516cad936012e14c6c8e6b185492bed8bbdbc03eb47d948c',
   'native/engine/src/wallet_transfer_watch.rs': '81fd003cd72af142eb8ec4b2597a6091d8cd56334bc13d4dd391cdd1acdf4971',
   'native/engine/src/wallet_transfer_watch_tests.rs': 'ac91c7a1e795a4ec10b161c99361d2ca46edb12abcf446dc7a5fec068bb154fb',
   'native/engine/tests/account_state.rs': '3271646a267cfb325ae4a4ccd2142975c00325383d81380d62e424822230208a',
@@ -1026,7 +1032,7 @@ const CORE_RUST_FILES = Object.freeze({
   'native/engine/tests/transaction_outcome.rs': '24422882e1cb4f929fef69263de854f053cb45343fc5c5b4224d2e8a4e7a2946',
   'native/ffi/Cargo.toml': '5b4497bd4b992cc8c2cab4d273ad2e32a12240928db43d030aeff5f79e65a38c',
   'native/ffi/README.md': '42f84f35b07003cca7409f6801867dab7f13467709fb298899534e33aea9cf5a',
-  'native/ffi/src/abi.rs': '5554ffa80f39d84e5f3e8fe46ea5d385eb41e0fe21a45f7d4510a5b2524d3a82',
+  'native/ffi/src/abi.rs': '789a8f5eab5ac18a66de2441512c83c56d29fad2ee802701130371cce8ce8e37',
   'native/ffi/src/assets.rs': '38ec1fc759746e68967ced815b7fcd4d1312be8ccc8da80cc4f8c60b4278ac67',
   'native/ffi/src/capabilities.rs': '5ed23ecbd7a206f1db42f0d96ca28cac21b69fe397024da763bfea7d508e3332',
   'native/ffi/src/composition.rs': 'd9ad0e306e9d555a2514def9d0d48353cd43a7ab3c5f9257db8e1812c5007ddb',
@@ -1041,12 +1047,12 @@ const CORE_RUST_FILES = Object.freeze({
   'native/ffi/src/ownership.rs': '107c8420dd1979e101fd18b7b5e7671e6368310529c612963acf4c2ff55c4eb8',
   'native/ffi/src/requests.rs': '3b9f1aa5f8cfc2727e563a80b9f5198b095420c8bd944ff5931cd2193ad7ece4',
   'native/ffi/src/runtime.rs': '505e3a0226e3ca66da82977fe728fef2d96574291c4aa8354e63e0be999f6d29',
-  'native/ffi/src/wallet_abi.rs': 'debb88a3e19f086f937e70d782f0cd32573f4c1f79fb700ac08869d4f3c23729',
-  'native/ffi/src/wallet_abi_tests.rs': '411b86c63277473e7ed8c39466713287577a89320898c79a4697350b6850c5a4',
-  'native/ffi/tests/abi_layout.rs': '5ccba7c43fdfe78c317d3ffd23de627df4af1cad13e895aae11bf7a75527113f',
+  'native/ffi/src/wallet_abi.rs': 'ca531f9570fda3232907a5815d220deb32885f2e0099559a9868150c1b47de0c',
+  'native/ffi/src/wallet_abi_tests.rs': '800209ed79d556563c91e3cc0eaa9b5043111ba8a8b42e5ae99e01322873893b',
+  'native/ffi/tests/abi_layout.rs': '6945397b49c13102648cbf274bef73c557f9c35e973a3027e2b62026e421656d',
   'native/ffi/tests/asset_boundary.rs': 'a0a56cba330088ce01e807ac37191195b8d90013aba895ac2c7acf98b9a6ecfe',
-  'native/ffi/tests/c_header_c11.c': '26f90252182189932277d77236d8ef50a44410b60c8fa17e30b4169f542edf73',
-  'native/ffi/tests/c_header_cpp17.cc': 'bc9e01786ef55af8ac47396960028483205207c711fb380195506065e52e9eb5',
+  'native/ffi/tests/c_header_c11.c': '44bbeb9a7b4ef3887c2fc2d74ed30a1c089752a08266242028e633764ad1694c',
+  'native/ffi/tests/c_header_cpp17.cc': '965a18810b5dd79f2f48da7e03ae86d93dfe376d54fd0b446ddff2dda7029036',
   'native/ffi/tests/capability_contract.rs': 'd0ba2b94dab377dfbead8f2c341cf1a42697189f461572ed5ce5986c5d8dca38',
   'native/ffi/tests/error_contract.rs': 'ae585490b05768b64401b1e6774789ba1beb1eede552e4d3e70a99cd1d395d91',
   'native/ffi/tests/event_contract.rs': 'e39b153cbebf7510d8f72af6692cf99ac8aec43f254bcc305dc5c741b063fd11',
@@ -1054,8 +1060,8 @@ const CORE_RUST_FILES = Object.freeze({
   'native/ffi/tests/host_provider_contract.rs': 'a1aabe53e73e31e5eefe0669c1eceb3f4f0b09f5c9d65bb2661a9c142793e209',
   'native/ffi/tests/ownership_contract.rs': 'b75c13b228598177b1f8fabaa9a2cf5b1e62d8674a5dff662fed06616308ba0e',
   'native/ffi/tests/request_contract.rs': '816038c6de732cac1b85bdd15c72bfaac7b0eec2ace307937ce410f280204e42',
-  'native/ffi/tests/symbol_contract.rs': 'f307bb95a762e0dcc618f5c92aaa5db567bc71af3ca5ba551c0734e11f5c9559',
-  'native/ffi/tests/wallet_abi_contract.rs': '845070da4704549b9bd48c460de978da6dfb0c2fb93a372d7f9fcf3afd639449',
+  'native/ffi/tests/symbol_contract.rs': '71af6cac729aab8403b24561c3a9543eec9f914b92f21a6a0a4373d365fa2fba',
+  'native/ffi/tests/wallet_abi_contract.rs': '91cdcd2bcd5d891ac076b6c24f70149b6f470b0a75eefb895d2ff28dd376dda8',
 });
 // native 根只能拥有这些已审核直接条目，防止出现第二个未审查的 Rust 产品边界。
 const NATIVE_ROOT_ENTRIES = Object.freeze({
@@ -1069,18 +1075,18 @@ const NATIVE_ROOT_ENTRIES = Object.freeze({
 // Core Rust 的 workspace 入口、解析闭包、边界说明和法律声明必须与源码闭集
 // 同步审核；每个边界文件都固定最终审核字节，任何后续漂移均失败关闭。
 const CORE_RUST_BOUNDARY_FILES = Object.freeze({
-  'Cargo.toml': 'c2001e230187da0e5ca7df7227696d60e4c99d0f44622e389ba8dac8ee949b24',
+  'Cargo.toml': '2caf8831132c3e599eef276e4bfd4872ff44ab42892d9fd011673ca93baab3ab',
   'Cargo.lock': '338e8db350d4c5abf9bdcbd9cc067a35f8c77bbe6eafcd125335b5eedaed8b32',
   'docs/C_ABI.md': '06561cadc85d40b5980e9cfb392e84c5a914fcf17db83a7fc0926592589ebb82',
   'native/README.md': '57895b15a2f05c3370730562dbac4bf32ce37c5a8fa5eafe5d3385755f0ccb05',
-  'THIRD_PARTY_NOTICES.md': 'a66332e74e9e2a2dea9f3bd2049cc87ac9dca9c547b08432e9d4bcce26ebcb15',
+  'THIRD_PARTY_NOTICES.md': '96eb93e16175f59749676e3941bfbec6f31e546775e57542fd476bb162d6bbf3',
 });
 // 该清单离线固定 FFI、PoW workspace、light-base 与 lib 的完整文件闭集；
 // byte_identical 项来自 CitizenApp 初始稳定基线，adapted/sdk_only 是已审查的
 // SDK 边界。清单自身再由此哈希固定，CI/Release 不回指 CitizenApp。
 const SMOLDOT_RUST_SOURCE_MANIFEST = Object.freeze({
   path: 'native/smoldot/SOURCE_SHA256.json',
-  sha256: '1e24c80cac3c2ba693194cb8e9588aa73e85324c4a6d8538ffe38369590d34e3',
+  sha256: 'af57fe6a563fc7161503ff2d3983b406408f3c8c19fce3992efe0ac46a634910',
 });
 // 这些文件位于各来源单元之外，但仍属于 Release 的正式输入：许可证、来源说明、
 // smoldot 原始 ABI 头文件以及由 light-base 示例通过 include_str! 编译引用的链规范。
@@ -1773,6 +1779,13 @@ export function assertProviderLockParity(root) {
  */
 export function assertCoreRustSource(root) {
   const sourceRoot = resolve(root);
+  const manifest = readFileSync(join(sourceRoot, 'Cargo.toml'), 'utf8');
+  for (const field of ['repository', 'homepage']) {
+    const declarations = manifest.match(new RegExp(`^${field}\\s*=.*$`, 'gm')) ?? [];
+    if (declarations.length !== 1 || declarations[0] !== `${field} = "https://github.com/VoyagerRhett/GMB"`) {
+      fail(`CitizenSDK Rust ${field} 必须为现行唯一仓库`);
+    }
+  }
   if (Object.keys(CORE_RUST_FILES).length !== CORE_RUST_FILE_COUNT) {
     fail(`CitizenSDK Core Rust 固定清单必须精确为 ${CORE_RUST_FILE_COUNT} 文件`);
   }
@@ -1916,11 +1929,17 @@ export function assertPublicAbiHeaders(root) {
       'citizensdk_import_wallet',
       'citizensdk_add_wallet_accounts',
       'citizensdk_prepared_wallet_copy_mnemonic',
+      'citizensdk_validate_wallet_mnemonic',
     ]);
     if (forbiddenPrivateMaterial
         || carriesGenericSecret
         || (carriesMnemonic && !mnemonicFunctions.has(functionName))) {
       fail(`CitizenSDK 公共 ABI 禁止助记词、私钥或秘密导出：${functionName}`);
+    }
+    // 同步校验只接收只读视图及显式词数，不能借校验函数名增加秘密输出。
+    if (functionName === 'citizensdk_validate_wallet_mnemonic'
+        && normalized !== 'citizensdk_error_code_t citizensdk_validate_wallet_mnemonic( citizensdk_bytes_view_t mnemonic, citizensdk_wallet_word_count_t word_count)') {
+      fail('CitizenSDK 助记词校验 ABI 只允许输入视图、词数和状态码');
     }
     if (functionName === 'citizensdk_prepared_wallet_copy_mnemonic'
         && (!/\bcitizensdk_handle_t\s+handle\b/.test(normalized)
@@ -2400,6 +2419,16 @@ export function assertHostedPackageSource(root, {
   }
   const pubspec = readFileSync(pubspecPath, 'utf8');
   const pubspecVersion = pubspec.match(/^version: (\d+\.\d{1,2}\.\d{1,2})$/m)?.[1];
+  // 包身份直接核对唯一现行仓库；固定摘要不能替代字段语义校验。
+  const repositories = pubspec.match(/^repository:.*$/gm) ?? [];
+  if (repositories.length !== 1 || repositories[0] !== 'repository: https://github.com/VoyagerRhett/GMB') {
+    fail('CitizenSDK Hosted Package repository 必须为现行唯一仓库');
+  }
+  const podspec = readFileSync(join(sourceRoot, 'darwin/citizen_sdk.podspec'), 'utf8');
+  const homepages = podspec.match(/^\s*spec\.homepage.*$/gm) ?? [];
+  if (homepages.length !== 1 || !/^  spec\.homepage\s+= 'https:\/\/github\.com\/VoyagerRhett\/GMB\/tree\/main\/citizensdk'$/.test(homepages[0])) {
+    fail('CitizenSDK Apple homepage 必须为现行唯一仓库');
+  }
   if (!/^name: citizen_sdk$/m.test(pubspec) || !pubspecVersion) {
     fail('CitizenSDK Hosted Package 身份或版本无效');
   }
@@ -3579,7 +3608,7 @@ function assertWindowsInstalledPlatform(sourceRoot, prefix) {
   const coreSymbols = expectedCitizenSdkSymbols(sourceRoot);
   const hostSymbols = [...new Set([...readFileSync(join(sourceRoot, 'windows/include/citizen_sdk/citizensdk_host.h'), 'utf8')
     .matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]))].sort();
-  if (coreSymbols.length !== 70 || hostSymbols.length !== 13) fail('CitizenSDK Windows 公开导出基线漂移');
+  if (coreSymbols.length !== 73 || hostSymbols.length !== 13) fail('CitizenSDK Windows 公开导出基线漂移');
   for (const [name, symbols, imports, library] of [
     ['citizensdk.dll', coreSymbols, [], 'citizensdk.dll.lib'],
     ['citizensdk_host.dll', hostSymbols, ['citizensdk.dll'], 'citizensdk_host.lib'],
@@ -4506,7 +4535,7 @@ function expectedCitizenSdkSymbols(root) {
   const symbols = [...new Set(
     [...header.matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]),
   )].sort();
-  if (symbols.length !== 70) fail('CitizenSDK 产品头必须精确声明 70 个 citizensdk_* 函数');
+  if (symbols.length !== 73) fail('CitizenSDK 产品头必须精确声明 73 个 citizensdk_* 函数');
   return symbols;
 }
 
@@ -4566,7 +4595,7 @@ function assertAppleFrameworkSlice(candidate, xcframework, identifier, contract)
     .filter((symbol) => symbol.startsWith('citizensdk_'))
     .sort();
   if (JSON.stringify(actualSymbols) !== JSON.stringify(expectedSymbols)) {
-    fail(`${label} 必须精确导出 70 个 citizensdk_* 产品符号`);
+    fail(`${label} 必须精确导出 73 个 citizensdk_* 产品符号`);
   }
   const forbidden = [...binary.symbols]
     .filter((symbol) => /^(?:smoldot_|citizen_sr25519_|account_crypto_)/.test(symbol))

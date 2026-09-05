@@ -25,10 +25,11 @@ const BIP39_SEED_BYTES: usize = 64;
 const MINI_SECRET_BYTES: usize = 32;
 const OWNER_BYTES: usize = 16;
 
-/// 创建钱包只接受当前产品已经验证的 12 或 24 词。
+/// SDK 创建与恢复只接受 12、18、24 词，不接受 BIP-39 的其他词数。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WalletWordCount {
     Words12,
+    Words18,
     Words24,
 }
 
@@ -36,6 +37,7 @@ impl WalletWordCount {
     pub const fn words(self) -> usize {
         match self {
             Self::Words12 => 12,
+            Self::Words18 => 18,
             Self::Words24 => 24,
         }
     }
@@ -43,6 +45,7 @@ impl WalletWordCount {
     const fn entropy_bytes(self) -> usize {
         match self {
             Self::Words12 => 16,
+            Self::Words18 => 24,
             Self::Words24 => 32,
         }
     }
@@ -233,15 +236,8 @@ fn derive_master_mini_secret(
             "助记词必须是 UTF-8 English BIP-39 文本",
         )
     })?;
-    let normalized = sentence.trim();
-    let mnemonic = Mnemonic::parse_in(Language::English, normalized)
-        .map_err(|_| EngineError::contract(ContractErrorCode::InvalidArgument, "助记词无效"))?;
-    if !matches!(mnemonic.word_count(), 12 | 24) {
-        return Err(EngineError::contract(
-            ContractErrorCode::InvalidArgument,
-            "当前钱包只接受 12 或 24 词 English BIP-39 助记词",
-        ));
-    }
+    // UI 校验、导入、恢复和追加账户必须使用同一个词数与 checksum 入口。
+    let mnemonic = crate::wallet_input::parse_wallet_mnemonic(sentence, None)?;
 
     let mut entropy = Zeroizing::new(mnemonic.to_entropy());
     let mut salt = Zeroizing::new(String::with_capacity(8 + password.len()));

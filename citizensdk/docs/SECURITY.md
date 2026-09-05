@@ -53,7 +53,7 @@ Rust Core 没有私钥导出方法。
 来源。钱包创建/导入/多账户、通用载荷签名和高层转账/历史入口都经同一个 Rust Engine，
 钱包模式下原始 signed-extrinsic submit/watch 在触达 provider 前失败关闭。
 legacy `citizensdk_create` 路径原 36 个 ABI 符号、数值、布局和单请求功能语义保持不变，新增
-34 个符号，总计 70 个。
+37 个符号，总计 73 个。
 
 Apple 绑定为 Core 借用的 HostBridge、callback、store 和 vault context 保留显式 ABI +1。
 关闭只能沿 `live -> monitorStopped -> destroyOnly -> closed` 单调前进；callback clear
@@ -305,7 +305,7 @@ host completion 被 claim 后仍计为 outstanding，直到 SDK
 
 根产品 C ABI/头文件不导出低层 signer、private-key 或 child-secret 原语；高层
 `citizensdk_sign_wallet_payload` 只返回签名结果。Android AAR/Flutter 双投影禁止
-`libsmoldot`，只带产品 Core 与薄 JNI bridge；Apple XCFramework 只导出根产品头的 70 个
+`libsmoldot`，只带产品 Core 与薄 JNI bridge；Apple XCFramework 只导出根产品头的 73 个
 `citizensdk_*` 符号，并拒绝 `smoldot_*`、`citizen_sr25519_*` 与 `account_crypto_*`。legacy
 smoldot/signer 符号只允许存在于源码树外的 macOS `arm64` 差分测试宿主库，绝不进入候选。
 

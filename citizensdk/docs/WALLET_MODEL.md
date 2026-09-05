@@ -25,7 +25,7 @@ exact secrets 或当前 generation 的 wallet key。`WalletProfileStore` 只保�
 `EncryptedSecretBlobStore` 只能保存加密信封，`SecretVault` 单独承担设备金库与认证。
 `ChainSigner` 是独立的 sr25519 合同，不能与系统金库合并成同一业务接口。
 
-第 4.1 步已经在 Rust Engine 实现钱包派生和完整生命周期：English BIP-39 12/24 词、可选
+第 4.1 步已经在 Rust Engine 实现钱包派生和完整生命周期：English BIP-39 12／18／24 词、可选
 NFKD password、`//0..//1989`，以及 create/import/add/usable/rename/activate/delete/sign/
 reconcile。create 不是“先落盘再返回助记词”的单阶段调用，而是
 `prepare_wallet_creation`（profile/密文/KEK 零写入）→用户确认备份→
@@ -35,8 +35,8 @@ reconcile。create 不是“先落盘再返回助记词”的单阶段调用，�
 正常写入和写后抛错都由回读事实收敛。失败方只有先取得自己的 cleanup 所有权才可删除，未完
 清理进入最多 64 项的可重放队列，不能命中当前钱包或另一代秘密。
 
-产品 C ABI v1 保留原 36 个符号不变并追加 34 个账户、钱包、签名、转账和历史符号，总计
-70 个。原 `citizensdk_create` 仍是无钱包秘密持久化的 chain-only session；完整
+产品 C ABI v1 保留原 36 个符号不变并追加 37 个账户、钱包、签名、转账和历史符号，总计
+73 个。原 `citizensdk_create` 仍是无钱包秘密持久化的 chain-only session；完整
 `citizensdk_create_with_host` 注入唯一 signer、准确 Runtime nonce、五类具名 typed stores 与
 all-or-none secure store/KEK-DEK Vault，并投影第 4.1 步钱包入口。旧构造的 unsupported
 能力只描述该构造，不能再写成整个产品 ABI 未投影。根 Dart、Android 与 Apple 共享 Darwin
@@ -152,7 +152,7 @@ Linux Host 同样固定 `citizensdk` 命名空间；TPM public/private object bl
 与安全库记录只属于本 SDK。v1 的 PBKDF2-HMAC-SHA256 与 600000 次迭代由 `secure-state-v1`
 实现版本固定，不另存为可漂移 KDF 字段。Host 层不能接收 child mini-secret，unwrap 目标仍是 Rust-owned
 32-byte buffer。SDK-owned GTK 钱包流程是恢复词/password 唯一展示或输入例外，其终态必须
-best-effort 清空控件和原生敏感缓冲区。创建只接受 12/24 词，导入/追加的无关 `word_count`
+best-effort 清空控件和原生敏感缓冲区。创建只接受 12／18／24 词，导入/追加的无关 `word_count`
 必须为 0，追加 index 只接受唯一 `1..1989`。Core 未打开、wallet 未启用或 Vault 不可用时
 必须在展示 GTK 前分别失败关闭；GTK 终态只能在 owner UI thread 清理，有限调度重试仍失败
 时 terminate，不能从 worker 析构。parent 销毁必须立即在该 UI 线程清空并退休 dialog、恢复词

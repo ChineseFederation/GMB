@@ -753,8 +753,9 @@ DecodedRequest decode_request(const std::string &name, FlValue *arguments) {
         (void)list(root, 4); result.account_id = account(fields[3]); break;
       case Method::create_wallet: {
         (void)list(root, 4); const auto words = integer(fields[3]);
-        require(words == 12 || words == 24, CITIZENSDK_ERROR_INVALID_ARGUMENT,
-                "wordCount must be 12 or 24");
+        require(words == 12 || words == 18 || words == 24,
+                CITIZENSDK_ERROR_INVALID_ARGUMENT,
+                "wordCount must be 12, 18, or 24");
         result.word_count = static_cast<uint32_t>(words); break;
       }
       case Method::add_wallet_accounts: {

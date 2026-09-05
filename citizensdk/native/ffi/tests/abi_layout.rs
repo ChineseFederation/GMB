@@ -383,6 +383,7 @@ fn account_wallet_and_history_layout_and_constants_are_exact() {
     assert_eq!(CitizenSdkResultKind::WalletTransfer as u32, 16);
     assert_eq!(CitizenSdkResultKind::TransactionHistory as u32, 17);
     assert_eq!(CitizenSdkWalletWordCount::Words12 as u32, 12);
+    assert_eq!(CitizenSdkWalletWordCount::Words18 as u32, 18);
     assert_eq!(CitizenSdkWalletWordCount::Words24 as u32, 24);
     assert_eq!(CitizenSdkWalletOrigin::Created as u32, 1);
     assert_eq!(CitizenSdkWalletOrigin::Imported as u32, 2);

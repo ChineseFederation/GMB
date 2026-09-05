@@ -5,10 +5,12 @@ import XCTest
 @MainActor
 final class CitizenSDKFlutterWalletFlowTests: XCTestCase {
     func testFlutterRequestsMapOnlyToSdkOwnedWalletFlows() throws {
-        XCTAssertEqual(
-            try CitizenSdkFlutterWalletFlow.contract(for: .create(session: "s", sequence: 1, wordCount: 12)),
-            .create(wordCount: 12)
-        )
+        for count: UInt32 in [12, 18, 24] {
+            XCTAssertEqual(
+                try CitizenSdkFlutterWalletFlow.contract(for: .create(session: "s", sequence: 1, wordCount: count)),
+                .create(wordCount: count)
+            )
+        }
         XCTAssertEqual(
             try CitizenSdkFlutterWalletFlow.contract(for: .empty(method: "importWallet", session: "s", sequence: 2)),
             .importWallet
@@ -27,4 +29,3 @@ final class CitizenSDKFlutterWalletFlowTests: XCTestCase {
         }
     }
 }
-

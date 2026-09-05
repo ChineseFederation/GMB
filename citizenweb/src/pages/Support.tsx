@@ -44,7 +44,7 @@ export default function Support() {
           对于不包含个人隐私或安全机密的一般产品问题，可以在 GMB 官方代码仓库提交问题。涉及隐私或安全事件时，请先移除所有敏感信息，只提供复现所需的最少资料。
         </p>
         <a
-          href="https://github.com/ChineseFederation/GMB/issues"
+          href="https://github.com/VoyagerRhett/GMB/issues"
           target="_blank"
           rel="noreferrer"
           className="inline-flex rounded-lg border border-gold-400/40 bg-gold-500/10 px-5 py-3 text-sm font-semibold text-gold-300 no-underline transition-colors hover:bg-gold-500/20"

@@ -51,6 +51,45 @@ void main() {
     await sdk.close();
   });
 
+  test('三种助记词数量使用准确数值且默认十二词，不向Dart传递秘密', () async {
+    expect(CitizenWalletWordCount.values.map((value) => value.value), [
+      12,
+      18,
+      24,
+    ]);
+    final sdk = await CitizenSdk.open();
+    await sdk.wallet.create();
+    expect(platform.argumentsByMethod['createWallet']!.last, 12);
+    for (final count in CitizenWalletWordCount.values) {
+      await sdk.wallet.create(wordCount: count);
+      final request = platform.argumentsByMethod['createWallet']!;
+      expect(request, hasLength(4));
+      expect(request.last, count.value);
+    }
+    await sdk.close();
+  });
+
+  test('原生输入合同拒绝十五词、二十一词及任意其他数量', () {
+    const codec = CitizenSdkFlutterCodec();
+    for (final count in [0, 11, 15, 21, 25]) {
+      expect(
+        () => codec.encodeRequest(
+          method: 'createWallet',
+          sessionId: 'session-a',
+          requestSequence: 1,
+          fields: [count],
+        ),
+        throwsA(
+          isA<CitizenSdkException>().having(
+            (error) => error.code,
+            'code',
+            CitizenSdkErrorCode.invalidArgument,
+          ),
+        ),
+      );
+    }
+  });
+
   test('sign消息使用临时副本并仅返回公开sr25519签名', () async {
     final sdk = await CitizenSdk.open();
     final callerPayload = Uint8List.fromList(<int>[1, 2, 3]);

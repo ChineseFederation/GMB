@@ -18,8 +18,8 @@ resolver = "2"
 edition = "2021"
 version = "1.0.0"
 authors = ["voyager_rhett <chinanation@icloud.com>"]
-repository = "https://github.com/ChineseFederation/GMB"
-homepage = "https://github.com/ChineseFederation/GMB"
+repository = "https://github.com/VoyagerRhett/GMB"
+homepage = "https://github.com/VoyagerRhett/GMB"
 license = "MIT"
 
 [workspace.lints.rust]

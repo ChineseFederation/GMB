@@ -154,6 +154,7 @@ pub enum CitizenSdkResultKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CitizenSdkWalletWordCount {
     Words12 = 12,
+    Words18 = 18,
     Words24 = 24,
 }
 

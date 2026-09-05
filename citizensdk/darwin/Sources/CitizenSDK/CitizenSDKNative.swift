@@ -317,8 +317,9 @@ internal final class CitizenSDKNative: @unchecked Sendable {
         self.handle = handle
     }
 
-    static func open(assets: CitizenSDKAssets, storageRoot: URL? = nil) throws -> CitizenSDKNative {
-        let host = try CitizenSDKHostBridge(root: storageRoot)
+    static func open(assets: CitizenSDKAssets, storageRoot: URL? = nil,
+                     applicationID: String? = Bundle.main.bundleIdentifier) throws -> CitizenSDKNative {
+        let host = try CitizenSDKHostBridge(root: storageRoot, applicationID: applicationID)
         var handle: UInt64 = 0
         let name = Data("CitizenSDK".utf8)
         let version = Data("1.0.0".utf8)

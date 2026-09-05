@@ -69,6 +69,10 @@ int main() {
   twelve.word_count = 12;
   assert(validate_contract(FlutterWalletFlows::contract(twelve)).word_count ==
          CITIZENSDK_WALLET_WORDS_12);
+  auto eighteen = create;
+  eighteen.word_count = 18;
+  assert(validate_contract(FlutterWalletFlows::contract(eighteen)).word_count ==
+         CITIZENSDK_WALLET_WORDS_18);
   assert(citizen_sdk::WalletFlowRequest{}.word_count == 12);
 
   int completions = 0;
@@ -147,6 +151,10 @@ int main() {
 
   auto invalid = create;
   invalid.word_count = 15;
+  citizen_sdk::flutter::test::expect_failure(
+      [&] { (void)FlutterWalletFlows::contract(invalid); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  invalid = create;
+  invalid.word_count = 21;
   citizen_sdk::flutter::test::expect_failure(
       [&] { (void)FlutterWalletFlows::contract(invalid); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
   invalid = create;

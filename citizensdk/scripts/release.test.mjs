@@ -24,10 +24,10 @@ import {
 import { spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, getEventListeners } from 'node:events';
 import { gunzipSync, gzipSync } from 'node:zlib';
-import { basename, dirname, join, posix, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, posix, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import test from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runInNewContext } from 'node:vm';
 
 import {
@@ -83,6 +83,118 @@ if (!workRoot) {
 mkdirSync(workRoot, { recursive: true });
 
 const citizenSdkRoot = fileURLToPath(new URL('../', import.meta.url));
+
+test('Android独立CMake真实中央读取拒绝缺失与异版且不影响Flutter插件', async () => {
+  const gradle = readFileSync(join(citizenSdkRoot, 'android/native/build.gradle'), 'utf8');
+  const snippets = [...gradle.matchAll(/commandLine 'node', '--input-type=module', '-e', '''([\s\S]*?)'''/gu)];
+  assert.equal(snippets.length, 1);
+  const script = snippets[0][1];
+  assert.match(gradle, /version = cmakeVersion/u);
+  assert.doesNotMatch(gradle, /version = '\d+\.\d+\.\d+'/u);
+  assert.doesNotMatch(readFileSync(join(citizenSdkRoot, 'android/build.gradle'), 'utf8'), /readCmake|cmakeVersion|tools.*android\.mjs/u);
+  const root = process.env.TATA_WORKSPACE_ROOT || process.env.TATA_ROOT;
+  const flows = process.env.TATA_CONSOLE_FLOW_ROOT || (root && join(root, 'tataconsole', 'flows'));
+  assert.ok(flows && isAbsolute(flows), 'CMake合同测试需要中央流程绝对路径');
+  const tools = resolve(flows, '..', 'tools');
+  const library = JSON.parse(readFileSync(join(tools, 'shared.json'), 'utf8'));
+  const expected = library.tools.find(tool => tool.id === 'cmake').version;
+  // 先执行Gradle将调用的原始Node脚本；它只读取中央合同，不编译或下载。
+  const actual = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+    env: { ...process.env, TATA_CONSOLE_FLOW_ROOT: flows }, encoding: 'utf8', timeout: 10000,
+  });
+  assert.equal(actual.status, 0, actual.stderr);
+  assert.equal(actual.stdout.trim(), expected);
+  const source = readFileSync(join(tools, 'android.mjs'), 'utf8');
+  const reader = source.slice(source.indexOf('export function readCmake('), source.indexOf('\n// 版本真源'))
+    .replace('export function', 'function')
+    .replace("fileURLToPath(new URL('shared.json', import.meta.url))", "'central'");
+  // 错版和缺失场景只替换内存中的读取边界，实际生产版本校验函数保持原文。
+  const run = async (document, env = { TATA_CONSOLE_FLOW_ROOT: flows }, host = 'darwin', arch = 'arm64') => {
+    const output = [];
+    const readCmake = runInNewContext(`${reader}\nreadCmake`, {
+      lstatSync: () => { if (!document) throw Error('中央登记缺失'); return { isFile: () => true, size: 1000 }; },
+      realpathSync: resolve, resolve,
+      readFileSync: () => JSON.stringify(document),
+      repository: 'https://dl.google.com/android/repository/',
+      URL, fail: message => { throw Error(message); },
+    });
+    const executable = script.replace(/^import .*;\n/gm, '')
+      .replace('await import(', 'await loadCmake(');
+    await runInNewContext(`(async () => {${executable}})()`, {
+      join, isAbsolute, pathToFileURL, process: { env, platform: host, arch },
+      console: { log: value => output.push(value) },
+      loadCmake: async url => {
+        assert.equal(url.href, pathToFileURL(join(tools, 'android.mjs')).href);
+        return { readCmake };
+      },
+    });
+    return output;
+  };
+  for (const [host, arch] of [['darwin', 'arm64'], ['linux', 'x64'], ['linux', 'arm64'], ['win32', 'x64']]) {
+    assert.deepEqual(await run(library, undefined, host, arch), [expected]);
+  }
+  await assert.rejects(run(library, {}), /中央流程绝对路径/u);
+  await assert.rejects(run(library, { TATA_CONSOLE_FLOW_ROOT: 'relative' }), /中央流程绝对路径/u);
+  await assert.rejects(run(null), /中央登记缺失/u);
+  await assert.rejects(run(library, undefined, 'freebsd', 'x64'), /宿主未登记/u);
+  for (const change of [
+    value => { value.tools = value.tools.filter(tool => tool.id !== 'cmake'); },
+    value => { value.tools.push(structuredClone(value.tools.find(tool => tool.id === 'cmake'))); },
+    value => { value.tools.find(tool => tool.id === 'cmake').version = '0.0.0'; },
+    value => { value.tools.find(tool => tool.id === 'cmake').archives.macos.sha256 = 'invalid'; },
+  ]) {
+    const changed = structuredClone(library);
+    change(changed);
+    await assert.rejects(run(changed), /唯一版本|准确官方宿主/u);
+  }
+});
+
+test('Android工具三配置真实来源摘要与失败拒绝保持一致', () => {
+  const source = readFileSync(join(citizenSdkRoot, 'scripts/release.mjs'), 'utf8');
+  const block = source.match(/const MOBILE_BINDING_SOURCE_FILES = Object\.freeze\((\{[\s\S]*?\n\})\);/u)[1];
+  const pins = runInNewContext('(' + block + ')');
+  const names = ['android/build.gradle', 'android/settings.gradle', 'android/native/build.gradle'];
+  const contents = new Map(names.map(path => [join(citizenSdkRoot, path), readFileSync(join(citizenSdkRoot, path))]));
+  // 执行生产摘要验证函数；失败仅替换内存字节，不改源码或另一线程正在写的文件。
+  const start = source.indexOf('function assertPinnedFiles(');
+  const end = source.indexOf('\nfunction stripCComments(', start);
+  const expected = Object.fromEntries(names.map(path => [path, pins[path]]));
+  let missing = '', linked = '';
+  const verify = runInNewContext(source.slice(start, end) + '\nassertPinnedFiles', {
+    resolve, join,
+    existsSync: path => contents.has(path) && path !== missing,
+    lstatSync: path => ({ isFile: () => true, isSymbolicLink: () => path === linked }),
+    sha256File: path => createHash('sha256').update(contents.get(path)).digest('hex'),
+    fail: message => { throw Error(message); },
+  });
+  assert.doesNotThrow(() => verify(citizenSdkRoot, expected, '移动绑定来源'));
+  for (const name of names) {
+    const path = join(citizenSdkRoot, name), original = contents.get(path);
+    contents.set(path, Buffer.concat([original, Buffer.from('\n// changed input\n')]));
+    assert.throws(() => verify(citizenSdkRoot, expected, '移动绑定来源'), /哈希漂移/u);
+    contents.set(path, original);
+    missing = path;
+    assert.throws(() => verify(citizenSdkRoot, expected, '移动绑定来源'), /缺少普通/u);
+    missing = ''; linked = path;
+    assert.throws(() => verify(citizenSdkRoot, expected, '移动绑定来源'), /缺少普通/u);
+    linked = '';
+  }
+  assert.ok(source.includes("assertPinnedFiles(sourceRoot, MOBILE_BINDING_SOURCE_FILES, '移动绑定来源')"));
+});
+
+test('钱包输入 ABI 与三种词数完整进入同一分发合同', () => {
+  const symbols = citizenSdkSymbols();
+  for (const symbol of [
+    'citizensdk_validate_wallet_password',
+    'citizensdk_validate_wallet_mnemonic',
+    'citizensdk_wallet_word_suggestions',
+  ]) assert.equal(symbols.filter((value) => value === symbol).length, 1);
+  const header = readFileSync(join(citizenSdkRoot, 'include/citizensdk_types.h'), 'utf8');
+  const counts = [...header.matchAll(/^#define CITIZENSDK_WALLET_WORDS_(\d+)\b/gm)]
+    .map((match) => Number(match[1]));
+  assert.deepEqual(counts, [12, 18, 24]);
+  assertCoreRustSource(citizenSdkRoot);
+});
 
 // 直接执行构建器中的唯一函数体；不 source 整个构建器，避免合同测试触发
 // mkdir、依赖解析或编译，也不维护第二份 ELF/安装验收算法。
@@ -421,7 +533,7 @@ function windowsInstallFixture(root) {
         ? 'windows/include/citizen_sdk/citizensdk_host.h' : 'include/citizensdk.h');
       const names = [...new Set([...readFileSync(header, 'utf8')
         .matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/gu)].map((m) => m[1]))].sort();
-      assert.equal(names.length, host ? 13 : 70);
+      assert.equal(names.length, host ? 13 : 73);
       if (name.endsWith('.dll')) {
         bytes = windowsPeFixture(names, name);
         exports.set(name, `Dump of file ${name}\n\n    ordinal hint RVA      name\n${names.map((symbol, index) =>
@@ -1030,7 +1142,7 @@ function citizenSdkSymbols() {
   const symbols = [...new Set(
     [...header.matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]),
   )].sort();
-  assert.equal(symbols.length, 70);
+  assert.equal(symbols.length, 73);
   return symbols;
 }
 
@@ -1929,6 +2041,14 @@ test('SDK 根 Cargo 与 Dart 锁文件固定已审查依赖闭包', () => {
     }
     assert.doesNotThrow(() => assertSdkRootLocks(root));
 
+    // 合法格式的单包旧版本也必须被拒绝，不能仅拦截完全损坏的锁文本。
+    const dartLock = readFileSync(join(root, 'pubspec.lock'), 'utf8');
+    const staleDartLock = dartLock.replace(/(  vector_math:\n[\s\S]*?    version: )"2\.4\.2"/, '$1"2.2.0"');
+    assert.notEqual(staleDartLock, dartLock);
+    writeFileSync(join(root, 'pubspec.lock'), staleDartLock);
+    assert.throws(() => assertSdkRootLocks(root), /SDK 根锁文件哈希漂移：pubspec\.lock/);
+    writeFileSync(join(root, 'pubspec.lock'), dartLock);
+
     writeFileSync(join(root, 'Cargo.lock'), 'drift\n');
     assert.throws(() => assertSdkRootLocks(root), /SDK 根锁文件哈希漂移：Cargo\.lock/);
 
@@ -2283,7 +2403,7 @@ test('Apple XCFramework 固定三个 arm64 技术变体、产品 ABI、版本与
     });
     assert.throws(
       () => assertAppleReleaseProjection(missingSymbol),
-      /精确导出 70 个 citizensdk_/,
+      /精确导出 73 个 citizensdk_/,
     );
 
     const legacySymbol = join(root, 'legacy-symbol');
@@ -2788,7 +2908,7 @@ test('Windows 薄 Host 与正式 Flutter 适配保持唯一 Core 和官方注册
   const functions = [...new Set([...header.matchAll(/\b(citizensdk_host_[a-z0-9_]+)\s*\(/gu)].map((m) => m[1]))].sort();
   assert.equal(exported.length, 13);
   assert.deepEqual(exported, functions);
-  assert.equal(citizenSdkSymbols().length, 70);
+  assert.equal(citizenSdkSymbols().length, 73);
   assert.match(header, /void \*hwnd;/u);
   assert.doesNotMatch(header, /gtk_parent|private_key|plaintext_dek|mnemonic_utf8/u);
   const cmake = readFileSync(join(citizenSdkRoot, 'windows/CMakeLists.txt'), 'utf8');
@@ -4136,6 +4256,10 @@ test('根 include 固定三文件闭集并只开放安全 citizensdk_* ABI', () 
       /公共 ABI 禁止助记词、私钥或秘密导出：citizensdk_get_mnemonic/,
     );
     rejectDeclaration(
+      'CITIZENSDK_API uint32_t citizensdk_validate_wallet_mnemonic(uint8_t *out_mnemonic);',
+      /助记词校验 ABI 只允许输入视图、词数和状态码/,
+    );
+    rejectDeclaration(
       'CITIZENSDK_API uint32_t citizensdk_copy_secret(uint8_t *out_secret);',
       /公共 ABI 禁止助记词、私钥或秘密导出：citizensdk_copy_secret/,
     );
@@ -4190,6 +4314,17 @@ test('CitizenSDK 自有 Core Rust 生产源码固定逐文件哈希', () => {
   try {
     writeCoreRustFixture(root);
     assert.doesNotThrow(() => assertCoreRustSource(root));
+
+    const manifestPath = join(root, 'Cargo.toml');
+    const manifest = readFileSync(manifestPath, 'utf8');
+    for (const field of ['repository', 'homepage']) {
+      writeFileSync(manifestPath, manifest.replace(
+        `${field} = "https://github.com/VoyagerRhett/GMB"`,
+        `${field} = "https://github.com/Unregistered/GMB"`,
+      ));
+      assert.throws(() => assertCoreRustSource(root), new RegExp(`Rust ${field} 必须为现行唯一仓库`));
+      writeFileSync(manifestPath, manifest);
+    }
 
     const source = join(root, 'native', 'engine', 'src', 'lib.rs');
     writeFileSync(source, `${readFileSync(source, 'utf8')}\n`);
@@ -4261,7 +4396,8 @@ test('Core Rust 合同拒绝 workspace Cargo manifest 与锁文件漂移', () =>
   const root = mkdtempSync(join(workRoot, 'release-core-rust-workspace-test-'));
   try {
     writeCoreRustFixture(root);
-    writeFileSync(join(root, 'Cargo.toml'), 'drift\n');
+    // 保留准确仓库声明，单独检验内容摘要漂移，不混淆身份拒绝路径。
+    writeFileSync(join(root, 'Cargo.toml'), `${readFileSync(join(root, 'Cargo.toml'), 'utf8')}\n# drift\n`);
     assert.throws(
       () => assertCoreRustSource(root),
       /Core Rust 边界文件哈希漂移：Cargo\.toml/,
@@ -4566,6 +4702,24 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     assert.doesNotThrow(() => assertHostedRuntimeDartProjection(root));
     assert.doesNotThrow(() => assertHostedPackageSource(root));
 
+    // 错误、缺失或多个仓库声明都不能成为可发布输入，不保留旧身份兼容。
+    const manifestPath = join(root, 'pubspec.yaml');
+    const manifest = readFileSync(manifestPath, 'utf8');
+    for (const invalid of [
+      manifest.replace('github.com/VoyagerRhett/GMB', 'github.com/Unregistered/GMB'),
+      manifest.replace(/^repository:.*\n/m, ''),
+      manifest + '\nrepository: https://github.com/Unregistered/GMB\n',
+    ]) {
+      writeFileSync(manifestPath, invalid);
+      assert.throws(() => assertHostedPackageSource(root), /repository 必须为现行唯一仓库/);
+    }
+    writeFileSync(manifestPath, manifest);
+    const podspecPath = join(root, 'darwin/citizen_sdk.podspec');
+    const podspec = readFileSync(podspecPath, 'utf8');
+    writeFileSync(podspecPath, podspec.replace('github.com/VoyagerRhett/GMB', 'github.com/Unregistered/GMB'));
+    assert.throws(() => assertHostedPackageSource(root), /Apple homepage 必须为现行唯一仓库/);
+    writeFileSync(podspecPath, podspec);
+
     const facadePath = join(root, 'lib', 'src', 'api', 'citizen_sdk.dart');
     const facade = readFileSync(facadePath, 'utf8');
     const forbiddenFacadeName = ['CitizenSdk', 'Client'].join('');
@@ -4773,6 +4927,7 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
       'native/engine/src/transaction_builder_tests.rs',
       'native/engine/src/transaction_history_tests.rs',
       'native/engine/src/wallet_derivation_tests.rs',
+      'native/engine/src/wallet_input_tests.rs',
       'native/engine/src/wallet_service_tests.rs',
       'native/engine/src/wallet_transfer_watch_tests.rs',
       'native/ffi/src/composition_tests.rs',
@@ -5795,7 +5950,7 @@ test('Linux 安装验收执行真实文件闭集、字节、版本、平台和 E
     ]) {
       const names = [...new Set([...readFileSync(header, 'utf8')
         .matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)].map((match) => match[1]))].sort();
-      assert.equal(names.length, kind === 'core' ? 70 : 13);
+      assert.equal(names.length, kind === 'core' ? 73 : 13);
       writeFileSync(join(root, `${kind}-symbols.txt`), `${names.map((name) => `0 T ${name}`).join('\n')}\n`);
     }
     const shell = [
@@ -6152,7 +6307,7 @@ test('产品 ABI 从完整 nm 导出集合与头文件精确对拍并拒绝任�
       [...header.matchAll(/\b(citizensdk_[a-z0-9_]+)\s*\(/g)]
         .map((match) => match[1]),
     )].sort();
-    assert.equal(expected.length, 70);
+    assert.equal(expected.length, 73);
 
     const runGate = (symbols, prefix = '') => {
       writeFileSync(

@@ -557,6 +557,20 @@ class CitizenSdk private constructor(
         }
     }
 
+    // 仅 SDK 安全 Activity 调用。校验和词表来自同一个 Rust Core，不向 Flutter 导出秘密参数。
+    @JvmSynthetic
+    internal fun validateWalletPassword(password: ByteArray) = native.validateWalletPassword(password)
+
+    @JvmSynthetic
+    internal fun validateWalletMnemonic(mnemonic: ByteArray, wordCount: Int) = native.validateWalletMnemonic(mnemonic, wordCount)
+
+    @JvmSynthetic
+    internal fun walletWordSuggestions(prefix: ByteArray): List<String> {
+        val bytes = native.walletWordSuggestions(prefix)
+        return try { bytes.toString(Charsets.UTF_8).split('\n').filter { it.isNotEmpty() } }
+        finally { bytes.fill(0) }
+    }
+
     private fun requireWalletProfile(
         result: CitizenSdkNativeResult,
         operation: String,

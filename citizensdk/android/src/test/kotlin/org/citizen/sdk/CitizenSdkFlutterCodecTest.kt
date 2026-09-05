@@ -7,6 +7,18 @@ import org.junit.Test
 
 class CitizenSdkFlutterCodecTest {
     @Test
+    fun `wallet word count closure is exactly twelve eighteen twenty four`() {
+        for (count in listOf(12, 18, 24)) {
+            val request = CitizenSdkFlutterCodec.decode("createWallet", listOf(1, "session", 1L, count))
+                as CitizenSdkFlutterCodec.Request.CreateWallet
+            assertEquals(count, request.wordCount)
+        }
+        for (count in listOf(0, 15, 21, 30)) assertThrows(CitizenSdkFlutterCodec.ContractFailure::class.java) {
+            CitizenSdkFlutterCodec.decode("createWallet", listOf(1, "session", 1L, count))
+        }
+    }
+
+    @Test
     fun `v1 method and channel closure is exact`() {
         assertEquals("citizen/sdk/core/v1", CitizenSdkFlutterCodec.METHOD_CHANNEL)
         assertEquals("citizen/sdk/events/v1", CitizenSdkFlutterCodec.EVENT_CHANNEL)

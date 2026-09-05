@@ -67,6 +67,10 @@ int main() {
   twelve.word_count = 12;
   assert(validate_contract(FlutterWalletFlows::contract(twelve)).word_count ==
          CITIZENSDK_WALLET_WORDS_12);
+  auto eighteen = create;
+  eighteen.word_count = 18;
+  assert(validate_contract(FlutterWalletFlows::contract(eighteen)).word_count ==
+         CITIZENSDK_WALLET_WORDS_18);
   assert(citizen_sdk::WalletFlowRequest{}.word_count == 12);
 
   int completions = 0;
@@ -142,6 +146,14 @@ int main() {
   contaminated = FlutterWalletFlows::contract(create);
   contaminated.account_indices = {1};
   expect_host_rejection(contaminated);
+
+  for (const uint32_t words : {15U, 21U}) {
+    auto invalid = create;
+    invalid.word_count = words;
+    citizen_sdk::flutter::test::expect_failure(
+        [&] { (void)FlutterWalletFlows::contract(invalid); },
+        CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  }
 
   // No secret-bearing field exists in either the decoded public request or
   // wallet contract; import receives all secrets only inside Host-owned GTK.

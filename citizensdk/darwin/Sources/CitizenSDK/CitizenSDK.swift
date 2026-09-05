@@ -24,8 +24,10 @@ public final class CitizenSdk: @unchecked Sendable {
         return try finishOpen(native)
     }
 
-    internal static func open(storageRoot: URL) throws -> CitizenSdk {
-        let native = try CitizenSDKNative.open(assets: CitizenSDKAssets.load(), storageRoot: storageRoot)
+    internal static func open(storageRoot: URL, applicationID: String? = Bundle.main.bundleIdentifier,
+                              assets: CitizenSDKAssets? = nil) throws -> CitizenSdk {
+        let native = try CitizenSDKNative.open(assets: assets ?? CitizenSDKAssets.load(), storageRoot: storageRoot,
+                                              applicationID: applicationID)
         return try finishOpen(native)
     }
 
@@ -269,8 +271,9 @@ public final class CitizenSdk: @unchecked Sendable {
     /// is awaited.
     @MainActor
     internal func prepareWallet(wordCount: UInt32, password: CitizenSDKSensitiveBuffer) async throws -> CitizenSDKPreparedWallet {
-        guard wordCount == 12 || wordCount == 24 else { throw CitizenSDKError(.invalidArgument, "word count must be 12 or 24") }
+        guard [12, 18, 24].contains(wordCount) else { throw CitizenSDKError(.invalidArgument, "word count must be 12, 18 or 24") }
         let operation = try native.prepareWallet(wordCount: wordCount, password: password)
+        password.clear()
         return CitizenSDKPreparedWallet(native: native, handle: try await operation.value())
     }
 
@@ -282,6 +285,7 @@ public final class CitizenSdk: @unchecked Sendable {
         // Admission borrows both buffers synchronously on MainActor. Only the
         // Sendable operation result crosses the suspension point.
         let operation = try native.importWallet(mnemonic: mnemonic, password: password)
+        mnemonic.clear(); password.clear()
         return try await operation.value()
     }
 
@@ -292,6 +296,7 @@ public final class CitizenSdk: @unchecked Sendable {
         try CitizenSDKWalletMutationGate.shared.enterWalletUI()
         defer { CitizenSDKWalletMutationGate.shared.leaveWalletUI() }
         let operation = try native.addAccounts(mnemonic: mnemonic, password: password, indices: checked)
+        mnemonic.clear(); password.clear()
         let added = try await operation.value()
         guard added.count == checked.count, Set(added.map(\.index)) == Set(checked) else {
             throw CitizenSDKError(.integrity, "add accounts result does not match requested indices")

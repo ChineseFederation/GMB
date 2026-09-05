@@ -1,5 +1,6 @@
 // 验证 Linux Flutter 边界逐字段复用既有 v1 tuple，且不会截断 UTF-8/NUL。
 #include <cassert>
+#include <cstdint>
 #include <cstring>
 #include <set>
 #include <string>
@@ -88,6 +89,8 @@ void test_method_closure_and_requests() {
   }
   assert(decode("createWallet", list({Value::integer(1), Value::string("s"),
       Value::integer(1), Value::integer(24)})).word_count == 24);
+  assert(decode("createWallet", list({Value::integer(1), Value::string("s"),
+      Value::integer(1), Value::integer(18)})).word_count == 18);
   assert((decode("addWalletAccounts", list({Value::integer(1), Value::string("s"),
       Value::integer(1), list({Value::integer(1), Value::integer(1989)})})).indices ==
       std::vector<uint32_t>{1, 1989}));
@@ -112,8 +115,10 @@ void test_strict_failures() {
                  CITIZENSDK_ERROR_INVALID_ARGUMENT);
   expect_failure([&] { (void)decode("unknown", list({Value::integer(1)})); },
                  CITIZENSDK_ERROR_UNSUPPORTED);
-  expect_failure([&] { (void)decode("createWallet", list({Value::integer(1), Value::string("s"),
-      Value::integer(1), Value::integer(18)})); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  for (const int64_t words : {int64_t{15}, int64_t{21}}) {
+    expect_failure([&] { (void)decode("createWallet", list({Value::integer(1), Value::string("s"),
+        Value::integer(1), Value::integer(words)})); }, CITIZENSDK_ERROR_INVALID_ARGUMENT);
+  }
   expect_failure([&] { (void)decode("addWalletAccounts", list({Value::integer(1), Value::string("s"),
       Value::integer(1), list({Value::integer(1), Value::integer(1)})})); },
       CITIZENSDK_ERROR_INVALID_ARGUMENT);

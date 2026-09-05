@@ -8,7 +8,7 @@ import org.citizen.sdk.CitizenWalletProfile
 object CitizenSdkWalletFlowContract {
     sealed class Request {
         class Create(val wordCount: Int = 12) : Request() {
-            init { require(wordCount == 12 || wordCount == 24) { "wordCount must be 12 or 24" } }
+            init { require(wordCount in listOf(12, 18, 24)) { "wordCount must be 12, 18 or 24" } }
         }
 
         class Import : Request()

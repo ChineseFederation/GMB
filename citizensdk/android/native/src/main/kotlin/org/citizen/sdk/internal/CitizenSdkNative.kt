@@ -51,6 +51,9 @@ internal class CitizenSdkNative private constructor(
     fun getAccountNonce(accountId: ByteArray): Long = call { nativeGetAccountNonce(it, accountId) }
     fun getFeeSnapshot(): Long = call { nativeGetFeeSnapshot(it) }
     fun getWalletProfile(): Long = call { nativeGetWalletProfile(it) }
+    fun validateWalletPassword(password: ByteArray) = call { nativeValidateWalletPassword(password) }
+    fun validateWalletMnemonic(mnemonic: ByteArray, wordCount: Int) = call { nativeValidateWalletMnemonic(mnemonic, wordCount) }
+    fun walletWordSuggestions(prefix: ByteArray): ByteArray = call { nativeWalletWordSuggestions(prefix) }
     fun setActiveWalletAccount(accountId: ByteArray): Long = call { nativeSetActiveWalletAccount(it, accountId) }
     fun renameWalletAccount(accountId: ByteArray, name: String): Long =
         call { nativeRenameWalletAccount(it, accountId, name.toByteArray(Charsets.UTF_8)) }
@@ -190,6 +193,9 @@ internal class CitizenSdkNative private constructor(
     private external fun nativeInitializeFinalizedHistory(bridge: Long, accountIds: ByteArray, count: Int): Long
     private external fun nativeSyncFinalizedHistory(bridge: Long, accountIds: ByteArray, count: Int): Long
     private external fun nativePrepareWalletCreation(bridge: Long, wordCount: Int, password: ByteArray): Long
+    private external fun nativeValidateWalletPassword(password: ByteArray)
+    private external fun nativeValidateWalletMnemonic(mnemonic: ByteArray, wordCount: Int)
+    private external fun nativeWalletWordSuggestions(prefix: ByteArray): ByteArray
     private external fun nativeImportWallet(bridge: Long, mnemonic: ByteArray, password: ByteArray): Long
     private external fun nativeAddWalletAccounts(
         bridge: Long,

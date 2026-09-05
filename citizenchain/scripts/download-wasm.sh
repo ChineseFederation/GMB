@@ -7,7 +7,7 @@ set -euo pipefail
 # 补充常见的 PATH，确保 gh CLI 可用
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-REPO="ChineseFederation/GMB"
+REPO="VoyagerRhett/GMB"
 WORKFLOW="CitizenChain WASM"
 ARTIFACT_NAME="citizenchain-wasm"
 

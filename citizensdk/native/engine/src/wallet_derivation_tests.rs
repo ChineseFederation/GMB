@@ -143,6 +143,34 @@ fn mnemonic_generation_and_index_validation_keep_the_public_boundary_narrow() {
         )
     });
 
+    let eighteen = generate_mnemonic(&FixedEntropy(vec![0; 24]), WalletWordCount::Words18)
+        .expect("24 字节熵应生成 18 词");
+    eighteen.with_secret(|bytes| {
+        assert_eq!(
+            std::str::from_utf8(bytes)
+                .unwrap()
+                .split_whitespace()
+                .count(),
+            18
+        )
+    });
+    let eighteen_accounts = block_on(derive_wallet_accounts(
+        Arc::new(Sr25519SoftwareSigner),
+        &eighteen,
+        "",
+        &[0, 1, 1989],
+    ))
+    .expect("18 词必须支持恢复和派生");
+    assert_eq!(eighteen_accounts.len(), 3);
+    let protected = block_on(derive_wallet_accounts(
+        Arc::new(Sr25519SoftwareSigner),
+        &eighteen,
+        "abcdef",
+        &[0],
+    ))
+    .expect("18 词支持非空派生密码");
+    assert_ne!(eighteen_accounts[0].public_key(), protected[0].public_key());
+
     let twenty_four = generate_mnemonic(&FixedEntropy(vec![0; 32]), WalletWordCount::Words24)
         .expect("32 字节熵应生成 24 词");
     twenty_four.with_secret(|bytes| {

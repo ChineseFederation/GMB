@@ -62,15 +62,18 @@ fn header_functions(header: &str) -> BTreeSet<String> {
 }
 
 #[test]
-fn old_36_exports_are_unchanged_and_new_surface_is_an_exact_disjoint_34() {
+fn base_exports_and_wallet_surface_are_exact_and_disjoint() {
     let old = rust_exports(include_str!("../src/lib.rs"));
     let wallet = rust_exports(include_str!("../src/wallet_abi.rs"));
     assert_eq!(old.len(), 36);
-    assert_eq!(wallet.len(), 34);
+    assert_eq!(wallet.len(), 37);
     assert!(old.is_disjoint(&wallet));
 
     let expected_wallet: BTreeSet<_> = [
         "citizensdk_create_with_host",
+        "citizensdk_validate_wallet_password",
+        "citizensdk_validate_wallet_mnemonic",
+        "citizensdk_wallet_word_suggestions",
         "citizensdk_get_finalized_account_balance",
         "citizensdk_get_account_nonce",
         "citizensdk_get_best_fee_snapshot",

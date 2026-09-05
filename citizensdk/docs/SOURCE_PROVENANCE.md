@@ -1,5 +1,31 @@
 # CitizenSDK 源码来源与同步策略
 
+## 现行仓库身份与来源元数据（2026-09-05）
+
+用户明确要求三仓统一清除旧仓库身份；当前第一方身份为 VoyagerRhett，SDK 所属仓库为
+https://github.com/VoyagerRhett/GMB。包清单、主页、自有版权署名与来源清单同步更新。
+本次 `native/smoldot/ffi/Cargo.toml` 只调整自有作者元数据，
+`native/smoldot/pow/lib/src/verify/pow.rs` 只调整第一方版权署名，不改上游算法。
+归档 `docs/smoldot-dart/source-pubspec.yaml` 的 repository 已按当前身份规范化，
+不再声称该字段仍为初始快照原文；固定依赖提交、版本、协议、签名向量及许可证条款不变。
+来源摘要只针对已核实的上述差异更新；同时核对现行 CitizenApp 对应文件。
+订阅继续调用 smoldot 已实现的订阅／通知／取消接口，SDK 只负责适配和钱包应用层调度。
+
+## 钱包输入单源与本轮明确差异（2026-09-05）
+
+钱包派生密码语义参照 CitizenApp 和 shared/wallet-password：空值有效、非空 NFKD 与
+字符／字素长度校验、一次风险确认；密码参与派生而非 App 登录。本轮不移动或修改这些
+来源文件，也不修改 CitizenWallet 或上游依赖。SDK 的校验与派生共用既有 Rust 核心。
+
+新增 `native/engine/src/wallet_input.rs` 直接使用已有 BIP39 依赖的英文词表和校验和；
+三个同步 C ABI 只校验或返回最多六个公开词表候选，不启动轻节点，不回显原输入。
+各平台 SDK 安全界面调用该实现，宿主 Dart 不接触助记词、派生密码或私钥。
+
+以下是用户明确要求的行为变化，不宣称与 CitizenApp 逐字节相同：允许 12／18／24 词；
+创建先准备、确认备份后再提交；各平台取消重复密码输入，非空创建／导入只确认一次风险；
+失败重试不隐式改用空密码。原有公开测试向量保留，18 词用公开合成熵补充生命周期回归。
+新增与原样来源分开审计，许可证、上游源码和既有链资产不变。
+
 ## 固定原生静态依赖来源（第 10.5 步）
 
 下列官方归档已核验实际下载字节；它们不是 CitizenApp 的逐字节收编源码，也不是本机
@@ -96,8 +122,8 @@ Core/产品 FFI 闭集由 Release 独立反向枚举、固定哈希并拒绝额�
 第 4.1 步的 Rust Core 已实现账户、两阶段钱包创建与完整生命周期、唯一 sr25519 签名路径、
 不可拆分的钱包交易和 finalized 历史行为。第 4.2 步又建立 Rust 内部产品组合，固定真实
 smoldot provider、准确 Runtime nonce 和唯一 signer，并只接受 typed Vault/stores。第 5.1 步
-在未发布 ABI v1 内保留原 36 个符号不变，追加 34 个账户、钱包、签名、转账和历史符号，
-总计 70 个。旧 `citizensdk_create` 仍是 session-backed chain-only；
+在未发布 ABI v1 内保留原 36 个符号不变，当时追加 34 个账户、钱包、签名、转账和历史符号；
+本轮再加入 3 个同步钱包输入接口，当前总计 73 个。旧 `citizensdk_create` 仍是 session-backed chain-only；
 `citizensdk_create_with_host` 以五类 typed stores 和 KEK/DEK Vault 形成完整平台无关组合。
 第 5.2 步根 Dart API 与 Android native/Flutter 双投影切换到 Rust Engine；第 6 步又以共享
 `darwin/` 源码为 iOS 与 macOS 建立 Swift/Flutter、typed SQLite 与 Apple Vault 投影。旧 Dart

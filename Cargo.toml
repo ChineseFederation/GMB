@@ -18,8 +18,8 @@ resolver = "2"      # 使用 Cargo 新版依赖解析器，减少 feature 冲突
 edition = "2021"                                                    # Rust 版本规范（2021 Edition）
 version = "1.0.0"                                                   # 整个工作空间的统一版本号（子 crate 可继承或覆盖）
 authors = ["voyager_rhett <chinanation@icloud.com>"]                # 作者信息
-repository = "https://github.com/ChineseFederation/GMB"                   # 项目仓库地址
-homepage = "https://github.com/ChineseFederation/GMB"                     # 项目主页
+repository = "https://github.com/VoyagerRhett/GMB"                   # 项目仓库地址
+homepage = "https://github.com/VoyagerRhett/GMB"                     # 项目主页
 license = "MIT"                                                     # 开源协议
 
 [workspace.lints.rust]                                              # 仓库级共享 Rust crate 统一规则
@@ -48,60 +48,60 @@ jsonrpsee  = { version = "0.24.2", features = ["server"] }
 arrayvec   = { version = "0.7.6", default-features = false }
 
 # SDK 核心零件（统一使用指定 Polkadot SDK 提交）
-sp-api = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-block-builder = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-blockchain = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-consensus-aura = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-consensus-grandpa = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-core = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-genesis-builder = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-inherents = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-io = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-keyring = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-offchain = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-runtime = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-session = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-storage = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-transaction-pool = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-timestamp = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-sp-version = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-api = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-block-builder = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-blockchain = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-consensus-aura = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-consensus-grandpa = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-core = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-genesis-builder = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-inherents = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-io = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-keyring = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-offchain = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-runtime = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-session = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-storage = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-transaction-pool = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-timestamp = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+sp-version = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
 
-sc-basic-authorship = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-cli = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-client-api = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-consensus = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-consensus-aura = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-consensus-grandpa = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-executor = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-network = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-service = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-telemetry = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-transaction-pool = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-sc-transaction-pool-api = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-basic-authorship = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-cli = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-client-api = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-consensus = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-consensus-aura = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-consensus-grandpa = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-executor = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-network = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-service = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-telemetry = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-transaction-pool = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+sc-transaction-pool-api = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
 
-frame-executive = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-support = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-system = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-benchmarking = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-system-benchmarking = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-try-runtime = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-metadata-hash-extension = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-frame-benchmarking-cli = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+frame-executive = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-support = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-system = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-benchmarking = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-system-benchmarking = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-try-runtime = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-metadata-hash-extension = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-benchmarking-cli = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
 
 # ✅ 关键：Runtime APIs (这里是报错最多的地方)
-frame-system-rpc-runtime-api = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-transaction-payment-rpc-runtime-api = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+frame-system-rpc-runtime-api = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-transaction-payment-rpc-runtime-api = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
 
 # Pallets
-pallet-aura = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-balances = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-grandpa = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-sudo = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-timestamp = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-transaction-payment = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
-pallet-transaction-payment-rpc = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-substrate-frame-rpc-system = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+pallet-aura = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-balances = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-grandpa = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-sudo = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-timestamp = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-transaction-payment = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d", default-features = false }
+pallet-transaction-payment-rpc = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+substrate-frame-rpc-system = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
 
 # Tools
-substrate-build-script-utils = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
-substrate-wasm-builder = { git = "https://github.com/ChineseFederation/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+substrate-build-script-utils = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }
+substrate-wasm-builder = { git = "https://github.com/VoyagerRhett/polkadot-sdk.git", rev = "1aa4447575d446ab393e89b86cd8ec0a8fca100d" }

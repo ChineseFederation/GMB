@@ -403,6 +403,73 @@ impl Harness {
 }
 
 #[test]
+fn every_supported_word_count_round_trips_backup_import_accounts_and_deletion() {
+    block_on(async {
+        for count in [
+            WalletWordCount::Words12,
+            WalletWordCount::Words18,
+            WalletWordCount::Words24,
+        ] {
+            for password in ["", "abcdef"] {
+                let created = Harness::new();
+                let prepared = created
+                    .service
+                    .prepare_create(count, Zeroizing::new(password.to_owned()))
+                    .await
+                    .unwrap();
+                assert!(created.profiles.snapshot().profile().is_none());
+                assert_eq!(created.secrets.envelope_count(), 0);
+                let backup = prepared.with_mnemonic(|words| {
+                    assert_eq!(
+                        std::str::from_utf8(words)
+                            .unwrap()
+                            .split_whitespace()
+                            .count(),
+                        count.words()
+                    );
+                    SecretBuffer::try_new(words.to_vec()).unwrap()
+                });
+                let profile = created
+                    .service
+                    .commit_create_after_backup(prepared)
+                    .await
+                    .unwrap();
+                let restored = Harness::new();
+                let imported = restored.service.import(&backup, password).await.unwrap();
+                assert_eq!(profile.master_account_id(), imported.master_account_id());
+                let accounts = restored
+                    .service
+                    .add_accounts(&backup, password, &[1989, 1])
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    accounts
+                        .iter()
+                        .map(|account| account.index())
+                        .collect::<Vec<_>>(),
+                    vec![1, 1989]
+                );
+                let before = restored.profiles.snapshot();
+                assert!(restored
+                    .service
+                    .add_accounts(&backup, "wrong!", &[2])
+                    .await
+                    .is_err());
+                assert_eq!(restored.profiles.snapshot(), before);
+                restored
+                    .service
+                    .delete_account(accounts[0].account_id())
+                    .await
+                    .unwrap();
+                restored.service.delete_wallet().await.unwrap();
+                assert!(restored.service.profile().await.unwrap().is_none());
+                assert_eq!(restored.secrets.envelope_count(), 0);
+            }
+        }
+    });
+}
+
+#[test]
 fn create_add_accounts_usability_and_local_signing_form_one_complete_lifecycle() {
     block_on(async {
         let harness = Harness::new();

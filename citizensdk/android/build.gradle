@@ -45,18 +45,6 @@ if (androidBuildValue != null && !androidBuildValue.trim().isEmpty()) {
     buildDir = new File(androidBuildRoot, 'flutter')
 }
 
-buildscript {
-    ext.kotlin_version = '2.2.20'
-    repositories {
-        google()
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'com.android.tools.build:gradle:8.11.1'
-        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
-    }
-}
-
 allprojects {
     repositories {
         google()
@@ -65,7 +53,7 @@ allprojects {
 }
 
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
+// AGP启用内置Kotlin；Flutter宿主或独立settings负责唯一版本选择。
 
 def sharedFacadeSource = file('native/src/main/kotlin').canonicalFile
 def packagedAndroidAbiDirectory = file('src/main/jniLibs/arm64-v8a').canonicalFile
@@ -106,7 +94,8 @@ android {
         main {
             // The Flutter plugin compiles the exact same public Android facade
             // as the native/AAR surface. There is no nested AAR or second adapter.
-            java.srcDirs += [sharedFacadeSource]
+            // 内置Kotlin只识别Kotlin源集，不能再借Java源集加入共享门面。
+            kotlin.srcDir(sharedFacadeSource)
             assets.srcDirs = [file('../assets')]
             // Android's jniLibs root is the parent of the fixed arm64-v8a leaf.
             jniLibs.srcDirs = [selectedAndroidAbiDirectory.parentFile]
@@ -117,17 +106,13 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-        freeCompilerArgs += ['-Xjvm-default=all']
-    }
     defaultConfig {
         minSdk = 24
         ndk {
             abiFilters 'arm64-v8a'
         }
     }
-    packagingOptions {
+    packaging {
         jniLibs {
             useLegacyPackaging = false
             excludes += ['lib/armeabi*/**', 'lib/x86/**', 'lib/x86_64/**']
@@ -138,6 +123,14 @@ android {
     }
     testOptions {
         unitTests.returnDefaultValues = true
+    }
+}
+
+// 使用公开编译选项保持JVM17和接口默认实现语义。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+        jvmDefault = org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode.NO_COMPATIBILITY
     }
 }
 
