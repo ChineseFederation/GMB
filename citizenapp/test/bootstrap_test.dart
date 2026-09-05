@@ -50,7 +50,7 @@ Future<void> pumpUntilFound(
   }
 }
 
-class _ForegroundWakeChatRuntime extends ChatRuntime {
+class _ForegroundWakeChatRuntime extends CitizenChatSdk {
   int wakeCount = 0;
 
   @override
@@ -272,37 +272,37 @@ void main() {
     // Mock secure storage — return null for all reads (no PIN set, no device lock).
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(secureStorageChannel, (call) async {
-      switch (call.method) {
-        case 'read':
-          return null;
-        case 'write':
-        case 'delete':
-        case 'deleteAll':
-          return null;
-        case 'containsKey':
-          return false;
-        case 'readAll':
-          return <String, String>{};
-        default:
-          return null;
-      }
-    });
+          switch (call.method) {
+            case 'read':
+              return null;
+            case 'write':
+            case 'delete':
+            case 'deleteAll':
+              return null;
+            case 'containsKey':
+              return false;
+            case 'readAll':
+              return <String, String>{};
+            default:
+              return null;
+          }
+        });
 
     // Mock local_auth — device not supported (skips device lock gate).
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(localAuthChannel, (call) async {
-      switch (call.method) {
-        case 'isDeviceSupported':
-        case 'deviceSupportsBiometrics':
-          return false;
-        case 'getAvailableBiometrics':
-          return const <String>[];
-        case 'authenticate':
-          return true;
-        default:
-          return null;
-      }
-    });
+          switch (call.method) {
+            case 'isDeviceSupported':
+            case 'deviceSupportsBiometrics':
+              return false;
+            case 'getAvailableBiometrics':
+              return const <String>[];
+            case 'authenticate':
+              return true;
+            default:
+              return null;
+          }
+        });
   });
 
   tearDown(() {
@@ -365,7 +365,8 @@ void main() {
       // testWidgets 的 skip 仅接受 bool。连活链的全量启动冒烟默认跳过(离线会 hang 到超时);
       // 本地设 RUN_BOOTSTRAP_CHAIN_SMOKE=1 且 libsmoldot native 可用时才跑,由集成 / APK 测试覆盖。
     },
-    skip: Platform.environment['RUN_BOOTSTRAP_CHAIN_SMOKE'] == null ||
+    skip:
+        Platform.environment['RUN_BOOTSTRAP_CHAIN_SMOKE'] == null ||
         smoldotNativeSkipReason() != null,
   );
 

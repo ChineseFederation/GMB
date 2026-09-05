@@ -117,14 +117,14 @@ void main() {
     expect(state.errorMessage, '请先创建钱包');
   });
 
-  test('MyId 身份只读不构造 ChatRuntime', () async {
+  test('MyId 身份只读不构造 CitizenChatSdk', () async {
     final liveChatRuntimeCount = ChatRuntimeCore.debugLiveInstanceCount;
     final service = buildService(wallet: null);
     await service.getState();
     expect(
       ChatRuntimeCore.debugLiveInstanceCount,
       lessThanOrEqualTo(liveChatRuntimeCount),
-      reason: 'Wallet/MyId 普通读取不得惰性之外构造 ChatRuntime',
+      reason: 'Wallet/MyId 普通读取不得惰性之外构造 CitizenChatSdk',
     );
   });
 
@@ -842,7 +842,7 @@ class _FakeWalletManager extends WalletManager {
   }
 }
 
-class _HandoverChatRuntime extends ChatRuntime {
+class _HandoverChatRuntime extends CitizenChatSdk {
   int discardCalls = 0;
 
   @override

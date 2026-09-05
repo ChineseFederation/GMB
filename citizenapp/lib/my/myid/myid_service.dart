@@ -47,14 +47,14 @@ enum MyIdStatus { normal, notYetValid, expired, revoked, queryFailed }
 class CidAccountDataHandover {
   CidAccountDataHandover({
     UserContactService? contactService,
-    ChatRuntime? chatRuntime,
+    CitizenChatSdk? chatRuntime,
     WalletManager? walletManager,
   }) : _contactService = contactService ?? UserContactService(autoSync: false),
-       _chatRuntime = chatRuntime ?? ChatRuntime(),
+       _chatRuntime = chatRuntime ?? CitizenChatSdk.instance,
        _walletManager = walletManager ?? WalletManager();
 
   final UserContactService _contactService;
-  final ChatRuntime _chatRuntime;
+  final CitizenChatSdk _chatRuntime;
   final WalletManager _walletManager;
 
   Future<void> stage({

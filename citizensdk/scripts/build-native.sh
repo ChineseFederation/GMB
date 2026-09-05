@@ -164,8 +164,16 @@ done
 
 require_rust_target() {
   local target="$1"
-  rustup target list --installed | grep -Fxq "$target" \
+  local compiler="${RUSTC:-rustc}" sysroot libdir library
+  # 检查实际编译器的标准库，不查询另一份rustup，更不能由产品任务下载组件。
+  sysroot="$("$compiler" --print sysroot)" || fail '无法读取Rust sysroot'
+  libdir="$("$compiler" --print target-libdir --target "$target")" || fail "Rust目标无效：$target"
+  # Windows官方路径使用反斜线；统一分隔符后仍检查同一个真实sysroot。
+  sysroot="${sysroot//\\//}"; libdir="${libdir//\\//}"
+  [[ "$libdir" == "$sysroot/lib/rustlib/$target/lib" && -d "$libdir" && ! -L "$libdir" ]] \
     || fail "Rust 目标未预装：$target"
+  for library in "$libdir"/libstd-*.rlib; do [[ -s "$library" && ! -L "$library" ]] && return 0; done
+  fail "Rust 目标标准库缺失：$target"
 }
 
 assert_new_file() {
@@ -791,10 +799,12 @@ build_android() {
   prepare_safe_output_file "$output_dir" "$core_destination" "Android CitizenSDK Core 库"
   cp "$core_stage/libcitizensdk.so" "$core_destination"
 
+  # Gradle 的 HTML 问题报告会写入源码；关闭该报告，中央日志仍保留完整错误栈。
+  # 三个环境变量必须连续传给同一子进程，续行中插入注释会使变量失去导出效果。
   CITIZENSDK_ANDROID_BUILD_DIR="$android_build_dir" \
   CITIZENSDK_ANDROID_CORE_DIR="$core_stage" \
   GRADLE_USER_HOME="$gradle_user_home" \
-    "$gradle_bin" --no-daemon --stacktrace \
+    "$gradle_bin" --no-daemon --stacktrace --no-problems-report \
       --project-cache-dir "$gradle_project_cache" \
       -Pkotlin.project.persistent.dir="$kotlin_persistent_dir" \
       -p "$android_gradle_project" :native:assembleRelease
@@ -1781,15 +1791,18 @@ build_apple_framework_slice() {
     # 最终进入同一个 CitizenSDK.xcframework，公开平台名只是 iOS/macOS。
     framework_content_root="$framework/Versions/A"
     framework_plist="$framework_content_root/Resources/Info.plist"
+    framework_resources="$framework_content_root/Resources"
     framework_install_name='@rpath/CitizenSDK.framework/Versions/A/CitizenSDK'
   else
     framework_content_root="$framework"
     framework_plist="$framework/Info.plist"
+    # iOS frameworks are shallow bundles. Keeping a macOS-style Resources
+    # directory makes installd reject the framework during package inspection.
+    framework_resources="$framework_content_root"
     framework_install_name='@rpath/CitizenSDK.framework/CitizenSDK'
   fi
   framework_headers="$framework_content_root/Headers"
   modules="$framework_content_root/Modules/CitizenSDK.swiftmodule"
-  framework_resources="$framework_content_root/Resources"
   framework_binary="$framework_content_root/CitizenSDK"
   module_map="$framework_content_root/Modules/module.modulemap"
   module_cache="$work_dir/apple-module-cache/$slice_name"
@@ -1944,7 +1957,7 @@ MODULES
 
 verify_apple_framework_slice() {
   local framework="$1" label="$2" expected_platform="$3" expected_minos="$4"
-  local module_identity="$5" framework_content_root framework_plist binary nm_bin
+  local module_identity="$5" framework_content_root framework_plist framework_resources binary nm_bin
   local architectures install_name expected_install_name build_info links top_entries version_entries
   local actual_platform actual_minos entries expected_entries swift_modules module_entries
   local bundle_platform platform_name minimum_key software_version expected_plist
@@ -1984,15 +1997,17 @@ MACOS_FRAMEWORK_LINKS
     [[ "$entries" == $'CitizenSDK\nHeaders\nModules\nResources' ]] \
       || fail "$label Versions/A 内容闭集漂移"
     framework_plist="$framework_content_root/Resources/Info.plist"
+    framework_resources="$framework_content_root/Resources"
   else
     [[ -z "$(find "$framework" -type l -print -quit)" ]] \
       || fail "$label shallow framework 禁止符号链接"
     top_entries="$(find "$framework" -mindepth 1 -maxdepth 1 -print \
       | sed 's#^.*/##' | LC_ALL=C sort)"
-    [[ "$top_entries" == $'CitizenSDK\nHeaders\nInfo.plist\nModules\nResources' ]] \
+    [[ "$top_entries" == $'CitizenSDK\nHeaders\nInfo.plist\nModules\nPrivacyInfo.xcprivacy\ncitizenchain' ]] \
       || fail "$label shallow framework 顶层闭集漂移"
     framework_content_root="$framework"
     framework_plist="$framework/Info.plist"
+    framework_resources="$framework_content_root"
   fi
   binary="$framework_content_root/CitizenSDK"
   [[ -f "$binary" && ! -L "$binary" ]] || fail "$label framework 二进制缺失"
@@ -2068,31 +2083,33 @@ MACOS_FRAMEWORK_LINKS
       && ! -L "$framework_content_root/Modules/CitizenSDK.swiftmodule/$module_file" ]] \
       || fail "$label Swift module 必须全部为普通文件：$module_file"
   done <<<"$swift_modules"
-  [[ -d "$framework_content_root/Resources" \
-    && ! -L "$framework_content_root/Resources" \
-    && -d "$framework_content_root/Resources/citizenchain" \
-    && ! -L "$framework_content_root/Resources/citizenchain" ]] \
-    || fail "$label Resources 或 citizenchain 不是普通目录"
-  entries="$(find "$framework_content_root/Resources" -mindepth 1 -print \
-    | sed 's#^.*/Resources/##' | LC_ALL=C sort)"
+  [[ -d "$framework_resources/citizenchain" \
+    && ! -L "$framework_resources/citizenchain" ]] \
+    || fail "$label citizenchain 不是普通目录"
   if [[ "$module_identity" == arm64-apple-macos ]]; then
+    [[ -d "$framework_resources" && ! -L "$framework_resources" ]] \
+      || fail "$label Resources 不是普通目录"
+    entries="$(find "$framework_resources" -mindepth 1 -print \
+      | sed "s#^$framework_resources/##" | LC_ALL=C sort)"
     expected_entries=$'Info.plist\nPrivacyInfo.xcprivacy\ncitizenchain\ncitizenchain/chainspec.json\ncitizenchain/light_sync_state.json\ncitizenchain/manifest.json'
   else
-    expected_entries=$'PrivacyInfo.xcprivacy\ncitizenchain\ncitizenchain/chainspec.json\ncitizenchain/light_sync_state.json\ncitizenchain/manifest.json'
+    entries="$(find "$framework_resources/citizenchain" -mindepth 1 -maxdepth 1 -print \
+      | sed 's#^.*/##' | LC_ALL=C sort)"
+    expected_entries=$'chainspec.json\nlight_sync_state.json\nmanifest.json'
   fi
-  [[ "$entries" == "$expected_entries" ]] || fail "$label Resources 闭集漂移"
+  [[ "$entries" == "$expected_entries" ]] || fail "$label 资源闭集漂移"
   for asset in chainspec.json light_sync_state.json manifest.json; do
-    [[ -f "$framework_content_root/Resources/citizenchain/$asset" \
-      && ! -L "$framework_content_root/Resources/citizenchain/$asset" ]] \
+    [[ -f "$framework_resources/citizenchain/$asset" \
+      && ! -L "$framework_resources/citizenchain/$asset" ]] \
       || fail "$label 链资产不是普通文件：$asset"
-    cmp -s "$framework_content_root/Resources/citizenchain/$asset" "$apple_asset_root/$asset" \
+    cmp -s "$framework_resources/citizenchain/$asset" "$apple_asset_root/$asset" \
       || fail "$label 链资产字节漂移：$asset"
   done
-  [[ -f "$framework_content_root/Resources/PrivacyInfo.xcprivacy" \
-    && ! -L "$framework_content_root/Resources/PrivacyInfo.xcprivacy" \
+  [[ -f "$framework_resources/PrivacyInfo.xcprivacy" \
+    && ! -L "$framework_resources/PrivacyInfo.xcprivacy" \
     && -f "$framework_plist" && ! -L "$framework_plist" ]] \
     || fail "$label 隐私清单或 Info.plist 不是普通文件"
-  cmp -s "$framework_content_root/Resources/PrivacyInfo.xcprivacy" \
+  cmp -s "$framework_resources/PrivacyInfo.xcprivacy" \
     "$darwin_source_root/PrivacyInfo.xcprivacy" \
     || fail "$label 隐私清单字节漂移"
   case "$module_identity" in

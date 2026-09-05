@@ -123,7 +123,7 @@ void main() {
     final store = _PendingMessagesStore();
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -165,7 +165,7 @@ void main() {
     final readThrough = <int>[];
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -224,7 +224,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -278,7 +278,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -313,7 +313,7 @@ void main() {
     const avatarPath = '/cached/chat/avatar.webp';
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -363,7 +363,7 @@ void main() {
     final submitted = <String>[];
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -412,7 +412,7 @@ void main() {
     final store = _FakeChatStore();
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:$_ownerUserId:$peerUserId',
           ownerUserId: _ownerUserId,
           accountId:
@@ -624,7 +624,7 @@ void main() {
     );
     await tester.pump(const Duration(milliseconds: 100));
 
-    // 点会话进详情(Navigator.push ChatPage)。
+    // 点会话进入 SDK 完整会话页。
     await tester.tap(find.text('Bob'));
     await tester.pump(const Duration(milliseconds: 400)); // 路由转场
     await tester.pump(const Duration(milliseconds: 100));
@@ -809,7 +809,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.byType(ChatPage), findsOneWidget);
+    expect(find.byType(CitizenChatPage), findsOneWidget);
     expect(find.text('hello'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.more_vert_rounded));
@@ -821,7 +821,11 @@ void main() {
 
     expect(deleteCalls, 1);
     expect(find.text('聊天暂时无法使用，请稍后重试'), findsNothing);
-    expect(find.byType(ChatPage), findsNothing, reason: '确认后聊天窗口必须立即关闭');
+    expect(
+      find.byType(CitizenChatPage),
+      findsNothing,
+      reason: '确认后聊天窗口必须立即关闭',
+    );
     expect(find.text('Bob'), findsNothing, reason: '后台删除未完成时路由重载也不得恢复卡片');
     expect(store.deletedConversationIds, isEmpty);
 
@@ -1032,7 +1036,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1071,7 +1075,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1128,7 +1132,7 @@ void main() {
     final store = _IntegrityRefreshStore(message);
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:me:peer',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1171,7 +1175,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1246,7 +1250,7 @@ void main() {
 
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1309,7 +1313,7 @@ void main() {
                 onPressed: () {
                   Navigator.of(context).push<void>(
                     MaterialPageRoute(
-                      builder: (_) => ChatPage(
+                      builder: (_) => CitizenChatPage(
                         conversationId: 'dm:alice-wallet:bob-wallet',
                         ownerUserId: _ownerUserId,
                         accountId:
@@ -1383,7 +1387,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1415,7 +1419,7 @@ void main() {
     );
     await tester.pumpWidget(
       MaterialApp(
-        home: ChatPage(
+        home: CitizenChatPage(
           conversationId: 'dm:alice-wallet:bob-wallet',
           ownerUserId: _ownerUserId,
           accountId:
@@ -1628,8 +1632,8 @@ class _FakeChatStore extends ChatStore {
   _FakeChatStore({
     List<ChatConversationPreview> conversations = const [],
     List<ChatStoredMessage> messages = const [],
-  }) : _conversations = List<ChatConversationPreview>.from(conversations),
-       _messages = List<ChatStoredMessage>.from(messages);
+  })  : _conversations = List<ChatConversationPreview>.from(conversations),
+        _messages = List<ChatStoredMessage>.from(messages);
 
   final List<ChatConversationPreview> _conversations;
   final List<ChatStoredMessage> _messages;
@@ -1713,7 +1717,8 @@ class _PendingChatStore extends _FakeChatStore {
   Future<List<ChatConversationPreview>> readConversationPreviews({
     required String ownerUserId,
     required String currentAccountId,
-  }) => completer.future;
+  }) =>
+      completer.future;
 }
 
 class _PendingMessagesStore extends _FakeChatStore {
@@ -1725,12 +1730,13 @@ class _PendingMessagesStore extends _FakeChatStore {
     required String ownerUserId,
     required String currentAccountId,
     required String conversationId,
-  }) => completer.future;
+  }) =>
+      completer.future;
 }
 
 class _IntegrityRefreshStore extends _FakeChatStore {
   _IntegrityRefreshStore(this.message)
-    : super(messages: <ChatStoredMessage>[message]);
+      : super(messages: <ChatStoredMessage>[message]);
 
   final ChatStoredMessage message;
   final Completer<ChatMessageDisplayBatch> _heartbeat =
@@ -1775,7 +1781,8 @@ class _FakeProfileApi extends CitizenProfileApi {
   Future<CitizenProfile> fetchProfile(
     String cidNumber, {
     SquareSession? session,
-  }) async => profile;
+  }) async =>
+      profile;
 }
 
 class _FakeContactService extends UserContactService {
@@ -1814,22 +1821,23 @@ class _MemoryProfileMediaCache extends CitizenProfileMediaCache {
     required String? avatarUrl,
     required String? bannerUrl,
     required Map<String, String>? headers,
-  }) async => snapshot;
+  }) async =>
+      snapshot;
 }
 
 class _FakeProfileSessionProvider extends SquareSessionProvider {
   @override
   Future<SquareSession?> ensureSession() async => SquareSession(
-    sessionToken: 'profile-token',
-    cidNumber: _ownerUserId,
-    bindingRevision: 1,
-    accountId:
-        '0x1111111111111111111111111111111111111111111111111111111111111111',
-    expiresAt: DateTime.now().millisecondsSinceEpoch + 60000,
-  );
+        sessionToken: 'profile-token',
+        cidNumber: _ownerUserId,
+        bindingRevision: 1,
+        accountId:
+            '0x1111111111111111111111111111111111111111111111111111111111111111',
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60000,
+      );
 }
 
-class _FakeRuntime extends ChatRuntime {
+class _FakeRuntime extends CitizenChatSdk {
   _FakeRuntime({
     required this.address,
     this.enableRealtime = false,
@@ -1846,8 +1854,8 @@ class _FakeRuntime extends ChatRuntime {
   int syncCount = 0;
   int realtimeStartCount = 0;
   int realtimeStopCount = 0;
-  final List<({String? recipientUserId, String? conversationId})>
-  retryScopes = [];
+  final List<({String? recipientUserId, String? conversationId})> retryScopes =
+      [];
   final List<bool> realtimeRetryOutgoingOnConnect = [];
   Future<void> Function()? realtimeNotice;
   Future<void> Function()? realtimeDisconnected;
@@ -1898,7 +1906,7 @@ class _FakeRuntime extends ChatRuntime {
   Future<void> deleteLocalConversation(String conversationId) async {
     final deleter = onDeleteConversation;
     if (deleter == null) {
-      throw StateError('测试未注入 ChatRuntime 会话删除入口');
+      throw StateError('测试未注入 CitizenChatSdk 会话删除入口');
     }
     await deleter(conversationId);
   }

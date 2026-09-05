@@ -25,20 +25,20 @@ class SquareAccountDeletionService {
     CitizenProfileCache? profileCache,
     CitizenProfileMediaCache? profileMediaCache,
     DeviceSubkey? deviceSubkey,
-    ChatRuntime? chatRuntime,
+    CitizenChatSdk? chatRuntime,
     SquareLocalPostBulkDeletionStore? localPostStore,
-  })  : _api = apiClient ?? SquareApiClient(),
-        _profileCache = profileCache ?? const CitizenProfileCache(),
-        _profileMediaCache = profileMediaCache ?? CitizenProfileMediaCache(),
-        _deviceSubkey = deviceSubkey ?? DeviceSubkey(),
-        _chatRuntime = chatRuntime ?? ChatRuntime(),
-        _localPostStore = localPostStore ?? const SquarePostStore();
+  }) : _api = apiClient ?? SquareApiClient(),
+       _profileCache = profileCache ?? const CitizenProfileCache(),
+       _profileMediaCache = profileMediaCache ?? CitizenProfileMediaCache(),
+       _deviceSubkey = deviceSubkey ?? DeviceSubkey(),
+       _chatRuntime = chatRuntime ?? CitizenChatSdk.instance,
+       _localPostStore = localPostStore ?? const SquarePostStore();
 
   final SquareApiClient _api;
   final CitizenProfileCache _profileCache;
   final CitizenProfileMediaCache _profileMediaCache;
   final DeviceSubkey _deviceSubkey;
-  final ChatRuntime _chatRuntime;
+  final CitizenChatSdk _chatRuntime;
   final SquareLocalPostBulkDeletionStore _localPostStore;
 
   /// [signAction] 对 signing_message(0x1D) 摘要用 sr25519 主钥签名（弹生物识别）。

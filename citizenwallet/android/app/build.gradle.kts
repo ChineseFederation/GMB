@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // AGP提供内置Kotlin；Flutter插件在Android插件之后应用。
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -20,12 +19,8 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
-    }
-
     defaultConfig {
-        // Google Play 永久应用标识与 Kotlin namespace 保持一致；与旧沙箱不兼容、不迁移。
+        // Google Play 永久应用标识与 Kotlin namespace 保持一致，不改变现有安装数据。
         applicationId = "com.crcfrcn.citizenwallet"
         // local_auth 3.x 与新 SecureStorage 加固配置统一要求 API ≥ 24。
         minSdk = maxOf(24, flutter.minSdkVersion)
@@ -56,6 +51,13 @@ android {
             // 物理上只保留 defaultConfig 声明的 arm64-v8a。
             excludes.addAll(listOf("lib/armeabi*/**", "lib/x86/**", "lib/x86_64/**"))
         }
+    }
+}
+
+// 统一使用Kotlin公开编译配置，与Java 17字节码保持一致。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
 }
 

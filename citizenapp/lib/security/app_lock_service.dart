@@ -333,7 +333,7 @@ class AppLockService {
   /// 新进程只有在无 marker，或上一进程已完整擦除后才允许启动。
   ///
   /// pending 会无 PIN 重试全量擦除；无论重试成功还是失败，当前
-  /// 进程都只能显示擦除终态并退出，不得继续构造 ChatRuntime。
+  /// 进程都只能显示擦除终态并退出，不得继续构造 CitizenChatSdk。
   static Future<AppDataWipeStartupResult> recoverPersistentWipeAtStartup({
     Future<void> Function()? debugDeleteSecureStorage,
     Future<void> Function()? debugClearSharedPreferences,
@@ -347,17 +347,17 @@ class AppLockService {
     try {
       // 普通启动只验证擦除门闩；没有 marker 时不得等待正常 Chat 后台收件，
       // 否则 FCM/APNs 唤醒与用户冷启动重叠会被误判成数据安全故障。
-      final initialState = await ChatRuntime.readPersistentAppDataWipeState(
+      final initialState = await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
       );
       if (initialState == ChatPersistentWipeState.none) {
         return AppDataWipeStartupResult.ready;
       }
-      return await ChatRuntime.runStartupPreflight(
+      return await CitizenChatSdk.runStartupPreflight(
         // barrier 覆盖 CID artifact 清理、wipe marker 判定与完整恢复，不能在
         // 中间释放后让后台 isolate 插入新 lease。
         operation: () async {
-          final state = await ChatRuntime.readPersistentAppDataWipeState(
+          final state = await CitizenChatSdk.readPersistentAppDataWipeState(
             documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
           );
           switch (state) {
@@ -365,7 +365,7 @@ class AppLockService {
               return AppDataWipeStartupResult.ready;
             case ChatPersistentWipeState.complete:
               try {
-                await ChatRuntime.clearCompletedPersistentAppDataWipe(
+                await CitizenChatSdk.clearCompletedPersistentAppDataWipe(
                   documentsDirectoryProvider:
                       debugChatDocumentsDirectoryProvider,
                 );
@@ -411,7 +411,7 @@ class AppLockService {
       return debugLatch();
     }
     if (debugChatDocumentsDirectoryProvider != null) _requireFlutterTest();
-    return ChatRuntime.beginPersistentAppDataWipe(
+    return CitizenChatSdk.beginPersistentAppDataWipe(
       documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
     ).timeout(_wipeStepTimeout);
   }
@@ -419,7 +419,7 @@ class AppLockService {
   // 数据清空
   /// 清空全部应用数据：各业务 Isar DB、Chat 文件树、SecureStorage 与偏好设置。
   ///
-  /// 第一阶段先同步终止 ChatRuntime 与各业务 Isar 生产者，并有界等待其收口；
+  /// 第一阶段先同步终止 CitizenChatSdk 与各业务 Isar 生产者，并有界等待其收口；
   /// 第二阶段才最终清理 SecureStorage 与 SharedPreferences。任一域失败
   /// 也不会阻止后续域尝试，但绝不返回成功。Chat 文件域只允许删除
   /// Documents 下的 `chat/` 子树，跨 isolate marker 保留到进程退出。
@@ -453,7 +453,7 @@ class AppLockService {
     var persistentGateReady = false;
     Object? persistentGateError;
     try {
-      await ChatRuntime.beginPersistentAppDataWipe(
+      await CitizenChatSdk.beginPersistentAppDataWipe(
         documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
       ).timeout(_wipeStepTimeout);
       persistentGateReady = true;
@@ -466,7 +466,7 @@ class AppLockService {
     // cold-open/delete，因此各业务域仍逐项处理并准确归因失败。
     await _attemptWipe(
       'ChatFiles',
-      () => ChatRuntime.closeAndDeleteLocalFiles(
+      () => CitizenChatSdk.closeAndDeleteLocalFiles(
         documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
       ),
       failures,
@@ -488,7 +488,7 @@ class AppLockService {
     // 删除平台安全存储，避免把一次迟到的成功错误降级成跳过密钥清理。
     if (!persistentGateReady) {
       try {
-        final state = await ChatRuntime.readPersistentAppDataWipeState(
+        final state = await CitizenChatSdk.readPersistentAppDataWipeState(
           documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
         ).timeout(_wipeStepTimeout);
         persistentGateReady = state != ChatPersistentWipeState.none;
@@ -559,7 +559,7 @@ class AppLockService {
     if (failures.isEmpty) {
       await _attemptWipe(
         '持久擦除完成态',
-        () => ChatRuntime.markPersistentAppDataWipeComplete(
+        () => CitizenChatSdk.markPersistentAppDataWipeComplete(
           documentsDirectoryProvider: debugChatDocumentsDirectoryProvider,
         ),
         failures,

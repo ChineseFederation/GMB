@@ -77,59 +77,56 @@ List<int> _squareDeviceBindPayload({
   required String cidNumber,
   required String accountId,
   required int issuedAtMillis,
-}) =>
-    <int>[
-      ..._scaleString(cidNumber),
-      ..._u64Le(4),
-      ..._scaleString(accountId),
-      ..._scaleString('04${'ab' * 64}'),
-      ..._u64Le(issuedAtMillis),
-    ];
+}) => <int>[
+  ..._scaleString(cidNumber),
+  ..._u64Le(4),
+  ..._scaleString(accountId),
+  ..._scaleString('04${'ab' * 64}'),
+  ..._u64Le(issuedAtMillis),
+];
 
 List<int> _squareAccountActionPayload({
   required String accountId,
   required int expiresAt,
   String action = 'cancel_membership',
-}) =>
-    <int>[
-      ..._scaleString(action),
-      ..._scaleString(accountId),
-      ..._scaleString('sqa_test'),
-      ..._u64Le(expiresAt * 1000),
-    ];
+}) => <int>[
+  ..._scaleString(action),
+  ..._scaleString(accountId),
+  ..._scaleString('sqa_test'),
+  ..._u64Le(expiresAt * 1000),
+];
 
 List<int> _occupyAuthorizationTemplate(String cid, int expiresAt) => [
-      ..._hexToBytes(ChainConstants.genesisHash),
-      cid.length << 2,
-      ...cid.codeUnits,
-      ...List<int>.filled(32, 0),
-      ..._u64Le(0),
-      ..._u64Le(expiresAt),
-    ];
+  ..._hexToBytes(ChainConstants.genesisHash),
+  cid.length << 2,
+  ...cid.codeUnits,
+  ...List<int>.filled(32, 0),
+  ..._u64Le(0),
+  ..._u64Le(expiresAt),
+];
 
 List<int> _rebindAuthorizationTemplate(String cid, int expiresAt) => [
-      ..._hexToBytes(ChainConstants.genesisHash),
-      cid.length << 2,
-      ...cid.codeUnits,
-      ...List<int>.filled(32, 0x55),
-      ...List<int>.filled(32, 0),
-      ..._u64Le(7),
-      ..._u64Le(expiresAt),
-    ];
+  ..._hexToBytes(ChainConstants.genesisHash),
+  cid.length << 2,
+  ...cid.codeUnits,
+  ...List<int>.filled(32, 0x55),
+  ...List<int>.filled(32, 0),
+  ..._u64Le(7),
+  ..._u64Le(expiresAt),
+];
 
 List<int> _switchDefaultAccountPayload({
   required String currentDefaultAccountId,
   required int expiresAt,
-}) =>
-    [
-      ..._hexToBytes(ChainConstants.genesisHash),
-      ..._hexToBytes(currentDefaultAccountId),
-      2 << 2,
-      ...List<int>.filled(32, 0x55),
-      ..._hexToBytes(currentDefaultAccountId),
-      ..._u64Le(expiresAt),
-      ...List<int>.filled(16, 0x66),
-    ];
+}) => [
+  ..._hexToBytes(ChainConstants.genesisHash),
+  ..._hexToBytes(currentDefaultAccountId),
+  2 << 2,
+  ...List<int>.filled(32, 0x55),
+  ..._hexToBytes(currentDefaultAccountId),
+  ..._u64Le(expiresAt),
+  ...List<int>.filled(16, 0x66),
+];
 
 /// 中文注释：全部产品端复用同一份 SCALE 发布载荷，参数化只替换闭集身份，
 /// 字段顺序、签名域和防重放字段始终与生产 QR_V1 合同一致。
@@ -137,17 +134,16 @@ List<int> _publishAuthorizationPayload({
   required String product,
   required String platform,
   required int expiresAt,
-}) =>
-    <int>[
-      ..._scaleString(product),
-      ..._scaleString(platform),
-      ..._scaleString('1.2.3'),
-      ...List<int>.generate(20, (index) => index + 1),
-      ...List<int>.generate(32, (index) => index + 21),
-      ..._scaleString('deployment-stable-1'),
-      ..._u64Le(expiresAt),
-      ...List<int>.filled(32, 0x66),
-    ];
+}) => <int>[
+  ..._scaleString(product),
+  ..._scaleString(platform),
+  ..._scaleString('1.2.3'),
+  ...List<int>.generate(20, (index) => index + 1),
+  ...List<int>.generate(32, (index) => index + 21),
+  ..._scaleString(product == 'citizenchatserver' ? '' : 'deployment-stable-1'),
+  ..._u64Le(expiresAt),
+  ...List<int>.filled(32, 0x66),
+];
 
 void main() {
   group('OfflineSignService', () {
@@ -270,8 +266,8 @@ void main() {
     test('发布授权严格绑定外层期限、使用 0x24 域且同一请求只能签一次', () async {
       final expiresAt = DateTime.now().millisecondsSinceEpoch ~/ 1000 + 90;
       final payload = _publishAuthorizationPayload(
-        product: 'tuyuweb',
-        platform: 'web',
+        product: 'citizenchatserver',
+        platform: 'cloudflare',
         expiresAt: expiresAt,
       );
       final request = _buildTestRequest(
@@ -285,11 +281,12 @@ void main() {
       final verification = service.verifyPayload(request);
       expect(verification.status, SignDecisionStatus.normal);
       expect(verification.actionLabel, '生产发布授权');
-      expect(verification.decoded?.fields['product_id'], 'tuyuweb');
-      expect(verification.decoded?.fields['platform'], 'web');
+      expect(verification.decoded?.fields['product_id'], 'citizenchatserver');
+      expect(verification.decoded?.fields['platform'], 'cloudflare');
+      expect(verification.decoded?.fields['previous_deployment_id'], '');
       expect(
         verification.decoded?.summary,
-        '授权发布 途遇官网 1.2.3 到 Web',
+        '授权发布 公民聊天服务 1.2.3 到 Cloudflare；不授权回滚或删除资源',
       );
 
       final response = await service.signParsedRequest(
@@ -536,12 +533,7 @@ void main() {
           .status;
 
       expect(
-        verify(
-          _withSigningTailHex(
-            callData,
-            genesisHash: '0x${'99' * 32}',
-          ),
-        ),
+        verify(_withSigningTailHex(callData, genesisHash: '0x${'99' * 32}')),
         SignDecisionStatus.reject,
       );
       expect(
@@ -569,16 +561,7 @@ void main() {
       final roleBytes = role.codeUnits;
       final price = List<int>.filled(16, 0)..[0] = 100;
       final payloadHex = _withSigningTailHex(
-        '0x${_toHex([
-              34,
-              5,
-              cidBytes.length << 2,
-              ...cidBytes,
-              roleBytes.length << 2,
-              ...roleBytes,
-              2,
-              ...price
-            ])}',
+        '0x${_toHex([34, 5, cidBytes.length << 2, ...cidBytes, roleBytes.length << 2, ...roleBytes, 2, ...price])}',
       );
       final request = _buildTestRequest(
         requestId: 'offline-platform-price',
@@ -627,16 +610,7 @@ void main() {
           requestId: 'offline-platform-price-mismatch',
           signerPublicKey: signingAccount.accountId,
           payloadHex: _withSigningTailHex(
-            '0x${_toHex([
-                  34,
-                  5,
-                  cidBytes.length << 2,
-                  ...cidBytes,
-                  roleBytes.length << 2,
-                  ...roleBytes,
-                  0,
-                  ...price
-                ])}',
+            '0x${_toHex([34, 5, cidBytes.length << 2, ...cidBytes, roleBytes.length << 2, ...roleBytes, 0, ...price])}',
           ),
           action: QrActions.transferWithRemark,
         );
@@ -684,10 +658,8 @@ void main() {
       final request = _buildTestRequest(
         requestId: 'offline-req-test-square-action',
         signerPublicKey: signingAccount.accountId,
-        payloadHex: '0x${_toHex(_squareAccountActionPayload(
-          accountId: signingAccount.accountId,
-          expiresAt: expiresAt,
-        ))}',
+        payloadHex:
+            '0x${_toHex(_squareAccountActionPayload(accountId: signingAccount.accountId, expiresAt: expiresAt))}',
         action: QrActions.squareAccountAction,
         expiresAt: expiresAt,
       );
@@ -698,7 +670,9 @@ void main() {
       expect(verification.canSign, isTrue);
       expect(verification.actionLabel, '广场账户动作签名');
       expect(
-          verification.decoded?.fields['account_id'], signingAccount.accountId);
+        verification.decoded?.fields['account_id'],
+        signingAccount.accountId,
+      );
       expect(QrSigner.signingBytesFor(request.body), hasLength(32));
     });
 
@@ -707,10 +681,8 @@ void main() {
       final request = _buildTestRequest(
         requestId: 'offline-req-square-account-mismatch',
         signerPublicKey: signingAccount.accountId,
-        payloadHex: '0x${_toHex(_squareAccountActionPayload(
-          accountId: '0x${'ab' * 32}',
-          expiresAt: expiresAt,
-        ))}',
+        payloadHex:
+            '0x${_toHex(_squareAccountActionPayload(accountId: '0x${'ab' * 32}', expiresAt: expiresAt))}',
         action: QrActions.squareAccountAction,
         expiresAt: expiresAt,
       );

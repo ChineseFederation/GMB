@@ -205,11 +205,11 @@ class ChatPushService implements sdk.ChatPushBridge {
 Future<void> chatRuntimeBackgroundHandler(RemoteMessage message) async {
   if (!ChatPushService.isWakeData(message.data)) return;
   try {
-    await ChatRuntime.runStartupPreflight<void>(
+    await CitizenChatSdk.runStartupPreflight<void>(
       operation: () async {
         await ensureChatFirebaseReady();
         await ChatPushService.storeWake();
-        await ChatRuntime(receiveOnly: true).handleWake();
+        await CitizenChatSdk(receiveOnly: true).handleWake();
       },
     );
   } catch (error) {

@@ -87,7 +87,7 @@ class UserProfilePage extends StatefulWidget {
   final MembershipDisplayDecision initialMembershipDecision;
   final SquareMembershipState? initialMembershipState;
 
-  /// 私聊入口，测试可注入 spy；默认走正式 ChatRuntime。
+  /// 私聊入口，测试可注入 spy；默认走正式 CitizenChatSdk。
   final DirectChatOpener? onOpenDirectChat;
 
   @override

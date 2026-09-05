@@ -65,8 +65,8 @@ class DecodedCidAccountAuthorizationTemplate {
     required this.expectedBindingRevision,
     required this.expiresAt,
     required int accountOffset,
-  })  : _payload = Uint8List.fromList(payload),
-        _accountOffset = accountOffset;
+  }) : _payload = Uint8List.fromList(payload),
+       _accountOffset = accountOffset;
 
   final Uint8List _payload;
   final int _accountOffset;
@@ -532,12 +532,13 @@ class PayloadDecoder {
         return switch (callIndex) {
           PalletRegistry.publishPostCall => _decodePublishPost(bytes),
           PalletRegistry.subscribeCall => _decodeSubscriptionChange(
-              bytes,
-              action: 'subscribe',
-              actionText: '订阅',
-            ),
-          PalletRegistry.cancelSubscriptionCall =>
-            _decodeCancelSubscription(bytes),
+            bytes,
+            action: 'subscribe',
+            actionText: '订阅',
+          ),
+          PalletRegistry.cancelSubscriptionCall => _decodeCancelSubscription(
+            bytes,
+          ),
           PalletRegistry.setCreatorPlansCall => _decodeSetCreatorPlans(bytes),
           PalletRegistry.changeSubscriptionPlanCall =>
             _decodeSubscriptionChange(
@@ -560,8 +561,8 @@ class PayloadDecoder {
           PalletRegistry.proposeMintCall => _decodeProposeAssetMint(bytes),
           PalletRegistry.proposeBurnCall => _decodeProposeAssetBurn(bytes),
           PalletRegistry.proposeCloseAssetCall => _decodeProposeAssetClose(
-              bytes,
-            ),
+            bytes,
+          ),
           PalletRegistry.proposeAssetTransferCall =>
             _decodeProposeAssetTransfer(bytes),
           PalletRegistry.proposeMonitorFreezeCall =>
@@ -774,10 +775,7 @@ class PayloadDecoder {
       action: 'square_account_action',
       summary: '$actionLabel（账户 ${account.$1}）',
       fields: fields,
-      reviewFields: <String, String>{
-        ...fields,
-        'action_type': actionLabel,
-      },
+      reviewFields: <String, String>{...fields, 'action_type': actionLabel},
     );
   }
 
@@ -1841,7 +1839,8 @@ class PayloadDecoder {
     String? actorRoleCode,
     int assetId,
     int next,
-  })? _readOnchainAssetHeader(Uint8List bytes, {bool withActorRole = false}) {
+  })?
+  _readOnchainAssetHeader(Uint8List bytes, {bool withActorRole = false}) {
     final actorRead = _readCidNumber(bytes, 2);
     if (actorRead == null) return null;
     var offset = actorRead.$2;
@@ -1903,7 +1902,8 @@ class PayloadDecoder {
 
     if (offset + 4 + 16 > bytes.length) return null;
     if (!_hasValidSigningTail(bytes, offset + 4 + 16)) return null;
-    final regularThreshold = bytes[offset] |
+    final regularThreshold =
+        bytes[offset] |
         (bytes[offset + 1] << 8) |
         (bytes[offset + 2] << 16) |
         (bytes[offset + 3] << 24);
@@ -2220,8 +2220,9 @@ class PayloadDecoder {
     if (offset + proofSignatureBytes > bytes.length) return null;
     offset += proofSignatureBytes;
     if (!_hasValidSigningTail(bytes, offset)) return null;
-    final keyHex =
-        keyBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final keyHex = keyBytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
     return DecodedPayload(
       action: emergencyRecovery
           ? 'propose_emergency_grandpa_key_recovery'
@@ -3025,7 +3026,8 @@ class PayloadDecoder {
     Map<String, String> fields,
     Map<String, String> reviewFields,
     int next,
-  })? _readVotingIdentityPayload(Uint8List bytes, int offset) {
+  })?
+  _readVotingIdentityPayload(Uint8List bytes, int offset) {
     final (cidNumber, afterCid) = _readUtf8Vec(bytes, offset);
     if (cidNumber == null || cidNumber.isEmpty || cidNumber.length > 32) {
       return null;
@@ -3107,7 +3109,8 @@ class PayloadDecoder {
     Map<String, String> fields,
     Map<String, String> reviewFields,
     int next,
-  })? _readCandidateIdentityPayload(Uint8List bytes, int offset) {
+  })?
+  _readCandidateIdentityPayload(Uint8List bytes, int offset) {
     final voting = _readVotingIdentityPayload(bytes, offset);
     if (voting == null) return null;
     offset = voting.next;
@@ -3391,28 +3394,27 @@ class PayloadDecoder {
 
     final fieldNames = switch (callIndex) {
       PalletRegistry.setAddressNameCall => const [
-          'province_code',
-          'city_code',
-          'town_code',
-          'address_name_code',
-          'address_name',
-        ],
+        'province_code',
+        'city_code',
+        'town_code',
+        'address_name_code',
+        'address_name',
+      ],
       PalletRegistry.removeAddressNameCall => const [
-          'province_code',
-          'city_code',
-          'town_code',
-          'address_name_code',
-        ],
+        'province_code',
+        'city_code',
+        'town_code',
+        'address_name_code',
+      ],
       PalletRegistry.setAddressCall ||
-      PalletRegistry.removeAddressCall =>
-        const [
-          'province_code',
-          'city_code',
-          'town_code',
-          'address_name_code',
-          'address_local_no',
-          'address_detail',
-        ],
+      PalletRegistry.removeAddressCall => const [
+        'province_code',
+        'city_code',
+        'town_code',
+        'address_name_code',
+        'address_local_no',
+        'address_detail',
+      ],
       _ => null,
     };
     if (fieldNames == null) return null;
@@ -3610,9 +3612,7 @@ class PayloadDecoder {
         if (priceFen <= BigInt.zero) return null;
         priceTexts.add('$period ${_fenToYuan(priceFen)} 元（$priceFen 分）');
       }
-      tierLines.add(
-        '${tierRead.$1} / ${nameRead.$1}：${priceTexts.join('、')}',
-      );
+      tierLines.add('${tierRead.$1} / ${nameRead.$1}：${priceTexts.join('、')}');
     }
     if (!_hasValidSigningTail(bytes, offset)) return null;
     final tiers = tierLines.join('\n');
@@ -3641,11 +3641,11 @@ class PayloadDecoder {
   }
 
   static String? _billingPeriodLabel(int value) => switch (value) {
-        0 => '月付',
-        1 => '季付',
-        2 => '年付',
-        _ => null,
-      };
+    0 => '月付',
+    1 => '季付',
+    2 => '年付',
+    _ => null,
+  };
 
   static bool _isValidTierId(String value) =>
       value.isNotEmpty && value.codeUnits.every((unit) => unit <= 0x7f);
@@ -3828,6 +3828,7 @@ class PayloadDecoder {
       // 只是部署实现；公民服务端的正式端才是 cloudflare。
       'citizenweb': {'web'},
       'citizenserve': {'cloudflare'},
+      'citizenchatserver': {'cloudflare'},
       'tuyulove': {'ios', 'android'},
       'tuyuserve': {'cloudflare'},
       'tuyuweb': {'web'},
@@ -3843,6 +3844,7 @@ class PayloadDecoder {
       'citizenapp': '公民',
       'citizenwallet': '公民钱包',
       'citizenserve': '公民服务端',
+      'citizenchatserver': '公民聊天服务',
       'citizenweb': '公民官网',
       'tuyulove': '途遇',
       'tuyuserve': '途遇服务端',
@@ -3864,7 +3866,12 @@ class PayloadDecoder {
     final artifactSha = _bytesToLowerHex(bytes.sublist(offset, offset + 32));
     offset += 32;
     final previous = _readStrictBoundedUtf8(bytes, offset, maxLength: 128);
-    if (previous == null || previous.$1.isEmpty) return null;
+    // 独立聊天安装器不申请回滚权限；空值属于已签名内容，不能替换成假编号。
+    if (previous == null ||
+        (product.$1 == 'citizenchatserver'
+            ? previous.$1.isNotEmpty
+            : previous.$1.isEmpty))
+      return null;
     offset = previous.$2;
     if (offset + 8 + 32 != bytes.length) return null;
     final expiresAt = _readU64Le(bytes, offset);
@@ -3887,7 +3894,8 @@ class PayloadDecoder {
     return DecodedPayload(
       action: 'publish',
       summary:
-          '授权发布 ${productNamesZh[product.$1]} ${version.$1} 到 ${platformNames[platform.$1]}',
+          '授权发布 ${productNamesZh[product.$1]} ${version.$1} 到 ${platformNames[platform.$1]}'
+          '${product.$1 == 'citizenchatserver' ? '；不授权回滚或删除资源' : ''}',
       fields: fields,
       reviewFields: fields,
     );
@@ -3995,7 +4003,8 @@ class PayloadDecoder {
         return (BigInt.from(val), 2);
       case 2:
         if (offset + 4 > bytes.length) return (null, 0);
-        final val = ((bytes[offset + 3] << 24) |
+        final val =
+            ((bytes[offset + 3] << 24) |
                 (bytes[offset + 2] << 16) |
                 (bytes[offset + 1] << 8) |
                 bytes[offset]) >>
@@ -4144,15 +4153,17 @@ class PayloadDecoder {
   }
 
   static String _adminReviewValue(List<_DecodedAdminPerson> admins) {
-    return admins.map((admin) {
-      final name = '${admin.familyName}${admin.givenName}';
-      final cid = admin.citizenCidNumber;
-      final profile = [
-        if (name.isNotEmpty) name,
-        if (cid != null && cid.isNotEmpty) cid,
-      ].join(' / ');
-      return '${profile.isEmpty ? '资料待完善' : profile}(${_bytesToSs58(admin.accountBytes)})';
-    }).join('、');
+    return admins
+        .map((admin) {
+          final name = '${admin.familyName}${admin.givenName}';
+          final cid = admin.citizenCidNumber;
+          final profile = [
+            if (name.isNotEmpty) name,
+            if (cid != null && cid.isNotEmpty) cid,
+          ].join(' / ');
+          return '${profile.isEmpty ? '资料待完善' : profile}(${_bytesToSs58(admin.accountBytes)})';
+        })
+        .join('、');
   }
 
   /// 机构治理共用读取器；对外只返回人数、展示文本和新偏移。
@@ -4378,7 +4389,7 @@ class PayloadDecoder {
   /// 严格读取 `CidOccupyAuthorization` 模板:
   /// genesis_hash + cid_number + account_id(零槽) + revision=0 + expires_at。
   static DecodedCidAccountAuthorizationTemplate?
-      readCidOccupyAuthorizationTemplate(Uint8List bytes) {
+  readCidOccupyAuthorizationTemplate(Uint8List bytes) {
     if (bytes.length < 33 || (bytes[32] & 0x03) != 0) return null;
     var offset = 32;
     final cidRead = _readCidNumber(bytes, offset);
@@ -4406,7 +4417,7 @@ class PayloadDecoder {
   /// 严格读取 `CidRebindAuthorization` 模板:
   /// genesis_hash + cid_number + current_account_id + new_account_id(零槽) + revision + expires_at。
   static DecodedCidAccountAuthorizationTemplate?
-      readCidRebindAuthorizationTemplate(Uint8List bytes) {
+  readCidRebindAuthorizationTemplate(Uint8List bytes) {
     if (bytes.length < 65 || (bytes[32] & 0x03) != 0) return null;
     var offset = 32;
     final cidRead = _readCidNumber(bytes, offset);
@@ -4499,9 +4510,9 @@ class PayloadDecoder {
     final yuan = fen ~/ BigInt.from(100);
     final remainder = (fen % BigInt.from(100)).toInt().abs();
     final intStr = yuan.toString().replaceAllMapped(
-          RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
-          (m) => '${m[1]},',
-        );
+      RegExp(r'(\d)(?=(\d{3})+(?!\d))'),
+      (m) => '${m[1]},',
+    );
     return '$intStr.${remainder.toString().padLeft(2, '0')}';
   }
 

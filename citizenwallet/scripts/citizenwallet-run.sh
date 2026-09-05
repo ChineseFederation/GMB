@@ -57,18 +57,7 @@ export CP_HOME_DIR="$INCREMENTAL_CACHE_DIR/cocoapods"
 export TMPDIR="$TATA_CONSOLE_WORK_DIR/"
 export FLUTTER_SUPPRESS_ANALYTICS=true COCOAPODS_DISABLE_STATS=true
 mkdir -p "$XDG_CONFIG_HOME"
-if [[ "$PLATFORM" == android ]]; then
-  # 使用产品原始 Wrapper 配置，只预填本任务 Gradle 分发缓存，不声明 Maven 依赖覆盖。
-  "${TATA_CONSOLE_NODE_BIN:-node}" --input-type=module - \
-    "${TATA_CONSOLE_FLOW_ROOT:-${TATA_WORKSPACE_ROOT:?缺少 TATA_WORKSPACE_ROOT}/tataconsole/flows}/dependencies.mjs" \
-    "$CITIZENWALLET_DIR/android/gradle/wrapper/gradle-wrapper.properties" <<'NODE_GRADLE'
-import { realpath } from 'node:fs/promises';
-import { pathToFileURL } from 'node:url';
-const { activeDependencyTask, prepareGradleDependencyEnvironment } = await import(pathToFileURL(process.argv[2]));
-const task = await activeDependencyTask();
-await prepareGradleDependencyEnvironment({ ...task, lockfiles: [await realpath(process.argv[3])], environment: process.env });
-NODE_GRADLE
-fi
+# The central Worker has already prepared this task's Gradle Wrapper cache.
 flutter config --build-dir=cache/flutter-build >/dev/null
 
 # 与 CitizenApp 共用仓库根 Flutter 依赖真源；版本不符必须在

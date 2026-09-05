@@ -202,7 +202,7 @@ void main() {
     }
   });
 
-  test('启动明文附件清扫不构造 ChatRuntime，也不等待 WalletIsar', () async {
+  test('启动明文附件清扫不构造 CitizenChatSdk，也不等待 WalletIsar', () async {
     await WalletIsar.instance.db();
     final plain = File(
       '${chatDocumentsRoot.path}/chat/by_user/cid-fixture/by_binding/7/'
@@ -222,7 +222,7 @@ void main() {
     try {
       await walletEntered.future.timeout(_shortQueueTimeout);
       final liveRuntimeCount = ChatRuntimeCore.debugLiveInstanceCount;
-      await ChatRuntime.purgePlainAttachmentsWithoutAccount(
+      await CitizenChatSdk.purgePlainAttachmentsWithoutAccount(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ).timeout(_shortQueueTimeout);
       expect(plain.existsSync(), isFalse);
@@ -251,7 +251,9 @@ void main() {
     final previousFixedKeys = ChatCrypto.debugFixedKeys;
     ChatCrypto.debugFixedKeys = null;
     try {
-      final store = ChatStore(crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)));
+      final store = ChatStore(
+        crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)),
+      );
       final bindingToken = await store.activateBindingFence(_binding);
       const messageText = '聊天和钱包独立队列回归消息';
       final plaintext = ChatPayloadCodec.encode(ChatContent.text(messageText));
@@ -596,7 +598,7 @@ void main() {
     expect(appMarker, isNull);
   });
 
-  test('全量擦除只删除 Documents/chat 并让当前进程 ChatRuntime 永久终止', () async {
+  test('全量擦除只删除 Documents/chat 并让当前进程 CitizenChatSdk 永久终止', () async {
     final chatRoot = Directory('${chatDocumentsRoot.path}/chat');
     final plainFile = File('${chatRoot.path}/by_cid/cid/attachments/.plain/a');
     final mlsFile = File('${chatRoot.path}/by_cid/cid/mls/device/state.bin');
@@ -607,11 +609,11 @@ void main() {
     await mlsFile.writeAsBytes(const <int>[1, 2, 3]);
     await sibling.writeAsString('outside-chat-root');
 
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     await expectLater(
-      ChatRuntime.closeAndDeleteLocalFiles(
+      CitizenChatSdk.closeAndDeleteLocalFiles(
         documentsDirectoryProvider: () async {
           throw StateError('chat-documents-provider-first-attempt-failed');
         },
@@ -634,7 +636,7 @@ void main() {
       throwsA(isA<StateError>()),
     );
     expect(
-      () => ChatRuntime(
+      () => CitizenChatSdk(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       throwsA(isA<StateError>()),
@@ -649,7 +651,7 @@ void main() {
     await marker.writeAsBytes(const <int>[1]);
 
     var disposeCalls = 0;
-    ChatRuntime? runtime = ChatRuntime(
+    CitizenChatSdk? runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     runtime.debugRegisterContextDisposerForTest(() async {
@@ -660,7 +662,7 @@ void main() {
     });
 
     await expectLater(
-      ChatRuntime.closeAndDeleteLocalFiles(
+      CitizenChatSdk.closeAndDeleteLocalFiles(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       throwsA(isA<StateError>()),
@@ -672,14 +674,14 @@ void main() {
     // 模拟 UI 放弃最后一个强引用；静态 pending-close 集合仍必须保活失败实例。
     runtime = null;
 
-    await ChatRuntime.closeAndDeleteLocalFiles(
+    await CitizenChatSdk.closeAndDeleteLocalFiles(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     expect(disposeCalls, 2, reason: '二次擦除必须重新执行关闭，不得复用失败 Future');
     expect(await chatRoot.exists(), isFalse);
     expect(ChatRuntimeCore.debugPendingCloseInstanceCount, 0);
 
-    await ChatRuntime.closeAndDeleteLocalFiles(
+    await CitizenChatSdk.closeAndDeleteLocalFiles(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     expect(disposeCalls, 2, reason: '关闭成功后必须保持幂等');
@@ -691,7 +693,7 @@ void main() {
     await initialFile.parent.create(recursive: true);
     await initialFile.writeAsBytes(const <int>[1]);
 
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     final mutationEntered = Completer<void>();
@@ -734,7 +736,7 @@ void main() {
     await initial.parent.create(recursive: true);
     await initial.writeAsBytes(const <int>[1]);
 
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     final flightEntered = Completer<void>();
@@ -774,7 +776,7 @@ void main() {
     await marker.parent.create(recursive: true);
     await marker.writeAsBytes(const <int>[1]);
 
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     var socketStops = 0;
@@ -792,7 +794,7 @@ void main() {
     );
 
     await expectLater(
-      ChatRuntime.closeAndDeleteLocalFiles(
+      CitizenChatSdk.closeAndDeleteLocalFiles(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       throwsA(isA<StateError>()),
@@ -800,7 +802,7 @@ void main() {
     expect((socketStops, wakeCancels, tokenCancels), (1, 1, 1));
     expect(await chatRoot.exists(), isTrue);
 
-    await ChatRuntime.closeAndDeleteLocalFiles(
+    await CitizenChatSdk.closeAndDeleteLocalFiles(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     expect((socketStops, wakeCancels, tokenCancels), (2, 1, 1));
@@ -819,7 +821,7 @@ void main() {
   });
 
   test('后台 handler 在 stop 后仍等待已触发 callback，完成前不得释放运行态', () async {
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     final callbackEntered = Completer<void>();
@@ -883,7 +885,7 @@ void main() {
       ),
     );
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.pending,
@@ -924,7 +926,7 @@ void main() {
     expect(secureStorageAttempted, isTrue);
     expect(sharedPreferencesAttempted, isTrue);
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.complete,
@@ -961,7 +963,7 @@ void main() {
       AppDataWipeStartupResult.ready,
     );
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.none,
@@ -982,7 +984,7 @@ void main() {
     expect(secureStorageCalls, 0);
     expect(sharedPreferencesCalls, 0);
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.none,
@@ -1039,13 +1041,13 @@ void main() {
       AppDataWipeStartupResult.ready,
     );
     expect(await orphanLease.exists(), isTrue);
-    await ChatRuntime.recoverStartupArtifacts(
+    await CitizenChatSdk.recoverStartupArtifacts(
       documentsDirectoryProvider: () async => chatDocumentsRoot,
     );
     expect(await orphanLease.exists(), isFalse);
     expect(await retainedCiphertext.readAsBytes(), const <int>[7, 8, 9]);
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.none,
@@ -1071,9 +1073,7 @@ void main() {
         ).timeout(_shortQueueTimeout),
         AppDataWipeStartupResult.ready,
       );
-      final digest = crypto.sha256
-          .convert(_ownerUserId.codeUnits)
-          .toString();
+      final digest = crypto.sha256.convert(_ownerUserId.codeUnits).toString();
       expect(
         File(
           '${chatDocumentsRoot.path}/.tatachat_sdk_chat_user_'
@@ -1107,7 +1107,7 @@ void main() {
       AppDataWipeStartupResult.ready,
     );
     await expectLater(
-      ChatRuntime.recoverStartupArtifacts(
+      CitizenChatSdk.recoverStartupArtifacts(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       throwsA(isA<StateError>()),
@@ -1145,7 +1145,7 @@ void main() {
       throwsA(isA<AppDataWipeException>()),
     );
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.pending,
@@ -1171,7 +1171,7 @@ void main() {
       AppDataWipeStartupResult.dataWiped,
     );
     expect(
-      await ChatRuntime.readPersistentAppDataWipeState(
+      await CitizenChatSdk.readPersistentAppDataWipeState(
         documentsDirectoryProvider: () async => chatDocumentsRoot,
       ),
       ChatPersistentWipeState.complete,

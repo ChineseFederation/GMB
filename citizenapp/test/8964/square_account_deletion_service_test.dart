@@ -63,7 +63,7 @@ class _FakeSubkey extends DeviceSubkey {
   }
 }
 
-class _FakeChatRuntime extends ChatRuntime {
+class _FakeChatRuntime extends CitizenChatSdk {
   bool cleared = false;
   @override
   Future<void> clearAllForCidNumber({

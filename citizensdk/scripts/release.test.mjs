@@ -1864,6 +1864,55 @@ function assertAndroidKotlinPersistentStateContract(source) {
   assert.doesNotMatch(source, /mkdir[^\n]*android\/\.kotlin/);
 }
 
+test('Android Gradle 子进程接收中央环境、参数并传播失败', () => {
+  const source = nativeShellFunctions(['build_android']);
+  const start = source.indexOf('  CITIZENSDK_ANDROID_BUILD_DIR="$android_build_dir"');
+  const end = source.indexOf('  built_aar=', start);
+  assert.ok(start >= 0 && end > start, '必须执行真实 Gradle 调用段');
+  const invocation = source.slice(start, end);
+  const root = mkdtempSync(join(workRoot, 'android-gradle-environment-'));
+  try {
+    const gradle = join(root, 'gradle fixture');
+    writeFileSync(gradle, `#!/bin/bash
+set -eu
+[[ "\${CITIZENSDK_ANDROID_BUILD_DIR:-}" == "$FIXTURE_ROOT/build dir" ]] || exit 91
+[[ "\${CITIZENSDK_ANDROID_CORE_DIR:-}" == "$FIXTURE_ROOT/core dir" ]] || exit 92
+[[ "\${GRADLE_USER_HOME:-}" == "$FIXTURE_ROOT/gradle home" ]] || exit 93
+expected=(--no-daemon --stacktrace --no-problems-report --project-cache-dir "$FIXTURE_ROOT/project cache" "-Pkotlin.project.persistent.dir=$FIXTURE_ROOT/kotlin state" -p "$FIXTURE_ROOT/project" :native:assembleRelease)
+[[ "$#" == "\${#expected[@]}" ]] || exit 94
+for argument in "\${expected[@]}"; do [[ "$1" == "$argument" ]] || exit 95; shift; done
+exit "$FIXTURE_STATUS"
+`, { mode: 0o700 });
+    const shell = `set -eu
+unset CITIZENSDK_ANDROID_BUILD_DIR CITIZENSDK_ANDROID_CORE_DIR GRADLE_USER_HOME
+android_build_dir="$FIXTURE_ROOT/build dir"
+core_stage="$FIXTURE_ROOT/core dir"
+gradle_user_home="$FIXTURE_ROOT/gradle home"
+gradle_project_cache="$FIXTURE_ROOT/project cache"
+kotlin_persistent_dir="$FIXTURE_ROOT/kotlin state"
+android_gradle_project="$FIXTURE_ROOT/project"
+gradle_bin="$FIXTURE_ROOT/gradle fixture"
+`;
+    const run = (body, status) => spawnSync('/bin/bash', ['-c', shell + body], {
+      env: { PATH: '/usr/bin:/bin', FIXTURE_ROOT: root, FIXTURE_STATUS: String(status) },
+      encoding: 'utf8', timeout: 5000,
+    });
+    for (const status of [0, 37]) {
+      const result = run(invocation, status);
+      assert.equal(result.error, undefined);
+      assert.equal(result.status, status, result.stderr);
+    }
+    // 重现本次故障：注释切断赋值续行。bash -n 会通过，真实子进程检查必须失败。
+    const broken = invocation.replace('    "$gradle_bin"', '    # misplaced comment\n    "$gradle_bin"');
+    assert.notEqual(broken, invocation);
+    const failed = run(broken, 0);
+    assert.equal(failed.error, undefined);
+    assert.equal(failed.status, 91);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('smoldot Dart Release 合同固定根包生产、测试与来源记录迁移闭集', () => {
   assert.doesNotThrow(() => assertSmoldotDartSource(citizenSdkRoot));
 });

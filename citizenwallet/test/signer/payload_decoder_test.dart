@@ -42,13 +42,12 @@ void main() {
     String familyName,
     String givenName, {
     String citizenCidNumber = '',
-  }) =>
-      [
-        ...adminAccount,
-        ...compactVec(citizenCidNumber),
-        ...compactVec(familyName),
-        ...compactVec(givenName),
-      ];
+  }) => [
+    ...adminAccount,
+    ...compactVec(citizenCidNumber),
+    ...compactVec(familyName),
+    ...compactVec(givenName),
+  ];
 
   List<int> u128LeForTest(BigInt value) {
     final out = List<int>.filled(16, 0);
@@ -63,11 +62,11 @@ void main() {
   List<int> u16Le(int value) => [value & 0xff, (value >> 8) & 0xff];
 
   List<int> u32Le(int value) => [
-        value & 0xff,
-        (value >> 8) & 0xff,
-        (value >> 16) & 0xff,
-        (value >> 24) & 0xff,
-      ];
+    value & 0xff,
+    (value >> 8) & 0xff,
+    (value >> 16) & 0xff,
+    (value >> 24) & 0xff,
+  ];
 
   List<int> u64Le(int value) {
     final out = List<int>.filled(8, 0);
@@ -91,8 +90,8 @@ void main() {
   Uint8List roleFixtureBytes(Map<String, dynamic> fixture, String name) {
     final cases = fixture['cases']! as List<dynamic>;
     final entry = cases.cast<Map<String, dynamic>>().singleWhere(
-          (item) => item['name'] == name,
-        );
+      (item) => item['name'] == name,
+    );
     final hex = entry['encoded_hex']! as String;
     return Uint8List.fromList([
       for (var index = 0; index < hex.length; index += 2)
@@ -148,38 +147,37 @@ void main() {
   // 裸 call_data 会被 decoder 的尾部校验拒绝(Reject → 红色)。
   final tailGenesis = List<int>.generate(32, (i) => 0x49 ^ i);
   List<int> signingTail({int nonce = 1, int tip = 0}) => [
-        0x00,
-        ...compactU32(nonce),
-        ...compactU32(tip),
-        0x00,
-        1, 0, 0, 0, // spec_version u32 LE
-        1, 0, 0, 0, // tx_version u32 LE
-        ...tailGenesis,
-        ...tailGenesis,
-        0x00,
-      ];
+    0x00,
+    ...compactU32(nonce),
+    ...compactU32(tip),
+    0x00,
+    1, 0, 0, 0, // spec_version u32 LE
+    1, 0, 0, 0, // tx_version u32 LE
+    ...tailGenesis,
+    ...tailGenesis,
+    0x00,
+  ];
 
   Uint8List withSigningTail(List<int> callData, {int nonce = 1, int tip = 0}) =>
       Uint8List.fromList([...callData, ...signingTail(nonce: nonce, tip: tip)]);
 
   List<int> citizenIdentityPayloadForTest(List<int> walletBytes) => [
-        ...compactVec('CTZN-430100-0001'),
-        ...walletBytes,
-        ...u32Le(20260630),
-        ...u32Le(20360630),
-        0,
-        ...compactVec('43'),
-        ...compactVec('0100'),
-        ...compactVec('001'),
-      ];
+    ...compactVec('CTZN-430100-0001'),
+    ...walletBytes,
+    ...u32Le(20260630),
+    ...u32Le(20360630),
+    0,
+    ...compactVec('43'),
+    ...compactVec('0100'),
+    ...compactVec('001'),
+  ];
 
   /// 身份写入防重放两标量：expected_identity_version(8) + expires_at(8)。
   /// 链端 extrinsic 里紧跟 payload，授权载荷里位于末尾，两处顺序一致。
   List<int> identityAuthorizationTailForTest({
     int identityVersion = 3,
     int expiresAt = 1800000000,
-  }) =>
-      [...u64Le(identityVersion), ...u64Le(expiresAt)];
+  }) => [...u64Le(identityVersion), ...u64Le(expiresAt)];
 
   /// 公民实际签名覆盖的完整授权字节：
   /// genesis_hash(32) ++ payload ++ version(8) ++ expires_at(8)。
@@ -187,27 +185,26 @@ void main() {
     List<int> payloadBytes, {
     int identityVersion = 3,
     int expiresAt = 1800000000,
-  }) =>
-      [
-        ...List<int>.filled(32, 0x11), // genesis_hash
-        ...payloadBytes,
-        ...identityAuthorizationTailForTest(
-          identityVersion: identityVersion,
-          expiresAt: expiresAt,
-        ),
-      ];
+  }) => [
+    ...List<int>.filled(32, 0x11), // genesis_hash
+    ...payloadBytes,
+    ...identityAuthorizationTailForTest(
+      identityVersion: identityVersion,
+      expiresAt: expiresAt,
+    ),
+  ];
 
   List<int> candidateIdentityPayloadForTest(List<int> walletBytes) => [
-        ...citizenIdentityPayloadForTest(walletBytes),
-        ...compactVec('43'),
-        ...compactVec('0100'),
-        ...compactVec('002'),
-        ...compactVec('测'),
-        ...compactVec('试公民'),
-        1, // CitizenSex::Female
-        // CandidateIdentityPayload 的末字段为 u32 LE YYYYMMDD。
-        ...u32Le(20260630),
-      ];
+    ...citizenIdentityPayloadForTest(walletBytes),
+    ...compactVec('43'),
+    ...compactVec('0100'),
+    ...compactVec('002'),
+    ...compactVec('测'),
+    ...compactVec('试公民'),
+    1, // CitizenSex::Female
+    // CandidateIdentityPayload 的末字段为 u32 LE YYYYMMDD。
+    ...u32Le(20260630),
+  ];
 
   List<int> bytesFromHex(String hex) {
     final clean = hex.startsWith('0x') ? hex.substring(2) : hex;
@@ -223,11 +220,15 @@ void main() {
   group('PayloadDecoder', () {
     // 发布授权必须按链端定义完整消费所有 SCALE 字段；同时覆盖 action 绑定与尾字节拒绝，
     // 防止钱包把其它动作或带有未解释附加数据的载荷展示成可签名发布请求。
-    test('生产发布授权严格绑定十三个产品端并拒绝旧标识与尾字节', () {
+    test('生产发布授权严格绑定产品端并拒绝错误标识与尾字节', () {
       const expiresAt = 1900000000;
-      // 中文注释：发布授权中的 platform 是产品端身份；十三个产品端组合
+      // 中文注释：发布授权中的 platform 是产品端身份；已登记产品端组合
       // 必须逐一进入同一解码路径，任何旧标识或交叉组合都在冷钱包拒绝。
-      List<int> publishPayload(String product, String platform) {
+      List<int> publishPayload(
+        String product,
+        String platform, {
+        String? previous,
+      }) {
         const versionTag = '1.2.3';
         return <int>[
           ...compactVec(product),
@@ -235,7 +236,10 @@ void main() {
           ...compactVec(versionTag),
           ...List<int>.filled(20, 0x11),
           ...List<int>.filled(32, 0x22),
-          ...compactVec('deployment-previous'),
+          ...compactVec(
+            previous ??
+                (product == 'citizenchatserver' ? '' : 'deployment-previous'),
+          ),
           ...u64Le(expiresAt),
           ...List<int>.filled(32, 0x33),
         ];
@@ -245,6 +249,7 @@ void main() {
         'citizenapp': ['ios', 'android'],
         'citizenwallet': ['ios', 'android'],
         'citizenserve': ['cloudflare'],
+        'citizenchatserver': ['cloudflare'],
         'citizenweb': ['web'],
         'tuyulove': ['ios', 'android'],
         'tuyuserve': ['cloudflare'],
@@ -255,6 +260,7 @@ void main() {
         'citizenapp': '公民',
         'citizenwallet': '公民钱包',
         'citizenserve': '公民服务端',
+        'citizenchatserver': '公民聊天服务',
         'citizenweb': '公民官网',
         'tuyulove': '途遇',
         'tuyuserve': '途遇服务端',
@@ -286,12 +292,15 @@ void main() {
           expect(
             decoded?.summary,
             '授权发布 ${productNamesZh[productEntry.key]} '
-            '1.2.3 到 ${platformNames[platform]}',
+            '1.2.3 到 ${platformNames[platform]}'
+            '${productEntry.key == 'citizenchatserver' ? '；不授权回滚或删除资源' : ''}',
           );
         }
       }
 
       const invalidProductPlatforms = <(String, String)>[
+        ('citizenchatserver', 'ios'),
+        ('citizenchatserver', 'web'),
         ('citizenweb', 'cloudflare'),
         ('citizenserve', 'web'),
         ('tuyulove', 'web'),
@@ -314,6 +323,26 @@ void main() {
       }
 
       final payload = publishPayload('citizenweb', 'web');
+      expect(
+        PayloadDecoder.decode(
+          hexOf(
+            publishPayload(
+              'citizenchatserver',
+              'cloudflare',
+              previous: 'forged-previous',
+            ),
+          ),
+          expectedAction: 'publish',
+        ),
+        isNull,
+      );
+      expect(
+        PayloadDecoder.decode(
+          hexOf(publishPayload('citizenweb', 'web', previous: '')),
+          expectedAction: 'publish',
+        ),
+        isNull,
+      );
       expect(PayloadDecoder.decode(hexOf(payload)), isNull);
       expect(
         PayloadDecoder.decode(
@@ -639,12 +668,12 @@ void main() {
       final reasonHash = List<int>.generate(32, (i) => 0xa0 + i);
 
       List<int> assetHeader(int callIndex, int assetId) => [
-            0x17,
-            callIndex,
-            ...compactVec(registryActorCid),
-            ...compactVec('ASSET_OPERATOR'),
-            ...u32Le(assetId),
-          ];
+        0x17,
+        callIndex,
+        ...compactVec(registryActorCid),
+        ...compactVec('ASSET_OPERATOR'),
+        ...u32Le(assetId),
+      ];
 
       test('QR action codes are the unique pallet 23 call codes', () {
         expect(QrActions.proposeAssetIssue, 0x1700);
@@ -696,63 +725,66 @@ void main() {
       });
 
       test('calls 1..4 decode every business field', () {
-        final cases = <({
-          List<int> callData,
-          String action,
-          int qrAction,
-          Map<String, String> expected,
-        })>[
-          (
-            callData: [
-              ...assetHeader(1, 7),
-              ...toAccount,
-              ...u128LeForTest(BigInt.from(101)),
-            ],
-            action: 'propose_asset_mint',
-            qrAction: QrActions.proposeAssetMint,
-            expected: {
-              'asset_id': '7',
-              'recipient_account_id': '0x${hexLower(toAccount)}',
-              'amount_raw': '101',
-            },
-          ),
-          (
-            callData: [
-              ...assetHeader(2, 8),
-              ...fromAccount,
-              ...u128LeForTest(BigInt.from(202)),
-            ],
-            action: 'propose_asset_burn',
-            qrAction: QrActions.proposeAssetBurn,
-            expected: {
-              'asset_id': '8',
-              'sender_account_id': '0x${hexLower(fromAccount)}',
-              'amount_raw': '202',
-            },
-          ),
-          (
-            callData: [...assetHeader(3, 9)],
-            action: 'propose_asset_close',
-            qrAction: QrActions.proposeAssetClose,
-            expected: {'asset_id': '9'},
-          ),
-          (
-            callData: [
-              ...assetHeader(4, 10),
-              ...fromAccount,
-              ...toAccount,
-              ...u128LeForTest(BigInt.from(303)),
-            ],
-            action: 'propose_asset_transfer',
-            qrAction: QrActions.proposeAssetTransfer,
-            expected: {
-              'asset_id': '10',
-              'sender_account_id': '0x${hexLower(fromAccount)}',
-              'recipient_account_id': '0x${hexLower(toAccount)}',
-              'amount_raw': '303',
-            },
-          ),
-        ];
+        final cases =
+            <
+              ({
+                List<int> callData,
+                String action,
+                int qrAction,
+                Map<String, String> expected,
+              })
+            >[
+              (
+                callData: [
+                  ...assetHeader(1, 7),
+                  ...toAccount,
+                  ...u128LeForTest(BigInt.from(101)),
+                ],
+                action: 'propose_asset_mint',
+                qrAction: QrActions.proposeAssetMint,
+                expected: {
+                  'asset_id': '7',
+                  'recipient_account_id': '0x${hexLower(toAccount)}',
+                  'amount_raw': '101',
+                },
+              ),
+              (
+                callData: [
+                  ...assetHeader(2, 8),
+                  ...fromAccount,
+                  ...u128LeForTest(BigInt.from(202)),
+                ],
+                action: 'propose_asset_burn',
+                qrAction: QrActions.proposeAssetBurn,
+                expected: {
+                  'asset_id': '8',
+                  'sender_account_id': '0x${hexLower(fromAccount)}',
+                  'amount_raw': '202',
+                },
+              ),
+              (
+                callData: [...assetHeader(3, 9)],
+                action: 'propose_asset_close',
+                qrAction: QrActions.proposeAssetClose,
+                expected: {'asset_id': '9'},
+              ),
+              (
+                callData: [
+                  ...assetHeader(4, 10),
+                  ...fromAccount,
+                  ...toAccount,
+                  ...u128LeForTest(BigInt.from(303)),
+                ],
+                action: 'propose_asset_transfer',
+                qrAction: QrActions.proposeAssetTransfer,
+                expected: {
+                  'asset_id': '10',
+                  'sender_account_id': '0x${hexLower(fromAccount)}',
+                  'recipient_account_id': '0x${hexLower(toAccount)}',
+                  'amount_raw': '303',
+                },
+              ),
+            ];
 
         for (final item in cases) {
           final decoded = PayloadDecoder.decode(
@@ -770,69 +802,72 @@ void main() {
       });
 
       test('calls 10..14 decode every monitor field', () {
-        final cases = <({
-          List<int> callData,
-          String action,
-          int qrAction,
-          Map<String, String> expected,
-        })>[
-          (
-            callData: [...assetHeader(10, 11), ...toAccount, ...reasonHash],
-            action: 'propose_monitor_freeze',
-            qrAction: QrActions.proposeMonitorFreeze,
-            expected: {
-              'asset_id': '11',
-              'account_id': '0x${hexLower(toAccount)}',
-            },
-          ),
-          (
-            callData: [...assetHeader(11, 12), ...toAccount, ...reasonHash],
-            action: 'propose_monitor_unfreeze',
-            qrAction: QrActions.proposeMonitorUnfreeze,
-            expected: {
-              'asset_id': '12',
-              'account_id': '0x${hexLower(toAccount)}',
-            },
-          ),
-          (
-            callData: [
-              ...assetHeader(12, 13),
-              ...toAccount,
-              ...u128LeForTest(BigInt.from(404)),
-              ...reasonHash,
-            ],
-            action: 'propose_monitor_confiscate',
-            qrAction: QrActions.proposeMonitorConfiscate,
-            expected: {
-              'asset_id': '13',
-              'account_id': '0x${hexLower(toAccount)}',
-              'amount_raw': '404',
-            },
-          ),
-          (
-            callData: [
-              ...assetHeader(13, 14),
-              ...fromAccount,
-              ...toAccount,
-              ...u128LeForTest(BigInt.from(505)),
-              ...reasonHash,
-            ],
-            action: 'propose_monitor_force_transfer',
-            qrAction: QrActions.proposeMonitorForceTransfer,
-            expected: {
-              'asset_id': '14',
-              'sender_account_id': '0x${hexLower(fromAccount)}',
-              'recipient_account_id': '0x${hexLower(toAccount)}',
-              'amount_raw': '505',
-            },
-          ),
-          (
-            callData: [...assetHeader(14, 15), ...reasonHash],
-            action: 'propose_monitor_force_close',
-            qrAction: QrActions.proposeMonitorForceClose,
-            expected: {'asset_id': '15'},
-          ),
-        ];
+        final cases =
+            <
+              ({
+                List<int> callData,
+                String action,
+                int qrAction,
+                Map<String, String> expected,
+              })
+            >[
+              (
+                callData: [...assetHeader(10, 11), ...toAccount, ...reasonHash],
+                action: 'propose_monitor_freeze',
+                qrAction: QrActions.proposeMonitorFreeze,
+                expected: {
+                  'asset_id': '11',
+                  'account_id': '0x${hexLower(toAccount)}',
+                },
+              ),
+              (
+                callData: [...assetHeader(11, 12), ...toAccount, ...reasonHash],
+                action: 'propose_monitor_unfreeze',
+                qrAction: QrActions.proposeMonitorUnfreeze,
+                expected: {
+                  'asset_id': '12',
+                  'account_id': '0x${hexLower(toAccount)}',
+                },
+              ),
+              (
+                callData: [
+                  ...assetHeader(12, 13),
+                  ...toAccount,
+                  ...u128LeForTest(BigInt.from(404)),
+                  ...reasonHash,
+                ],
+                action: 'propose_monitor_confiscate',
+                qrAction: QrActions.proposeMonitorConfiscate,
+                expected: {
+                  'asset_id': '13',
+                  'account_id': '0x${hexLower(toAccount)}',
+                  'amount_raw': '404',
+                },
+              ),
+              (
+                callData: [
+                  ...assetHeader(13, 14),
+                  ...fromAccount,
+                  ...toAccount,
+                  ...u128LeForTest(BigInt.from(505)),
+                  ...reasonHash,
+                ],
+                action: 'propose_monitor_force_transfer',
+                qrAction: QrActions.proposeMonitorForceTransfer,
+                expected: {
+                  'asset_id': '14',
+                  'sender_account_id': '0x${hexLower(fromAccount)}',
+                  'recipient_account_id': '0x${hexLower(toAccount)}',
+                  'amount_raw': '505',
+                },
+              ),
+              (
+                callData: [...assetHeader(14, 15), ...reasonHash],
+                action: 'propose_monitor_force_close',
+                qrAction: QrActions.proposeMonitorForceClose,
+                expected: {'asset_id': '15'},
+              ),
+            ];
 
         for (final item in cases) {
           final decoded = PayloadDecoder.decode(
@@ -868,10 +903,12 @@ void main() {
           ];
           final truncated = validIssue.sublist(0, validIssue.length - 1);
           final trailing = [...validIssue, 0xff];
-          final invalidClass = [...validIssue]..[2 +
-              compactVec(registryActorCid).length +
-              compactVec('ASSET_OPERATOR').length +
-              32] = 2;
+          final invalidClass = [...validIssue]
+            ..[2 +
+                    compactVec(registryActorCid).length +
+                    compactVec('ASSET_OPERATOR').length +
+                    32] =
+                2;
           final accountIdOnly = <int>[
             0x17,
             0,
@@ -2345,20 +2382,10 @@ void main() {
           action: 'publish_post',
         ),
         (
-          callData: [
-            34,
-            1,
-            0,
-            0,
-            2,
-            ...u128LeForTest(BigInt.from(599900)),
-          ],
+          callData: [34, 1, 0, 0, 2, ...u128LeForTest(BigInt.from(599900))],
           action: 'subscribe',
         ),
-        (
-          callData: [34, 2, 1, ...compactVec(creatorCid)],
-          action: 'cancel',
-        ),
+        (callData: [34, 2, 1, ...compactVec(creatorCid)], action: 'cancel'),
         (
           callData: [
             34,
@@ -2388,12 +2415,7 @@ void main() {
           action: 'change_subscription_plan',
         ),
         (
-          callData: [
-            34,
-            6,
-            ...compactVec('t1'),
-            ...compactVec('铁杆粉丝'),
-          ],
+          callData: [34, 6, ...compactVec('t1'), ...compactVec('铁杆粉丝')],
           action: 'update_creator_tier_name',
         ),
       ];
@@ -2406,69 +2428,69 @@ void main() {
       }
     });
 
-    test('rejects malformed SquarePost wallet calls instead of changing route',
-        () {
-      const creatorCid = 'CN220-CTZN2-198805200-2026';
-      final issuerPlanMismatch = [
-        34,
-        1,
-        0, // Platform issuer
-        1, // Creator plan
-        ...compactVec('t1'),
-        0,
-        ...u128LeForTest(BigInt.one),
-      ];
-      final duplicatePeriod = [
-        34,
-        3,
-        ...compactU32(1),
-        ...compactVec('t1'),
-        ...compactVec('支持者'),
-        ...compactU32(2),
-        0,
-        ...u128LeForTest(BigInt.one),
-        0,
-        ...u128LeForTest(BigInt.from(2)),
-      ];
-      final emptyReceipt = [
-        34,
-        0,
-        ...compactVec('post-1'),
-        0,
-        ...List<int>.filled(32, 0x11),
-        ...compactU32(0),
-      ];
-      expect(
-        PayloadDecoder.decode(hexOf(withSigningTail(issuerPlanMismatch))),
-        isNull,
-      );
-      expect(
-        PayloadDecoder.decode(hexOf(withSigningTail(duplicatePeriod))),
-        isNull,
-      );
-      expect(
-        PayloadDecoder.decode(hexOf(withSigningTail(emptyReceipt))),
-        isNull,
-      );
-      expect(
-        PayloadDecoder.decode(
-          hexOf([34, 2, 1, ...compactVec(creatorCid)]),
-        ),
-        isNull,
-        reason: '钱包账户冷签必须携带完整 SigningPayload 尾',
-      );
-    });
+    test(
+      'rejects malformed SquarePost wallet calls instead of changing route',
+      () {
+        const creatorCid = 'CN220-CTZN2-198805200-2026';
+        final issuerPlanMismatch = [
+          34,
+          1,
+          0, // Platform issuer
+          1, // Creator plan
+          ...compactVec('t1'),
+          0,
+          ...u128LeForTest(BigInt.one),
+        ];
+        final duplicatePeriod = [
+          34,
+          3,
+          ...compactU32(1),
+          ...compactVec('t1'),
+          ...compactVec('支持者'),
+          ...compactU32(2),
+          0,
+          ...u128LeForTest(BigInt.one),
+          0,
+          ...u128LeForTest(BigInt.from(2)),
+        ];
+        final emptyReceipt = [
+          34,
+          0,
+          ...compactVec('post-1'),
+          0,
+          ...List<int>.filled(32, 0x11),
+          ...compactU32(0),
+        ];
+        expect(
+          PayloadDecoder.decode(hexOf(withSigningTail(issuerPlanMismatch))),
+          isNull,
+        );
+        expect(
+          PayloadDecoder.decode(hexOf(withSigningTail(duplicatePeriod))),
+          isNull,
+        );
+        expect(
+          PayloadDecoder.decode(hexOf(withSigningTail(emptyReceipt))),
+          isNull,
+        );
+        expect(
+          PayloadDecoder.decode(hexOf([34, 2, 1, ...compactVec(creatorCid)])),
+          isNull,
+          reason: '钱包账户冷签必须携带完整 SigningPayload 尾',
+        );
+      },
+    );
 
     test('rejects invalid SquarePost platform price proposal payloads', () {
       const actorCid = 'GD001-SFGQ0-000000001-2026';
       List<int> call(int level, BigInt price) => <int>[
-            34,
-            5,
-            ...compactVec(actorCid),
-            ...compactVec('GENESIS_PRODUCT_MANAGER'),
-            level,
-            ...u128LeForTest(price),
-          ];
+        34,
+        5,
+        ...compactVec(actorCid),
+        ...compactVec('GENESIS_PRODUCT_MANAGER'),
+        level,
+        ...u128LeForTest(price),
+      ];
       expect(PayloadDecoder.decode(hexOf(call(3, BigInt.one))), isNull);
       expect(PayloadDecoder.decode(hexOf(call(0, BigInt.zero))), isNull);
       expect(
@@ -2905,16 +2927,16 @@ void main() {
     // 国家储委会转账提案等 9 类提案扫码必红。本组用例锁死两端约定:
     // 带合法尾 → 解码成功;裸 call_data / 篡改尾 → null(红色拒签)。
     List<int> buildNrcTransferCallData() => [
-          0x11, 0x00,
-          0x01, // institution Some
-          ...compactVec(nrcActorCid),
-          0x01, // proposer_role_code Some
-          ...compactVec('COMMITTEE_MEMBER'),
-          ...List<int>.filled(32, 0x66), // funding_account_id
-          ...List<int>.filled(32, 0x44), // beneficiary
-          ...u128LeForTest(BigInt.from(12345)),
-          0x00, // remark 空 Vec
-        ];
+      0x11, 0x00,
+      0x01, // institution Some
+      ...compactVec(nrcActorCid),
+      0x01, // proposer_role_code Some
+      ...compactVec('COMMITTEE_MEMBER'),
+      ...List<int>.filled(32, 0x66), // funding_account_id
+      ...List<int>.filled(32, 0x44), // beneficiary
+      ...u128LeForTest(BigInt.from(12345)),
+      0x00, // remark 空 Vec
+    ];
 
     test('decodes 国家储委会 propose_transfer 带真实签名扩展尾', () {
       final decoded = PayloadDecoder.decode(
@@ -2992,22 +3014,22 @@ void main() {
 
     // 一章一节一条无款的最小章节树。
     List<int> minimalChapters() => [
-          ...compactU32(1), // 1 章
-          ...u32Le(1), // Chapter.number
-          ...compactVec('总则'), // Chapter.title
-          0x00, // Chapter.title_en None
-          ...compactU32(1), // 1 节
-          ...u32Le(1), // Section.number
-          ...compactVec('第一节'), // Section.title
-          0x00, // Section.title_en None
-          ...compactU32(1), // 1 条
-          ...u32Le(1), // Article.number
-          ...compactVec('第一条'), // Article.title
-          0x00, // Article.title_en None
-          ...compactVec('正文内容'), // Article.body
-          0x00, // Article.body_en None
-          ...compactU32(0), // 0 款
-        ];
+      ...compactU32(1), // 1 章
+      ...u32Le(1), // Chapter.number
+      ...compactVec('总则'), // Chapter.title
+      0x00, // Chapter.title_en None
+      ...compactU32(1), // 1 节
+      ...u32Le(1), // Section.number
+      ...compactVec('第一节'), // Section.title
+      0x00, // Section.title_en None
+      ...compactU32(1), // 1 条
+      ...u32Le(1), // Article.number
+      ...compactVec('第一条'), // Article.title
+      0x00, // Article.title_en None
+      ...compactVec('正文内容'), // Article.body
+      0x00, // Article.body_en None
+      ...compactU32(0), // 0 款
+    ];
 
     test('decodes propose_enact_law (25.0)', () {
       final callData = [

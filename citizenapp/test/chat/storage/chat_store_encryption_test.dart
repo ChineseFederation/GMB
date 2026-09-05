@@ -270,7 +270,7 @@ void main() {
       File receipt,
       _HandoverWalletManager manager,
       ChatStore store,
-      ChatRuntime runtime,
+      CitizenChatSdk runtime,
     })
   >
   createRuntimeHandoverFixture({
@@ -285,7 +285,7 @@ void main() {
         createStore?.call(manager) ??
         ChatStore(crypto: ChatCrypto(CitizenChatStorageKeyProvider(manager)));
     await store.activateBindingFence(handoverSource);
-    final runtime = ChatRuntime(
+    final runtime = CitizenChatSdk(
       store: store,
       walletManager: manager,
       documentsDirectoryProvider: () async => root,

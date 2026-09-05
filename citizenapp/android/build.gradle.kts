@@ -1,16 +1,29 @@
+// AGP内置Kotlin使用与中央Flutter插件相同的版本，不应用独立Android Kotlin插件。
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.4.10")
+    }
+}
+
 allprojects {
     repositories {
         google()
         mavenCentral()
     }
 
-    // Force compileSdk = 36 for ALL Android modules (app + library).
-    // isar_flutter_libs ships with a low compileSdk causing android:attr/lStar not found.
-    // Must be in allprojects so it fires when each module applies the Android plugin,
-    // BEFORE evaluationDependsOn triggers evaluation.
-    plugins.withType<com.android.build.gradle.BasePlugin> {
-        extensions.configure<com.android.build.gradle.BaseExtension> {
-            compileSdkVersion(36)
+    // 通过公开DSL统一Android模块的编译API级别。
+    plugins.withId("com.android.application") {
+        extensions.configure<com.android.build.api.dsl.ApplicationExtension> {
+            compileSdk = 36
+        }
+    }
+    plugins.withId("com.android.library") {
+        extensions.configure<com.android.build.api.dsl.LibraryExtension> {
+            compileSdk = 36
         }
     }
 }
@@ -34,19 +47,6 @@ subprojects {
 }
 subprojects {
     project.evaluationDependsOn(":app")
-}
-
-// Patch namespace for isar_flutter_libs (AGP 8+ requires it).
-subprojects {
-    if (name == "isar_flutter_libs") {
-        plugins.withId("com.android.library") {
-            extensions.configure<com.android.build.gradle.LibraryExtension> {
-                if (namespace.isNullOrEmpty()) {
-                    namespace = "dev.isar.isar_flutter_libs"
-                }
-            }
-        }
-    }
 }
 
 tasks.register<Delete>("clean") {

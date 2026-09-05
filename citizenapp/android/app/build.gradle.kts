@@ -1,7 +1,6 @@
 plugins {
     id("com.android.application")
-    id("kotlin-android")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
+    // AGP提供内置Kotlin；Flutter插件在Android插件之后应用。
     id("dev.flutter.flutter-gradle-plugin")
 }
 
@@ -20,10 +19,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = JavaVersion.VERSION_17.toString()
     }
 
     defaultConfig {
@@ -67,6 +62,13 @@ dependencies {
     implementation("androidx.media3:media3-transformer:1.10.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+}
+
+// 统一使用Kotlin公开编译配置，与Java 17字节码保持一致。
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
+    }
 }
 
 flutter {
