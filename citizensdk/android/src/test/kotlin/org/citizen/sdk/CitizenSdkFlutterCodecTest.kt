@@ -7,6 +7,16 @@ import org.junit.Test
 
 class CitizenSdkFlutterCodecTest {
     @Test
+    fun `history invalidation has no payload`() {
+        assertEquals("historyChanged", CitizenSdkFlutterCodec.event("session", 7L, "historyChanged", emptyList())[3])
+        assertThrows(IllegalArgumentException::class.java) {
+            CitizenSdkFlutterCodec.event("session", 0L, "historyChanged", emptyList())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            CitizenSdkFlutterCodec.event("session", 7L, "historyChanged", listOf(1))
+        }
+    }
+    @Test
     fun `wallet word count closure is exactly twelve eighteen twenty four`() {
         for (count in listOf(12, 18, 24)) {
             val request = CitizenSdkFlutterCodec.decode("createWallet", listOf(1, "session", 1L, count))

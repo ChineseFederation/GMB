@@ -11,9 +11,9 @@ use subxt_core::{
 };
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const EVENTS_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-system-events.hex");
 
 fn hex_bytes(value: &str) -> Vec<u8> {
     let value = value.trim();

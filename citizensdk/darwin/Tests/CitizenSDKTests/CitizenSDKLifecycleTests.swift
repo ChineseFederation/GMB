@@ -36,6 +36,10 @@ private final class CitizenSDKRecursiveLockProbe: @unchecked Sendable {
 }
 
 final class CitizenSDKLifecycleTests: XCTestCase {
+    func testHistoryEventPreservesSequenceWithoutSnapshotOrResultOwnership() {
+        XCTAssertEqual(CitizenSDKEvent.historyChanged(sequence: 7), .historyChanged(sequence: 7))
+        XCTAssertNotEqual(CitizenSDKEvent.historyChanged(sequence: 7), .historyChanged(sequence: 8))
+    }
     private enum ProbeFailure: Error { case lifecycle, install }
 
     func testOpenLifecycleFailureRunsCleanupAndPreservesError() {

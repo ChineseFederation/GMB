@@ -131,6 +131,13 @@ internal class CitizenSdkNative private constructor(
         )
     }
 
+    @Suppress("unused") // Called only by citizensdk_jni.
+    private fun onNativeHistoryChanged(sequence: Long) {
+        if (!calls.isClosed()) eventSink?.invoke(
+            CitizenSdkEvents.Event.HistoryChanged(java.lang.Long.toUnsignedString(sequence)),
+        )
+    }
+
     override fun close() {
         calls.close {
             nativeDestroy(bridge)

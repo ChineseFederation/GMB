@@ -354,6 +354,8 @@ internal final class CitizenSdkFlutterSessions: NSObject, @preconcurrency Flutte
     private func onSDKEvent(_ session: Session, _ event: CitizenSDKEvent, expectedGeneration: UInt64) {
         guard sessions[session.sdk.sessionID] === session else { return }
         switch event {
+        case .historyChanged:
+            emit(session, type: "historyChanged", payload: [], expectedGeneration: expectedGeneration)
         case let .lifecycleChanged(_, lifecycle):
             emit(session, type: "lifecycleChanged", payload: [CitizenSdkFlutterCodec.lifecycle(lifecycle)],
                  expectedGeneration: expectedGeneration)

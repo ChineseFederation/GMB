@@ -178,7 +178,8 @@ impl ProductComposition {
         system_version: String,
     ) -> FfiResult<Self> {
         let config =
-            SmoldotProviderConfig::try_new(combined_chain_spec, system_name, system_version)?;
+            SmoldotProviderConfig::try_new(combined_chain_spec, system_name, system_version)?
+                .with_bootstrap();
         Self::try_new(config, ProductHostProviders::public_abi_session())
     }
 
@@ -223,7 +224,8 @@ impl ProductComposition {
             wallet,
         );
         let config =
-            SmoldotProviderConfig::try_new(combined_chain_spec, system_name, system_version)?;
+            SmoldotProviderConfig::try_new(combined_chain_spec, system_name, system_version)?
+                .with_bootstrap();
         let mut composition = Self::try_new(config, host)?;
         composition.host_services = Some(adapter);
         Ok(composition)
@@ -359,12 +361,26 @@ impl ProductComposition {
 
     /// 在 provider 停止前关闭并排空产品侧后台工作。
     ///
-    /// 第 4.2 步的 finalized history 由显式 Engine future 驱动，Engine 不自建 timer 或
-    /// 后台线程；当前没有独立 history worker 可加入。所有 ABI future 仍由
-    /// `NativeRuntime` 的 pending-request 门在 destroy 前排空。保留这一顺序点，后续若
-    /// 平台明确组合 SDK 自有 worker，必须先在此 stop/join，随后才能停止 provider。
-    pub(crate) const fn stop_and_drain_product_services(&self) -> FfiResult<()> {
+    /// NativeRuntime 已先取消并 join 自有调度线程；此处等待 Engine 的真实存储租约
+    /// 和 provider 的 unsubscribe 应答，之后调用者才允许 remove_chain。
+    pub(crate) fn stop_and_drain_product_services(&self) -> FfiResult<()> {
+        self.engine.stop_chain_monitor()?;
+        self.provider
+            .drive(self.engine.drain_chain_monitor())?
+            .map_err(FfiError::from)?;
+        if matches!(
+            self.provider.lifecycle(),
+            Ok(citizen_sdk_smoldot_provider::ProviderLifecycle::Running)
+        ) {
+            self.provider
+                .drive(self.provider.drain_finalized_subscriptions())?
+                .map_err(FfiError::from)?;
+        }
         Ok(())
+    }
+
+    pub(crate) fn has_wallet_services(&self) -> bool {
+        self.wallet.is_some()
     }
 
     fn wallet_capability_facts(&self) -> ProductCapabilityFacts {

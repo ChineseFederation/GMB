@@ -8,6 +8,14 @@ import 'package:flutter_test/flutter_test.dart';
 void main() {
   const codec = CitizenSdkFlutterCodec();
 
+  test('历史通知只含 sequence，拒绝额外 payload 与无效顺序号', () {
+    final decoded = codec.decodeEvent(<Object?>[1, 'session', 7, 'historyChanged', <Object?>[]]);
+    expect(decoded.event, isA<CitizenSdkHistoryChanged>());
+    expect(decoded.event.sequence, 7);
+    expect(() => codec.decodeEvent(<Object?>[1, 'session', 8, 'historyChanged', <Object?>[1]]), throwsA(isA<Object>()));
+    expect(() => codec.decodeEvent(<Object?>[1, 'session', 0, 'historyChanged', <Object?>[]]), throwsA(isA<Object>()));
+  });
+
   test('三平台 Flutter 的 22 个方法使用固定长度 tuple 且没有 Map 兼容旁路', () {
     const expectedMethods = <String>{
       'open',

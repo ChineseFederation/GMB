@@ -56,22 +56,9 @@
 !/linux/src/citizen_sdk_flutter_environment.hpp
 
 # CitizenSDK 在 Android/Apple/Linux/Windows 统一经固定 Flutter tuple 调用产品 C ABI。
-# 下列 Dart 实现仅作 CitizenApp 迁移差分、回归和来源审计输入；它们不是
-# Hosted 运行闭包，不得让宿主通过 implementation import 绕过 SDK API、密钥金库
-# 或已验证链客户端边界。account_codec.dart 是固定 tuple 运行闭包唯一保留的
-# crypto helper，只负责公开 AccountId/SS58 投影，不处理秘密。
-/lib/src/crypto/citizen_signer.dart
-/lib/src/crypto/native_sr25519.dart
-/lib/src/crypto/wallet_mini_secret.dart
-/lib/src/crypto/wallet_password.dart
-/lib/src/node/
+# 仅保留受保护的上游 smoldot Dart 来源快照作审计输入，不能成为 Hosted 运行闭包。
+# account_codec.dart 只负责公开 AccountId/SS58 投影，不处理秘密。
 /lib/src/smoldot/
-/lib/src/transaction/
-/lib/src/wallet/
-/lib/src/platform/preferences_chain_database_store.dart
-/lib/src/platform/preferences_data_store.dart
-/lib/src/platform/preferences_finalized_transaction_repository.dart
-/lib/src/platform/preferences_wallet_repository.dart
 
 # Android Flutter compiles the one shared Kotlin facade directly. Native/AAR
 # build descriptions, C++ sources, tests and generated packages remain audit

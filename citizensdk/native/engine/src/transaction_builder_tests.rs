@@ -12,9 +12,9 @@ use citizen_signer::Sr25519SoftwareSigner;
 use serde_json::Value as JsonValue;
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const VECTOR_JSON: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-transfer-build-v1.json");
+    include_str!("../../../test/transaction/citizenchain-transfer-build-v1.json");
 
 struct BuildClient {
     identity: ChainIdentity,

@@ -103,6 +103,7 @@ pub struct NativeRuntime {
     owned_results: AtomicU64,
     cancellations: Mutex<HashMap<CitizenSdkRequestId, PendingRequest>>,
     capability_monitor: Mutex<Option<CapabilityMonitor>>,
+    chain_monitor: Mutex<Option<crate::chain_monitor::ChainMonitor>>,
 }
 
 impl NativeRuntime {
@@ -181,6 +182,7 @@ impl NativeRuntime {
             owned_results: AtomicU64::new(0),
             cancellations: Mutex::new(HashMap::new()),
             capability_monitor: Mutex::new(None),
+            chain_monitor: Mutex::new(None),
         }))
     }
 
@@ -671,11 +673,37 @@ impl NativeRuntime {
             .send(CitizenSdkEventType::LifecycleChanged, 0, 0, 0)
     }
 
+    pub(crate) fn publish_history_changed(&self) -> FfiResult<()> {
+        self.dispatcher
+            .send(CitizenSdkEventType::HistoryChanged, 0, 0, 0)
+    }
+
+    pub(crate) fn start_product_services(self: &Arc<Self>) -> FfiResult<()> {
+        let mut monitor = self
+            .chain_monitor
+            .lock()
+            .map_err(|_| FfiError::internal("chain monitor lock poisoned"))?;
+        if monitor.is_some() {
+            return Err(FfiError::internal("chain monitor already started"));
+        }
+        let wallet = self.composition.has_wallet_services();
+        if wallet {
+            self.provider()
+                .drive(self.engine().start_chain_monitor())?
+                .map_err(FfiError::from)?;
+        }
+        *monitor = Some(crate::chain_monitor::ChainMonitor::start(
+            Arc::downgrade(self),
+            wallet,
+        )?);
+        Ok(())
+    }
+
     /// Converge every failure after provider startup side effects into the
     /// one-way failed-start state. Cleanup is best-effort so callers can return
     /// the original causal error unchanged; destroy remains the only recovery.
     pub fn converge_failed_start(&self) {
-        let _ = self.composition.stop_and_drain_product_services();
+        let _ = self.stop_product_services();
         if matches!(self.provider().lifecycle(), Ok(ProviderLifecycle::Running)) {
             let _ = self.provider().stop();
         }
@@ -684,6 +712,14 @@ impl NativeRuntime {
             Ok(citizen_sdk_engine::EngineLifecycle::Starting)
         ) {
             let _ = self.engine().mark_provider_start_failed();
+        } else if matches!(
+            self.engine().lifecycle(),
+            Ok(citizen_sdk_engine::EngineLifecycle::Running)
+        ) && matches!(self.provider().lifecycle(), Ok(ProviderLifecycle::Stopped))
+        {
+            // 最后一个启动阶段（自有 worker 启动）失败时，不能留下 provider 已停、
+            // Engine 却仍 Running 的矛盾事实；实例保持单向停止，只能销毁。
+            let _ = self.engine().mark_provider_stopped();
         }
         let _ = self.publish_capabilities();
         let _ = self.publish_lifecycle();
@@ -747,7 +783,7 @@ impl NativeRuntime {
         self.stop_capability_subscription_for_shutdown()?;
 
         // 产品后台服务若存在，必须先停止并 drain；provider 是最后一个被关闭的依赖。
-        self.composition.stop_and_drain_product_services()?;
+        self.stop_product_services()?;
         if self.provider().lifecycle()? == ProviderLifecycle::Running {
             self.provider().stop()?;
             if self.engine().lifecycle()? == citizen_sdk_engine::EngineLifecycle::Running {
@@ -760,6 +796,15 @@ impl NativeRuntime {
 
     /// 停止显式 `citizensdk_stop` 前的产品侧服务；顺序与 destroy 共用同一组合边界。
     pub fn stop_product_services(&self) -> FfiResult<()> {
+        self.engine().stop_chain_monitor()?;
+        let monitor = self
+            .chain_monitor
+            .lock()
+            .map_err(|_| FfiError::internal("chain monitor lock poisoned"))?
+            .take();
+        if let Some(monitor) = monitor {
+            monitor.stop()?;
+        }
         self.composition.stop_and_drain_product_services()
     }
 }

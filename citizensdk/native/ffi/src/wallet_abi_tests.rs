@@ -1,3 +1,6 @@
+// 仅在测试中要求定时器及预期错误成立；生产 ABI 不以 panic 处理业务错误。
+#![allow(clippy::expect_used)]
+
 use super::{
     claim_prepared_wallet, copy_pair, lock_prepared_wallets, next_prepared_wallet_handle,
     require_prepared_owner, secret_utf8, u128_from_abi, u128_to_abi, wallet_profile_to_abi,
@@ -8,7 +11,10 @@ use crate::abi::{
     CitizenSdkBytesView, CitizenSdkErrorCode, CitizenSdkU128, CitizenSdkWalletWordCount,
 };
 use citizen_sdk_contracts::{ExecutionConclusion, ExtrinsicWatchEvent, Hash32, VerifiedBlockRef};
-use citizen_sdk_engine::{EngineError, WalletTransferWatchResult, WalletTransferWatchStage};
+use citizen_sdk_engine::{
+    EngineError, WalletTransferCancellation, WalletTransferWatchResult, WalletTransferWatchStage,
+};
+use futures_util::FutureExt;
 use std::{
     future::Future,
     pin::Pin,
@@ -21,13 +27,21 @@ use std::{
 
 struct PendingWalletTransfer {
     dropped: Arc<AtomicBool>,
+    release: futures_channel::oneshot::Receiver<()>,
+    completed: Arc<AtomicBool>,
 }
 
 impl Future for PendingWalletTransfer {
     type Output = Result<WalletTransferWatchResult, EngineError>;
 
-    fn poll(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<Self::Output> {
-        Poll::Pending
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        match Pin::new(&mut self.release).poll(context) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(_) => {
+                self.completed.store(true, Ordering::SeqCst);
+                Poll::Ready(Err(EngineError::StatePoisoned))
+            }
+        }
     }
 }
 
@@ -227,22 +241,159 @@ fn prepared_wallet_owner_is_checked_even_while_the_handle_is_claimed() {
 }
 
 #[test]
-fn wallet_transfer_cancellation_returns_cancelled_and_drops_the_terminal_future() {
+fn wallet_transfer_cancellation_drains_before_returning_or_releasing_the_future() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("timer runtime");
+    let _entered = runtime.enter();
     let dropped = Arc::new(AtomicBool::new(false));
+    let completed = Arc::new(AtomicBool::new(false));
+    let (release, receiver) = futures_channel::oneshot::channel();
     let transfer = PendingWalletTransfer {
         dropped: Arc::clone(&dropped),
+        completed: Arc::clone(&completed),
+        release: receiver,
     };
+    let token = WalletTransferCancellation::default();
     let (cancel, cancellation) = futures_channel::oneshot::channel();
+    let mut operation = Box::pin(wallet_transfer_or_cancellation(
+        transfer,
+        cancellation,
+        token.clone(),
+    ));
+    assert!(operation.as_mut().now_or_never().is_none());
     cancel
         .send(())
         .unwrap_or_else(|_| panic!("cancellation receiver disappeared before selection"));
-
-    let error = futures_executor::block_on(wallet_transfer_or_cancellation(transfer, cancellation))
+    assert!(operation.as_mut().now_or_never().is_none());
+    assert!(token.is_cancelled());
+    assert!(!completed.load(Ordering::SeqCst));
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "host CAS 未返回前不能释放 Engine lease"
+    );
+    release
+        .send(())
+        .unwrap_or_else(|_| panic!("CAS receiver was dropped by cancellation"));
+    let error = futures_executor::block_on(operation)
         .err()
         .unwrap_or_else(|| panic!("cancellation must not return a wallet transfer result"));
     assert_eq!(error.code, CitizenSdkErrorCode::Cancelled);
     assert!(error.message.contains("durable pending/in-block history"));
     assert!(dropped.load(Ordering::SeqCst));
+    assert!(completed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn cancellation_before_first_poll_reaches_engine_before_side_effects() {
+    let token = WalletTransferCancellation::default();
+    let transfer_token = token.clone();
+    let transfer = async move {
+        assert!(
+            transfer_token.is_cancelled(),
+            "首 poll 前先通知 Engine，不能启动广播前写入"
+        );
+        Err(EngineError::StatePoisoned)
+    };
+    let (send, receiver) = futures_channel::oneshot::channel();
+    assert!(send.send(()).is_ok());
+    let result =
+        futures_executor::block_on(wallet_transfer_or_cancellation(transfer, receiver, token));
+    assert_eq!(
+        result
+            .err()
+            .unwrap_or_else(|| panic!("预取消必须失败"))
+            .code,
+        CitizenSdkErrorCode::Cancelled
+    );
+}
+
+#[test]
+fn timeout_drains_an_entered_store_and_preserves_pending_without_cancelling_other_requests() {
+    let dropped = Arc::new(AtomicBool::new(false));
+    let completed = Arc::new(AtomicBool::new(false));
+    let (release, receiver) = futures_channel::oneshot::channel();
+    let transfer = PendingWalletTransfer {
+        dropped: dropped.clone(),
+        completed: completed.clone(),
+        release: receiver,
+    };
+    let token = WalletTransferCancellation::default();
+    let other = WalletTransferCancellation::default();
+    let (_cancel, cancellation) = futures_channel::oneshot::channel();
+    let (expire, deadline) = futures_channel::oneshot::channel();
+    let mut operation = Box::pin(super::wallet_transfer_or_cancellation_and_budget(
+        transfer,
+        cancellation,
+        token.clone(),
+        async {
+            let _ = deadline.await;
+        },
+    ));
+    assert!(operation.as_mut().now_or_never().is_none());
+    assert!(expire.send(()).is_ok());
+    assert!(operation.as_mut().now_or_never().is_none());
+    assert!(token.is_cancelled());
+    assert!(!other.is_cancelled());
+    assert!(!dropped.load(Ordering::SeqCst));
+    assert!(!completed.load(Ordering::SeqCst));
+    assert!(release.send(()).is_ok());
+    let error = futures_executor::block_on(operation)
+        .expect_err("expired budget must not imply execution success");
+    assert_eq!(error.code, CitizenSdkErrorCode::Timeout);
+    assert!(error.message.contains("unverified"));
+    assert!(error.message.contains("retained"));
+    assert!(dropped.load(Ordering::SeqCst));
+    assert!(completed.load(Ordering::SeqCst));
+}
+
+#[test]
+fn cancellation_of_idle_watch_is_cooperative_and_does_not_wait_for_a_block() {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("timer runtime");
+    let _entered = runtime.enter();
+    let token = WalletTransferCancellation::default();
+    let transfer_token = token.clone();
+    let transfer = std::future::poll_fn(move |_| {
+        if transfer_token.is_cancelled() {
+            Poll::Ready(Err(EngineError::StatePoisoned))
+        } else {
+            Poll::Pending
+        }
+    });
+    let (send, receiver) = futures_channel::oneshot::channel();
+    let mut operation = Box::pin(wallet_transfer_or_cancellation(transfer, receiver, token));
+    assert!(operation.as_mut().now_or_never().is_none());
+    assert!(send.send(()).is_ok());
+    assert_eq!(
+        futures_executor::block_on(operation)
+            .err()
+            .unwrap_or_else(|| panic!("观察取消必须失败"))
+            .code,
+        CitizenSdkErrorCode::Cancelled
+    );
+}
+
+#[test]
+fn uncancelled_transfer_preserves_the_engine_result_without_setting_the_token() {
+    let token = WalletTransferCancellation::default();
+    let (_send, receiver) = futures_channel::oneshot::channel();
+    let result = futures_executor::block_on(wallet_transfer_or_cancellation(
+        async { Err(EngineError::StatePoisoned) },
+        receiver,
+        token.clone(),
+    ));
+    assert_eq!(
+        result
+            .err()
+            .unwrap_or_else(|| panic!("必须保留 Engine 失败"))
+            .code,
+        crate::error::FfiError::from(EngineError::StatePoisoned).code
+    );
+    assert!(!token.is_cancelled());
 }
 
 #[test]

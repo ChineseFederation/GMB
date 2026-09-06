@@ -58,6 +58,7 @@ pub struct SmoldotProviderConfig {
     pub(crate) system_name: String,
     pub(crate) system_version: String,
     pub(crate) request_timeout: Duration,
+    pub(crate) bootstrap: bool,
 }
 
 impl SmoldotProviderConfig {
@@ -103,7 +104,15 @@ impl SmoldotProviderConfig {
             system_name,
             system_version,
             request_timeout: DEFAULT_REQUEST_TIMEOUT,
+            bootstrap: false,
         })
+    }
+
+    /// SDK 产品组合显式启用公民网非权威节点建议；裸 provider 不隐式访问额外服务。
+    /// 只改变启动时的节点候选，不影响信任资产、验证语义或上游网络算法。
+    pub fn with_bootstrap(mut self) -> Self {
+        self.bootstrap = true;
+        self
     }
 }
 
@@ -131,7 +140,7 @@ impl SmoldotVerifiedChainClient {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(PROVIDER_WORKER_THREADS)
             .thread_name("cit-sdk-smoldot")
-            .enable_time()
+            .enable_all()
             .build()
             .map_err(|error| {
                 contract_error(
@@ -214,6 +223,14 @@ impl SmoldotVerifiedChainClient {
                     "只有 Running provider 可以停止",
                 ));
             }
+            if let Some(running) = &state.running {
+                if !running.rpc.close_finalized_gate_if_idle() {
+                    return Err(contract_error(
+                        ContractErrorCode::InvalidState,
+                        "finalized subscriptions must be drained before provider stop",
+                    ));
+                }
+            }
             state.lifecycle = ProviderLifecycle::Stopped;
             state.running.take().ok_or_else(|| {
                 contract_error(
@@ -224,6 +241,11 @@ impl SmoldotVerifiedChainClient {
         };
         Self::remove_running_chain(&running);
         Ok(())
+    }
+
+    /// 排空 SDK 订阅适配任务，不实现或重启 smoldot 的网络服务。
+    pub fn drain_finalized_subscriptions(&self) -> ContractFuture<'_, ()> {
+        Box::pin(async move { self.running()?.rpc.drain_finalized_subscriptions().await })
     }
 
     pub fn status(&self) -> ContractFuture<'_, SmoldotProviderStatus> {
@@ -318,6 +340,14 @@ impl SmoldotVerifiedChainClient {
         &self,
         pending_import: Option<&ExportedChainState>,
     ) -> ContractResult<Arc<RunningProvider>> {
+        // 建议不具备信任权限；失败、超时或链身份不符时不采用建议，随包资产原值保留。
+        let suggested = if self.config.bootstrap {
+            crate::bootstrap::discover(&self.config.chain_spec)
+                .await
+                .ok()
+        } else {
+            None
+        };
         let platform = DefaultPlatform::new(
             self.config.system_name.clone(),
             self.config.system_version.clone(),
@@ -340,7 +370,7 @@ impl SmoldotVerifiedChainClient {
         };
         let added = client
             .add_chain(AddChainConfig {
-                specification: &self.config.chain_spec,
+                specification: suggested.as_deref().unwrap_or(&self.config.chain_spec),
                 json_rpc: AddChainConfigJsonRpc::Enabled {
                     max_pending_requests,
                     max_subscriptions: MAX_SUBSCRIPTIONS,

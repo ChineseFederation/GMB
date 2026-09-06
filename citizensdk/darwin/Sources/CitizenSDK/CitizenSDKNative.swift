@@ -263,6 +263,7 @@ internal actor CitizenSDKLifecycleSupervisor {
 /// Sole owner of one Core handle, callback, result ownership and host context.
 internal final class CitizenSDKNative: @unchecked Sendable {
     private enum DeferredStateEvent: Sendable {
+        case history(sequence: UInt64)
         case capabilities(sequence: UInt64)
         case lifecycle(sequence: UInt64)
     }
@@ -849,6 +850,10 @@ internal final class CitizenSDKNative: @unchecked Sendable {
             enqueueDeferredStateEvent(.capabilities(sequence: event.sequence))
         case 4:
             enqueueDeferredStateEvent(.lifecycle(sequence: event.sequence))
+        case 5:
+            guard event.request_id == 0, event.result == 0,
+                  event.capability_revision == 0, event.reserved == 0 else { return }
+            enqueueDeferredStateEvent(.history(sequence: event.sequence))
         default:
             if event.result != 0 { _ = citizensdk_result_release(event.result) }
         }
@@ -880,6 +885,8 @@ internal final class CitizenSDKNative: @unchecked Sendable {
         deferredStateEvents.enqueue { [self] in
             do {
                 switch event {
+                case let .history(sequence):
+                    publish(.historyChanged(sequence: sequence))
                 case let .capabilities(sequence):
                     publish(.capabilitiesChanged(sequence: sequence, capabilities: try capabilities()))
                 case let .lifecycle(sequence):

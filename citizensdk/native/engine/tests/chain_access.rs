@@ -30,11 +30,11 @@ use subxt_core::{
 use zeroize::Zeroizing;
 
 const TRANSFER_METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const TRANSFER_VECTOR_JSON: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-transfer-build-v1.json");
+    include_str!("../../../test/transaction/citizenchain-transfer-build-v1.json");
 const WALLET_VECTOR_JSON: &str =
-    include_str!("../../../test/wallet/fixtures/citizenchain-wallet-derivation-v1.json");
+    include_str!("../../../test/wallet/citizenchain-wallet-derivation-v1.json");
 
 struct CountingClient {
     reads: AtomicUsize,

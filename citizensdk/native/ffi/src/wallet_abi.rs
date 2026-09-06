@@ -22,9 +22,9 @@ use citizen_sdk_contracts::{
     WalletAccount, WalletOrigin, WalletProfile,
 };
 use citizen_sdk_engine::{
-    BestFeeSnapshot, EngineError, PreparedWalletCreation, WalletTransferObserver,
-    WalletTransferResolution, WalletTransferWatchResult, WalletTransferWatchStage,
-    WalletTransferWatchUpdate, WalletWordCount,
+    BestFeeSnapshot, EngineError, PreparedWalletCreation, WalletTransferCancellation,
+    WalletTransferObserver, WalletTransferResolution, WalletTransferWatchResult,
+    WalletTransferWatchStage, WalletTransferWatchUpdate, WalletWordCount,
 };
 use futures_util::FutureExt;
 use zeroize::Zeroizing;
@@ -799,26 +799,75 @@ pub unsafe extern "C" fn citizensdk_sign_wallet_payload(
 }
 
 /// Drives the Engine's complete submit-and-watch future until a proven terminal
-/// result, unless the host cancels the accepted request first. Dropping the
-/// future on cancellation does not roll back the Engine's durable
-/// `Pending`/`InBlock` record. 同参数再次调用 transfer 会核验并恢复原始授权字节，
+/// result, or cooperatively cancels and drains the accepted request. Cancellation
+/// never drops the Engine future: an in-flight host store/CAS or vault operation
+/// must really return before its lease and request completion are released.
+/// This does not roll back a durable `Pending`/`InBlock` record.
+/// 同参数再次调用 transfer 会核验并恢复原始授权字节，
 /// 先同步 finalized 证据再决定是否重广播，不重新签名或更换 nonce。
 async fn wallet_transfer_or_cancellation<F>(
     transfer: F,
     cancellation: RequestCancellation,
+    transfer_cancellation: WalletTransferCancellation,
 ) -> FfiResult<WalletTransferWatchResult>
 where
     F: Future<Output = Result<WalletTransferWatchResult, EngineError>>,
 {
+    let budget_token = transfer_cancellation.clone();
+    wallet_transfer_or_cancellation_and_budget(
+        transfer,
+        cancellation,
+        transfer_cancellation,
+        wallet_transfer_budget(&budget_token),
+    )
+    .await
+}
+
+async fn wallet_transfer_or_cancellation_and_budget<F, B>(
+    transfer: F,
+    cancellation: RequestCancellation,
+    transfer_cancellation: WalletTransferCancellation,
+    budget: B,
+) -> FfiResult<WalletTransferWatchResult>
+where
+    F: Future<Output = Result<WalletTransferWatchResult, EngineError>>,
+    B: Future<Output = ()>,
+{
     let transfer = transfer.fuse();
     let cancellation = cancellation.fuse();
-    futures_util::pin_mut!(transfer, cancellation);
+    let budget = budget.fuse();
+    futures_util::pin_mut!(transfer, cancellation, budget);
     futures_util::select_biased! {
-        _ = cancellation => Err(FfiError::new(
-            CitizenSdkErrorCode::Cancelled,
-            "wallet transfer watch was cancelled; durable pending/in-block history was retained",
-        )),
+        _ = cancellation => {
+            transfer_cancellation.cancel();
+            // Keep polling the same future, including an already-entered CAS. Its
+            // generation/request guard stops further reads or broadcast after drain.
+            let _ = transfer.await;
+            Err(FfiError::new(
+                CitizenSdkErrorCode::Cancelled,
+                "wallet transfer watch was cancelled after draining; durable pending/in-block history was retained",
+            ))
+        },
         result = transfer => result.map_err(FfiError::from),
+        _ = budget => {
+            transfer_cancellation.cancel();
+            let _ = transfer.await;
+            Err(FfiError::new(CitizenSdkErrorCode::Timeout,
+                "wallet transfer observation budget expired after draining; execution remains unverified and durable history was retained"))
+        },
+    }
+}
+
+/// 计时器只唤醒协调取消，不拥有 Engine future；阶段切换由 Engine 的真实 watch 事实驱动。
+async fn wallet_transfer_budget(token: &WalletTransferCancellation) {
+    loop {
+        let remaining = token
+            .remaining_budget()
+            .unwrap_or(std::time::Duration::from_secs(1));
+        if remaining.is_zero() {
+            return;
+        }
+        tokio::time::sleep(remaining.min(std::time::Duration::from_secs(1))).await;
     }
 }
 
@@ -859,6 +908,7 @@ pub unsafe extern "C" fn citizensdk_transfer_with_remark(
                         runtime: Arc::clone(runtime),
                         request_id,
                     });
+                let transfer_cancellation = WalletTransferCancellation::default();
                 let transfer = runtime.provider().drive(wallet_transfer_or_cancellation(
                     runtime.engine().transfer_with_remark_and_watch(
                         source,
@@ -866,8 +916,10 @@ pub unsafe extern "C" fn citizensdk_transfer_with_remark(
                         amount_fen,
                         remark,
                         observer,
+                        transfer_cancellation.clone(),
                     ),
                     cancellation,
+                    transfer_cancellation,
                 ))??;
                 Ok(ResultPayload::WalletTransfer(transfer))
             },

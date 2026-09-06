@@ -64,7 +64,7 @@
       "sdk_only": [
         {
           "path": "Cargo.toml",
-          "sha256": "efe12f7350e34dc99c4c20766275e57569e9ed6989441b055ce7f157a9a2ae38"
+          "sha256": "b2820243e0e29267a3d16bc93418221954c115f17c4265ac14e7264d1ecaf3fb"
         },
         {
           "path": "README.md",
@@ -75,20 +75,28 @@
           "sha256": "5fcf4d7d87b85761b3a3f3c6c0fff85c95b98acb09007231135b3e12c8e19425"
         },
         {
+          "path": "src/bootstrap_tests.rs",
+          "sha256": "688a8883eb780fd61c69f348353d32300115b32928b001ea1113e7ae95e0bf30"
+        },
+        {
+          "path": "src/bootstrap.rs",
+          "sha256": "763d86326179ccc3e99e536e21318b59cd64de01984ba6de688680b31c1f1c63"
+        },
+        {
           "path": "src/client.rs",
-          "sha256": "c34885fdcde3c5e64b63288493eb2f499bebd483190d71eeb8b1e130c3e0e596"
+          "sha256": "6adce92e1e770f43dd0a7825e3bd4b94302e21cd049679eb178f1376e18ae63b"
         },
         {
           "path": "src/legacy.rs",
-          "sha256": "aed81cb9f7e940afe59d18a4dcfb0bd3ec47d532452669c9b04d8d802b4fb5f0"
+          "sha256": "721bb4b19e57b45ae4df72fcf28c6d34aa1b9d7f5051cb8c903dfc080da9d4f8"
         },
         {
           "path": "src/lib.rs",
-          "sha256": "b9f54167bcefe64d688931061da2e63438982dde23b3ae616ad44947d3536308"
+          "sha256": "e56627859301c7ab8ebba9e8f1aa07467a6b8ebb7055021d771037bd1fb95dec"
         },
         {
           "path": "src/verified_chain_client.rs",
-          "sha256": "ab34fadd895429bb0a2576307e192d0b43dd032b879860e917cdce7a61ae9b78"
+          "sha256": "d46193352203f0e8fd75afb900fa9b897a9689d7ff37b00d8c83c166c7f2b6c8"
         },
         {
           "path": "tests/account_nonce_contract.rs",
@@ -100,7 +108,7 @@
         },
         {
           "path": "tests/verified_chain_client_contract.rs",
-          "sha256": "62ba6c74801b2f50ff8458fd7da73bc85c522347a7bd81c01ec0ef2060e6d6a4"
+          "sha256": "140e90e7e52b259919b0705c1df52d89366ef1e31c34ad672065201b4e18e308"
         }
       ],
       "excluded": [],

@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -51,6 +52,34 @@ afterEach(async () => {
 });
 
 describe('公民链官网显式发布指针', () => {
+  it('公民与钱包安装器只查询准确GitHub仓库并保留失败状态', async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: string[] = [];
+    const downloadEnv = { HASH_KEY: 'download-route-fixture',
+      RATE_READ: { limit: async () => ({ success: true }) } } as unknown as Env;
+    try {
+      // 请求桩只替代外网；入口、正式版筛选和失败转换均执行真实服务端路由。
+      for (const product of ['citizenapp', 'citizenwallet']) {
+        const location = `https://github.com/VoyagerRhett/GMB/releases/download/${product}-release-android-v1.0.1/${product}.apk`;
+        globalThis.fetch = async (input) => {
+          requests.push(String(input));
+          return Response.json([{ tag_name: `${product}-release-android-v1.0.1`,
+            draft: false, prerelease: false, assets: [{ name: `${product}.apk`, browser_download_url: location }] }]);
+        };
+        const request = new Request(`https://www.crcfrcn.com/download/${product}/android`);
+        const response = await routeRequest(request, downloadEnv);
+        assert.equal(response.status, 302);
+        assert.equal(response.headers.get('location'), location);
+        globalThis.fetch = async (input) => { requests.push(String(input)); return new Response(null, { status: 503 }); };
+        await assert.rejects(routeRequest(request, downloadEnv), { code: 'release_lookup_failed', status: 502 });
+        globalThis.fetch = async (input) => { requests.push(String(input)); return Response.json([]); };
+        await assert.rejects(routeRequest(request, downloadEnv), { code: 'release_asset_not_found', status: 404 });
+      }
+      assert.equal(requests.length, 6);
+      for (const url of requests) assert.equal(url, 'https://api.github.com/repos/VoyagerRhett/GMB/releases?per_page=100');
+    } finally { globalThis.fetch = originalFetch; }
+  });
+
   it('唯一基线只建立四条七字段精简空指针', async () => {
     const database = env.CITIZENCHAIN_DOWNLOAD_DB;
     if (!database) throw new Error('测试缺少公民链下载数据库 binding');

@@ -29,10 +29,27 @@ use crate::{
 };
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const EVENTS_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-system-events.hex");
 const FIXTURE_EXTRINSIC: &[u8] = &[0x0c, 0x84, 0x01, 0x02];
+
+#[test]
+fn transfer_budget_begins_at_watch_and_changes_only_for_this_request() {
+    let token = crate::WalletTransferCancellation::default();
+    let other = crate::WalletTransferCancellation::default();
+    assert!(token.remaining_budget().is_none());
+    token.begin_watch();
+    let remaining = token.remaining_budget().unwrap();
+    assert!(remaining <= std::time::Duration::from_secs(1200));
+    assert!(remaining > std::time::Duration::from_secs(1190));
+    token.begin_execution();
+    let remaining = token.clone().remaining_budget().unwrap();
+    assert!(remaining <= std::time::Duration::from_secs(30));
+    assert!(remaining > std::time::Duration::from_secs(20));
+    assert!(!token.is_cancelled());
+    assert!(other.remaining_budget().is_none());
+}
 
 #[derive(Debug)]
 struct MemoryHistoryStore {
@@ -40,6 +57,8 @@ struct MemoryHistoryStore {
     fail_after_write: AtomicBool,
     fail_next_load: AtomicBool,
     fail_before_write: AtomicBool,
+    pause_next: Mutex<Option<futures::channel::oneshot::Receiver<()>>>,
+    cas_entered: AtomicBool,
 }
 
 impl Default for MemoryHistoryStore {
@@ -52,6 +71,8 @@ impl Default for MemoryHistoryStore {
             fail_after_write: AtomicBool::new(false),
             fail_next_load: AtomicBool::new(false),
             fail_before_write: AtomicBool::new(false),
+            pause_next: Mutex::new(None),
+            cas_entered: AtomicBool::new(false),
         }
     }
 }
@@ -81,6 +102,11 @@ impl TransactionHistoryStore for MemoryHistoryStore {
         next: TransactionHistoryState,
     ) -> ContractFuture<'_, TransactionHistoryState> {
         Box::pin(async move {
+            let pause = self.pause_next.lock().unwrap().take();
+            if let Some(pause) = pause {
+                self.cas_entered.store(true, Ordering::SeqCst);
+                pause.await.expect("已进入的 CAS 不能被取消丢弃");
+            }
             if self.fail_before_write.swap(false, Ordering::SeqCst) {
                 return Err(ContractError::new(
                     ContractErrorCode::Storage,
@@ -122,6 +148,23 @@ struct AlwaysRunning;
 impl FinalizedHistoryRunGuard for AlwaysRunning {
     fn ensure_current(&self) -> Result<(), EngineError> {
         Ok(())
+    }
+}
+
+struct TransferGuard(crate::WalletTransferCancellation);
+impl FinalizedHistoryRunGuard for TransferGuard {
+    fn ensure_current(&self) -> Result<(), EngineError> {
+        if self.0.is_cancelled() {
+            Err(EngineError::contract(
+                ContractErrorCode::InvalidState,
+                "测试请求取消",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+    fn poll_cancelled(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        self.0.signal.poll_cancelled(cx)
     }
 }
 
@@ -440,6 +483,144 @@ fn pending_precedes_provider_and_finalized_requires_exact_system_outcome() {
                 WalletTransferWatchStage::Finalized { .. }
             ]
         ));
+    });
+}
+
+#[test]
+fn cancelling_during_inblock_or_terminal_cas_preserves_the_real_write_without_late_events() {
+    use futures::FutureExt;
+    block_on(async {
+        for event in [
+            ExtrinsicWatchEvent::InBlock {
+                block: block(1).verified(),
+            },
+            ExtrinsicWatchEvent::Invalid,
+            ExtrinsicWatchEvent::Finalized { block: block(1) },
+        ] {
+            let harness = Harness::new(vec![Ok(event.clone())]).await;
+            let (release, receiver) = futures::channel::oneshot::channel();
+            *harness.store.pause_next.lock().unwrap() = Some(receiver);
+            let token = crate::WalletTransferCancellation::default();
+            let guard = TransferGuard(token.clone());
+            let observed = Arc::new(RecordingObserver::default());
+            let observer: Arc<dyn WalletTransferObserver> = observed.clone();
+            let mut operation = Box::pin(watch_recorded_transfer(
+                harness.client.as_ref(),
+                &harness.runtime,
+                &harness.history,
+                &guard,
+                &observer,
+                harness.account_id,
+                harness.transaction_hash,
+                harness.signed.clone(),
+            ));
+            for _ in 0..100_000 {
+                assert!(operation.as_mut().now_or_never().is_none());
+                if harness.store.cas_entered.load(Ordering::SeqCst) {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            assert!(harness.store.cas_entered.load(Ordering::SeqCst));
+            token.cancel();
+            assert!(
+                operation.as_mut().now_or_never().is_none(),
+                "取消不能丢弃状态 CAS"
+            );
+            assert!(matches!(
+                harness.store.snapshot().records()[0].status(),
+                HistoryTransactionStatus::Pending
+            ));
+            release.send(()).unwrap();
+            assert!(operation.await.is_err());
+            let state = harness.store.snapshot();
+            match event {
+                ExtrinsicWatchEvent::InBlock { .. } => assert!(matches!(
+                    state.records()[0].status(),
+                    HistoryTransactionStatus::InBlock { .. }
+                )),
+                ExtrinsicWatchEvent::Invalid => assert!(matches!(
+                    state.records()[0].status(),
+                    HistoryTransactionStatus::PoolRejected { .. }
+                )),
+                ExtrinsicWatchEvent::Finalized { .. } => assert!(matches!(
+                    state.records()[0].status(),
+                    HistoryTransactionStatus::Execution(ExecutionConclusion::Success { .. })
+                )),
+                _ => unreachable!(),
+            }
+            assert_eq!(observed.stages(), vec![WalletTransferWatchStage::Pending]);
+        }
+    });
+}
+
+#[test]
+fn cancelling_during_pending_cas_finishes_persistence_but_never_starts_broadcast() {
+    use futures::FutureExt;
+    block_on(async {
+        let harness = Harness::new(vec![Ok(ExtrinsicWatchEvent::Invalid)]).await;
+        let snapshot = harness.store.snapshot();
+        let record = snapshot.records()[0].clone();
+        *harness.store.state.lock().unwrap() = TransactionHistoryState::try_new(
+            snapshot.revision(),
+            snapshot.cursors().to_vec(),
+            Vec::new(),
+            Vec::new(),
+        )
+        .unwrap();
+        let (release, receiver) = futures::channel::oneshot::channel();
+        *harness.store.pause_next.lock().unwrap() = Some(receiver);
+        let token = crate::WalletTransferCancellation::default();
+        let guard = TransferGuard(token.clone());
+        let observer: Arc<dyn WalletTransferObserver> = Arc::new(RecordingObserver::default());
+        let mut operation = Box::pin(async {
+            harness
+                .history
+                .record_pending_before_broadcast(
+                    harness.account_id,
+                    harness.transaction_hash,
+                    record.nonce(),
+                    record.destination_account_id(),
+                    record.amount_fen(),
+                    record.remark(),
+                    record.signed_extrinsic().clone(),
+                    record.block(),
+                    record.runtime_version(),
+                    record.genesis_hash(),
+                )
+                .await?;
+            watch_recorded_transfer(
+                harness.client.as_ref(),
+                &harness.runtime,
+                &harness.history,
+                &guard,
+                &observer,
+                harness.account_id,
+                harness.transaction_hash,
+                harness.signed.clone(),
+            )
+            .await
+        });
+        for _ in 0..100_000 {
+            assert!(operation.as_mut().now_or_never().is_none());
+            if harness.store.cas_entered.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(harness.store.cas_entered.load(Ordering::SeqCst));
+        token.cancel();
+        assert!(operation.as_mut().now_or_never().is_none());
+        release.send(()).unwrap();
+        assert!(operation.await.is_err());
+        assert!(matches!(
+            harness.store.snapshot().records()[0].status(),
+            HistoryTransactionStatus::Pending
+        ));
+        assert!(
+            harness.client.watch_events.lock().unwrap().is_some(),
+            "取消后不得广播"
+        );
     });
 }
 
@@ -835,6 +1016,7 @@ fn public_engine_resumes_outbox_after_failed_write_receipt_without_wallet_or_new
                     2,
                     "resume".to_owned(),
                     observer.clone(),
+                    crate::WalletTransferCancellation::default(),
                 )
                 .await
                 .unwrap_err();
@@ -849,6 +1031,7 @@ fn public_engine_resumes_outbox_after_failed_write_receipt_without_wallet_or_new
                     1,
                     "resume".to_owned(),
                     observer,
+                    crate::WalletTransferCancellation::default(),
                 )
                 .await
                 .unwrap();

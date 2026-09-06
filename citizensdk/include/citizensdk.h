@@ -50,7 +50,11 @@ citizensdk_destroy(citizensdk_handle_t handle);
  * every result. Request acceptance and callback control are linearized; a
  * conflicting transition returns BUSY. Registration is the commit point and
  * its immediate state notifications are best-effort/queryable synchronously.
- * The event pointer is valid only during the callback. */
+ * HISTORY_CHANGED (5) is a payloadless history invalidation from SDK-owned
+ * wallet monitoring; read the existing history API for the latest snapshot.
+ * It carries only sequence; request_id/result/capability_revision/reserved are
+ * zero. Stop drains the monitor, pending host writes and owned subscriptions
+ * before removing the provider. The event pointer is valid only during the callback. */
 CITIZENSDK_API citizensdk_error_code_t citizensdk_set_event_callback(
     citizensdk_handle_t handle, citizensdk_event_callback_t callback,
     void *context);
@@ -79,7 +83,10 @@ citizensdk_unsubscribe_capability_changes(citizensdk_handle_t handle);
  * Every completion event.result must be inspected and released once. Raw
  * extrinsic watch and high-level wallet transfer watch are cancellable after
  * acceptance; cancel on other state-mutating or atomic requests returns
- * UNSUPPORTED, so it never falsely promises rollback. */
+ * UNSUPPORTED, so it never falsely promises rollback. Wallet transfer
+ * cancellation is cooperative: REQUEST_COMPLETED waits for any already-entered
+ * host store/CAS or vault operation to return. Cancellation is not withdrawal
+ * and never clears a durable Pending/InBlock or proven execution record. */
 /* For create_with_host instances, start restores the typed chain database
  * before provider start. Stop first persists an exact revisioned snapshot;
  * persistence failure leaves unsubscribe/services/provider untouched. The

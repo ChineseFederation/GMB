@@ -64,6 +64,22 @@ void main() {
     await sdk.close();
   });
 
+  test('公共 SDK 转发历史失效通知，不改变生命周期', () async {
+    final sdk = await CitizenSdk.open();
+    final events = <CitizenSdkEvent>[];
+    final subscription = sdk.events.listen(events.add);
+    final before = sdk.lifecycle;
+    platform.emit(<Object?>[1, 'session-a', 1, 'historyChanged', <Object?>[]]);
+    await Future<void>.delayed(Duration.zero);
+    expect(events.single, isA<CitizenSdkHistoryChanged>());
+    expect(sdk.lifecycle, before);
+    await sdk.close();
+    platform.emit(<Object?>[1, 'session-a', 2, 'historyChanged', <Object?>[]]);
+    await Future<void>.delayed(Duration.zero);
+    expect(events, hasLength(1));
+    await subscription.cancel();
+  });
+
   test('余额与nonce响应必须精确绑定请求账户', () async {
     platform.wrongAccountResponses = true;
     final sdk = await CitizenSdk.open();

@@ -573,6 +573,149 @@ fn import_uses_the_same_verified_account_and_missing_ciphertext_is_not_usable() 
 }
 
 #[test]
+fn unavailable_security_never_persists_creation_or_import_side_effects() {
+    block_on(async {
+        for (availability, code) in [
+            (
+                VaultAvailability::NoStrongUserAuthentication,
+                ContractErrorCode::AuthenticationRequired,
+            ),
+            (
+                VaultAvailability::Unsupported,
+                ContractErrorCode::Unsupported,
+            ),
+            (
+                VaultAvailability::Unavailable,
+                ContractErrorCode::Unavailable,
+            ),
+        ] {
+            let harness = Harness::new();
+            *harness.vault.availability.lock().unwrap() = availability;
+            assert_contract_code(
+                harness
+                    .service
+                    .prepare_create(WalletWordCount::Words12, Zeroizing::new(String::new()))
+                    .await
+                    .unwrap_err(),
+                code,
+            );
+            assert_contract_code(
+                harness
+                    .service
+                    .import(&known_mnemonic(), "")
+                    .await
+                    .unwrap_err(),
+                code,
+            );
+            assert_eq!(harness.profiles.snapshot(), WalletState::empty());
+            assert_eq!(harness.profiles.cas_calls.load(Ordering::SeqCst), 0);
+            assert_eq!(harness.secrets.envelope_count(), 0);
+            assert!(harness.vault.wallet_keys.lock().unwrap().is_empty());
+        }
+    });
+}
+
+#[test]
+fn public_profile_and_rename_need_no_unlock_and_invalid_names_never_commit() {
+    block_on(async {
+        let harness = Harness::new();
+        assert!(harness.service.profile().await.unwrap().is_none());
+        assert!(harness.service.usable_profile().await.unwrap().is_none());
+        let profile = harness.service.import(&known_mnemonic(), "").await.unwrap();
+        *harness.vault.availability.lock().unwrap() = VaultAvailability::Unavailable;
+        assert_eq!(
+            harness.service.profile().await.unwrap(),
+            Some(profile.clone())
+        );
+        let renamed = harness
+            .service
+            .rename_account(profile.master_account_id(), " 本地名称 ")
+            .await
+            .unwrap();
+        assert_eq!(renamed.accounts()[0].name(), "本地名称");
+        let before = harness.profiles.snapshot();
+        for name in ["", "   ", &"a".repeat(257)] {
+            assert!(harness
+                .service
+                .rename_account(profile.master_account_id(), name)
+                .await
+                .is_err());
+        }
+        let unknown = AccountId32::from_bytes([0xf1; 32]);
+        assert!(harness
+            .service
+            .rename_account(unknown, "未知")
+            .await
+            .is_err());
+        assert!(harness.service.set_active_account(unknown).await.is_err());
+        assert!(harness.service.sign(unknown, vec![]).await.is_err());
+        assert_eq!(harness.profiles.snapshot(), before);
+        assert_eq!(harness.secrets.envelope_count(), 1);
+        assert_eq!(harness.vault.delete_wallet_calls.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn missing_key_or_any_existing_child_blocks_append_before_new_facts() {
+    block_on(async {
+        for missing_key in [false, true] {
+            let harness = Harness::new();
+            let mnemonic = known_mnemonic();
+            let profile = harness.service.import(&mnemonic, "").await.unwrap();
+            let child = harness
+                .service
+                .add_accounts(&mnemonic, "", &[1])
+                .await
+                .unwrap();
+            if missing_key {
+                harness
+                    .vault
+                    .wallet_keys
+                    .lock()
+                    .unwrap()
+                    .remove(&(profile.wallet_index(), profile.generation()));
+            } else {
+                harness
+                    .secrets
+                    .remove_without_contract(child[0].secret_ref());
+            }
+            let before = harness.profiles.snapshot();
+            let count = harness.secrets.envelope_count();
+            assert!(harness.service.usable_profile().await.unwrap().is_none());
+            assert!(harness
+                .service
+                .add_accounts(&mnemonic, "", &[2])
+                .await
+                .is_err());
+            assert_eq!(harness.profiles.snapshot(), before);
+            assert_eq!(harness.secrets.envelope_count(), count);
+        }
+    });
+}
+
+#[test]
+fn mismatched_child_ciphertext_is_not_usable_and_cannot_sign() {
+    block_on(async {
+        let harness = Harness::new();
+        let profile = harness.service.import(&known_mnemonic(), "").await.unwrap();
+        harness
+            .secrets
+            .insert_envelope(profile.accounts()[0].secret_ref());
+        let before = harness.profiles.snapshot();
+        assert!(harness.service.usable_profile().await.unwrap().is_none());
+        assert_contract_code(
+            harness
+                .service
+                .sign(profile.master_account_id(), b"public test message".to_vec())
+                .await
+                .unwrap_err(),
+            ContractErrorCode::Integrity,
+        );
+        assert_eq!(harness.profiles.snapshot(), before);
+    });
+}
+
+#[test]
 fn create_converges_when_profile_and_ciphertext_cas_throw_after_writing() {
     block_on(async {
         let harness = Harness::new();

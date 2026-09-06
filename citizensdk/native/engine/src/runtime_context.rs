@@ -144,6 +144,12 @@ impl RuntimeContextCache {
         let block = self.current_best?;
         self.get(block)
     }
+
+    /// 只失效可变 best 指针，保留准确块的不可变 metadata 缓存。
+    pub fn invalidate_current_best(&mut self) {
+        self.current_best = None;
+        self.latest_best_request = None;
+    }
 }
 
 #[cfg(test)]
@@ -154,6 +160,22 @@ mod tests {
 
     use super::{RuntimeContextCache, MAX_RUNTIME_CONTEXTS};
     use crate::EngineError;
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn invalidation_rejects_late_best_completion_but_keeps_exact_context() {
+        let block = VerifiedBlockRef::best(Hash32::from_bytes([1; 32]), 1);
+        let mut cache = RuntimeContextCache::new();
+        let request = cache.begin(block).expect("request");
+        cache.invalidate_current_best();
+        let context =
+            RuntimeContext::try_new(block, RuntimeVersion::new(1, 1), vec![1]).expect("context");
+        cache
+            .complete(request, context.clone())
+            .expect("exact context");
+        assert!(cache.current_best().is_none());
+        assert_eq!(cache.get(block), Some(&context));
+    }
 
     #[test]
     fn request_sequence_exhaustion_is_permanent_and_never_reuses_identity() {

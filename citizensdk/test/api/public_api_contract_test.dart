@@ -1,4 +1,8 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:citizen_sdk/citizen_sdk.dart';
+import 'package:citizen_sdk/src/crypto/account_codec.dart';
 import 'package:citizen_sdk/src/platform/citizen_sdk_flutter_codec.dart';
 import 'package:citizen_sdk/src/platform/citizen_sdk_platform.dart';
 import 'package:citizen_sdk/src/platform/flutter_citizen_sdk_platform.dart';
@@ -8,6 +12,53 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  test('公开账户地址投影与原生派生共用同一冻结测试向量', () {
+    final golden = jsonDecode(
+      File('test/wallet/citizenchain-wallet-derivation-v1.json')
+          .readAsStringSync(),
+    ) as Map<String, dynamic>;
+    for (final entry in golden['cases'] as List) {
+      for (final account in (entry as Map)['accounts'] as List) {
+        final map = account as Map;
+        if (map['ss58'] != null) {
+          expect(
+            citizenSs58FromAccountId(map['account_id'] as String),
+            map['ss58'],
+          );
+        }
+      }
+    }
+  });
+
+  test('源码中不保留第二套 Dart 钱包、轻节点或交易实现', () {
+    for (final path in [
+      'lib/src/node',
+      'lib/src/wallet',
+      'lib/src/transaction',
+    ]) {
+      expect(Directory(path).existsSync(), isFalse, reason: path);
+    }
+    final platform = Directory('lib/src/platform').listSync().whereType<File>();
+    expect(
+      platform.where(
+        (file) => file.path.split('/').last.startsWith('preferences_'),
+      ),
+      isEmpty,
+    );
+    final dart = Directory('lib')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((file) => file.path.endsWith('.dart'));
+    expect(
+      dart.any(
+        (file) =>
+            RegExp(r'class\s+CitizenSdkClient\b')
+                .hasMatch(file.readAsStringSync()),
+      ),
+      isFalse,
+    );
+  });
 
   test('Hosted Package根入口公开稳定API与公开模型', () {
     expect(CitizenSdk.open, isA<Function>());

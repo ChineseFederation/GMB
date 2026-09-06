@@ -1,6 +1,7 @@
 //! finalized 历史的确定性单批协调器。
 //!
-//! 本模块不创建线程、定时器或订阅重试。宿主只负责决定何时再次调用；每次调用最多
+//! 本模块不创建后台线程或区块订阅。后台批次由宿主调度；仅高层交易已见 finalized 时
+//! 使用官方 Tokio 定时器在整笔执行预算内重试事件读取。每次调用最多
 //! 连续处理 120 个高度。每一块都从 [`VerifiedChainClient`] 直接读取 canonical finalized
 //! 块、同块 Runtime、完整 body 与 `System.Events`，然后把转账、执行终态和游标交给
 //! [`TransactionHistoryService`] 一次 CAS。任何证据缺失都在 CAS 前失败，游标保持原位。
@@ -27,6 +28,53 @@ use crate::{
 /// Engine 生命周期代际门；每次外部 await 后必须重新核对。
 pub(crate) trait FinalizedHistoryRunGuard: Send + Sync {
     fn ensure_current(&self) -> Result<(), EngineError>;
+    fn begin_watch(&self) {}
+    fn begin_execution(&self) {}
+    fn execution_budget(&self) -> Option<std::time::Duration> {
+        None
+    }
+    fn poll_cancelled(&self, _: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        std::task::Poll::Pending
+    }
+}
+
+/// 只有高层交易已见 finalized 才重试；钱包历史后台批次仍立即返回失败给调度器。
+pub(crate) async fn wait_execution_retry(
+    guard: &dyn FinalizedHistoryRunGuard,
+) -> Result<bool, EngineError> {
+    let Some(remaining) = guard.execution_budget() else {
+        return Ok(false);
+    };
+    if remaining.is_zero() {
+        return Err(EngineError::contract(
+            ContractErrorCode::Timeout,
+            "finalized execution lookup budget expired; durable pending history retained",
+        ));
+    }
+    cancellable_chain(
+        tokio::time::sleep(remaining.min(std::time::Duration::from_secs(1))),
+        guard,
+    )
+    .await?;
+    guard.ensure_current()?;
+    Ok(true)
+}
+
+/// 只用于链读取/观察，不包裹持久化 future；已进入的 store/CAS 必须真正返回。
+pub(crate) async fn cancellable_chain<T>(
+    future: impl std::future::Future<Output = T>,
+    guard: &dyn FinalizedHistoryRunGuard,
+) -> Result<T, EngineError> {
+    let mut future = std::pin::pin!(future);
+    std::future::poll_fn(|cx| {
+        if guard.poll_cancelled(cx).is_ready() {
+            return std::task::Poll::Ready(Err(invalid_state(
+                "wallet monitor generation was cancelled",
+            )));
+        }
+        future.as_mut().poll(cx).map(Ok)
+    })
+    .await
 }
 
 /// 仅由 [`crate::CitizenEngine`] 构造的低层协调器。
@@ -58,10 +106,8 @@ impl FinalizedHistoryRuntime {
             guard.ensure_current()?;
             return Ok(state);
         }
-        let finalized = self
-            .chain_client
-            .get_finalized_head()
-            .await
+        let finalized = cancellable_chain(self.chain_client.get_finalized_head(), guard)
+            .await?
             .map_err(EngineError::from)?;
         guard.ensure_current()?;
         let state = self.history.ensure_cursors(account_ids, finalized).await?;
@@ -84,10 +130,8 @@ impl FinalizedHistoryRuntime {
         }
         require_all_cursors(&state, &tracked)?;
 
-        let finalized_head = self
-            .chain_client
-            .get_finalized_head()
-            .await
+        let finalized_head = cancellable_chain(self.chain_client.get_finalized_head(), guard)
+            .await?
             .map_err(EngineError::from)?;
         guard.ensure_current()?;
         let minimum_cursor = minimum_cursor_number(&state, &tracked)?;
@@ -105,11 +149,13 @@ impl FinalizedHistoryRuntime {
 
         // 一次请求让 provider 从同一个 verified finalized anchor 完成整段 ancestry walk；
         // 禁止逐高度从当前链头重复回溯形成 O(batch × gap)。
-        let blocks = self
-            .chain_client
-            .get_finalized_blocks_at(start_number, end_number)
-            .await
-            .map_err(EngineError::from)?;
+        let blocks = cancellable_chain(
+            self.chain_client
+                .get_finalized_blocks_at(start_number, end_number),
+            guard,
+        )
+        .await?
+        .map_err(EngineError::from)?;
         guard.ensure_current()?;
         let expected_len = validated_finalized_block_range_len(start_number, end_number)
             .map_err(EngineError::from)?;
@@ -134,6 +180,70 @@ impl FinalizedHistoryRuntime {
         Ok(state)
     }
 
+    /// 恢复未终态记录，只查询准确 canonical body/System.Events，绝不调用 submit/watch。
+    /// 游标已越过该块也允许复核 pending，覆盖广播和历史 CAS 交错及重启窗口。
+    /// 内存进度丢失仅导致重读，不影响持久化终态；一次最多 120 块。
+    pub(crate) async fn reconcile_pending_batch(
+        &self,
+        accounts: &[AccountId32],
+        positions: &mut std::collections::BTreeMap<Hash32, u64>,
+        guard: &dyn FinalizedHistoryRunGuard,
+    ) -> Result<TransactionHistoryState, EngineError> {
+        let mut state = self.history.load().await?;
+        guard.ensure_current()?;
+        let tracked = accounts.iter().copied().collect::<BTreeSet<_>>();
+        let pending = state
+            .records()
+            .iter()
+            .filter(|record| {
+                tracked.contains(&record.account_id())
+                    && matches!(
+                        record.status(),
+                        citizen_sdk_contracts::HistoryTransactionStatus::Pending
+                            | citizen_sdk_contracts::HistoryTransactionStatus::InBlock { .. }
+                    )
+            })
+            .map(|record| (record.transaction_hash(), record.block().number()))
+            .collect::<Vec<_>>();
+        positions.retain(|hash, _| pending.iter().any(|(candidate, _)| candidate == hash));
+        if pending.is_empty() || tracked.is_empty() {
+            return Ok(state);
+        }
+        let upper = minimum_cursor_number(&state, &tracked)?;
+        for (hash, floor) in pending {
+            positions.entry(hash).or_insert(floor);
+        }
+        let Some(start) = positions
+            .values()
+            .copied()
+            .filter(|height| *height <= upper)
+            .min()
+        else {
+            return Ok(state);
+        };
+        let end = upper.min(start.saturating_add(MAX_FINALIZED_BLOCKS_PER_BATCH - 1));
+        let blocks =
+            cancellable_chain(self.chain_client.get_finalized_blocks_at(start, end), guard)
+                .await??;
+        if blocks.len() != validated_finalized_block_range_len(start, end)? {
+            return Err(integrity(
+                "pending recovery received a partial finalized batch",
+            ));
+        }
+        for (offset, block) in blocks.into_iter().enumerate() {
+            if block.number() != start + offset as u64 {
+                return Err(integrity("pending recovery block order mismatch"));
+            }
+            state = self.process_finalized_block(block, &tracked, guard).await?;
+            for position in positions.values_mut() {
+                if *position <= block.number() {
+                    *position = block.number().saturating_add(1).min(upper);
+                }
+            }
+        }
+        Ok(state)
+    }
+
     /// 处理一个准确块。该入口保持 crate-private，供确定性重放/并发合同测试使用。
     pub(crate) async fn process_finalized_block(
         &self,
@@ -142,11 +252,12 @@ impl FinalizedHistoryRuntime {
         guard: &dyn FinalizedHistoryRunGuard,
     ) -> Result<TransactionHistoryState, EngineError> {
         guard.ensure_current()?;
-        let runtime_context = self
-            .chain_client
-            .get_finalized_runtime_context_at(block)
-            .await
-            .map_err(EngineError::from)?;
+        let runtime_context = cancellable_chain(
+            self.chain_client.get_finalized_runtime_context_at(block),
+            guard,
+        )
+        .await?
+        .map_err(EngineError::from)?;
         guard.ensure_current()?;
         if runtime_context.block() != block.verified() {
             return Err(EngineError::BlockContextMismatch(
@@ -154,24 +265,54 @@ impl FinalizedHistoryRuntime {
             ));
         }
 
-        let block_extrinsics = self
-            .chain_client
-            .get_finalized_block_extrinsics_at(block)
-            .await
-            .map_err(EngineError::from)?;
+        let block_extrinsics = cancellable_chain(
+            self.chain_client.get_finalized_block_extrinsics_at(block),
+            guard,
+        )
+        .await?
+        .map_err(EngineError::from)?;
         guard.ensure_current()?;
-        let system_events = self
-            .chain_client
-            .get_finalized_storage_at(block, SYSTEM_EVENTS_STORAGE_KEY.to_vec())
-            .await
-            .map_err(EngineError::from)?
-            .ok_or_else(|| {
-                EngineError::InvalidEvents(
-                    "provider 未返回 finalized System.Events；本块不得推进游标".to_owned(),
-                )
-            })?;
-        guard.ensure_current()?;
-        let decoded = decode_finalized_events(block, &runtime_context, &system_events)?;
+        let (system_events, decoded) = loop {
+            // 同一块体只读一次；短暂不可用的 System.Events 读取复用上方准确块/metadata。
+            let candidate = cancellable_chain(
+                self.chain_client
+                    .get_finalized_storage_at(block, SYSTEM_EVENTS_STORAGE_KEY.to_vec()),
+                guard,
+            )
+            .await?
+            .map_err(EngineError::from)
+            .and_then(|events| {
+                events.ok_or_else(|| {
+                    EngineError::InvalidEvents(
+                        "provider 未返回 finalized System.Events；本块不得推进游标".to_owned(),
+                    )
+                })
+            })
+            .and_then(|events| {
+                decode_finalized_events(block, &runtime_context, &events)
+                    .map(|decoded| (events, decoded))
+            });
+            guard.ensure_current()?;
+            match candidate {
+                Ok(value) => break value,
+                Err(error) => {
+                    // 已验证身份/证明冲突不能通过重试降级；仅暂不可用或事件未取得可重试。
+                    let retryable = match &error {
+                        EngineError::InvalidEvents(_) => true,
+                        EngineError::Contract(error) => matches!(
+                            error.code(),
+                            ContractErrorCode::Unavailable
+                                | ContractErrorCode::NotReady
+                                | ContractErrorCode::Timeout
+                        ),
+                        _ => false,
+                    };
+                    if !retryable || !wait_execution_retry(guard).await? {
+                        return Err(error);
+                    }
+                }
+            }
+        };
 
         // 链读取完成后重新加载最新仓储，以纳入读取期间新增的 pending。后续所有事实仍由
         // TransactionHistoryService 在同一个 CAS 候选中提交。

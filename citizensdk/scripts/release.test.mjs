@@ -2808,6 +2808,21 @@ test('Dart、Android 与 Apple 生产绑定以固定哈希和反向闭集进入 
     assert.match(swiftFacade, /public final class CitizenSdk:/u);
     assert.doesNotMatch(swiftFacade, /public (?:final class|typealias) CitizenSDK\b/u);
 
+    // 删除旧实现后不得靠过滤规则隐藏第二套源码，恢复任一旧文件均须拒绝。
+    for (const relative of [
+      'lib/src/node/light_client.dart',
+      'lib/src/wallet/wallet_service.dart',
+      'lib/src/transaction/chain_rpc.dart',
+      'lib/src/crypto/native_sr25519.dart',
+      'lib/src/platform/preferences_wallet_repository.dart',
+    ]) {
+      const path = join(root, relative);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, '// Forbidden duplicate implementation.\n');
+      assert.throws(() => assertMobileBindingSource(root), /移动绑定文件闭集漂移/);
+      rmSync(path);
+    }
+
     const darwinSourceLink = join(
       root,
       'darwin',
@@ -4188,6 +4203,18 @@ test('provider 递归 registry 闭包与随包 PoW 锁逐项一致且完全离�
     );
 
     copyFileSync(join(citizenSdkRoot, 'Cargo.lock'), rootLock);
+    // HTTPS 依赖造成的锁 feature 合并也逐边验真；不能利用登记项掩盖来源缺失或摘要变化。
+    const originalLock = readFileSync(rootLock, 'utf8');
+    for (const corrupt of [
+      originalLock.replace(/(name = "web-time"\nversion = "1\.1\.0"\nsource = "[^"\n]+"\nchecksum = ")[a-f0-9]{64}/, `$1${'0'.repeat(64)}`),
+      originalLock.replace(/(name = "citizen-sdk-smoldot-provider"[\s\S]*?) "reqwest",\n/, '$1'),
+      originalLock.replace(/(name = "rustls-pki-types"[\s\S]*?) "web-time",\n/, '$1'),
+    ]) {
+      assert.notEqual(corrupt, originalLock);
+      writeFileSync(rootLock, corrupt);
+      assert.throws(() => assertProviderLockParity(root), /provider registry.*漂移/);
+    }
+    writeFileSync(rootLock, originalLock);
     rmSync(join(powDirectory, 'Cargo.lock'));
     assert.throws(
       () => assertProviderLockParity(root),
@@ -4357,6 +4384,22 @@ test('CitizenSDK 自有 Core Rust 生产源码固定逐文件哈希', () => {
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('监控实现及回归测试全部进入正式 Core 来源闭集', () => {
+  const root = mkdtempSync(join(workRoot, 'release-chain-monitor-source-test-'));
+  try {
+    writeCoreRustFixture(root);
+    for (const file of ['native/engine/src/chain_monitor.rs', 'native/engine/src/chain_monitor_tests.rs',
+      'native/ffi/src/chain_monitor.rs', 'native/ffi/src/chain_monitor_tests.rs']) {
+      const path = join(root, file);
+      const original = readFileSync(path);
+      writeFileSync(path, Buffer.concat([original, Buffer.from('\n')]));
+      assert.throws(() => assertCoreRustSource(root), /Core Rust 来源文件哈希漂移/);
+      writeFileSync(path, original);
+    }
+    assert.doesNotThrow(() => assertCoreRustSource(root));
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test('Core Rust 合同拒绝额外 build.rs 与未审查 native 产品目录', () => {
@@ -4581,13 +4624,13 @@ test('链资产合同固定根边界说明、manifest、目录说明和两个运
 test('真实 Runtime metadata/events 测试夹具由 Release 固定完整闭集', () => {
   const root = mkdtempSync(join(workRoot, 'release-source-fixture-test-'));
   const fixturePaths = [
-    'test/transaction/fixtures/citizenchain-balance-fee-v1.json',
-    'test/transaction/fixtures/citizenchain-runtime-system-events.hex',
-    'test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex',
-    'test/transaction/fixtures/citizenchain-transfer-build-v1.json',
-    'test/transaction/fixtures/substrate-v14-system-events-metadata.hex',
-    'test/wallet/fixtures/citizenchain-wallet-derivation-v1.json',
-    'test/wallet/fixtures/citizenchain-wallet-password-v1.json',
+    'test/transaction/citizenchain-balance-fee-v1.json',
+    'test/transaction/citizenchain-runtime-system-events.hex',
+    'test/transaction/citizenchain-runtime-v14-metadata.hex',
+    'test/transaction/citizenchain-transfer-build-v1.json',
+    'test/transaction/substrate-v14-system-events-metadata.hex',
+    'test/wallet/citizenchain-wallet-derivation-v1.json',
+    'test/wallet/citizenchain-wallet-password-v1.json',
   ];
   try {
     for (const relativePath of fixturePaths) {
@@ -4600,7 +4643,6 @@ test('真实 Runtime metadata/events 测试夹具由 Release 固定完整闭集'
       root,
       'test',
       'transaction',
-      'fixtures',
       'substrate-v14-system-events-metadata.hex',
     );
     writeFileSync(destination, `${readFileSync(destination, 'utf8')}00\n`);
@@ -4752,12 +4794,7 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     const pubignorePath = join(root, '.pubignore');
     const pubignore = readFileSync(pubignorePath, 'utf8');
     for (const forbiddenRule of [
-      '/lib/src/crypto/native_sr25519.dart',
-      '/lib/src/node/',
       '/lib/src/smoldot/',
-      '/lib/src/transaction/',
-      '/lib/src/wallet/',
-      '/lib/src/platform/preferences_wallet_repository.dart',
     ]) {
       writeFileSync(pubignorePath, pubignore.replace(`${forbiddenRule}\n`, ''));
       assert.throws(
@@ -4827,10 +4864,10 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     copyFileSync(join(citizenSdkRoot, 'CHANGELOG.md'), join(root, 'CHANGELOG.md'));
     const pubspecPath = join(root, 'pubspec.yaml');
     const pubspec = readFileSync(pubspecPath, 'utf8');
-    writeFileSync(pubspecPath, pubspec.replace('bip39_mnemonic: ^4.0.1', 'bip39_mnemonic: 4.0.1'));
+    writeFileSync(pubspecPath, pubspec.replace('ffi: ^2.2.0', 'ffi: 2.2.0'));
     assert.throws(
       () => assertHostedPackageSource(root),
-      /Hosted Package dev_dependencies 依赖约束漂移：bip39_mnemonic/,
+      /Hosted Package dev_dependencies 依赖约束漂移：ffi/,
     );
 
     writeFileSync(pubspecPath, pubspec.replace('crypto: ^3.0.7', 'crypto: ^3.0.6'));
@@ -4842,7 +4879,7 @@ test('Hosted Package 合同固定过滤规则、变更日志与可解析依赖�
     writeFileSync(
       pubspecPath,
       pubspec.replace('  polkadart_keyring: ^0.7.1',
-        '  polkadart_keyring: ^0.7.1\n  bip39_mnemonic: ^4.0.1'),
+        '  polkadart_keyring: ^0.7.1\n  unexpected_dependency: ^1.0.0'),
     );
     assert.throws(
       () => assertHostedPackageSource(root),
@@ -4923,6 +4960,8 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
     }
     for (const relativePath of [
       'native/engine/src/finalized_events_tests.rs',
+      'native/engine/src/chain_monitor_tests.rs',
+      'native/ffi/src/chain_monitor_tests.rs',
       'native/engine/src/finalized_history_runtime_tests.rs',
       'native/engine/src/transaction_builder_tests.rs',
       'native/engine/src/transaction_history_tests.rs',
@@ -4933,6 +4972,7 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
       'native/ffi/src/composition_tests.rs',
       'native/ffi/src/host_codec_tests.rs',
       'native/ffi/src/wallet_abi_tests.rs',
+      'native/smoldot/provider/src/bootstrap_tests.rs',
     ]) {
       const destination = join(root, ...relativePath.split('/'));
       mkdirSync(dirname(destination), { recursive: true });
@@ -4945,17 +4985,21 @@ test('SDK 自有测试源码固定 Core Rust、FFI、provider、根与平台合�
     );
     assert.doesNotThrow(() => assertSdkTestContracts(root));
 
-    const golden = join(root, 'test', 'crypto', 'derivation_golden_test.dart');
+    const golden = join(root, 'native', 'engine', 'src', 'wallet_derivation_tests.rs');
     writeFileSync(golden, `${readFileSync(golden, 'utf8')}\n`);
     assert.throws(
       () => assertSdkTestContracts(root),
-      /测试合同文件哈希漂移：test\/crypto\/derivation_golden_test\.dart/,
+      /测试合同文件哈希漂移：native\/engine\/src\/wallet_derivation_tests\.rs/,
     );
 
     copyFileSync(
-      join(citizenSdkRoot, 'test', 'crypto', 'derivation_golden_test.dart'),
+      join(citizenSdkRoot, 'native', 'engine', 'src', 'wallet_derivation_tests.rs'),
       golden,
     );
+    const bootstrap = join(root, 'native/smoldot/provider/src/bootstrap_tests.rs');
+    rmSync(bootstrap);
+    assert.throws(() => assertSdkTestContracts(root), /内嵌测试文件闭集漂移.*bootstrap_tests\.rs/);
+    copyFileSync(join(citizenSdkRoot, 'native/smoldot/provider/src/bootstrap_tests.rs'), bootstrap);
     const ffiTest = join(root, 'native', 'ffi', 'tests', 'symbol_contract.rs');
     writeFileSync(ffiTest, `${readFileSync(ffiTest, 'utf8')}\n`);
     assert.throws(
@@ -5260,9 +5304,13 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
   // GitHub 分支仍在通用路径检查之后；不把本机进程伪装成 GitHub 来绕过门禁。
   assert.match(functions[2], /const target = assertSafeTargetPath\(path, label\);\n  if \(process\.env\.GITHUB_ACTIONS === 'true'\) return target;/u);
   const expectedRoots = [
-    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/SDK',
-    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/SDK',
+    '/Users/rhett/TATA/tataconsole/target/GMB/citizensdk/sdk',
+    '/Users/rhett/TATA/tataconsole/target/.work/GMB/citizensdk/sdk',
   ];
+  // 原生构建与打包路径同组校验，避免大小写不敏感磁盘掩盖严格字符串门禁冲突。
+  const native = readFileSync(new URL('./build-native.sh', import.meta.url), 'utf8');
+  assert.ok(native.includes('citizensdk_target_root="$tata_console_target_root/GMB/citizensdk/sdk"'));
+  assert.ok(native.includes('root="$tata_console_work_root/GMB/citizensdk/sdk/citizensdk"'));
 
   // 仅替换文件系统事实，不复制路径算法，也不在其它 OS 创建真实 /Users 目录。
   // 两个根的金标独立于生产常量；VM 执行提取到的完整原文，不修改真实 process.env。
@@ -5311,7 +5359,8 @@ test('本机打包路径执行唯一门禁，只接受两固定根的严格后�
     for (const suffix of ['/candidate', '/nested/native-output', '/archive/citizensdk.tgz']) {
       assert.equal(check(`${root}${suffix}`), `${root}${suffix}`);
     }
-    for (const path of [root, `${root}-other/candidate`, `${root}x/candidate`]) {
+    for (const path of [root, `${root}-other/candidate`, `${root}x/candidate`,
+      `${root.replace(/sdk$/u, 'SDK')}/candidate`]) {
       assert.throws(() => check(path), /本地路径/u);
     }
     for (const path of [
@@ -6902,7 +6951,7 @@ for (const github of process.platform === 'darwin' ? [false, true] : []) {
       const runnerTemp = join(root, 'runner');
       const checkout = join(root, 'checkout');
       const sdk = join(checkout, 'citizensdk');
-      const central = github ? join(runnerTemp, 'citizensdk') : join(root, 'GMB/citizensdk/SDK/citizensdk');
+      const central = github ? join(runnerTemp, 'citizensdk') : join(root, 'GMB/citizensdk/sdk/citizensdk');
       const input = {
         candidate: join(central, 'candidate'), audit: join(central, 'audit.tgz'),
         hosted: join(central, 'hosted.tar.gz'), flutter: join(central, 'flutter'),

@@ -841,7 +841,8 @@ Value response(const std::string &session, int64_t sequence, Value value) {
 }
 Value event(const std::string &session, int64_t sequence,
             const std::string &type, Value payload) {
-  require(sequence > 0 && (type == "lifecycleChanged" || type == "capabilitiesChanged" ||
+  if (type == "historyChanged") (void)list(payload, 0);
+  require(sequence > 0 && (type == "historyChanged" || type == "lifecycleChanged" || type == "capabilitiesChanged" ||
                           type == "transferProgress"),
           CITIZENSDK_ERROR_INTEGRITY, "Invalid event envelope");
   (void)response(session, sequence, payload);

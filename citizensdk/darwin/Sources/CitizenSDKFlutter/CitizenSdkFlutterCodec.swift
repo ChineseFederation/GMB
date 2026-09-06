@@ -13,7 +13,7 @@ internal enum CitizenSdkFlutterCodec {
     static let methodChannel = "citizen/sdk/core/v1"
     static let eventChannel = "citizen/sdk/events/v1"
     static let version: Int64 = 1
-    static let eventTypes: Set<String> = ["lifecycleChanged", "capabilitiesChanged", "transferProgress"]
+    static let eventTypes: Set<String> = ["lifecycleChanged", "capabilitiesChanged", "transferProgress", "historyChanged"]
     static let methods: Set<String> = [
         "open", "start", "stop", "close", "getCapabilities", "getFinalizedHead",
         "getAccountBalance", "getAccountNonce", "getFeeSnapshot", "getWalletProfile",
@@ -146,7 +146,8 @@ internal enum CitizenSdkFlutterCodec {
         [version, session, sequence, value]
     }
     static func event(session: String, sequence: Int64, type: String, payload: [Any?]) throws -> [Any?] {
-        guard eventTypes.contains(type) else {
+        guard eventTypes.contains(type), sequence > 0,
+              type != "historyChanged" || payload.isEmpty else {
             throw CitizenSDKError(.integrity, "Unsupported CitizenSDK event type")
         }
         return [version, session, sequence, type, payload]

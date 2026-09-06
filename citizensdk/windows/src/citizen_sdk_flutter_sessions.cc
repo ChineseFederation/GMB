@@ -315,6 +315,8 @@ struct Sessions::State final : std::enable_shared_from_this<State> {
   void snapshots(const std::shared_ptr<Session> &session, uint64_t expected,
                  citizensdk_event_type_t kind = 0) {
     if (!current(session) || is_detached() || expected != snapshot_epoch()) return;
+    if (kind == CITIZENSDK_EVENT_HISTORY_CHANGED)
+      emit(session, "historyChanged", Value::list({}), expected);
     // Core callbacks carry only a notification, not an owned snapshot. Query
     // on the UI thread after the callback returns, never re-enter Core while
     // its dispatch thread may hold lifecycle/provider locks.
@@ -347,7 +349,11 @@ struct Sessions::State final : std::enable_shared_from_this<State> {
     if (event_value.struct_size < sizeof(event_value) ||
         event_value.abi_version != CITIZENSDK_ABI_VERSION) return;
     if (event_value.event_type == CITIZENSDK_EVENT_LIFECYCLE_CHANGED ||
-        event_value.event_type == CITIZENSDK_EVENT_CAPABILITIES_CHANGED) {
+        event_value.event_type == CITIZENSDK_EVENT_CAPABILITIES_CHANGED ||
+        event_value.event_type == CITIZENSDK_EVENT_HISTORY_CHANGED) {
+      if (event_value.event_type == CITIZENSDK_EVENT_HISTORY_CHANGED &&
+          (event_value.request_id != 0 || event_value.result != 0 ||
+           event_value.capability_revision != 0 || event_value.reserved != 0)) return;
       try {
         std::weak_ptr<State> weak = shared_from_this();
         std::weak_ptr<Session> target = session;

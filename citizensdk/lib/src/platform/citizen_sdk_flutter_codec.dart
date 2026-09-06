@@ -172,6 +172,7 @@ final class CitizenSdkFlutterCodec {
     _rejectMaps(payload, 'event payload');
     final event = switch (type) {
       'lifecycleChanged' => _decodeLifecycleEvent(sequence, payload),
+      'historyChanged' => _decodeHistoryEvent(sequence, payload),
       'capabilitiesChanged' => _decodeCapabilitiesEvent(sequence, payload),
       'transferProgress' => _decodeTransferProgress(sequence, payload),
       _ => throw _decodeFailure('未知事件类型：$type'),
@@ -614,6 +615,11 @@ final class CitizenSdkFlutterCodec {
       default:
         throw _decodeFailure('未知响应 method：$method');
     }
+  }
+
+  CitizenSdkHistoryChanged _decodeHistoryEvent(int sequence, List<Object?> payload) {
+    _expectLength(payload, 0, 'historyChanged');
+    return CitizenSdkHistoryChanged(sequence: sequence);
   }
 
   CitizenSdkLifecycleChanged _decodeLifecycleEvent(

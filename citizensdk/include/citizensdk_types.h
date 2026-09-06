@@ -79,6 +79,8 @@ typedef uint32_t citizensdk_event_type_t;
 #define CITIZENSDK_EVENT_WATCH_UPDATE UINT32_C(2)
 #define CITIZENSDK_EVENT_CAPABILITIES_CHANGED UINT32_C(3)
 #define CITIZENSDK_EVENT_LIFECYCLE_CHANGED UINT32_C(4)
+/* Payloadless invalidation; request_id/result/capability_revision/reserved are zero. */
+#define CITIZENSDK_EVENT_HISTORY_CHANGED UINT32_C(5)
 
 typedef uint32_t citizensdk_result_kind_t;
 #define CITIZENSDK_RESULT_EMPTY UINT32_C(0)

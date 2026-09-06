@@ -44,6 +44,60 @@ impl VerifiedChainClient for SmoldotVerifiedChainClient {
         })
     }
 
+    fn subscribe_finalized_heads(&self) -> ContractStream<'_, FinalizedBlockRef> {
+        let (mut sender, receiver) = mpsc::channel(1);
+        let preparation = self.running().and_then(|running| {
+            let lease = running.rpc.reserve_finalized_worker()?;
+            Ok((running, lease))
+        });
+        let (running, lease) = match preparation {
+            Ok(value) => value,
+            Err(error) => {
+                let _ = sender.try_send(Err(error));
+                return Box::pin(receiver);
+            }
+        };
+        self.runtime_handle().spawn(async move {
+            let (id, mut notifications) = match running.rpc.subscribe_finalized_heads().await {
+                Ok(value) => value,
+                Err(error) => { let _ = sender.try_send(Err(error)); return; }
+            };
+            let mut previous = None;
+            let mut pending = None;
+            while !sender.is_closed() && !lease.stopping() && !running.rpc.is_closed() {
+                if let Some(value) = pending.take() {
+                    if let Err(error) = sender.try_send(value) {
+                        if error.is_disconnected() { break; }
+                        pending = Some(error.into_inner());
+                    }
+                }
+                // 只检查取消，不轮询区块；零 peers 或安静链不会结束订阅。
+                let value = match tokio::time::timeout(std::time::Duration::from_millis(250), notifications.recv()).await {
+                    Err(_) => continue,
+                    Ok(Ok(value)) => value,
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => {
+                        // finalized 快照可以合并，重新读取 smoldot 验证后的准确头。
+                        json!({"method":"chain_finalizedHead","params":{"subscription":id,"result":null}})
+                    }
+                    Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) => break,
+                };
+                if value.get("method").and_then(Value::as_str) != Some("chain_finalizedHead")
+                    || subscription_result(&value, &id).is_none() { continue; }
+                // RPC header 只是唤醒信号，证明来自已有 typed verified snapshot。
+                match finalized_head(&running).await {
+                    Ok(block) if previous != Some(block) => {
+                        previous = Some(block);
+                        pending = Some(Ok(block));
+                    }
+                    Ok(_) => {}
+                    Err(error) => { pending = Some(Err(error)); }
+                }
+            }
+            if let Err(error) = running.rpc.unsubscribe_finalized_heads(&id).await { lease.fail(error); }
+        });
+        Box::pin(receiver)
+    }
+
     fn get_finalized_block_at(&self, number: u64) -> ContractFuture<'_, FinalizedBlockRef> {
         let running = self.running();
         Box::pin(async move {
@@ -205,6 +259,13 @@ impl VerifiedChainClient for SmoldotVerifiedChainClient {
                 return Box::pin(receiver);
             }
         };
+        let lease = match running.rpc.reserve_finalized_worker() {
+            Ok(lease) => lease,
+            Err(error) => {
+                let _ = sender.unbounded_send(Err(error));
+                return Box::pin(receiver);
+            }
+        };
         let runtime = self.runtime_handle();
         runtime.spawn(async move {
             let encoded = format!("0x{}", hex::encode(extrinsic.as_bytes()));
@@ -217,7 +278,7 @@ impl VerifiedChainClient for SmoldotVerifiedChainClient {
                 }
             };
 
-            loop {
+            while !lease.stopping() && !sender.is_closed() {
                 let notification = match tokio::time::timeout(
                     std::time::Duration::from_millis(250),
                     notifications.recv(),
@@ -258,7 +319,9 @@ impl VerifiedChainClient for SmoldotVerifiedChainClient {
                     }
                 }
             }
-            running.rpc.unwatch_extrinsic(&subscription).await;
+            if let Err(error) = running.rpc.unwatch_extrinsic(&subscription).await {
+                lease.fail(error);
+            }
         });
         Box::pin(receiver)
     }

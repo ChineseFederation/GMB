@@ -1,4 +1,52 @@
+// 固定公开夹具损坏时立即失败；不改变生产错误处理。
+#![allow(clippy::unwrap_used)]
+
 use std::sync::Arc;
+
+#[test]
+fn native_assets_reject_every_manifest_drift_before_provider_creation() {
+    let original: serde_json::Value =
+        serde_json::from_slice(include_bytes!("../../../assets/citizenchain/manifest.json"))
+            .unwrap();
+    let spec = include_bytes!("../../../assets/citizenchain/chainspec.json");
+    let sync = include_bytes!("../../../assets/citizenchain/light_sync_state.json");
+    for (key, value) in [
+        ("extra", serde_json::Value::Bool(true)),
+        ("chain_id", "other-network".into()),
+        ("protocol_id", "other-protocol".into()),
+        ("product_id", "other-product".into()),
+        ("format_version", 2.into()),
+        ("sdk_min_version", "99.0.0".into()),
+        ("genesis_hash", format!("0x{}", "00".repeat(32)).into()),
+        ("chainspec_sha256", "00".repeat(32).into()),
+        ("light_sync_state_sha256", "00".repeat(32).into()),
+    ] {
+        let mut candidate = original.clone();
+        candidate[key] = value;
+        assert!(
+            crate::assets::verify_assets(&serde_json::to_vec(&candidate).unwrap(), spec, sync)
+                .is_err(),
+            "{key}"
+        );
+    }
+    for key in original.as_object().unwrap().keys() {
+        let mut candidate = original.clone();
+        candidate.as_object_mut().unwrap().remove(key);
+        assert!(
+            crate::assets::verify_assets(&serde_json::to_vec(&candidate).unwrap(), spec, sync)
+                .is_err(),
+            "missing {key}"
+        );
+    }
+    let mut changed_sync = sync.to_vec();
+    changed_sync.push(b' ');
+    assert!(crate::assets::verify_assets(
+        &serde_json::to_vec(&original).unwrap(),
+        spec,
+        &changed_sync
+    )
+    .is_err());
+}
 
 use citizen_sdk_contracts::{
     CapabilityName, CapabilityReason, ChainDatabaseStore, ContractError, ContractErrorCode,

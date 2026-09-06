@@ -4,6 +4,7 @@
 
 pub mod account_state;
 pub mod capabilities;
+mod chain_monitor;
 pub mod engine;
 pub mod error;
 mod finalized_events;
@@ -38,6 +39,7 @@ mod wallet_transfer_watch_tests;
 
 pub use account_state::{AccountStateService, BestFeeSnapshot};
 pub use capabilities::{resolve_capabilities, CapabilityProbe, CapabilityTracker};
+pub use chain_monitor::ChainMonitorUpdate;
 pub use engine::{CitizenEngine, EngineComponents, EngineFuture};
 pub use error::EngineError;
 pub use runtime_context::{RuntimeContextCache, RuntimeContextRequest, MAX_RUNTIME_CONTEXTS};
@@ -53,6 +55,6 @@ pub use wallet_derivation::{validate_wallet_password, WalletWordCount};
 pub use wallet_input::{validate_wallet_mnemonic, wallet_word_suggestions};
 pub use wallet_service::PreparedWalletCreation;
 pub use wallet_transfer_watch::{
-    WalletTransferObserver, WalletTransferResolution, WalletTransferWatchResult,
-    WalletTransferWatchStage, WalletTransferWatchUpdate,
+    WalletTransferCancellation, WalletTransferObserver, WalletTransferResolution,
+    WalletTransferWatchResult, WalletTransferWatchStage, WalletTransferWatchUpdate,
 };

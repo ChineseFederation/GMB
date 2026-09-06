@@ -453,6 +453,9 @@ fn dispatch_loop(
 
 #[cfg(test)]
 mod tests {
+    // 回调/通道的测试前提失败须立即暴露；允许项只作用于测试，不影响生产事件分发。
+    #![allow(clippy::unwrap_used)]
+
     use std::{
         ffi::c_void,
         sync::{

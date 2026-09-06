@@ -6,6 +6,7 @@
 #![forbid(unsafe_code)]
 
 mod account_nonce;
+mod bootstrap;
 mod client;
 mod legacy;
 mod verified_chain_client;

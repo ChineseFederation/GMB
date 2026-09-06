@@ -17,6 +17,10 @@ use citizen_sdk_contracts::{
 };
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+#[path = "chain_monitor_tests.rs"]
+mod chain_monitor_tests;
+
 use crate::{
     account_state::{AccountStateService, BestFeeSnapshot},
     capabilities::{CapabilityProbe, CapabilityTracker},
@@ -33,8 +37,8 @@ use crate::{
     wallet_derivation::{SystemWalletEntropy, WalletWordCount},
     wallet_service::{PreparedWalletCreation, SystemWalletClock, WalletService},
     wallet_transfer_watch::{
-        watch_recorded_transfer, NoopWalletTransferObserver, WalletTransferObserver,
-        WalletTransferWatchResult,
+        watch_recorded_transfer, NoopWalletTransferObserver, WalletTransferCancellation,
+        WalletTransferObserver, WalletTransferWatchResult,
     },
 };
 
@@ -186,6 +190,7 @@ pub struct CitizenEngine {
     runtime_contexts: Mutex<RuntimeContextCache>,
     capabilities: Mutex<EngineCapabilityState>,
     state: Arc<Mutex<EngineState>>,
+    chain_monitor: Mutex<crate::chain_monitor::ChainMonitorState>,
 }
 
 #[derive(Default)]
@@ -207,6 +212,9 @@ struct EngineState {
     /// finalized 历史的一次原子提交可能跨越多个 await。stop/dispose 只有在这里为
     /// 0 时才能切换代际，从而保证最后一个 CAS 也不能穿越 Engine 停止边界。
     inflight_history_operations: u64,
+    history_paused: bool,
+    history_cancel: Arc<crate::chain_monitor::MonitorCancellation>,
+    history_drain_waiters: Vec<std::task::Waker>,
 }
 
 impl Default for EngineState {
@@ -218,6 +226,9 @@ impl Default for EngineState {
             verified_finalized: None,
             export_in_progress: false,
             inflight_history_operations: 0,
+            history_paused: false,
+            history_cancel: Arc::new(crate::chain_monitor::MonitorCancellation::default()),
+            history_drain_waiters: Vec::new(),
         }
     }
 }
@@ -229,6 +240,7 @@ impl CitizenEngine {
             runtime_contexts: Mutex::new(RuntimeContextCache::new()),
             capabilities: Mutex::new(EngineCapabilityState::default()),
             state: Arc::new(Mutex::new(EngineState::default())),
+            chain_monitor: Mutex::new(crate::chain_monitor::ChainMonitorState::default()),
         }
     }
 
@@ -444,7 +456,10 @@ impl CitizenEngine {
             CapabilityName::HardwareVault,
             CapabilityName::UserAuthentication,
         ]);
-        Box::pin(async move { service?.commit_create_after_backup(prepared).await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.commit_create_after_backup(prepared))
+                .await
+        })
     }
 
     pub fn import_wallet(
@@ -458,7 +473,10 @@ impl CitizenEngine {
             CapabilityName::HardwareVault,
             CapabilityName::UserAuthentication,
         ]);
-        Box::pin(async move { service?.import(&mnemonic, &password).await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.import(&mnemonic, &password))
+                .await
+        })
     }
 
     pub fn add_wallet_accounts(
@@ -473,7 +491,10 @@ impl CitizenEngine {
             CapabilityName::HardwareVault,
             CapabilityName::UserAuthentication,
         ]);
-        Box::pin(async move { service?.add_accounts(&mnemonic, &password, &indices).await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.add_accounts(&mnemonic, &password, &indices))
+                .await
+        })
     }
 
     pub fn set_active_wallet_account(
@@ -511,19 +532,28 @@ impl CitizenEngine {
     pub fn delete_wallet_account(&self, account_id: AccountId32) -> EngineFuture<'_, ()> {
         let service = self
             .local_wallet_service(&[CapabilityName::WalletProfile, CapabilityName::HardwareVault]);
-        Box::pin(async move { service?.delete_account(account_id).await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.delete_account(account_id))
+                .await
+        })
     }
 
     pub fn delete_wallet(&self) -> EngineFuture<'_, ()> {
         let service = self
             .local_wallet_service(&[CapabilityName::WalletProfile, CapabilityName::HardwareVault]);
-        Box::pin(async move { service?.delete_wallet().await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.delete_wallet())
+                .await
+        })
     }
 
     pub fn reconcile_wallet_cleanup(&self) -> EngineFuture<'_, ()> {
         let service = self
             .local_wallet_service(&[CapabilityName::WalletProfile, CapabilityName::HardwareVault]);
-        Box::pin(async move { service?.reconcile_cleanup().await })
+        Box::pin(async move {
+            self.with_wallet_monitor_paused(service?.reconcile_cleanup())
+                .await
+        })
     }
 
     /// 完成一笔钱包转账直到得到准确 finalized 执行终态或明确交易池拒绝。
@@ -543,6 +573,7 @@ impl CitizenEngine {
             amount_fen,
             remark,
             Arc::new(NoopWalletTransferObserver),
+            WalletTransferCancellation::default(),
         )
     }
 
@@ -553,6 +584,9 @@ impl CitizenEngine {
     /// 的 submit-and-watch。`InBlock` 不结束 future；`Finalized` 会从准确 canonical
     /// 块体和同 index `System.Events` 核验 Success/Failed。断线、dropped、retracted 或
     /// timeout 返回可重试错误，但不会清除 durable `Pending/InBlock` 门。
+    /// 取消仅通知本笔请求；调用方必须继续 await 到完成，确保已经开始的金库与 CAS
+    /// 真正返回。取消后不再签发下一阶段广播，不影响并行请求和后台监控。
+    #[allow(clippy::too_many_arguments)]
     pub fn transfer_with_remark_and_watch(
         &self,
         source_account_id: AccountId32,
@@ -560,9 +594,10 @@ impl CitizenEngine {
         amount_fen: u128,
         remark: String,
         observer: Arc<dyn WalletTransferObserver>,
+        cancellation: WalletTransferCancellation,
     ) -> EngineFuture<'_, WalletTransferWatchResult> {
         Box::pin(async move {
-            let (history_runtime, guard) = self.prepare_finalized_history_runtime(&[
+            let (history_runtime, mut guard) = self.prepare_finalized_history_runtime(&[
                 CapabilityName::ChainRead,
                 CapabilityName::TransactionBuild,
                 CapabilityName::TransactionSubmit,
@@ -573,6 +608,8 @@ impl CitizenEngine {
                 CapabilityName::HardwareVault,
                 CapabilityName::UserAuthentication,
             ])?;
+            guard.request_cancellation = Some(cancellation);
+            guard.ensure_current()?;
             let service = self.wallet_service_from_components()?;
             let history = self.history_service_from_components()?;
             let nonce_source = self.components.account_nonce_source().ok_or_else(|| {
@@ -584,12 +621,14 @@ impl CitizenEngine {
             history_runtime
                 .initialize_accounts(&[source_account_id], &guard)
                 .await?;
+            guard.ensure_current()?;
             // 在访问金库和读取新 nonce 之前寻找已持久授权。同参数重试只恢复该字节，
             // 包括取消、进程退出和 CAS 已落盘但调用未返回的窗口。
-            if let Some(record) = history
+            let resumable = history
                 .resumable_transfer(source_account_id, destination, amount_fen, &remark)
-                .await?
-            {
+                .await?;
+            guard.ensure_current()?;
+            if let Some(record) = resumable {
                 crate::wallet_transfer_watch::reconcile_before_rebroadcast(
                     self.components.chain_client().as_ref(),
                     &history_runtime,
@@ -601,6 +640,7 @@ impl CitizenEngine {
                 let (_, current) = history
                     .require_submission_snapshot(source_account_id, record.transaction_hash())
                     .await?;
+                guard.ensure_current()?;
                 record.require_same_submission_facts(&current)?;
                 // 同步已证明终态时不再要求读取构造 Runtime，也绝不重新广播。
                 if matches!(
@@ -611,12 +651,15 @@ impl CitizenEngine {
                     let signer = self.components.signer().ok_or_else(|| {
                         EngineError::CapabilityUnavailable("chain_signer_missing".to_owned())
                     })?;
-                    crate::transaction_builder::validate_recorded_transfer(
-                        self.components.chain_client().as_ref(),
-                        signer.as_ref(),
-                        &current,
+                    crate::finalized_history_runtime::cancellable_chain(
+                        crate::transaction_builder::validate_recorded_transfer(
+                            self.components.chain_client().as_ref(),
+                            signer.as_ref(),
+                            &current,
+                        ),
+                        &guard,
                     )
-                    .await?;
+                    .await??;
                 }
                 return watch_recorded_transfer(
                     self.components.chain_client().as_ref(),
@@ -640,11 +683,15 @@ impl CitizenEngine {
                     remark,
                 )
                 .await?;
-            let hash_context = self
-                .components
-                .chain_client()
-                .get_runtime_context_at(built.signed().payload().block())
-                .await?;
+            guard.ensure_current()?;
+            let hash_context = crate::finalized_history_runtime::cancellable_chain(
+                self.components
+                    .chain_client()
+                    .get_runtime_context_at(built.signed().payload().block()),
+                &guard,
+            )
+            .await??;
+            guard.ensure_current()?;
             if hash_context.block() != built.signed().payload().block()
                 || hash_context.version() != built.signed().payload().runtime_version()
             {
@@ -1368,9 +1415,9 @@ impl CitizenEngine {
             Arc::clone(self.components.chain_client()),
             self.history_service_from_components()?,
         );
-        let generation = {
+        let (generation, cancellation) = {
             let mut state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
-            if state.lifecycle != EngineLifecycle::Running {
+            if state.lifecycle != EngineLifecycle::Running || state.history_paused {
                 return Err(lifecycle_error(
                     "finalized history requires a running Engine generation",
                 ));
@@ -1379,13 +1426,15 @@ impl CitizenEngine {
                 .inflight_history_operations
                 .checked_add(1)
                 .ok_or_else(|| lifecycle_error("finalized history operation count overflowed"))?;
-            state.generation
+            (state.generation, Arc::clone(&state.history_cancel))
         };
         Ok((
             runtime,
             EngineHistoryOperationLease {
                 state: Arc::clone(&self.state),
                 generation,
+                cancellation,
+                request_cancellation: None,
             },
         ))
     }
@@ -1452,6 +1501,284 @@ impl CitizenEngine {
     }
 }
 
+impl CitizenEngine {
+    /// 启动 SDK 自有钱包监控；没有钱包 profile 是合法的初始状态。
+    pub fn start_chain_monitor(&self) -> EngineFuture<'_, ()> {
+        Box::pin(async move {
+            let state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
+            if state.lifecycle != EngineLifecycle::Running || state.history_paused {
+                return Err(lifecycle_error(
+                    "chain monitor requires a running, unpaused Engine",
+                ));
+            }
+            let mut monitor = self
+                .chain_monitor
+                .lock()
+                .map_err(|_| EngineError::StatePoisoned)?;
+            monitor.running = true;
+            Ok(())
+        })
+    }
+
+    /// 先使旧账户代际不可继续发起读取/CAS；真正的持久化排空由 drain 完成。
+    pub fn stop_chain_monitor(&self) -> Result<(), EngineError> {
+        let mut state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
+        state.history_paused = true;
+        state.history_cancel.cancel();
+        // 独立 stop 不得被先前正在执行的钱包变更恢复；更换 token 防止迟到恢复。
+        state.history_cancel = Arc::new(crate::chain_monitor::MonitorCancellation::default());
+        state.history_cancel.cancel();
+        self.chain_monitor
+            .lock()
+            .map_err(|_| EngineError::StatePoisoned)?
+            .running = false;
+        Ok(())
+    }
+
+    pub fn drain_chain_monitor(&self) -> EngineFuture<'_, ()> {
+        Box::pin(std::future::poll_fn(|cx| {
+            let mut state = match self.state.lock() {
+                Ok(state) => state,
+                Err(_) => return std::task::Poll::Ready(Err(EngineError::StatePoisoned)),
+            };
+            if state.inflight_history_operations == 0 {
+                return std::task::Poll::Ready(Ok(()));
+            }
+            if !state
+                .history_drain_waiters
+                .iter()
+                .any(|w| w.will_wake(cx.waker()))
+            {
+                state.history_drain_waiters.push(cx.waker().clone());
+            }
+            std::task::Poll::Pending
+        }))
+    }
+
+    async fn with_wallet_monitor_paused<T>(
+        &self,
+        mutation: impl Future<Output = Result<T, EngineError>>,
+    ) -> Result<T, EngineError> {
+        let (generation, cancellation) = {
+            let mut state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
+            if state.history_paused {
+                return Err(lifecycle_error("wallet history is already paused"));
+            }
+            state.history_paused = true;
+            state.history_cancel.cancel();
+            (state.generation, Arc::clone(&state.history_cancel))
+        };
+        self.drain_chain_monitor().await?;
+        // 此 future 不可用 select 丢弃：store/CAS 已进入后必须等真实返回。
+        let result = mutation.await;
+        {
+            let mut state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
+            if state.generation == generation
+                && Arc::ptr_eq(&state.history_cancel, &cancellation)
+                && !matches!(
+                    state.lifecycle,
+                    EngineLifecycle::Stopped
+                        | EngineLifecycle::Disposed
+                        | EngineLifecycle::StartFailed
+                )
+            {
+                state.history_paused = false;
+                state.history_cancel =
+                    Arc::new(crate::chain_monitor::MonitorCancellation::default());
+            }
+        }
+        // 成功和失败都使旧集合失效；下次 tick 从真实 WalletProfileStore 重读，不猜测回滚结果。
+        let mut monitor = self
+            .chain_monitor
+            .lock()
+            .map_err(|_| EngineError::StatePoisoned)?;
+        monitor.revision = None;
+        monitor.pending_positions.clear();
+        result
+    }
+
+    pub fn refresh_chain_monitor_accounts(&self) -> EngineFuture<'_, bool> {
+        Box::pin(async move {
+            let (_, guard) = self.prepare_finalized_history_runtime(&[CapabilityName::History])?;
+            let profiles = self
+                .components
+                .wallet_profiles()
+                .ok_or_else(|| lifecycle_error("wallet profiles missing"))?;
+            let stored = profiles.load().await?;
+            guard.ensure_current()?;
+            let accounts = stored
+                .profile()
+                .map(|profile| {
+                    profile
+                        .accounts()
+                        .iter()
+                        .map(|account| account.account_id())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let mut monitor = self
+                .chain_monitor
+                .lock()
+                .map_err(|_| EngineError::StatePoisoned)?;
+            let changed = accounts != monitor.accounts;
+            if changed {
+                monitor.revision = None;
+                monitor.pending_positions.clear();
+            }
+            monitor.accounts = accounts;
+            Ok(changed)
+        })
+    }
+
+    /// 一个有界批次，复用准确 finalized/body/System.Events 核验；不重新广播 pending。
+    pub fn poll_chain_monitor(&self) -> EngineFuture<'_, crate::ChainMonitorUpdate> {
+        Box::pin(async move {
+            {
+                let mut monitor = self
+                    .chain_monitor
+                    .lock()
+                    .map_err(|_| EngineError::StatePoisoned)?;
+                if !monitor.running || monitor.polling {
+                    return Err(lifecycle_error("chain monitor is stopped or busy"));
+                }
+                monitor.polling = true;
+            }
+            struct PollLease<'a>(&'a Mutex<crate::chain_monitor::ChainMonitorState>);
+            impl Drop for PollLease<'_> {
+                fn drop(&mut self) {
+                    if let Ok(mut state) = self.0.lock() {
+                        state.polling = false;
+                    }
+                }
+            }
+            let _poll = PollLease(&self.chain_monitor);
+            let (runtime, guard) = self.prepare_finalized_history_runtime(&[
+                CapabilityName::History,
+                CapabilityName::ChainRead,
+            ])?;
+            let stored = self
+                .components
+                .wallet_profiles()
+                .ok_or_else(|| lifecycle_error("wallet profiles missing"))?
+                .load()
+                .await?;
+            guard.ensure_current()?;
+            let accounts = stored
+                .profile()
+                .map(|profile| {
+                    profile
+                        .accounts()
+                        .iter()
+                        .map(|account| account.account_id())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let local_history = self.history_service_from_components()?.load().await?;
+            guard.ensure_current()?;
+            let has_pending = local_history.records().iter().any(|record| {
+                accounts.contains(&record.account_id())
+                    && matches!(
+                        record.status(),
+                        citizen_sdk_contracts::HistoryTransactionStatus::Pending
+                            | citizen_sdk_contracts::HistoryTransactionStatus::InBlock { .. }
+                    )
+            });
+            let (mut positions, chain_revision, should_sync) = {
+                let monitor = self
+                    .chain_monitor
+                    .lock()
+                    .map_err(|_| EngineError::StatePoisoned)?;
+                let positions = if monitor.accounts == accounts {
+                    monitor.pending_positions.clone()
+                } else {
+                    Default::default()
+                };
+                (
+                    positions,
+                    monitor.chain_revision,
+                    has_pending
+                        || monitor.needs_catchup
+                        || monitor.accounts != accounts
+                        || monitor.revision.is_none()
+                        || monitor.chain_revision != monitor.synced_chain_revision,
+                )
+            };
+            let mut target = None;
+            let history = if accounts.is_empty() || !should_sync {
+                local_history
+            } else {
+                target = Some(
+                    crate::finalized_history_runtime::cancellable_chain(
+                        self.components.chain_client().get_finalized_head(),
+                        &guard,
+                    )
+                    .await??,
+                );
+                runtime.initialize_accounts(&accounts, &guard).await?;
+                runtime.sync_batch(&accounts, &guard).await?;
+                runtime
+                    .reconcile_pending_batch(&accounts, &mut positions, &guard)
+                    .await?
+            };
+            guard.ensure_current()?;
+            let finalized_block = history
+                .cursors()
+                .iter()
+                .filter(|cursor| accounts.contains(&cursor.account_id()))
+                .map(|cursor| cursor.last_synced_block())
+                .min_by_key(|block| block.number());
+            let pending_count = history
+                .records()
+                .iter()
+                .filter(|record| {
+                    accounts.contains(&record.account_id())
+                        && matches!(
+                            record.status(),
+                            citizen_sdk_contracts::HistoryTransactionStatus::Pending
+                                | citizen_sdk_contracts::HistoryTransactionStatus::InBlock { .. }
+                        )
+                })
+                .count();
+            let mut monitor = self
+                .chain_monitor
+                .lock()
+                .map_err(|_| EngineError::StatePoisoned)?;
+            let history_changed =
+                monitor.revision != Some(history.revision()) || monitor.accounts != accounts;
+            monitor.revision = Some(history.revision());
+            monitor.accounts = accounts;
+            monitor.pending_positions = positions;
+            monitor.synced_chain_revision = chain_revision;
+            monitor.needs_catchup = target
+                .zip(finalized_block)
+                .is_some_and(|(target, synced)| synced.number() < target.number());
+            Ok(crate::ChainMonitorUpdate {
+                finalized_block,
+                history_revision: history.revision(),
+                history_changed,
+                pending_count,
+            })
+        })
+    }
+
+    pub fn invalidate_chain_read_cache(&self) -> Result<(), EngineError> {
+        let mut monitor = self
+            .chain_monitor
+            .lock()
+            .map_err(|_| EngineError::StatePoisoned)?;
+        monitor.chain_revision = monitor
+            .chain_revision
+            .checked_add(1)
+            .ok_or_else(|| lifecycle_error("chain notification revision exhausted"))?;
+        drop(monitor);
+        self.runtime_contexts
+            .lock()
+            .map_err(|_| EngineError::StatePoisoned)?
+            .invalidate_current_best();
+        Ok(())
+    }
+}
+
 /// finalized 协调器持有的不可复用 Engine 代际与完整操作租约。
 ///
 /// guard 从 prepare 开始一直活到所有 provider/store await 与最后一次 CAS 结束。只要
@@ -1460,17 +1787,64 @@ impl CitizenEngine {
 struct EngineHistoryOperationLease {
     state: Arc<Mutex<EngineState>>,
     generation: u64,
+    cancellation: Arc<crate::chain_monitor::MonitorCancellation>,
+    request_cancellation: Option<WalletTransferCancellation>,
 }
 
 impl FinalizedHistoryRunGuard for EngineHistoryOperationLease {
+    fn begin_watch(&self) {
+        if let Some(token) = &self.request_cancellation {
+            token.begin_watch();
+        }
+    }
+    fn begin_execution(&self) {
+        if let Some(token) = &self.request_cancellation {
+            token.begin_execution();
+        }
+    }
+    fn execution_budget(&self) -> Option<std::time::Duration> {
+        self.request_cancellation
+            .as_ref()
+            .and_then(WalletTransferCancellation::execution_budget)
+    }
+
     fn ensure_current(&self) -> Result<(), EngineError> {
+        if self
+            .request_cancellation
+            .as_ref()
+            .and_then(WalletTransferCancellation::remaining_budget)
+            .is_some_and(|remaining| remaining.is_zero())
+        {
+            return Err(EngineError::contract(
+                ContractErrorCode::Timeout,
+                "wallet transfer budget expired; durable pending history retained",
+            ));
+        }
         let state = self.state.lock().map_err(|_| EngineError::StatePoisoned)?;
-        if state.lifecycle != EngineLifecycle::Running || state.generation != self.generation {
+        if state.lifecycle != EngineLifecycle::Running
+            || state.generation != self.generation
+            || self.cancellation.is_cancelled()
+            || self
+                .request_cancellation
+                .as_ref()
+                .is_some_and(WalletTransferCancellation::is_cancelled)
+        {
             return Err(lifecycle_error(
                 "finalized history operation outlived its running Engine generation",
             ));
         }
         Ok(())
+    }
+
+    fn poll_cancelled(&self, cx: &mut std::task::Context<'_>) -> std::task::Poll<()> {
+        if self
+            .request_cancellation
+            .as_ref()
+            .is_some_and(|token| token.signal.poll_cancelled(cx).is_ready())
+        {
+            return std::task::Poll::Ready(());
+        }
+        self.cancellation.poll_cancelled(cx)
     }
 }
 
@@ -1480,6 +1854,11 @@ impl Drop for EngineHistoryOperationLease {
         if let Ok(mut state) = self.state.lock() {
             if let Some(remaining) = state.inflight_history_operations.checked_sub(1) {
                 state.inflight_history_operations = remaining;
+                if remaining == 0 {
+                    for waiter in std::mem::take(&mut state.history_drain_waiters) {
+                        waiter.wake();
+                    }
+                }
             }
         }
     }

@@ -8,7 +8,8 @@
 
 use std::{
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::Arc,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use citizen_sdk_contracts::{
@@ -19,10 +20,63 @@ use citizen_sdk_contracts::{
 use futures::StreamExt;
 
 use crate::{
+    chain_monitor::MonitorCancellation,
     error::EngineError,
-    finalized_history_runtime::{FinalizedHistoryRunGuard, FinalizedHistoryRuntime},
+    finalized_history_runtime::{
+        cancellable_chain, FinalizedHistoryRunGuard, FinalizedHistoryRuntime,
+    },
     transaction_history::TransactionHistoryService,
 };
+
+/// 单笔转账的协作取消令牌；克隆只共享本笔请求，不改变 Engine 或其它交易的代际。
+///
+/// 取消只中止后续链读取／观察。已经进入的存储或金库操作必须等待真实返回，调用方
+/// 必须继续驱动转账 future 直到结束，不能用丢弃 future 代替取消或把取消理解为撤回。
+#[derive(Clone, Debug, Default)]
+pub struct WalletTransferCancellation {
+    pub(crate) signal: Arc<MonitorCancellation>,
+    // 仅保存非秘密的单调 deadline；不改变任何业务账户或其它请求的状态。
+    deadline: Arc<Mutex<Option<(Instant, bool)>>>,
+}
+
+impl WalletTransferCancellation {
+    pub fn cancel(&self) {
+        self.signal.cancel();
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.signal.is_cancelled()
+    }
+
+    /// 原生调度器读取剩余观察预算。准备/签名时尚未开始；finalized 后切换到执行核验预算。
+    pub fn remaining_budget(&self) -> Option<Duration> {
+        self.deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map(|(deadline, _)| deadline.saturating_duration_since(Instant::now()))
+    }
+
+    pub(crate) fn execution_budget(&self) -> Option<Duration> {
+        self.deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .filter(|(_, execution)| *execution)
+            .map(|(deadline, _)| deadline.saturating_duration_since(Instant::now()))
+    }
+    pub(crate) fn begin_watch(&self) {
+        self.set_budget(Duration::from_secs(20 * 60), false);
+    }
+    pub(crate) fn begin_execution(&self) {
+        self.set_budget(Duration::from_secs(30), true);
+    }
+    fn set_budget(&self, budget: Duration, execution: bool) {
+        *self
+            .deadline
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((Instant::now() + budget, execution));
+    }
+}
 
 /// 已持久化或核验后才会发布给语言绑定的高层交易阶段。
 ///
@@ -226,8 +280,10 @@ pub(crate) async fn watch_recorded_transfer(
 
     // VerifiedChainClient 的该入口实际执行 submit-and-watch。它只能在 durable Pending
     // 已确认之后创建；任何提前创建 stream 的重构都会重新引入广播竞态。
+    guard.ensure_current()?;
+    guard.begin_watch();
     let mut events = chain_client.watch_extrinsic(signed_extrinsic);
-    while let Some(item) = events.next().await {
+    while let Some(item) = cancellable_chain(events.next(), guard).await? {
         guard.ensure_current()?;
         let event = match item {
             Ok(event) => event,
@@ -248,6 +304,7 @@ pub(crate) async fn watch_recorded_transfer(
 
         match event {
             ExtrinsicWatchEvent::Finalized { block } => {
+                guard.begin_execution();
                 let (state, conclusion) = finalize_exact_transaction(
                     runtime,
                     history,
@@ -438,7 +495,7 @@ pub(crate) async fn reconcile_before_rebroadcast(
     account_id: AccountId32,
 ) -> Result<(), EngineError> {
     guard.ensure_current()?;
-    let target = client.get_finalized_head().await?;
+    let target = cancellable_chain(client.get_finalized_head(), guard).await??;
     guard.ensure_current()?;
     loop {
         let state = history.load().await?;
@@ -543,6 +600,9 @@ async fn finalize_exact_transaction(
             .ok_or_else(|| invalid_state("钱包转账账户的 finalized 历史游标在同步后消失"))?
             .last_synced_block();
         if after.number() <= before.number() {
+            if crate::finalized_history_runtime::wait_execution_retry(guard).await? {
+                continue;
+            }
             return Err(EngineError::contract(
                 ContractErrorCode::Unavailable,
                 "provider 尚不能把 finalized 历史推进到交易目标块；持久 Pending/InBlock 保留",

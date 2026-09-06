@@ -33,6 +33,30 @@ pub(crate) struct LegacyRpc {
     next_request_id: Arc<AtomicU64>,
     closed: Arc<AtomicBool>,
     timeout: Duration,
+    finalized_workers: Arc<Mutex<FinalizedWorkers>>,
+}
+
+#[derive(Default)]
+struct FinalizedWorkers {
+    stopping: bool,
+    active: usize,
+    failure: Option<citizen_sdk_contracts::ContractError>,
+}
+
+/// 租约活到取消 RPC 的真实响应结束，receiver 关闭不代表服务已经排空。
+pub(crate) struct FinalizedWorkerLease(Arc<Mutex<FinalizedWorkers>>);
+impl FinalizedWorkerLease {
+    pub(crate) fn stopping(&self) -> bool {
+        self.0.lock().stopping
+    }
+    pub(crate) fn fail(&self, error: citizen_sdk_contracts::ContractError) {
+        self.0.lock().failure = Some(error);
+    }
+}
+impl Drop for FinalizedWorkerLease {
+    fn drop(&mut self) {
+        self.0.lock().active -= 1;
+    }
 }
 
 impl LegacyRpc {
@@ -60,6 +84,7 @@ impl LegacyRpc {
             next_request_id: Arc::new(AtomicU64::new(1)),
             closed,
             timeout,
+            finalized_workers: Arc::new(Mutex::new(FinalizedWorkers::default())),
         }
     }
 
@@ -68,10 +93,25 @@ impl LegacyRpc {
         method: &'static str,
         params: Value,
     ) -> ContractResult<Value> {
+        self.request_with_timeout(method, params, true).await
+    }
+
+    /// 订阅创建/销毁保留迟到响应。取消者由 worker 收到 ID 后负责 unsubscribe；
+    /// drain 超时只报错，不允许 remove_chain 后仍发出迟到请求。
+    async fn request_with_timeout(
+        &self,
+        method: &'static str,
+        params: Value,
+        bounded: bool,
+    ) -> ContractResult<Value> {
         let request_number = reserve_request_number(&self.next_request_id)?;
         let request_id = format!("__citizensdk_{request_number}");
         let (sender, receiver) = oneshot::channel();
         self.pending.lock().await.insert(request_id.clone(), sender);
+        if self.is_closed() {
+            self.pending.lock().await.remove(&request_id);
+            return Err(provider_error("smoldot response transport is closed"));
+        }
         let request = json!({
             "jsonrpc": "2.0",
             "id": request_id,
@@ -87,7 +127,12 @@ impl LegacyRpc {
             )));
         }
 
-        let response = match tokio::time::timeout(self.timeout, receiver).await {
+        let response_result = if bounded {
+            tokio::time::timeout(self.timeout, receiver).await
+        } else {
+            Ok(receiver.await)
+        };
+        let response = match response_result {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => {
                 self.pending.lock().await.remove(&request_id);
@@ -121,7 +166,11 @@ impl LegacyRpc {
     ) -> ContractResult<(String, broadcast::Receiver<Value>)> {
         let receiver = self.notifications.subscribe();
         let result = self
-            .request("author_submitAndWatchExtrinsic", json!([extrinsic_hex]))
+            .request_with_timeout(
+                "author_submitAndWatchExtrinsic",
+                json!([extrinsic_hex]),
+                false,
+            )
             .await?;
         let subscription = result.as_str().ok_or_else(|| {
             contract_error(
@@ -138,14 +187,89 @@ impl LegacyRpc {
         Ok((subscription.to_owned(), receiver))
     }
 
-    pub(crate) async fn unwatch_extrinsic(&self, subscription: &str) {
-        let _ = self
-            .request("author_unwatchExtrinsic", json!([subscription]))
-            .await;
+    pub(crate) async fn unwatch_extrinsic(&self, subscription: &str) -> ContractResult<()> {
+        let result = self
+            .request_with_timeout("author_unwatchExtrinsic", json!([subscription]), false)
+            .await?;
+        // false 同样证明不存在（终态后上游可能已自动移除），不是清理失败。
+        if !result.is_boolean() {
+            return Err(provider_error("extrinsic unsubscribe was not acknowledged"));
+        }
+        Ok(())
     }
 
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn reserve_finalized_worker(&self) -> ContractResult<FinalizedWorkerLease> {
+        let mut state = self.finalized_workers.lock();
+        if state.stopping {
+            return Err(provider_error("finalized subscriptions are draining"));
+        }
+        state.active = state
+            .active
+            .checked_add(1)
+            .ok_or_else(|| provider_error("subscription count overflow"))?;
+        Ok(FinalizedWorkerLease(Arc::clone(&self.finalized_workers)))
+    }
+
+    pub(crate) fn close_finalized_gate_if_idle(&self) -> bool {
+        let mut state = self.finalized_workers.lock();
+        state.stopping = true;
+        state.active == 0 && state.failure.is_none()
+    }
+
+    pub(crate) async fn drain_finalized_subscriptions(&self) -> ContractResult<()> {
+        self.finalized_workers.lock().stopping = true;
+        let drain = async {
+            loop {
+                {
+                    let state = self.finalized_workers.lock();
+                    if let Some(error) = &state.failure {
+                        return Err(error.clone());
+                    }
+                    if state.active == 0 {
+                        return Ok(());
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        };
+        tokio::time::timeout(self.timeout, drain)
+            .await
+            .map_err(|_| {
+                contract_error(
+                    ContractErrorCode::Timeout,
+                    "finalized subscription cleanup is still pending",
+                )
+            })?
+    }
+
+    pub(crate) async fn subscribe_finalized_heads(
+        &self,
+    ) -> ContractResult<(String, broadcast::Receiver<Value>)> {
+        let receiver = self.notifications.subscribe();
+        let id = self
+            .request_with_timeout("chain_subscribeFinalizedHeads", json!([]), false)
+            .await?;
+        let id = id.as_str().filter(|id| !id.is_empty()).ok_or_else(|| {
+            contract_error(
+                ContractErrorCode::Decode,
+                "finalized subscription returned an invalid id",
+            )
+        })?;
+        Ok((id.to_owned(), receiver))
+    }
+
+    pub(crate) async fn unsubscribe_finalized_heads(&self, id: &str) -> ContractResult<()> {
+        let value = self
+            .request_with_timeout("chain_unsubscribeFinalizedHeads", json!([id]), false)
+            .await?;
+        if !value.is_boolean() {
+            return Err(provider_error("finalized unsubscribe was not acknowledged"));
+        }
+        Ok(())
     }
 }
 

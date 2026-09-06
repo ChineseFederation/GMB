@@ -1,5 +1,10 @@
 # 公民SDK（CitizenSDK）
 
+SDK 原生后台监控复用 smoldot 现有 finalized 订阅；完整钱包组合启动后自动读取本机
+钱包账户集合、同步历史，并在没有新块时只读核验待确认交易。不会重新签名或广播。
+`historyChanged` 事件只表示历史应刷新，接收方使用已有历史查询；不携带秘密或账户快照。
+停止会取消旧代际并排空已进入的存储写入和订阅资源。本地钱包输入不要求启动网络。
+
 当前未发布版本已补充未决交易原授权恢复、有界完成事件预留、Android 关闭/认证边界、
 Apple 宿主数据隔离及 Linux SHM 恢复。恢复沿用同一个高层转账入口，不新增业务 API。
 本机测试不等于跨平台硬件或正式发布验收，准确结果与未完成项以任务卡为准。
@@ -19,8 +24,8 @@ Swift 与 Flutter 投影，已经统一通过产品 C ABI 调用 Rust Core，由
 finalized 数据库、多账户热钱包、硬件金库、任意协议载荷
 签名、钱包完整可用性核验、账户改名、finalized 单/批余额、链上手续费估算，以及
 `transfer_with_remark` 的构造、签名、pending-before-broadcast、观察和执行结果核验。
-从 CitizenApp 收编的旧 Dart smoldot、钱包、交易与私钥导出代码只在 `lib/src` 内保留为归档与
-差分测试基线，已经从根入口移除；Android、iOS 和 macOS 正式绑定均不导出或调用这些实现。
+SDK 自有旧 Dart 钱包、交易、轻节点协调及私钥导出已删除；相关行为与测试由正式 Rust
+Core 承接。受保护的 smoldot Dart/FFI 来源快照仅供上游审计测试，不是第二套 SDK。
 CitizenApp 现有功能和
 依赖保持不变；只有在 SDK 稳定后，才会另行设计 CitizenApp 的切换步骤。
 
@@ -74,8 +79,8 @@ Engine 持有；`CHAIN_READ`、提交和核验只有在 Engine 为 `Running` 且
 状态导入触及 Provider 后若失败，同一 Engine/Provider 组合保持不可复用的 `StartFailed`；
 导入前还会读取 revisioned `ChainDatabaseStore` 的 finalized 锚，拒绝高度回退和同高度哈希
 冲突，并以 CAS/写后回读保存 exact 状态。产品 ABI 当前要求绑定销毁该 handle、创建新实例并
-跳过坏导入后，才能从随包 #0 checkpoint 重启；归档 legacy Dart 差分基线的自动清坏缓存回退
-没有迁入产品 ABI。跨 Engine 或进程防回退仍要求 store provider 提供共享、耐久、强原子 CAS。
+显式处理坏导入后才能重新启动；SDK 不自动删除坏数据库或掩盖防回退失败。
+跨 Engine 或进程防回退仍要求 store provider 提供共享、耐久、强原子 CAS。
 
 只有 `citizensdk_create_with_host` 启用自动链数据库生命周期：`citizensdk_start` 在任何 provider
 启动副作用前从 typed store 恢复并复核状态，`citizensdk_export_state` 在返回前 CAS 持久化同一
@@ -196,8 +201,7 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   持有恢复词/password；终态会 best-effort 清空控件与 Rust 敏感 buffer，但 Swift `String` 不可
   可靠擦除。它们不得返回 public Swift API、记录、持久化或进入 Flutter。助记词、password、
   DEK、child secret、private key 与 native/result/prepared handle 都
-  没有 Flutter tuple 位置。旧 Dart `getAccountPrivateKey` 仅保留为归档差分基线，
-  不在任何正式绑定或根公开 API。
+  没有 Flutter tuple 位置；SDK 不保留私钥导出实现。
 - Apple 把可重建的链数据库、runtime cache 和交易公开事实放入 typed public SQLite，把钱包
   profile、加密秘密信封及 Vault 引用放入权限更严的 typed secure SQLite。Secure Enclave
   仅保护 generation-scoped KEK，用来 wrap/unwrap 随机 DEK；sr25519 始终由 Rust signer 完成。
@@ -208,13 +212,11 @@ light sync state 摘要；任何不一致都失败关闭，远端启动清单只
   generation。进程内操作门只是减少冲突；跨进程迟到写入由这两道持久 fence 拒绝，不能把
   “物理删除成空槽”当作删除成功。
 - 公开钱包状态在 secret 写入前保存 provisioning，并保存 active cleanup 与 exact
-  cleanup queue。保留的 legacy Dart Preferences 基线只承诺同 Dart isolate 内的跨实例单写；
-  Android 与 Apple 正式 typed store 使用独立持久合同。任何 Rust store provider 都必须实现共享、耐久
+  cleanup queue。平台 typed store 使用独立持久合同。任何 Rust store provider 都必须实现共享、耐久
   CAS、永久墓碑和 generation retirement，不能只依赖进程锁。
 - SDK 不包含远程签名或通用远程 RPC；公民链交易由设备内 smoldot 轻节点通过 P2P 广播。
-- 归档 legacy Dart 差分基线仍含 `WalletRepository`、`SecureSeedStore` 等高级注入点；它们不是根
-  `CitizenSdk` 或任何正式平台 API。使用这些内部注入点的测试进入受信任边界，SDK 无法
-  防止恶意实现复制传入的秘密。
+- 宿主进程属于受信任边界；公开接口不提供明文 child 注入或导出通道，SDK 不把同进程
+  内存隔离描述为能抵御恶意宿主。
 
 Rust 钱包交易只公开一个 `transfer_with_remark` 高级入口：内部构造对象不可从 Engine 取出，必须先
 以本地完整 extrinsic hash 持久化 source/destination/amount/remark/nonce，再向 provider
@@ -231,6 +233,9 @@ outgoing、保留接收方 incoming，同一原始块重放不能恢复已消费
 canonical finalized body、该块准确 metadata 与同 index `System.Events` 核验后才返回终态。
 取消、dropped/retracted、timeout、provider 错误或流中断会结束本次观察，但不会清除 durable
 Pending/InBlock single-flight 门，后续只能经历史协调继续收敛。
+取消使用单笔 `WalletTransferCancellation` 通知 Engine，不取消其它交易或监控；FFI
+继续驱动同一 future，直到已进入的存储／金库操作真实返回后才完成请求。取消不是撤回，
+不能抹去期间实际写入的 Pending、InBlock 或准确执行结果，也不保证已广播交易不会执行。
 
 `sign_wallet_payload` 仍是受信任宿主可调用的产品无关账户签名能力，可承载 TUYU 等明确协议。
 因为它返回通用 sr25519 签名，宿主技术上可以在 SDK 高层交易路径之外使用该结果；上述 pending
@@ -354,7 +359,7 @@ Host 源码及两平台合并的 26 项安装投影、Windows Host/adapter 源�
 Hosted Package 只交付 Flutter 运行时闭包、插件、链资产、Android/Apple/Linux/Windows 原生投影、README 和完整法律声明。
 其 Dart 运行闭包精确为 17 个文件：根入口 1 个、`lib/src/api` 6 个、
 `lib/src/crypto/account_codec.dart` 1 个、`lib/src/models` 5 个和 `lib/src/platform` 4 个；
-归档的旧 Dart 链、钱包、交易、smoldot 与 Preferences 实现均由 `.pubignore` 排除。
+SDK 自有旧 Dart 链、钱包、交易及 Preferences 实现已删除；仅上游 smoldot 审计快照由 `.pubignore` 排除。
 Android 原生 AAR 只存在于 GitHub 审计候选；Hosted 包明确排除该 AAR、native 测试/C++/构建
 输入，但保留根 Flutter 插件直接编译的同一 Kotlin 生产 facade 和两份 `arm64-v8a` SO。两种分发读取
 同一源码提交和同一注入后候选。Linux Hosted 精确保留 38 项：26 项安装件及 12 项插件输入，

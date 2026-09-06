@@ -24,6 +24,9 @@ use futures_util::{FutureExt, StreamExt};
 mod abi;
 mod assets;
 mod capabilities;
+mod chain_monitor;
+#[cfg(test)]
+mod chain_monitor_tests;
 mod composition;
 #[cfg(test)]
 mod composition_tests;
@@ -354,8 +357,18 @@ pub unsafe extern "C" fn citizensdk_start(
 
             // `complete_provider_start` applies the already sampled provider
             // readiness through the Engine lifecycle gate.
-            runtime.publish_capabilities()?;
-            runtime.publish_lifecycle()?;
+            if let Err(error) = runtime.start_product_services() {
+                runtime.converge_failed_start();
+                return Err(error);
+            }
+            if let Err(error) = runtime
+                .publish_capabilities()
+                .and_then(|_| runtime.publish_lifecycle())
+            {
+                // 自有 monitor 已启动；末尾事件入队失败也必须排空，不能留后台孤儿。
+                runtime.converge_failed_start();
+                return Err(error);
+            }
             Ok(ResultPayload::Empty)
         })
     })

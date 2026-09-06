@@ -16,6 +16,8 @@ object CitizenSdkEvents {
     }
 
     sealed class Event(open val sequence: String) {
+        /** Invalidation only; query the existing history API for the current state. */
+        class HistoryChanged(override val sequence: String) : Event(sequence)
         class LifecycleChanged(
             override val sequence: String,
             val lifecycle: CitizenSdkLifecycle,
@@ -56,4 +58,3 @@ object CitizenSdkEvents {
         fun onProgress(progress: Event.TransferProgress)
     }
 }
-

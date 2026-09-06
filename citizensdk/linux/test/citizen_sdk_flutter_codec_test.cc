@@ -363,6 +363,10 @@ void test_balance_nonce_fee_semantics() {
 }  // namespace
 
 int main() {
+  (void)citizen_sdk::flutter::event("s", 1, "historyChanged", Value::list({}));
+  expect_failure([] {
+    (void)citizen_sdk::flutter::event("s", 1, "historyChanged", Value::list({Value::integer(1)}));
+  }, CITIZENSDK_ERROR_INTEGRITY);
   test_method_closure_and_requests();
   test_strict_failures();
   test_standard_wire_preserves_nul_and_unicode();

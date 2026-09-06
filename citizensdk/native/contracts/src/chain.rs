@@ -381,6 +381,29 @@ pub trait VerifiedChainClient: Send + Sync {
 
     fn get_finalized_head(&self) -> ContractFuture<'_, FinalizedBlockRef>;
 
+    /// 通知只表示 provider 已验证的 finalized 快照变化；不得把未验证 RPC 头当作证明。
+    /// 未提供订阅的组合明确失败一次后结束，不以轮询伪装订阅。
+    fn subscribe_finalized_heads(&self) -> ContractStream<'_, FinalizedBlockRef> {
+        struct Unsupported(bool);
+        impl futures_core::Stream for Unsupported {
+            type Item = crate::ContractResult<FinalizedBlockRef>;
+            fn poll_next(
+                mut self: std::pin::Pin<&mut Self>,
+                _: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Option<Self::Item>> {
+                std::task::Poll::Ready(if std::mem::replace(&mut self.0, false) {
+                    Some(Err(ContractError::new(
+                        ContractErrorCode::Unsupported,
+                        "provider does not support finalized subscriptions",
+                    )))
+                } else {
+                    None
+                })
+            }
+        }
+        Box::pin(Unsupported(true))
+    }
+
     /// 解析一个高度在当前 verified finalized 上界内的 canonical finalized 块。
     ///
     /// 生产 provider 必须先读取 verified finalized 上界，再解析目标高度的 canonical hash；

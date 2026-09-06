@@ -23,8 +23,8 @@ Swift、Kotlin/Java 与 C/C++ 都只通过该 ABI 使用 Rust Engine。
 5. provider 分别依赖收编的 smoldot PoW、`schnorrkel` 和宿主操作系统安全设施。
 
 上述产品 ABI 与 Engine 路径已经由根 Dart API、Android 以及 iOS/macOS 正式绑定消费。
-保留的旧 Dart 轻节点、钱包与交易实现只用于归档和差分测试，不能被解释为根公开入口或任一
-正式平台运行路径。
+SDK 自有旧 Dart 轻节点协调、钱包、交易与 Preferences 实现已删除；正式能力和测试由
+Rust Core 承接，只保留受保护的 smoldot 来源快照作上游审计输入。
 
 原生核心与产品无关 Dart 层不得反向依赖 CitizenApp、CitizenWallet、TuyuLove、TuyuLife、
 TuyuBooking、聊天、广场、TUYU 协议、产品导航或产品数据库。
@@ -99,7 +99,7 @@ metadata、`System.Events` 与 extrinsic 哈希语义。
 状态导入门禁，以及交易执行结论。导入会把本 Engine provisional anchor 与 revisioned
 `ChainDatabaseStore` 已持久锚合并，先拒绝回退/冲突，再调用 provider；provider 或 CAS
 产生不确定副作用后失败会永久关闭该 Engine。跨 Engine 或进程的防回退保证要求 store
-adapter 提供共享、耐久、强原子 CAS；保留的 legacy Dart Preferences store 不因此获得该保证。链读取
+adapter 提供共享、耐久、强原子 CAS。链读取
 能力还受 Engine lifecycle 约束，只有 `Running` 才能 ready。持久 `RuntimeCacheStore` 只允许
 作为性能缓存，交易终态核验必须直接从 provider 取得目标 finalized 块的 runtime context，
 不能把宿主可写缓存提升为执行证据。组件缺失会关闭对应 capability；
@@ -107,7 +107,7 @@ adapter 提供共享、耐久、强原子 CAS；保留的 legacy Dart Preference
 Substrate 规则计算哈希，在准确
 块体中定位 index，再使用同一块 metadata 解码该 index 的 `System.ExtrinsicSuccess/Failed`；
 缺失、畸形、矛盾或跨块证据一律返回未核实。Engine 复用
-`test/transaction/fixtures` 的生产 CitizenChain metadata/events 夹具，没有复制第二份输入。
+`test/transaction` 的生产 CitizenChain metadata/events 夹具，没有复制第二份输入。
 
 host 组合的链数据库生命周期由同一 Engine 原语闭合：start 在 provider start 前执行
 typed-store restore；export 使用稳定 finalized 锚导出并以完整 `revision + state` CAS；
@@ -167,41 +167,31 @@ secure store/Vault all-or-none，不能注入 signer、nonce 或任意键值服�
 Apple 共享 Darwin 绑定均已改接这个产品 ABI；iOS 与 macOS 使用同一 host composition，平台
 差异只在宿主安全设施、文件保护与运行架构。
 
-## 归档 legacy Dart 差分基线
+## 唯一原生实现
 
-以下实现已经从根 `citizen_sdk.dart` 移除且 Android、iOS 与 macOS 正式绑定均不可到达，只保留
-用于归档和差分验证：
+公开 `CitizenSdk` 位于 `lib/src/api/citizen_sdk.dart`，仅通过 `chain`、`wallet`、`transactions`
+调用产品 ABI。钱包生命周期、输入派生、交易构造与执行核验在 `native/engine`；
+资产校验和系统装配在 `native/ffi`；签名算法在 `native/signer`；
+网络、共识和订阅仍由 smoldot 上游实现，`native/smoldot/provider` 只适配类型化合同。
 
-- 原 legacy 组合门面已删除，不保留兼容别名；下列内部实现只作为差分基线。当前公开
-  `CitizenSdk` 位于 `lib/src/api/citizen_sdk.dart`，仅通过 `chain`、`wallet`、`transactions`
-  分组调用产品 ABI，不暴露 legacy RPC 或 signer。
-- `CitizenLightClient`：管理 smoldot 生命周期、随包创世锚、bootnode、同步健康、
-  finalized database、JSON-RPC 与链头订阅。
-- `CitizenChainAssets`：在创建或初始化 smoldot 原生客户端前核对 manifest 精确字段闭集、正式
-  `citizenchain` 链/协议 ID、两个资产 SHA-256、genesis hash 与 checkpoint state root。
-- `WalletService`：管理一只无根热钱包、`//0..//1989` 多账户、创建/导入/追加/删除、完整
-  可用性门禁、账户改名、本地任意载荷签名和用户主动的子账户私钥导出。这里描述的是归档
-  legacy Dart API，任一正式绑定均不可达；新的 Rust Core 不移植私钥导出。
-- `ChainRpc`：只经本机轻节点读取 finalized 状态、提交 extrinsic、订阅状态并核对
-  `System.Events`；单/批读取 `System.Account` free/reserved，并从 runtime metadata 估算费用。
-- `SignedExtrinsicBuilder` / `TransferService`：使用实时 runtime version、nonce、immortal era、
-  sr25519 和公民链 `transfer_with_remark` 编码，并在广播前持久化本机 pending。
-- `FinalizedTransactionScanner` / `FinalizedTransactionHistory`：按账户持久游标增量扫描 finalized
-  转账，以 txHash、同 extrinsic index 的 System outcome 收敛本机 pending；每块事实原子提交。
-- `lib/src/platform` 中仍保留的平台无关 finalized 公开仓储；旧 Dart 硬件秘密通道与
-  `SecureSeedStore` 装配已删除，正式装配统一改用 Rust Core、typed stores 与 Vault。
+启动时可以读取六秒／64 KiB 限额的 HTTPS 节点建议。严格匹配固定公民链身份后只合并
+内存 bootNodes，禁止接收 RPC、checkpoint 或替换随包信任资产；失败继续使用随包节点。
+宿主持久组合每分钟检查已验证 finalized 进展，前进时复用原子导出和 CAS，失败不清库。
+钱包监控空闲时只读取本地状态；已有 finalized 订阅的通知触发有界补齐，不新增区块订阅实现。
+
+高层转账的观察预算为 20 分钟，收到 finalized 后切换为 30 秒执行核验预算。
+同一块体只读一次，暂未取得的事件按一秒间隔重试；超时协作取消并排空已有 CAS／金库操作，
+保留 Pending/InBlock，不推断执行失败，不自动重广播。私钥导出不属于 SDK。
 
 交易成功分为三个事实：返回 txHash 只表示本机轻节点接受提交；`inBlock/finalized` 只表示
 包含；只有按 txHash 定位同一 extrinsic index 并读到该 index 的
 `System.ExtrinsicSuccess` 才是执行成功。`ExtrinsicFailed` 会返回明确失败；未取得明确事件时
-返回未核实，不把“没找到失败”猜成成功。submit-only 后台观察一旦收到有效 `finalized`，
-等待式交易一旦收到要求的 `inBlock/finalized`，终态所有权都移交给同块 `System.Events` 核对；
-交易池订阅此后的迟到消息、畸形状态、错误或关闭不得再制造第二个终态。
+返回未核实，不把“没找到失败”猜成成功。后台历史补齐与高层观察均只从 verified finalized
+块构造执行证据；inBlock 不触发成功终态。交易池迟到消息和断线不能覆盖已验证链上终态。
 
-runtime version 与 metadata 组成同一块的 `ChainRuntimeContext`。缓存身份绑定 `specVersion`；
-不同版本的 in-flight 请求互不复用，前一代请求迟到不得覆盖新 registry。构造签名交易、读取链上
-费率以及解码目标块事件都消费对应 context，避免长驻进程跨升级后拼接前一代 metadata 与新
-`transactionVersion`。状态回调和非阻塞订阅取消都按 best-effort 隔离异常，不拥有状态机。
+runtime version 与 metadata 组成同一准确块的 `RuntimeContext`。缓存键绑定块身份及版本；
+构造交易、读取链上费率和解码事件都消费对应 context，防止跨升级拼接旧 metadata 与新
+`transactionVersion`。生命周期门、账户集合代际和请求取消共同约束异步完成，不由回调改写链事实。
 
 批量余额先把 AccountId/公民 SS58 规范化为唯一 storage key，通过轻节点已有的 finalized
 batch storage 一次读取，再按原始输入顺序和重复项重建不可变结果；传输错误上抛，不能被
@@ -255,8 +245,7 @@ wallet index、generation、owner、AccountId 与 secret kind 构成的完整 `S
 明文仍在使用后清零，助记词或 password 也没有 Flutter tuple 位置。
 
 宿主进程属于信任边界。新 host v1 只暴露五类具名 typed store 和不接触 child 的 DEK Vault，
-没有明文 `SecureSeedStore` callback。归档 legacy Dart 高级注入仍可能让自定义
-`SecureSeedStore` 观察 child，因此它只可用于受控差分测试，不能进入正式装配。
+没有明文 child callback；SDK 不保留可绕过产品 ABI 的 Dart 钱包或秘密注入实现。
 
 架构明确分开三层：公民链账户/余额/nonce/fee/交易；产品无关的 sr25519 派生、金库与本地
 签名；TUYU、员工登录等业务账户协议。业务协议可以请求同一公钥签名，但不得把 challenge、

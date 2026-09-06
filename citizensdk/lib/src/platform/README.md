@@ -34,5 +34,5 @@ pubspec 官方注册、默认 `CitizenSdk.open()` 和同版候选/Hosted 运行�
 旧 `citizen/sdk/hardware_secretvault` byte-only channel、Dart
 `HardwareBoundSeedStore`、`MobileCitizenSdkComponents` 与通用 secure-blob 装配已经删除。
 Android、iOS、macOS、LinuxARM/LinuxAMD 与 Windows 的公开 Flutter 路径都只经产品 C ABI、平台 typed stores 和平台
-`SecretVault`。保留的 Preferences 仓储、旧 Dart 链、钱包和交易代码只作为非公开差分输入，
-不得重新接回根公开 client，也不能据此声称跨 isolate 或跨进程原子性。
+`SecretVault`。Preferences 仓储、旧 Dart 链、钱包和交易实现已删除；原子性由正式
+平台持久仓储与 Rust CAS 合同保证，不依赖 Dart isolate 内的互斥锁。

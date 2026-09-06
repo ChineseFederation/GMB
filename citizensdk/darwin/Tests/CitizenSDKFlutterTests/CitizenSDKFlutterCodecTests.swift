@@ -10,6 +10,12 @@ import FlutterMacOS
 #endif
 
 final class CitizenSDKFlutterCodecTests: XCTestCase {
+    func testHistoryInvalidationHasNoPayload() throws {
+        let event = try CitizenSdkFlutterCodec.event(session: "session", sequence: 7, type: "historyChanged", payload: [])
+        XCTAssertEqual(event[3] as? String, "historyChanged")
+        XCTAssertThrowsError(try CitizenSdkFlutterCodec.event(session: "session", sequence: 7, type: "historyChanged", payload: [1]))
+        XCTAssertThrowsError(try CitizenSdkFlutterCodec.event(session: "session", sequence: 0, type: "historyChanged", payload: []))
+    }
     func testWalletWordCountsAreExactlyTwelveEighteenTwentyFour() throws {
         for count in [12, 18, 24] {
             let request = try CitizenSdkFlutterCodec.decode(method: "createWallet", arguments: [1, "session", 1, count])

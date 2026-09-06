@@ -30,12 +30,12 @@ use crate::{
 };
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const EVENTS_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-system-events.hex");
 
 #[derive(Debug)]
-struct MemoryHistoryStore {
+pub(crate) struct MemoryHistoryStore {
     state: Mutex<TransactionHistoryState>,
     cas_calls: AtomicUsize,
 }
@@ -169,6 +169,10 @@ impl FinalizedHistoryRunGuard for TestGuard {
 }
 
 struct FakeChainClient {
+    head_requests: Arc<AtomicUsize>,
+    body_requests: Arc<AtomicUsize>,
+    event_requests: Arc<AtomicUsize>,
+    transient_missing_events: bool,
     head: u64,
     metadata: Vec<u8>,
     events: Vec<u8>,
@@ -189,6 +193,7 @@ impl VerifiedChainClient for FakeChainClient {
     }
 
     fn get_finalized_head(&self) -> ContractFuture<'_, FinalizedBlockRef> {
+        self.head_requests.fetch_add(1, Ordering::SeqCst);
         let block = block(self.head);
         Box::pin(async move { Ok(block) })
     }
@@ -242,7 +247,9 @@ impl VerifiedChainClient for FakeChainClient {
         block: VerifiedBlockRef,
         _key: Vec<u8>,
     ) -> ContractFuture<'_, Option<Vec<u8>>> {
-        let missing = self.missing_events_at == Some(block.number());
+        let attempt = self.event_requests.fetch_add(1, Ordering::SeqCst);
+        let missing = self.missing_events_at == Some(block.number())
+            || (self.transient_missing_events && attempt == 0);
         let events = self.events.clone();
         Box::pin(async move { Ok((!missing).then_some(events)) })
     }
@@ -276,6 +283,7 @@ impl VerifiedChainClient for FakeChainClient {
         &self,
         _block: VerifiedBlockRef,
     ) -> ContractFuture<'_, Vec<Vec<u8>>> {
+        self.body_requests.fetch_add(1, Ordering::SeqCst);
         Box::pin(async { Ok(vec![vec![0x0c, 0x84, 0x01, 0x02], vec![0x08, 0x84, 0x03]]) })
     }
 
@@ -327,6 +335,10 @@ impl Harness {
         let running = Arc::new(AtomicBool::new(true));
         let block_requests = Arc::new(AtomicUsize::new(0));
         let client = Arc::new(FakeChainClient {
+            head_requests: Arc::new(AtomicUsize::new(0)),
+            body_requests: Arc::new(AtomicUsize::new(0)),
+            event_requests: Arc::new(AtomicUsize::new(0)),
+            transient_missing_events: false,
             head,
             metadata: hex_bytes(METADATA_HEX),
             events: hex_bytes(EVENTS_HEX),
@@ -374,6 +386,47 @@ fn new_accounts_start_at_current_finalized_without_backfill() {
             .all(|cursor| cursor.tracking_start_block() == block(42)
                 && cursor.last_synced_block() == block(42)));
         assert_eq!(harness.block_requests.load(Ordering::SeqCst), 0);
+    });
+}
+
+#[test]
+fn finalized_execution_retry_keeps_one_body_read_and_the_same_exact_block() {
+    struct ExecutionGuard(std::time::Instant);
+    impl FinalizedHistoryRunGuard for ExecutionGuard {
+        fn ensure_current(&self) -> Result<(), EngineError> {
+            Ok(())
+        }
+        fn execution_budget(&self) -> Option<std::time::Duration> {
+            Some(self.0.saturating_duration_since(std::time::Instant::now()))
+        }
+    }
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    executor.block_on(async {
+        let store = Arc::new(MemoryHistoryStore::default());
+        let history = TransactionHistoryService::new(store.clone(), Arc::new(TestClock::default()));
+        let body_requests = Arc::new(AtomicUsize::new(0));
+        let event_requests = Arc::new(AtomicUsize::new(0));
+        let client = Arc::new(FakeChainClient {
+            head_requests: Arc::new(AtomicUsize::new(0)),
+            head: 1, metadata: hex_bytes(METADATA_HEX), events: hex_bytes(EVENTS_HEX),
+            missing_events_at: None, stop_at_block_request: None, running: Arc::new(AtomicBool::new(true)),
+            block_requests: Arc::new(AtomicUsize::new(0)), body_requests: body_requests.clone(),
+            event_requests: event_requests.clone(), transient_missing_events: true,
+        });
+        let runtime = FinalizedHistoryRuntime::new(client, history.clone());
+        let sender = account(0x11);
+        history.ensure_cursors(&[sender], block(0)).await.unwrap();
+        let guard = ExecutionGuard(std::time::Instant::now() + std::time::Duration::from_secs(5));
+        let state = runtime.process_finalized_block(block(1), &[sender].into_iter().collect(), &guard).await.unwrap();
+        assert_eq!(state.cursors()[0].last_synced_block(), block(1));
+        assert_eq!(body_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(event_requests.load(Ordering::SeqCst), 2);
+        let expired = ExecutionGuard(std::time::Instant::now());
+        let error = super::finalized_history_runtime::wait_execution_retry(&expired).await.unwrap_err();
+        assert!(matches!(error, EngineError::Contract(error) if error.code() == ContractErrorCode::Timeout));
     });
 }
 
@@ -427,6 +480,31 @@ fn engine_history_lease_fences_the_complete_cas_await_window() {
     engine
         .mark_provider_stopped()
         .expect("CAS 与租约一起结束后 stop 必须成功");
+}
+
+#[test]
+fn monitor_cancel_does_not_drop_a_store_cas_that_already_started() {
+    use futures::FutureExt;
+    let (release, receiver) = oneshot::channel();
+    let store = Arc::new(PausedHistoryStore::new(receiver));
+    let engine = running_engine(store.clone(), 9);
+    let mut operation = engine.initialize_finalized_history(vec![account(0x72)]);
+    for _ in 0..100_000 {
+        assert!(operation.as_mut().now_or_never().is_none());
+        if store.cas_entered.load(Ordering::SeqCst) {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    assert!(store.cas_entered.load(Ordering::SeqCst));
+    engine.stop_chain_monitor().unwrap();
+    assert!(engine.drain_chain_monitor().now_or_never().is_none());
+    assert!(operation.as_mut().now_or_never().is_none());
+    release.send(()).unwrap();
+    // CAS 返回后旧代际被拒绝，但写入没有被中途丢弃，drain 此时才可完成。
+    assert!(block_on(operation).is_err());
+    block_on(engine.drain_chain_monitor()).unwrap();
+    assert_eq!(store.state.lock().unwrap().revision(), 1);
 }
 
 #[test]
@@ -548,6 +626,53 @@ fn same_index_outcome_transfer_dedupe_and_replay_are_atomic() {
 }
 
 #[test]
+fn pending_recovery_rechecks_an_already_synced_block_without_broadcast() {
+    block_on(async {
+        let harness = Harness::new(1, None, None);
+        let sender = account(0x11);
+        let receiver = account(0x22);
+        // 模拟游标 CAS 已完成，但同块 pending 在其读取窗口之后写入。
+        harness.seed(&[sender], 1).await;
+        let context = RuntimeContext::try_new(
+            block(1).verified(),
+            RuntimeVersion::new(100, 12),
+            hex_bytes(METADATA_HEX),
+        )
+        .unwrap();
+        let signed = SignedExtrinsic::try_new(vec![0x0c, 0x84, 0x01, 0x02]).unwrap();
+        let hash = signed_extrinsic_hash(&context, &signed).unwrap();
+        harness
+            .history
+            .record_pending_before_broadcast(
+                sender,
+                hash,
+                0,
+                receiver,
+                123_456,
+                "CitizenSDK production Runtime fixture",
+                signed,
+                block(1).verified(),
+                RuntimeVersion::new(100, 12),
+                ChainIdentity::citizenchain().genesis_hash(),
+            )
+            .await
+            .unwrap();
+        let before = harness.store.snapshot();
+        let state = harness
+            .runtime
+            .reconcile_pending_batch(&[sender], &mut Default::default(), &harness.guard())
+            .await
+            .unwrap();
+        assert!(matches!(
+            state.records()[0].status(),
+            HistoryTransactionStatus::Execution(_)
+        ));
+        assert_eq!(state.cursors(), before.cursors());
+        // FakeChainClient 的 submit/watch 永远报 Unsupported；本测试成功证明没有恢复广播。
+    });
+}
+
+#[test]
 fn mixed_phases_commit_pending_outcome_and_all_hook_transfers_atomically() {
     use subxt_core::{
         config::SubstrateConfig,
@@ -573,6 +698,10 @@ fn mixed_phases_commit_pending_outcome_and_all_hook_transfers_atomically() {
         let history = TransactionHistoryService::new(store.clone(), Arc::new(TestClock::default()));
         let runtime = FinalizedHistoryRuntime::new(
             Arc::new(FakeChainClient {
+                head_requests: Arc::new(AtomicUsize::new(0)),
+                body_requests: Arc::new(AtomicUsize::new(0)),
+                event_requests: Arc::new(AtomicUsize::new(0)),
+                transient_missing_events: false,
                 head: 1,
                 metadata: metadata.clone(),
                 events: mixed,
@@ -754,13 +883,25 @@ fn block(number: u64) -> FinalizedBlockRef {
     FinalizedBlockRef::from_parts(Hash32::from_bytes(bytes), number)
 }
 
-fn running_engine(
+pub(crate) fn running_engine(
     history: Arc<dyn TransactionHistoryStore>,
     finalized_height: u64,
 ) -> CitizenEngine {
+    running_engine_with_read_counter(history, finalized_height).0
+}
+
+pub(crate) fn running_engine_with_read_counter(
+    history: Arc<dyn TransactionHistoryStore>,
+    finalized_height: u64,
+) -> (CitizenEngine, Arc<AtomicUsize>) {
+    let head_requests = Arc::new(AtomicUsize::new(0));
     let running = Arc::new(AtomicBool::new(true));
     let block_requests = Arc::new(AtomicUsize::new(0));
     let client = Arc::new(FakeChainClient {
+        head_requests: head_requests.clone(),
+        body_requests: Arc::new(AtomicUsize::new(0)),
+        event_requests: Arc::new(AtomicUsize::new(0)),
+        transient_missing_events: false,
         head: finalized_height,
         metadata: hex_bytes(METADATA_HEX),
         events: hex_bytes(EVENTS_HEX),
@@ -784,7 +925,7 @@ fn running_engine(
         .begin_provider_start()
         .expect("测试 Engine 必须开始启动");
     block_on(engine.complete_provider_start()).expect("测试 provider 必须进入 Running");
-    engine
+    (engine, head_requests)
 }
 
 fn hex_bytes(value: &str) -> Vec<u8> {

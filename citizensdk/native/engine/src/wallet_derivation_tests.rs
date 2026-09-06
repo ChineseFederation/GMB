@@ -22,9 +22,9 @@ use futures::executor::block_on;
 use serde_json::Value;
 
 const DERIVATION_GOLDEN: &str =
-    include_str!("../../../test/wallet/fixtures/citizenchain-wallet-derivation-v1.json");
+    include_str!("../../../test/wallet/citizenchain-wallet-derivation-v1.json");
 const PASSWORD_GOLDEN: &str =
-    include_str!("../../../test/wallet/fixtures/citizenchain-wallet-password-v1.json");
+    include_str!("../../../test/wallet/citizenchain-wallet-password-v1.json");
 
 #[derive(Debug)]
 struct FixedEntropy(Vec<u8>);

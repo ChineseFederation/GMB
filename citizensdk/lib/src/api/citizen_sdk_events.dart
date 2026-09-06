@@ -7,6 +7,11 @@ sealed class CitizenSdkEvent {
   final int sequence;
 }
 
+/// 历史已变化；通过现有历史查询读取最新快照，不携带账户秘密或借用能力版本。
+final class CitizenSdkHistoryChanged extends CitizenSdkEvent {
+  const CitizenSdkHistoryChanged({required super.sequence});
+}
+
 final class CitizenSdkLifecycleChanged extends CitizenSdkEvent {
   const CitizenSdkLifecycleChanged({
     required super.sequence,

@@ -901,6 +901,11 @@ void CitizenSdkHostBridge::dispatch_event(const citizensdk_event_t &event) {
       }
       if (bytes != nullptr) env->DeleteLocalRef(bytes);
     }
+  } else if (event.event_type == CITIZENSDK_EVENT_HISTORY_CHANGED &&
+             event.request_id == 0 && event.result == 0 &&
+             event.capability_revision == 0 && event.reserved == 0) {
+    jmethodID method = env->GetMethodID(type, "onNativeHistoryChanged", "(J)V");
+    if (method != nullptr) env->CallVoidMethod(native_owner_, method, static_cast<jlong>(event.sequence));
   } else if (event.event_type == CITIZENSDK_EVENT_LIFECYCLE_CHANGED) {
     citizensdk_lifecycle_t lifecycle = 0;
     if (citizensdk_get_lifecycle(handle_, &lifecycle) == kOk) {

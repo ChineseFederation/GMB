@@ -19,11 +19,11 @@ use crate::{
 };
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const EVENTS_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-system-events.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-system-events.hex");
 const SYSTEM_ONLY_METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/substrate-v14-system-events-metadata.hex");
+    include_str!("../../../test/transaction/substrate-v14-system-events-metadata.hex");
 
 #[test]
 fn production_fixture_decodes_exact_transfers_and_both_system_outcomes() {

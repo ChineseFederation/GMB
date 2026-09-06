@@ -20,9 +20,9 @@ use serde_json::Value as JsonValue;
 use subxt_core::{ext::codec::Decode, Metadata};
 
 const METADATA_HEX: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-runtime-v14-metadata.hex");
+    include_str!("../../../test/transaction/citizenchain-runtime-v14-metadata.hex");
 const VECTOR_JSON: &str =
-    include_str!("../../../test/transaction/fixtures/citizenchain-balance-fee-v1.json");
+    include_str!("../../../test/transaction/citizenchain-balance-fee-v1.json");
 
 struct TestClient {
     identity: ChainIdentity,

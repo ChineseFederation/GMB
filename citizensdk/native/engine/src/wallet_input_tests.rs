@@ -46,7 +46,7 @@ fn other_bip39_lengths_are_rejected_even_with_valid_checksum() {
 
 #[test]
 fn errors_report_position_without_echoing_the_input() {
-    let mut words = vec!["abandon"; 12];
+    let mut words = ["abandon"; 12];
     words[4] = "notawalletword";
     let error = validate_wallet_mnemonic(&words.join(" "), WalletWordCount::Words12)
         .unwrap_err()

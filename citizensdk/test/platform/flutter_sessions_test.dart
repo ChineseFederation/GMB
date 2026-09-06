@@ -8,6 +8,22 @@ import 'package:citizen_sdk/src/platform/citizen_sdk_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('历史通知按 session 隔离，关闭后不接收迟到通知', () async {
+    final platform = _SessionPlatform();
+    addTearDown(platform.dispose);
+    final session = await CitizenSdkFlutterSession.open(platform: platform);
+    final events = <CitizenSdkEvent>[];
+    final subscription = session.events.listen(events.add);
+    platform.emit(<Object?>[1, 'foreign', 1, 'historyChanged', <Object?>[]]);
+    platform.emit(<Object?>[1, 'session-a', 1, 'historyChanged', <Object?>[]]);
+    await Future<void>.delayed(Duration.zero);
+    expect(events.single, isA<CitizenSdkHistoryChanged>());
+    await session.close();
+    platform.emit(<Object?>[1, 'session-a', 2, 'historyChanged', <Object?>[]]);
+    await Future<void>.delayed(Duration.zero);
+    expect(events, hasLength(1));
+    await subscription.cancel();
+  });
   test('Flutter open后按session浅路由事件，其他session的坏payload不会毒化本session', () async {
     final platform = _SessionPlatform();
     addTearDown(platform.dispose);

@@ -149,6 +149,17 @@ test('公民链四端下载固定走后端白名单代理，不受 Runtime Relea
   assert.doesNotMatch(ecosystemSource, /citizenchain-release|releaseTag:/);
 });
 
+test('官网问题渠道仅指向准确GitHub仓库并保护新窗口', () => {
+  // 精确解析该链接的属性，拒绝错账号、错仓、明文地址或只在注释中出现的正确字符串。
+  const links = [...supportSource.matchAll(/<a\s+([^>]+)>/gu)]
+    .map((match) => Object.fromEntries([...match[1].matchAll(/([\w-]+)="([^"]*)"/gu)]
+      .map((attribute) => [attribute[1], attribute[2]])));
+  assert.equal(links.length, 1);
+  assert.equal(links[0].href, 'https://github.com/VoyagerRhett/GMB/issues');
+  assert.equal(links[0].target, '_blank');
+  assert.ok(links[0].rel.split(/\s+/u).includes('noreferrer'));
+});
+
 test('App Store 前置公开页面固定提供用户协议、隐私政策和技术支持路由', () => {
   assert.match(appSource, /path="\/terms" element=\{<Terms \/>\}/);
   assert.match(appSource, /path="\/privacy" element=\{<Privacy \/>\}/);

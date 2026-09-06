@@ -13,23 +13,14 @@ dependencies:
   polkadart_keyring: ^0.7.1
 
 dev_dependencies:
-  # 仅供仓库内的 CitizenApp 差分/回归基线源码与测试使用；这些实现
-  # 由 .pubignore 排除在 Hosted 运行闭包之外，不会成为宿主运行依赖。
-  bip39_mnemonic: ^4.0.1
-  characters: ^1.3.0
-  convert: ^3.1.1
+  # 正式 Binding/资产测试和受保护 smoldot 来源测试；无第二套 Dart 钱包或交易。
   crypto: ^3.0.7
   ffi: ^2.2.0
   flutter_lints: ^5.0.0
   flutter_test:
     sdk: flutter
-  http: ^1.2.2
   meta: ^1.15.0
   path: ^1.9.1
-  polkadart: ^0.7.0
-  shared_preferences: ^2.5.5
-  substrate_bip39: ^0.7.0
-  unorm_dart: ^0.3.2
 
 flutter:
   plugin:

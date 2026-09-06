@@ -226,7 +226,8 @@ internal object CitizenSdkFlutterCodec {
 
     /** [1, sessionId, eventSequence, type, type-specific payload tuple]. */
     fun event(sessionId: String, eventSequence: Long, type: String, payload: List<Any?>): List<Any?> {
-        require(type in setOf("lifecycleChanged", "capabilitiesChanged", "transferProgress"))
+        require(type in setOf("lifecycleChanged", "capabilitiesChanged", "transferProgress", "historyChanged"))
+        require(type != "historyChanged" || (eventSequence > 0 && payload.isEmpty()))
         return listOf(PROTOCOL_VERSION, sessionId, eventSequence, type, payload)
     }
 

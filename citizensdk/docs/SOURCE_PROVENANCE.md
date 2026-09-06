@@ -1,5 +1,26 @@
 # CitizenSDK 源码来源与同步策略
 
+## SDK 单源实现与来源界限
+
+SDK 自有旧 Dart 钱包、交易、轻节点协调和 Preferences 实现已删除，相关正式路径只在
+Rust Core。受保护的 smoldot Dart/FFI/PoW 及 signer 算法保持原有来源边界；新增启动节点
+建议和原生调度属于 SDK 适配代码。完整测试执行、删除清单和差异证据只记录在唯一任务卡。
+
+## 第二步 SDK 自有监控接线（2026-09-05）
+
+`native/smoldot/provider/src/{client,legacy,verified_chain_client}.rs` 只适配既有 smoldot
+finalized 订阅、验证型快照和取消接口。上游 `pow/light-base` 的订阅、P2P、同步、PoW
+与验证源码未改。SDK 新增 `native/engine/src/chain_monitor.rs` 与
+`native/ffi/src/chain_monitor.rs`，以及同目录对应的 `chain_monitor_tests.rs`；它们是
+钱包账户代际、取消排空、持久化历史调度及事件转发，不是第二套轻节点实现。
+历史和 pending 恢复继续使用原有 finalized block/body/index/System.Events 与 CAS。
+本次明确 SDK 边界变化为 HistoryChanged=5 无 payload 事件及可取消监控接线；不宣称
+这些 SDK 协调代码与 CitizenApp 逐字节相同，也不改 CitizenApp、CitizenWallet 或 shared。
+原有 `wallet_abi.rs` 的整段 future 丢弃式取消已改为单笔 `WalletTransferCancellation`
+协作通知并继续等待 Engine 返回。该修复保持所有已进入 store/CAS／金库的操作租约，
+在随后边界停止读取或广播，不改变上游订阅算法、交易编码、签名与执行核验规则。
+回归覆盖取消前首次 poll、安静 watch、Pending／InBlock／终态 CAS、租约排空及其它请求隔离。
+
 ## 现行仓库身份与来源元数据（2026-09-05）
 
 用户明确要求三仓统一清除旧仓库身份；当前第一方身份为 VoyagerRhett，SDK 所属仓库为
@@ -104,8 +125,7 @@ cleanup 与 queue 由 exact secret/KEK 物理身份隔离。创建只能经 prep
 Engine 以生命周期覆盖链能力 readiness，
 所有生命周期转换和 probe 更新使用 `state -> capabilities` 锁序。导入会合并 revisioned
 `ChainDatabaseStore` 的持久化 finalized 锚并无条件 CAS exact 状态；跨 Engine 或进程保证要求
-store provider 提供共享、耐久、强原子 CAS；归档 legacy Dart Preferences store 不具备该
-保证，Android 与 Apple 正式投影使用独立 typed store adapter。
+store provider 提供共享、耐久、强原子 CAS；各正式平台使用独立 typed store adapter。
 host 组合还由 CitizenSDK 自有 Engine/FFI 实现 start-before-provider restore、export/stop exact
 snapshot persistence、失败短路、host lifecycle 独占 admission 与 pending/completing callback
 销毁屏障；平台绑定只履行 typed store vtable，不复制状态机或解析私有信封。legacy session 构造
@@ -127,8 +147,8 @@ smoldot provider、准确 Runtime nonce 和唯一 signer，并只接受 typed Va
 `citizensdk_create_with_host` 以五类 typed stores 和 KEK/DEK Vault 形成完整平台无关组合。
 第 5.2 步根 Dart API 与 Android native/Flutter 双投影切换到 Rust Engine；第 6 步又以共享
 `darwin/` 源码为 iOS 与 macOS 建立 Swift/Flutter、typed SQLite 与 Apple Vault 投影。旧 Dart
-硬件秘密通道和装配已删除；保留的 legacy Dart 轻节点/钱包/交易只属于归档差分基线，不能被
-误当成根公开入口或任何正式平台运行路径。
+硬件秘密通道和装配已删除；SDK 自有 Dart 轻节点协调、钱包、交易与 Preferences 实现及
+相关旧测试同样已删除，正式实现只在 Rust Core。
 
 ## 许可证原文
 
@@ -170,8 +190,8 @@ Release 仍须反向拒绝额外 `build.rs`、`src/bin`、符号链接或未登�
 - 包清单、锁文件、分析规则、许可证、上游说明和示例迁入 `docs/smoldot-dart` 作为历史记录。
 
 根 `pubspec.yaml` 是唯一有效包清单，运行依赖只有 Flutter SDK 与 `polkadart_keyring`，
-不再声明本地 `path` 包。归档 smoldot/钱包/交易差分源码所需的 `ffi`、`meta`、`path`、
-`convert` 等仅为 dev dependencies，对应源码又由 `.pubignore` 排除，不进入 Hosted 运行闭包。
+不再声明本地 `path` 包。受保护 smoldot 来源测试所需的 `ffi`、`meta`、`path` 仅为开发依赖，
+资产测试使用 `crypto`，Flutter 测试和 lint 使用官方工具依赖；不再直接依赖旧钱包或 Preferences 包。
 历史清单使用 `source-` 前缀，禁止参与依赖解析。
 迁入绑定除 import/export、移动测试夹具路径、移动平台测试加载路径、交付范围注释和根包
 formatter 归一外不改行为；发布器继续对迁移闭集逐文件固定哈希，并对
@@ -238,10 +258,9 @@ verified finalized 锚沿 exact parent hash 回溯，逐头核对响应 hash、S
 父链；best/recent cache 或按高度映射不是证明。独立有界 proof-derived cache 只优化回溯，因而
 既支持重启后补扫历史块，又不信任宿主自报 finality 或留下反向查询的重组 TOCTOU。
 
-该目录 10 个普通文件作为 `SOURCE_SHA256.json` 的独立 `provider/sdk_only` 单元固定；来源
-清单当前 SHA-256 为
-`1e24c80cac3c2ba693194cb8e9588aa73e85324c4a6d8538ffe38369590d34e3`。Release 还从根锁递归解析
-Provider 的 smoldot registry 图，要求其 name/version/checksum 与 PoW 已验证锁完全一致。
+该目录 12 个普通文件作为 `SOURCE_SHA256.json` 的独立 `provider/sdk_only` 单元固定；清单
+摘要由 `release.mjs` 固定。Release 还从根锁递归解析 Provider 的 smoldot registry 图，
+逐项核对 PoW 已验证锁与下文准确登记的 SDK feature 合并依赖，不修改 PoW 锁文件。
 
 ## 产品 C ABI
 
@@ -275,8 +294,7 @@ Android 候选注入 `libcitizensdk.so` 与 `libcitizensdk_jni.so`，并生成�
 `pow/light-base/src/platform/default.rs`、`pow/lib/src/chain_spec/tests.rs` 与
 `pow/lib/src/sync/warp_sync.rs` 已恢复为当前 CitizenApp 来源的逐字节副本，并以新的目标摘要
 固定在 `SOURCE_SHA256.json`。三者不再以格式或 import 顺序差异冒充 byte-identical；
-清单自身摘要为
-`1e24c80cac3c2ba693194cb8e9588aa73e85324c4a6d8538ffe38369590d34e3`。
+清单自身的现行摘要只由 `scripts/release.mjs` 固定；本说明不重复维护易失效的摘要。
 
 `pow/light-base` 的 18 个生产文件中 17 个逐字节复制；`src/lib.rs` 单独登记为适配文件，集中
 实现 typed storage snapshot、准确 best Runtime nonce 和 proof-backed finalized ancestry，
@@ -311,12 +329,15 @@ src/identity/seed_phrase.rs
 
 根 `Cargo.lock` 还会合并 Engine、FFI 与测试启用的 feature。Release 因此从
 `citizen-sdk-smoldot-provider → smoldot-light` 离线遍历完整 registry 闭包，同时核对 package
-identity、checksum 与直接依赖边；只允许已逐项登记的 `bip39`、`futures`、`pbkdf2` feature-union
-附加边和 `unicode-normalization 0.1.25` 附加包。PoW 中存在而根锁缺失的边、未登记的根锁附加边、
+identity、checksum 与直接依赖边；只允许固定的 `bip39`、`futures`、`pbkdf2` feature 合并边，
+以及 HTTPS reqwest 引入的 `getrandom`／`rustls-pki-types` 准确附加边。
+`unicode-normalization 0.1.25` 必须直接来自 Engine；`web-time 1.1.0` 必须沿 provider →
+`reqwest 0.12.28` → `rustls-pki-types 1.15.1` 的真实依赖边引入，二者均校验固定 checksum。
+PoW 中存在而根锁缺失的边、未登记的根锁附加边、
 版本或 checksum 漂移都会失败关闭。
 
-Release 门禁把 `native/smoldot` 固定为 232 个普通文件的完整闭集：来源清单自身 1 个、清单
-五个单元中的来源/适配/SDK-only 文件 223 个，以及以下 8 个单元外支持文件。迁出的 Dart 生产、测试和
+Release 门禁把 `native/smoldot` 固定为 234 个普通文件的完整闭集：来源清单自身 1 个、清单
+五个单元中的来源/适配/SDK-only 文件 225 个，以及以下 8 个单元外支持文件。迁出的 Dart 生产、测试和
 来源记录另由跨目录闭集固定。门禁不仅逐文件校验哈希，还反向枚举目录；新增、删除、符号链接
 或单字节变化都会失败关闭。
 
@@ -351,30 +372,25 @@ genesis hash 和上述两个摘要，SHA-256 为
 运行时会在创建或初始化 smoldot 原生客户端前重算两个摘要和 genesis hash，并核对 checkpoint
 state root。仅验证 JSON 可解析、bootnode 数量、区块高度或字段形状不能替代这些检查。
 
-CitizenApp 的轻节点服务、钱包管理器和交易 RPC 同时耦合全局单例、Isar、日志、身份、
-聊天、广场或服务器中继，不能整文件复制进产品无关 SDK。以下层属于行为收编与适配，不宣称
-目标文件逐字节相同：
+CitizenApp 的轻节点服务、钱包管理器和交易 RPC 耦合产品单例、Isar、导航与业务数据。
+SDK 自有协调层已统一到 Rust Core，不保留第二套 Dart 实现，也不声称跨语言代码逐字节相同：
 
-- `lib/src/node/*`：复制启动/停止/重试、同步健康、缓存锚、finalized database、bootnode、
-  JSON-RPC、链头订阅和错误语义，并改为可注入的 SDK 依赖。
-- `lib/src/wallet/*`：复制无根钱包、多账户、失败回滚、删除清理、完整热钱包可用性门禁、
-  账户改名和用户主动查看子账户私钥的行为，并改为 revision CAS 与平台安全存储接口。这里的
-  私钥导出仅描述归档 legacy Dart 行为，正式绑定均不可达；第 4.1 步 Rust Core 明确不移植该入口。
-- `lib/src/transaction/*`：复制实时 metadata/runtime/nonce、immortal extrinsic、
-  `transfer_with_remark`、本机提交与状态订阅；补全同一 extrinsic 的
-  `System.ExtrinsicSuccess/Failed` 核对；submit-only 收到 finalized、等待式交易收到目标
-  inBlock/finalized 后都由执行核对独占终态，忽略交易池订阅的迟到数据、错误和关闭。执行
-  核对的总 deadline 同时覆盖区块体、txHash 定位、`System.Events` 与首次 runtime metadata
-  读取；任一传输 Future 永不完成都会受控返回“未核实”，metadata 超时后也不会留下永久
-  污染后续交易的 in-flight 缓存。runtime version 与 metadata 现按同一块/specVersion 原子
-  绑定，前一代 in-flight 迟到不得倒灌；观察回调及订阅取消 Future 的异常不改变终态。
-- `ChainRpc` 同时收编 finalized `System.Account` free/reserved/total、一次 batch storage 的
-  多账户余额，以及完全由 metadata `OnchainFeeRate`/`OnchainMinFee` 驱动的 runtime 同值
-  手续费估算；不存在与传输失败保持不同语义。
-
-产品适配明确删除 CitizenApp 日志、导航、CID、冷钱包、产品数据库、远程交易中继、聊天和
-广场。对应 Dart/Flutter 测试源码覆盖生命周期、缓存、订阅、钱包故障窗口、交易状态、同块
-extrinsic 定位及 runtime 执行结果；这些是 CitizenSDK 自有合同测试，不冒充逐字节来源。
+- `native/engine` 承接输入派生、钱包生命周期、故障恢复、账户和交易历史；`native/signer`
+  承接 sr25519。冻结派生、密码、余额费用、交易编码和生产 metadata/events 向量集中于
+  `test/wallet` 和 `test/transaction`，移动时保持原始数据字节，Rust 直接读取同一份输入。
+- `native/smoldot/provider/src/bootstrap.rs` 承接既有 HTTPS 节点建议协议，六秒与 64 KiB 限额，
+  只修改内存 bootNodes；固定网络、genesis、state root、SS58 和币种身份，禁止 RPC/checkpoint。
+  服务端共享 fixture 的 wire 资产标识保留原值，不是 SDK 文件路径。
+- `native/ffi/src/chain_monitor.rs` 调用既有 smoldot finalized 订阅，定期调用 Engine 原子导出，
+  不实现网络订阅、共识、P2P 或同步算法。相同已保存准确块不重写；不清理失败数据库。
+- 高层转账沿用 20 分钟观察、finalized 后 30 秒执行核验、一秒事件读取重试；已取块体不重复
+  下载，超时协作取消并排空已有存储操作，保持 durable Pending/InBlock，不推断链上结果。
+- SDK 不包含产品登录、冷钱包、私钥导出、聊天、广场、业务协议或服务器中继。
+  来源中会自动删除坏数据库、导出 child 或直接暴露任意 RPC 的入口按已确认安全边界排除，
+  不为了复刻不适用入口而绕过正式 ABI。
+- `shared/citizen-signer`、`wallet-password`、`hardware-secretvault` 等现有文件被公民钱包
+  或公民 App 实际使用，未发现可以独立移出的热钱包专用文件。本轮不改这些独立产品的依赖；
+  SDK 无 shared 路径依赖。这里的单源结论限定 SDK 自身，不伪称三产品已共用一套运行实现。
 
 第 4.1/4.2 步 Rust 实现以这些已验证行为和公开夹具为参照，但目标是 CitizenSDK 自有 Core 源码，
 不伪装成 CitizenApp 文件的逐字节副本：账户服务从准确 metadata 生成 `System.Account` key，
@@ -402,7 +418,7 @@ AES-256-GCM；宿主 Vault 只 wrap/unwrap DEK，unwrap 直接写入 Rust-owned 
 Pending/InBlock 门，只有 canonical body、准确 metadata 与同 index `System.Events` 形成终态。
 
 交易执行确认使用
-`test/transaction/fixtures/substrate-v14-system-events-metadata.hex` 中的真实 Substrate v14
+`test/transaction/substrate-v14-system-events-metadata.hex` 中的真实 Substrate v14
 runtime metadata 快照，SHA-256 为
 `95b368e7907511b28ba283a6741f4be551b56fb917c2f0183b4143dbe0ebf95b`。它逐字节来自 CitizenApp
 已验证的 full-node 测试夹具，只为测试提供 `System.Event`、`Phase`、`DispatchInfo` 等 SCALE
@@ -412,8 +428,8 @@ Release 来源守卫同时固定该夹具哈希，防止测试和测试输入一
 Rust Engine 直接复用相邻
 `citizenchain-runtime-v14-metadata.hex` 与 `citizenchain-runtime-system-events.hex` 两份
 生产 CitizenChain 成对夹具，核对成功 index 0 与 `BadOrigin` 失败 index 1。它不复制第二份
-metadata/events；Dart 与 Rust 对同一生产输入建立差分行为锚。两份文件的来源、生成方式和
-固定 SHA-256 继续以 `test/transaction/fixtures/README.md` 为准。
+metadata/events；正式 Rust 测试对同一冻结生产输入核对行为。两份文件的来源、生成方式和
+固定 SHA-256 继续以 `test/transaction/README.md` 为准。
 
 第 4.1 步另增加两份公开 JSON 行为向量：
 

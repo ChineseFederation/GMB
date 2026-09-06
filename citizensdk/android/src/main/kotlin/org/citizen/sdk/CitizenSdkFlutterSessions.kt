@@ -646,6 +646,7 @@ internal class CitizenSdkFlutterSessions(context: Context) : EventChannel.Stream
 
     private fun onNativeEvent(session: Session, event: CitizenSdkEvents.Event) {
         when (event) {
+            is CitizenSdkEvents.Event.HistoryChanged -> emit(session, "historyChanged", emptyList())
             is CitizenSdkEvents.Event.LifecycleChanged -> emit(
                 session,
                 "lifecycleChanged",

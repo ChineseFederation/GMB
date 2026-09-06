@@ -125,6 +125,8 @@ pub enum CitizenSdkEventType {
     WatchUpdate = 2,
     CapabilitiesChanged = 3,
     LifecycleChanged = 4,
+    /// 无 payload 的历史失效通知，接收者通过已有历史 API 读取最新状态。
+    HistoryChanged = 5,
 }
 
 #[repr(u32)]

@@ -19,7 +19,7 @@ target_name="${1:-all}"
 hosted_consumer=false
 if [[ "$#" -gt 1 ]]; then hosted_consumer=true; fi
 tata_console_target_root="${TATA_CONSOLE_TARGET_ROOT:-/Users/rhett/TATA/tataconsole/target}"
-citizensdk_target_root="$tata_console_target_root/GMB/citizensdk/SDK"
+citizensdk_target_root="$tata_console_target_root/GMB/citizensdk/sdk"
 tata_console_work_root="$tata_console_target_root/.work"
 ios_deployment_target=16.0
 macos_deployment_target=13.0
@@ -986,7 +986,7 @@ macos_hosted_root() {
     checkout="$GITHUB_WORKSPACE"
     assert_descendant_path "$checkout" "$sdk_dir" "CitizenSDK checkout"
   else
-    root="$tata_console_work_root/GMB/citizensdk/SDK/citizensdk"
+    root="$tata_console_work_root/GMB/citizensdk/sdk/citizensdk"
     checkout="$(dirname "$sdk_dir")"
   fi
   assert_readonly_dependency_directory "$root" "macOS Hosted 受控根"

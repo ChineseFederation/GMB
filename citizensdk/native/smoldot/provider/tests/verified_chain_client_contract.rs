@@ -32,6 +32,55 @@ fn concrete_provider_implements_the_formal_chain_contract() {
 }
 
 #[test]
+fn finalized_subscription_before_start_fails_once_and_ends() {
+    use futures::StreamExt;
+    let provider = require_ok(
+        SmoldotVerifiedChainClient::new(require_ok(
+            SmoldotProviderConfig::try_new(CHAIN_SPEC, "CitizenSDK test", "2.4.0"),
+            "config",
+        )),
+        "provider",
+    );
+    let mut stream = provider.subscribe_finalized_heads();
+    let first = futures::executor::block_on(stream.next());
+    assert!(matches!(first, Some(Err(error)) if error.code() == ContractErrorCode::NotReady));
+    assert!(futures::executor::block_on(stream.next()).is_none());
+}
+
+#[test]
+#[allow(clippy::unwrap_used)]
+fn real_smoldot_subscription_drops_and_drains_without_peers() {
+    use futures::StreamExt;
+    let mut spec: serde_json::Value = serde_json::from_str(CHAIN_SPEC).unwrap();
+    spec["bootNodes"] = serde_json::json!([]);
+    spec["lightSyncState"] = serde_json::from_str(include_str!(
+        "../../../../assets/citizenchain/light_sync_state.json"
+    ))
+    .unwrap();
+    let provider = SmoldotVerifiedChainClient::new(
+        SmoldotProviderConfig::try_new(spec.to_string(), "CitizenSDK offline test", "2.4.0")
+            .unwrap(),
+    )
+    .unwrap();
+    provider.drive(provider.start()).unwrap().unwrap();
+    let mut subscription = provider.subscribe_finalized_heads();
+    // 有无初始通知取决于上游 runtime readiness；没有 peers 不允许自行终止订阅。
+    let event = provider
+        .drive(async {
+            tokio::time::timeout(std::time::Duration::from_millis(300), subscription.next()).await
+        })
+        .unwrap();
+    assert!(!matches!(event, Ok(None)));
+    drop(subscription);
+    provider
+        .drive(provider.drain_finalized_subscriptions())
+        .unwrap()
+        .unwrap();
+    provider.stop().unwrap();
+    assert_eq!(provider.lifecycle().unwrap(), ProviderLifecycle::Stopped);
+}
+
+#[test]
 fn static_identity_is_available_before_start_but_chain_reads_are_not() {
     let config = require_ok(
         SmoldotProviderConfig::try_new(CHAIN_SPEC, "CitizenSDK test", "1.0.0"),
