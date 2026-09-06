@@ -138,7 +138,7 @@ mkdir -p "$TARGET_DIR" "$npm_config_cache" "$PACKAGE_RESOURCES/onchina-bin" "$PA
 #   ② DB 用内嵌私有 PG(方案 A):借本机 PostgreSQL 二进制起一个 onchina 专属实例(127.0.0.1)。
 # 本机构的"系统签名钥 / 机构身份"是可选配置(签登录 QR / 签发凭证才需要),非启动前提。
 echo "==> 构建 OnChina 本机优化二进制 + 前端..."
-( cd "$REPO_ROOT" && CARGO_INCREMENTAL=1 cargo build --release -p onchina )
+( cd "$REPO_ROOT" && CARGO_INCREMENTAL=1 cargo build --locked --offline --release -p onchina )
 echo "==> 构建链上中国平台前端产物..."
 ( cd "$ONCHINA_FRONTEND_PROJECT" && ONCHINA_FRONTEND_DIST="$ONCHINA_BUILD_DIST" npm run build )
 echo "==> 构建节点前端产物..."

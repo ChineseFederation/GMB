@@ -21,6 +21,7 @@ on:
         description: TATA 私有流程租约公开证明
         required: true
         type: string
+      base_sha: { description: 本机全仓门禁通过的准确起始提交, required: false, type: string }
       source_sha:
         description: Release 的成功 CI 提交或全仓门禁的准确推送提交
         required: false
@@ -77,6 +78,7 @@ jobs:
       run_title: ${{ inputs.run_title }}
       lease_id: ${{ inputs.lease_id }}
       proof: ${{ inputs.proof }}
+      base_sha: ${{ inputs.base_sha || '' }}
       source_sha: ${{ inputs.source_sha }}
       ci_run_id: ${{ inputs.ci_run_id }}
       version_tag: ${{ inputs.version_tag }}

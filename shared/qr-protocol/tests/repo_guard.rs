@@ -2160,7 +2160,7 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
                 "APPLE_SIGNING_IDENTITY",
                 "MACOS_SIGNING_IDENTITY='Developer ID Application: WEI CHENG (MHYMVRN6FC)'",
                 "MACOS_TEAM_ID='MHYMVRN6FC'",
-                "cargo build --release -p onchina",
+                "cargo build --locked --offline --release -p onchina",
                 tauri_build_start,
                 tauri_build_locked,
                 tauri_bundle_start,
@@ -2173,6 +2173,15 @@ fn node_macos_camera_capability_is_bundled_and_verified() {
                 "com\\.apple\\.security\\.get-task-allow",
                 "entitlement_key_path=",
                 "plutil -extract \"$entitlement_key_path\"",
+            ][..],
+        ),
+        (
+            "scripts/prepare-toolchain.sh",
+            &[
+                "TATA_CONSOLE_CARGO_CONFIG",
+                "CARGO_NET_OFFLINE",
+                "CARGO_HOME/config.toml",
+                "Cargo必须消费Worker准备的任务内锁定依赖并保持离线",
             ][..],
         ),
     ];

@@ -8,6 +8,7 @@ on:
       run_title: { description: 塔塔控制台展示标题, required: true, type: string }
       lease_id: { description: TATA 私有流程租约标识, required: false, type: string }
       proof: { description: TATA 私有流程租约公开证明, required: false, type: string }
+      base_sha: { description: 本机全仓门禁通过的准确起始提交, required: false, type: string }
       source_sha: { description: Release 的成功 CI 提交或全仓门禁的准确推送提交, required: false, type: string }
       ci_run_id: { description: 对应成功 CI run id（仅 Release）, required: false, type: string }
       version_tag: { description: 正式版本 Tag（仅 Release）, required: false, type: string }
@@ -119,6 +120,7 @@ jobs:
           job: validate_dispatch
           pipeline: ${{ inputs.pipeline }}
           run_title: ${{ inputs.run_title }}
+          base_sha: ${{ inputs.base_sha }}
           source_sha: ${{ inputs.source_sha }}
           ci_run_id: ${{ inputs.ci_run_id }}
           version_tag: ${{ inputs.version_tag }}
@@ -157,7 +159,7 @@ jobs:
         env: { FLOW_COMMIT_SHA: "${{ secrets[format('TATA_FLOW_COMMIT_SHA_{0}', inputs.lease_id)] }}" }
         run: test "$(git -C .tata-flow rev-parse HEAD)" = "$FLOW_COMMIT_SHA"
       - uses: ./.tata-flow/tataconsole/flows/gmb/shared
-        with: { job: "${{ matrix.contract }}", pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}" }
+        with: { job: "${{ matrix.contract }}", pipeline: "${{ inputs.pipeline }}", run_title: "${{ inputs.run_title }}", base_sha: "${{ inputs.base_sha }}", source_sha: "${{ inputs.source_sha }}", ci_run_id: "${{ inputs.ci_run_id }}" }
 
   ci_phase_0:
     if: ${{ needs.validate_dispatch.outputs.has_ci_phase_0 == 'true' }}

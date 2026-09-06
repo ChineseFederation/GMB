@@ -99,7 +99,14 @@ NODE_PROJECT
 # npm/Vite 的官方可执行入口自身是链接，主入口必须正常解析；只保留业务模块的引用路径。
 export NODE_OPTIONS='--preserve-symlinks'
 export CARGO_TARGET_DIR="$TATA_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-target"
-export CARGO_HOME="$TATA_CONSOLE_INCREMENTAL_CACHE_DIR/cargo-home"
+: "${TATA_CONSOLE_CARGO_CONFIG:?缺少Worker准备的Cargo依赖配置}"
+[[ "${CARGO_NET_OFFLINE:-}" == true && -n "${CARGO_HOME:-}" \
+    && "$CARGO_HOME" == "$TATA_CONSOLE_WORK_DIR"/* \
+    && "$TATA_CONSOLE_CARGO_CONFIG" == "$CARGO_HOME/config.toml" \
+    && -f "$TATA_CONSOLE_CARGO_CONFIG" ]] || {
+    echo '[error] Cargo必须消费Worker准备的任务内锁定依赖并保持离线' >&2
+    return 1 2>/dev/null || exit 1
+}
 export npm_config_audit=false
 export npm_config_fund=false
 NODE_FRONTEND_PROJECT="$TATA_CONSOLE_WORK_DIR/project/citizenchain/node/frontend"
