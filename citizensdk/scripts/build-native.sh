@@ -8,7 +8,6 @@ ffi_manifest="$sdk_dir/native/smoldot/ffi/Cargo.toml"
 product_ffi_manifest="$sdk_dir/native/ffi/Cargo.toml"
 product_header="$sdk_dir/include/citizensdk.h"
 product_types_header="$sdk_dir/include/citizensdk_types.h"
-android_gradle_project="$sdk_dir/android"
 darwin_source_root="$sdk_dir/darwin/Sources/CitizenSDK"
 darwin_flutter_source_root="$sdk_dir/darwin/Sources/CitizenSDKFlutter"
 linux_source_root="$sdk_dir/linux"
@@ -755,10 +754,30 @@ android_toolchain() {
   printf '%s\n' "$toolchain"
 }
 
+# Gradle 9 要求每个 projectDir 可写。这里只生成当前任务的入口配置，
+# 三个脚本及全部业务源码仍从 SDK 原目录只读加载，不复制源码工程。
+prepare_android_gradle_project() {
+  local android_gradle_project="$work_dir/gradle-project" relative
+  prepare_safe_directory "$work_dir" "$android_gradle_project/native" "Android Gradle 任务工程"
+  for relative in settings.gradle build.gradle native/build.gradle; do
+    prepare_safe_output_file "$work_dir" "$android_gradle_project/$relative" "Android Gradle 任务配置"
+  done
+  cat >"$android_gradle_project/settings.gradle" <<'GRADLE'
+apply from: new File(System.getenv('CITIZENSDK_SOURCE_DIR'), 'android/settings.gradle')
+GRADLE
+  cat >"$android_gradle_project/build.gradle" <<'GRADLE'
+apply from: new File(System.getenv('CITIZENSDK_SOURCE_DIR'), 'android/build.gradle')
+GRADLE
+  cat >"$android_gradle_project/native/build.gradle" <<'GRADLE'
+apply from: new File(System.getenv('CITIZENSDK_SOURCE_DIR'), 'android/native/build.gradle')
+GRADLE
+}
+
 build_android() {
   require_rust_target aarch64-linux-android
   local toolchain gradle_bin android_build_dir gradle_project_cache gradle_user_home
   local kotlin_persistent_dir
+  local android_gradle_project="$work_dir/gradle-project"
   local core_stage core_destination jni_destination aar_destination source_library
   local built_aar aar_jni nm_bin strip_bin
   toolchain="$(android_toolchain)"
@@ -776,6 +795,7 @@ build_android() {
     "$kotlin_persistent_dir" "$core_stage"; do
     prepare_safe_directory "$work_dir" "$directory" "Android 外部构建目录"
   done
+  prepare_android_gradle_project
   export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$toolchain/bin/aarch64-linux-android24-clang"
   export CC_aarch64_linux_android="$toolchain/bin/aarch64-linux-android24-clang"
   export AR_aarch64_linux_android="$toolchain/bin/llvm-ar"
@@ -800,8 +820,9 @@ build_android() {
   cp "$core_stage/libcitizensdk.so" "$core_destination"
 
   # Gradle 的 HTML 问题报告会写入源码；关闭该报告，中央日志仍保留完整错误栈。
-  # 三个环境变量必须连续传给同一子进程，续行中插入注释会使变量失去导出效果。
+  # 环境变量必须连续传给同一子进程，续行中插入注释会使变量失去导出效果。
   CITIZENSDK_ANDROID_BUILD_DIR="$android_build_dir" \
+  CITIZENSDK_SOURCE_DIR="$sdk_dir" \
   CITIZENSDK_ANDROID_CORE_DIR="$core_stage" \
   GRADLE_USER_HOME="$gradle_user_home" \
     "$gradle_bin" --no-daemon --stacktrace --no-problems-report \

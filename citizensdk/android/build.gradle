@@ -1,7 +1,14 @@
 group = 'org.citizen.sdk'
 version = '1.0.0'
 
-def sdkProductRoot = project.projectDir.parentFile.canonicalFile
+// 独立AAR使用显式原源码根；Flutter插件继续使用宿主登记的插件根。
+def sdkSourceValue = System.getenv('CITIZENSDK_SOURCE_DIR')
+if (sdkSourceValue != null && !new File(sdkSourceValue).isAbsolute()) {
+    throw new GradleException('CITIZENSDK_SOURCE_DIR must be absolute')
+}
+def sdkProductRoot = sdkSourceValue == null
+    ? project.projectDir.parentFile.canonicalFile : new File(sdkSourceValue).canonicalFile
+def androidSourceRoot = new File(sdkProductRoot, 'android')
 def tataConsoleTargetRoot = file('/Users/rhett/TATA/tataconsole/target').canonicalFile
 def localCitizenSdkRoots = {
     def roots = [new File(tataConsoleTargetRoot, 'GMB/citizensdk/SDK').canonicalFile]
@@ -55,8 +62,8 @@ allprojects {
 apply plugin: 'com.android.library'
 // AGP启用内置Kotlin；Flutter宿主或独立settings负责唯一版本选择。
 
-def sharedFacadeSource = file('native/src/main/kotlin').canonicalFile
-def packagedAndroidAbiDirectory = file('src/main/jniLibs/arm64-v8a').canonicalFile
+def sharedFacadeSource = new File(androidSourceRoot, 'native/src/main/kotlin').canonicalFile
+def packagedAndroidAbiDirectory = new File(androidSourceRoot, 'src/main/jniLibs/arm64-v8a').canonicalFile
 def stagedAndroidAbiValue = System.getenv('CITIZENSDK_ANDROID_CORE_DIR')
 def stagedAndroidAbiFile = stagedAndroidAbiValue == null || stagedAndroidAbiValue.trim().isEmpty()
     ? null
@@ -91,12 +98,17 @@ android {
     ndkVersion = '28.2.13676358'
 
     sourceSets {
+        all { sourceSet ->
+            def sourceRoot = new File(androidSourceRoot, "src/${sourceSet.name}")
+            sourceSet.setRoot(sourceRoot.path)
+            sourceSet.kotlin.srcDirs = [new File(sourceRoot, 'kotlin')]
+        }
         main {
             // The Flutter plugin compiles the exact same public Android facade
             // as the native/AAR surface. There is no nested AAR or second adapter.
             // 内置Kotlin只识别Kotlin源集，不能再借Java源集加入共享门面。
             kotlin.srcDir(sharedFacadeSource)
-            assets.srcDirs = [file('../assets')]
+            assets.srcDirs = [new File(sdkProductRoot, 'assets')]
             // Android's jniLibs root is the parent of the fixed arm64-v8a leaf.
             jniLibs.srcDirs = [selectedAndroidAbiDirectory.parentFile]
         }

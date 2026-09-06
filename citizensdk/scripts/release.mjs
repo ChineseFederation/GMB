@@ -342,9 +342,9 @@ const PUBLIC_ABI_FILES = Object.freeze({
 // XCFramework 分别由测试、文档与候选投影合同固定，不能在本表建立第二条来源。
 const MOBILE_BINDING_SOURCE_FILE_COUNT = 88;
 const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
-  'android/build.gradle': '26ac24190314f30f7f035fd1c607c4b3eee41658af9e8659cee87778b5164cfb',
+  'android/build.gradle': 'e051a2d3f9fc92ed973731b460c524f9b9b9e713ba9d9119b49eb7224a6fa9a3',
   'android/gradle.properties': 'cf2c210cd35238888bb6c125c538bcadfebff01d28e97d664b83f96f31fa3160',
-  'android/native/build.gradle': '1ca8e4d1b480df2494f3eaf624ba687355e05dcef166d5ab6840ef4adba3f78e',
+  'android/native/build.gradle': 'efdd166b193e2934f4417c7f2b28ddddf19ee87a323e3a9b8457abf3e160ea66',
   'android/native/consumer-rules.pro': '81c0d229a083f6b87647b45708e1b19ad116a65c5eed33bf5152ac35def7f2c0',
   'android/native/src/main/AndroidManifest.xml': '4af8bd8f81dc572f010d489f9960baa1520f6d6573c7096e5d617033f876239a',
   'android/native/src/main/cpp/CMakeLists.txt': '4cdae89392703d44d47a2961588e1da9623c1f4fb8fdaa4e9517b7e941134105',
@@ -376,7 +376,7 @@ const MOBILE_BINDING_SOURCE_FILES = Object.freeze({
   'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowActivity.kt': 'c5ec3b592c2505de1b79bf4a7bdcbcdd83f49b4b4f1978a325cec9c74afee2ee',
   'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowContract.kt': '5dca45ab6aee418c09e3cfce90d56e00cdb3dcb67a5ef512c3995529e9db69ed',
   'android/native/src/main/kotlin/org/citizen/sdk/ui/CitizenSdkWalletFlowCoordinator.kt': '1c4ff98ac00e90ef8e29abc9b08789f19f89d37a004e57aa628a3791f59e2c90',
-  'android/settings.gradle': '598a529cce1cce1394e4656c1691b2ec2d9d660e3e0d778c698b97e83b81fe64',
+  'android/settings.gradle': 'fcfacd4890dc8a704035755fc342f12e25f3796b754fad9d9bba026b0ddda6d1',
   'android/src/main/AndroidManifest.xml': '238e29dda0ae9883bafebcd6f79de39e60837c839993ecfac3407203b5ce22ba',
   'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterCodec.kt': 'b7dabf2b8c0789362e16b9bf54a605169183ad521da045787c25f9727ff20293',
   'android/src/main/kotlin/org/citizen/sdk/CitizenSdkFlutterSessions.kt': '32592ec2d156fe34a567c820f84f57d77b05ff24b25c79c115df817cee43b5a5',
@@ -643,7 +643,7 @@ const SDK_SCRIPT_ENTRIES = Object.freeze({
   'release.test.mjs': 'pinned-test',
 });
 const SDK_PRODUCTION_SCRIPT_FILES = Object.freeze({
-  'scripts/build-native.sh': 'dd22c465f02ee605e3af7d470f47bdc10e7ec5e570edb779fd220853ce0e4e4a',
+  'scripts/build-native.sh': 'ac0193bad21feb132c9ae476c6bd24d09cce9ad1ce51233db111434349e0ac2f',
 });
 const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/src/bootstrap_tests.rs': '688a8883eb780fd61c69f348353d32300115b32928b001ea1113e7ae95e0bf30',
@@ -802,7 +802,7 @@ const SDK_TEST_CONTRACT_FILES = Object.freeze({
   'native/smoldot/provider/tests/account_nonce_contract.rs': '13f2d194df11c94527fd5b513228cc1ec917f3735b12f3326c239b600821b754',
   'native/smoldot/provider/tests/legacy_parity.rs': '7db2b3ef4959a7bd1c83b22597666b0448f48b3079b82821f624efd2ccb7d9dc',
   'native/smoldot/provider/tests/verified_chain_client_contract.rs': '140e90e7e52b259919b0705c1df52d89366ef1e31c34ad672065201b4e18e308',
-  'scripts/release.test.mjs': 'b03fafdfa3c557df9e2717f7712bc7d57229e37815fc17fa0803665cb53eda0f',
+  'scripts/release.test.mjs': 'ed938f681e4f790db23297e41a86125d1feda4c62d02dcb2d48d0c69a57bd2ef',
   'test/api/README.md': 'bd927ce1488fc609ab3d1199ef7e3c859c741fae14628d4ef4bd79aa8d8b7144',
   'test/api/citizen_sdk_test.dart': 'dbc79ebba64697a3b409235bd81ad723c670a76b7e95a805ff4252795aac28cf',
   'test/api/citizen_transaction_test.dart': 'e380a35918b6c4accaf94235cf373650ca12d61c352e88884e2ca858334ec4b2',

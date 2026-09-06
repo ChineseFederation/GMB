@@ -1988,6 +1988,7 @@ test('Android Gradle 子进程接收中央环境、参数并传播失败', () =>
     writeFileSync(gradle, `#!/bin/bash
 set -eu
 [[ "\${CITIZENSDK_ANDROID_BUILD_DIR:-}" == "$FIXTURE_ROOT/build dir" ]] || exit 91
+[[ "\${CITIZENSDK_SOURCE_DIR:-}" == "$FIXTURE_ROOT/sdk source" ]] || exit 96
 [[ "\${CITIZENSDK_ANDROID_CORE_DIR:-}" == "$FIXTURE_ROOT/core dir" ]] || exit 92
 [[ "\${GRADLE_USER_HOME:-}" == "$FIXTURE_ROOT/gradle home" ]] || exit 93
 expected=(--no-daemon --stacktrace --no-problems-report --project-cache-dir "$FIXTURE_ROOT/project cache" "-Pkotlin.project.persistent.dir=$FIXTURE_ROOT/kotlin state" -p "$FIXTURE_ROOT/project" :native:assembleRelease)
@@ -2003,6 +2004,7 @@ gradle_user_home="$FIXTURE_ROOT/gradle home"
 gradle_project_cache="$FIXTURE_ROOT/project cache"
 kotlin_persistent_dir="$FIXTURE_ROOT/kotlin state"
 android_gradle_project="$FIXTURE_ROOT/project"
+sdk_dir="$FIXTURE_ROOT/sdk source"
 gradle_bin="$FIXTURE_ROOT/gradle fixture"
 `;
     const run = (body, status) => spawnSync('/bin/bash', ['-c', shell + body], {
@@ -2020,6 +2022,60 @@ gradle_bin="$FIXTURE_ROOT/gradle fixture"
     const failed = run(broken, 0);
     assert.equal(failed.error, undefined);
     assert.equal(failed.status, 91);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Android任务工程仅生成入口配置且并发隔离并拒绝链接路径', async () => {
+  const root = mkdtempSync(join(workRoot, 'android-gradle-project-'));
+  const source = nativeShellFunctions([
+    'fail', 'assert_safe_directory_path', 'assert_descendant_path', 'assert_new_file',
+    'prepare_safe_directory', 'prepare_safe_output_file', 'prepare_android_gradle_project',
+  ]);
+  const run = work => new Promise((resolveRun, reject) => {
+    const child = spawn('/bin/bash', ['-c', source + '\nwork_dir="$FIXTURE_WORK"\nprepare_android_gradle_project'], {
+      env: { PATH: '/usr/bin:/bin', FIXTURE_WORK: work }, stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    child.stderr.on('data', data => { stderr += data; });
+    child.on('error', reject);
+    child.on('close', status => resolveRun({ status, stderr }));
+  });
+  try {
+    const tasks = ['booking', 'factory'].map(name => join(root, name));
+    const results = await Promise.all(tasks.map(run));
+    for (const result of results) assert.equal(result.status, 0, result.stderr);
+    for (const work of tasks) {
+      const project = join(work, 'gradle-project');
+      assert.deepEqual(readdirSync(project).sort(), ['build.gradle', 'native', 'settings.gradle']);
+      assert.deepEqual(readdirSync(join(project, 'native')), ['build.gradle']);
+      for (const file of ['settings.gradle', 'build.gradle', 'native/build.gradle']) {
+        const input = join(project, file);
+        assert.ok(lstatSync(input).isFile() && !lstatSync(input).isSymbolicLink());
+        assert.equal(readFileSync(input, 'utf8'),
+          `apply from: new File(System.getenv('CITIZENSDK_SOURCE_DIR'), 'android/${file}')\n`);
+      }
+    }
+    const untouched = join(root, 'outside');
+    mkdirSync(untouched);
+    writeFileSync(join(untouched, 'sentinel'), 'untouched');
+    for (const relative of ['gradle-project', 'gradle-project/native', 'gradle-project/settings.gradle']) {
+      const work = mkdtempSync(join(root, 'reject-'));
+      const link = join(work, relative);
+      mkdirSync(dirname(link), { recursive: true });
+      symlinkSync(untouched, link);
+      const result = await run(work);
+      assert.notEqual(result.status, 0);
+      assert.deepEqual(readdirSync(untouched), ['sentinel']);
+      assert.equal(readFileSync(join(untouched, 'sentinel'), 'utf8'), 'untouched');
+    }
+    const native = readFileSync(join(citizenSdkRoot, 'android/native/build.gradle'), 'utf8');
+    assert.match(native, /sourceSet\.setRoot\(sourceRoot\.path\)/u);
+    assert.match(native, /sourceSet\.kotlin\.srcDirs/u);
+    assert.match(native, /new File\(nativeSourceRoot, 'src\/main\/cpp\/CMakeLists\.txt'\)/u);
+    assert.match(native, /new File\(nativeSourceRoot, 'consumer-rules\.pro'\)/u);
+    assert.match(native, /new File\(sdkProductRoot, 'assets'\)/u);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
